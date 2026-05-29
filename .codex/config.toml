@@ -1,0 +1,6 @@
+[mcp_servers.chrome-devtools]
+args = [
+    "chrome-devtools-mcp@latest",
+    "--autoConnect",
+]
+command = "pnpx"

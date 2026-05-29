@@ -132,3 +132,20 @@ export function parseString(content: string): any {
     }
   }
 }
+
+export function getComplementString(string: string) {
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(string);
+
+  const complemented = new Uint8Array(bytes.length);
+  for (let i = 0; i < bytes.length; i++) {
+    complemented[i] = 0xff - bytes[i];
+  }
+
+  let hex = '';
+  for (let i = 0; i < complemented.length; i++) {
+    const h = complemented[i].toString(16).padStart(2, '0');
+    hex += h;
+  }
+  return hex;
+}
