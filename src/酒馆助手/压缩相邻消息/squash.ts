@@ -1,25 +1,8 @@
 import { assignInplace, chunkBy, getComplementString, regexFromString } from '@util/common';
 import { registerAsUniqueScript } from '@util/script';
 import { compare } from 'compare-versions';
+import YAML from 'yaml';
 import { Settings, WorldbookExtractionPositionOrder } from './store';
-
-const FORMAT_COMPLETION_DRY_RUN_PROCESSING_START_EVENT =
-  'tavern_resource:format_completion:dry_run_processing:start';
-const FORMAT_COMPLETION_DRY_RUN_PROCESSING_END_EVENT = 'tavern_resource:format_completion:dry_run_processing:end';
-
-let dry_run_prompt_processing_depth = 0;
-
-function enableNextDryRunPromptProcessing() {
-  dry_run_prompt_processing_depth += 1;
-}
-
-function disableNextDryRunPromptProcessing() {
-  dry_run_prompt_processing_depth = Math.max(0, dry_run_prompt_processing_depth - 1);
-}
-
-function shouldProcessDryRunPrompt(): boolean {
-  return dry_run_prompt_processing_depth > 0;
-}
 
 function getPromptContent(prompt: SillyTavern.SendingMessage, settings: Settings): string {
   if (typeof prompt.content === 'string') {
@@ -78,10 +61,7 @@ export function injectSeparators(settings: Settings) {
     },
   } as const);
 
-  const inject = (_type: string, _option: object, dry_run: boolean) => {
-    if (dry_run && !shouldProcessDryRunPrompt()) {
-      return;
-    }
+  const inject = () => {
     injectPrompts(Object.values(separators));
   };
   eventOn(tavern_events.GENERATION_AFTER_COMMANDS, inject);
@@ -265,6 +245,87 @@ function hasDynamicPromptMacro(content: string): boolean {
   return /\{\{[\s\S]*?\}\}/.test(checked_content) || /<%(?:[-_=#_%])?[\s\S]*?(?:[-_]?%>)/.test(checked_content);
 }
 
+type MacroLikeVariableType = 'message' | 'chat' | 'character' | 'preset' | 'global';
+
+function getLastMessageVariableId(): number {
+  return SillyTavern.chat.findLastIndex(message => _.isObject(message.variables?.[message.swipe_id ?? 0]));
+}
+
+function getMacroLikeVariables(type: MacroLikeVariableType): Record<string, any> {
+  return getVariables(
+    type === 'message'
+      ? {
+          type,
+          message_id: getLastMessageVariableId(),
+        }
+      : { type },
+  );
+}
+
+function omitVariableMetadata(value: any): any {
+  if (_.isArray(value)) {
+    return value.map(omitVariableMetadata);
+  }
+  if (_.isPlainObject(value)) {
+    return _(value)
+      .omitBy((_item, key) => key.startsWith('$'))
+      .mapValues(omitVariableMetadata)
+      .value();
+  }
+  return value;
+}
+
+function getMacroLikeVariableValue(type: MacroLikeVariableType, path: string): any {
+  return omitVariableMetadata(_.get(getMacroLikeVariables(type), _.unescape(path), null));
+}
+
+const FORMAT_VARIABLE_REPLACE_REGEX = /^(.*)\{\{format_(message|chat|character|preset|global)_variable::(.*?)\}\}/gim;
+const FORMAT_VARIABLE_PREFIX_REGEX = /^(.*)\{\{format_(message|chat|character|preset|global)_variable::(.*?)\}\}/im;
+const GET_VARIABLE_REPLACE_REGEX = /\{\{get_(message|chat|character|preset|global)_variable::(.*?)\}\}/gi;
+
+function applyFormatVariable(
+  _substring: string,
+  prefix: string,
+  type: MacroLikeVariableType,
+  path: string,
+): string {
+  const match = prefix.match(FORMAT_VARIABLE_PREFIX_REGEX);
+  if (match) {
+    prefix =
+      applyFormatVariable('', match[1], match[2] as MacroLikeVariableType, match[3]) + prefix.slice(match[0].length);
+  }
+
+  const value = getMacroLikeVariableValue(type, path);
+  const formatted_value = typeof value === 'string' ? value : YAML.stringify(value, { blockQuote: 'literal' }).trimEnd();
+  return prefix + formatted_value.replaceAll('\n', '\n' + ' '.repeat(prefix.length));
+}
+
+function applyTavernHelperVariableMacros(content: string): string {
+  let result = content.replace(
+    GET_VARIABLE_REPLACE_REGEX,
+    (_substring: string, type: MacroLikeVariableType, path: string) => {
+      const value = getMacroLikeVariableValue(type, path);
+      return typeof value === 'string' ? value : JSON.stringify(value);
+    },
+  );
+
+  result = result.replace(
+    FORMAT_VARIABLE_REPLACE_REGEX,
+    (_substring: string, prefix: string, type: MacroLikeVariableType, path: string) =>
+      applyFormatVariable(_substring, prefix, type, path),
+  );
+  return result;
+}
+
+function getWorldbookEntryContentCandidates(entry: ActivatedWorldbookEntry): string[] {
+  const candidates = [entry.content];
+  const macro_like_content = applyTavernHelperVariableMacros(entry.content);
+  if (macro_like_content !== entry.content) {
+    candidates.push(macro_like_content);
+  }
+  return candidates;
+}
+
 function parseActivatedWorldbookEntry(
   entry: { world: string } & SillyTavern.FlattenedWorldInfoEntry,
   index: number,
@@ -345,6 +406,7 @@ function replacePlaceholder(
 type ConsumedPromptContent = {
   prompt: SillyTavern.SendingMessage;
   index: number;
+  content: string;
 };
 
 function clearPromptContent(prompt: SillyTavern.SendingMessage, settings: Settings) {
@@ -407,7 +469,7 @@ function consumePromptContent(
       ({ content }) => content.slice(0, content_index) + content.slice(content_index + target.length),
       settings,
     );
-    return { prompt, index: prompt_index };
+    return { prompt, index: prompt_index, content: target };
   }
   return undefined;
 }
@@ -437,22 +499,35 @@ function extractWorldbookEntriesToPlaceholders(
       settings,
     );
     const flattened_chunks = _.flatten(chunks);
-    const consumed_entry_keys = new Set<string>();
+    const consumed_entry_contents = new Map<string, string>();
+    const entry_content_candidates = new Map(
+      entries.map(entry => [entry.key, getWorldbookEntryContentCandidates(entry)] as const),
+    );
     [...entries]
-      .sort((lhs, rhs) => rhs.content.length - lhs.content.length)
+      .sort(
+        (lhs, rhs) =>
+          _.max(entry_content_candidates.get(rhs.key)!.map(content => content.length))! -
+          _.max(entry_content_candidates.get(lhs.key)!.map(content => content.length))!,
+      )
       .forEach(entry => {
-        const consumed = consumePromptContent(flattened_chunks, entry.content, settings);
+        let consumed: ConsumedPromptContent | undefined;
+        for (const content of entry_content_candidates.get(entry.key)!.sort((lhs, rhs) => rhs.length - lhs.length)) {
+          consumed = consumePromptContent(flattened_chunks, content, settings);
+          if (consumed) {
+            break;
+          }
+        }
         if (consumed) {
           if (['before_example_messages', 'after_example_messages'].includes(entry.position)) {
             cleanupDialogueExampleSeparatorAfterConsumption(flattened_chunks, consumed, settings);
           }
-          consumed_entry_keys.add(entry.key);
+          consumed_entry_contents.set(entry.key, consumed.content);
         }
       });
 
     const placeholder_content = entries
-      .filter(entry => consumed_entry_keys.has(entry.key))
-      .map(entry => entry.content)
+      .filter(entry => consumed_entry_contents.has(entry.key))
+      .map(entry => consumed_entry_contents.get(entry.key)!)
       .join(settings.delimiter.value);
     replacePlaceholder(_.flatten(chunks), placeholder, placeholder_content, settings);
   };
@@ -465,14 +540,9 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
   const activated_worldbook_entries = new Map<string, ActivatedWorldbookEntry>();
   const raw_worldbook_entry_has_macro = new Map<string, boolean>();
 
-  eventOn(FORMAT_COMPLETION_DRY_RUN_PROCESSING_START_EVENT, enableNextDryRunPromptProcessing);
-  eventOn(FORMAT_COMPLETION_DRY_RUN_PROCESSING_END_EVENT, disableNextDryRunPromptProcessing);
-
-  const resetActivatedWorldbookEntries = (_type: string, _option: object, dry_run: boolean) => {
-    if (!dry_run || shouldProcessDryRunPrompt()) {
-      activated_worldbook_entries.clear();
-      raw_worldbook_entry_has_macro.clear();
-    }
+  const resetActivatedWorldbookEntries = () => {
+    activated_worldbook_entries.clear();
+    raw_worldbook_entry_has_macro.clear();
   };
   eventOn(tavern_events.GENERATION_AFTER_COMMANDS, resetActivatedWorldbookEntries);
 
@@ -509,8 +579,8 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
   };
   eventOn(tavern_events.WORLD_INFO_ACTIVATED, handleWorldInfoActivated);
 
-  const handlePrompts = ({ prompt }: { prompt: SillyTavern.SendingMessage[] }, dry_run: boolean) => {
-    if ((dry_run && !shouldProcessDryRunPrompt()) || !shouldEnable()) {
+  const handlePrompts = ({ prompt }: { prompt: SillyTavern.SendingMessage[] }) => {
+    if (!shouldEnable()) {
       return;
     }
 
@@ -594,7 +664,7 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
     assignInplace(prompt, result);
   };
   const handlePrompts2 = ({ messages }: { messages: SillyTavern.SendingMessage[] }) => {
-    handlePrompts({ prompt: messages }, false);
+    handlePrompts({ prompt: messages });
   };
 
   if (compare(getTavernVersion(), '1.13.4', '>')) {
@@ -653,8 +723,6 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
 
   return {
     unlisten: () => {
-      eventRemoveListener(FORMAT_COMPLETION_DRY_RUN_PROCESSING_START_EVENT, enableNextDryRunPromptProcessing);
-      eventRemoveListener(FORMAT_COMPLETION_DRY_RUN_PROCESSING_END_EVENT, disableNextDryRunPromptProcessing);
       eventRemoveListener(tavern_events.GENERATE_AFTER_DATA, handlePrompts);
       eventRemoveListener(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handlePrompts2);
       eventRemoveListener(tavern_events.GENERATION_AFTER_COMMANDS, resetActivatedWorldbookEntries);
