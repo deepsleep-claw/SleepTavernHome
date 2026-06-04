@@ -1,10 +1,14 @@
 {
   "scripts": {
     "build:dev": "webpack --mode development",
+<<<<<<< HEAD
     "build": "pnpm build:regex && webpack --mode production",
     "build:regex": "node util/build_tavern_regexes.mjs",
     "build:regex:dream-big-discuss": "node util/build_tavern_regexes.mjs src/酒馆助手/梦境讨论正则UI",
     "build:regex:dream-discuss": "pnpm build:regex:dream-big-discuss",
+=======
+    "build": "webpack --mode production",
+>>>>>>> 821d0f7fc2e1ba1b9ee76aa4a9f6fc81238c4bfb
     "watch": "webpack --mode development --watch --progress",
     "format": "prettier --write \"src/**/*.{ts,tsx,js,jsx,css,scss,html,vue}\" --no-error-on-unmatched-pattern",
     "lint": "eslint",
@@ -97,7 +101,11 @@
     "klona": "^2.0.6",
     "lodash": "^4.18.1",
     "pinia": "^3.0.4",
+<<<<<<< HEAD
     "pixi.js": "^8.19.0",
+=======
+    "pixi.js": "^8.18.1",
+>>>>>>> 821d0f7fc2e1ba1b9ee76aa4a9f6fc81238c4bfb
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "toastr": "^2.1.4",

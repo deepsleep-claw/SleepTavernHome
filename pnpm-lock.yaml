@@ -10,7 +10,11 @@ importers:
     dependencies:
       '@pixi/react':
         specifier: 8.0.0-beta.25
+<<<<<<< HEAD
         version: 8.0.0-beta.25(@types/react@19.2.16)(pixi.js@8.19.0)(react@19.2.7)
+=======
+        version: 8.0.0-beta.25(@types/react@19.2.16)(pixi.js@8.18.1)(react@19.2.7)
+>>>>>>> 821d0f7fc2e1ba1b9ee76aa4a9f6fc81238c4bfb
       '@vueuse/components':
         specifier: ^14.3.0
         version: 14.3.0(vue@3.5.35(typescript@6.0.0-dev.20250807))
@@ -60,8 +64,13 @@ importers:
         specifier: ^3.0.4
         version: 3.0.4(typescript@6.0.0-dev.20250807)(vue@3.5.35(typescript@6.0.0-dev.20250807))
       pixi.js:
+<<<<<<< HEAD
         specifier: ^8.19.0
         version: 8.19.0
+=======
+        specifier: ^8.18.1
+        version: 8.18.1
+>>>>>>> 821d0f7fc2e1ba1b9ee76aa4a9f6fc81238c4bfb
       react:
         specifier: ^19.2.7
         version: 19.2.7
@@ -3058,8 +3067,13 @@ packages:
     resolution: {integrity: sha512-ayCKvm/phCGxOkYRSCM82iDwct8/EonSEgCSxWxD7ve6jHggsFl4fZVQBPRNgQoKiuV/odhFrGzQXZwbifC8Rg==}
     engines: {node: '>=8'}
 
+<<<<<<< HEAD
   parse-svg-path@0.2.0:
     resolution: {integrity: sha512-Tf7FFIrguPKQwzD4pWnYkR2VOv3raoHeKED80Bm+BYHI3KxC8KsgsGC5+fSMzAGDA6UEk4bHvmi+RsjmL3khpg==}
+=======
+  parse-svg-path@0.1.2:
+    resolution: {integrity: sha512-JyPSBnkTJ0AI8GGJLfMXvKq42cj5c006fnLz6fXy6zfoVjJizi8BNTpu8on8ziI1cKy9d9DGNuY17Ce7wuejpQ==}
+>>>>>>> 821d0f7fc2e1ba1b9ee76aa4a9f6fc81238c4bfb
 
   parse5-htmlparser2-tree-adapter@7.1.0:
     resolution: {integrity: sha512-ruw5xyKs6lrpo9x9rCZqZZnIUntICjQAd0Wsmp396Ul9lN/h+ifgVV1x1gZHi8euej6wTfpqX8j+BFQxF0NS/g==}
@@ -3125,8 +3139,13 @@ packages:
     peerDependencies:
       pixi.js: '>=8.0.0-0'
 
+<<<<<<< HEAD
   pixi.js@8.19.0:
     resolution: {integrity: sha512-pq1O6emA/GFjjeF+8d3Pb5t7knD8FsnfWGqQcRjYjsqFZ7QdzG1XgjLDUu0DFJRbafjV5+g8iNLFBx0b9649lg==}
+=======
+  pixi.js@8.18.1:
+    resolution: {integrity: sha512-6LUPWYgulZhp/w4kam2XHXB0QedISZIqrJbRdHLLQ3csn5a38uzKxAp6B5j6s89QFYaIJbg95kvgTRcbgpO1ow==}
+>>>>>>> 821d0f7fc2e1ba1b9ee76aa4a9f6fc81238c4bfb
 
   pkg-dir@4.2.0:
     resolution: {integrity: sha512-HRDzbaKjC+AOWVXxAU/x54COGeIv9eb+6CkDSQoNTt4XyWoIJvuPsXizxu/Fr23EiekbtZwmh1IcIG/l/a10GQ==}
@@ -3860,8 +3879,13 @@ packages:
   undici-types@7.24.6:
     resolution: {integrity: sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg==}
 
+<<<<<<< HEAD
   undici@7.27.1:
     resolution: {integrity: sha512-UDdpiex+mzigiyrXrGbiUaF4HzTNhKbh2vRNFaTMzcqmLIPrZxaCtwo/1TMSuWoM1Xz3WiTo9KdgI3kRqYzJGg==}
+=======
+  undici@7.27.0:
+    resolution: {integrity: sha512-+t2Z/GwkZQDtu00813aP66ygViGtPHKhhoFZpQKpKrE+9jIgES+Zw+mFNaDWOVRKiuJjuqKHzD3B1sfGg8+ZOQ==}
+>>>>>>> 821d0f7fc2e1ba1b9ee76aa4a9f6fc81238c4bfb
     engines: {node: '>=20.18.1'}
 
   unified@11.0.5:
@@ -4426,10 +4450,17 @@ snapshots:
 
   '@pixi/colord@2.9.6': {}
 
+<<<<<<< HEAD
   '@pixi/react@8.0.0-beta.25(@types/react@19.2.16)(pixi.js@8.19.0)(react@19.2.7)':
     dependencies:
       its-fine: 1.2.5(@types/react@19.2.16)(react@19.2.7)
       pixi.js: 8.19.0
+=======
+  '@pixi/react@8.0.0-beta.25(@types/react@19.2.16)(pixi.js@8.18.1)(react@19.2.7)':
+    dependencies:
+      its-fine: 1.2.5(@types/react@19.2.16)(react@19.2.7)
+      pixi.js: 8.18.1
+>>>>>>> 821d0f7fc2e1ba1b9ee76aa4a9f6fc81238c4bfb
       react: 19.2.7
       react-reconciler: 0.31.0(react@19.2.7)
     transitivePeerDependencies:
@@ -5328,7 +5359,11 @@ snapshots:
       parse5: 7.3.0
       parse5-htmlparser2-tree-adapter: 7.1.0
       parse5-parser-stream: 7.1.2
+<<<<<<< HEAD
       undici: 7.27.1
+=======
+      undici: 7.27.0
+>>>>>>> 821d0f7fc2e1ba1b9ee76aa4a9f6fc81238c4bfb
       whatwg-mimetype: 4.0.0
 
   chokidar@3.6.0:
@@ -7182,7 +7217,11 @@ snapshots:
       json-parse-even-better-errors: 2.3.1
       lines-and-columns: 1.2.4
 
+<<<<<<< HEAD
   parse-svg-path@0.2.0: {}
+=======
+  parse-svg-path@0.1.2: {}
+>>>>>>> 821d0f7fc2e1ba1b9ee76aa4a9f6fc81238c4bfb
 
   parse5-htmlparser2-tree-adapter@7.1.0:
     dependencies:
@@ -7233,12 +7272,21 @@ snapshots:
     optionalDependencies:
       typescript: 6.0.0-dev.20250807
 
+<<<<<<< HEAD
   pixi-filters@6.1.5(pixi.js@8.19.0):
     dependencies:
       '@types/gradient-parser': 0.1.5
       pixi.js: 8.19.0
 
   pixi.js@8.19.0:
+=======
+  pixi-filters@6.1.5(pixi.js@8.18.1):
+    dependencies:
+      '@types/gradient-parser': 0.1.5
+      pixi.js: 8.18.1
+
+  pixi.js@8.18.1:
+>>>>>>> 821d0f7fc2e1ba1b9ee76aa4a9f6fc81238c4bfb
     dependencies:
       '@pixi/colord': 2.9.6
       '@types/earcut': 3.0.0
@@ -7248,7 +7296,11 @@ snapshots:
       eventemitter3: 5.0.4
       gifuct-js: 2.1.2
       ismobilejs: 1.1.1
+<<<<<<< HEAD
       parse-svg-path: 0.2.0
+=======
+      parse-svg-path: 0.1.2
+>>>>>>> 821d0f7fc2e1ba1b9ee76aa4a9f6fc81238c4bfb
       tiny-lru: 11.4.7
 
   pkg-dir@4.2.0:
@@ -7995,7 +8047,11 @@ snapshots:
 
   undici-types@7.24.6: {}
 
+<<<<<<< HEAD
   undici@7.27.1: {}
+=======
+  undici@7.27.0: {}
+>>>>>>> 821d0f7fc2e1ba1b9ee76aa4a9f6fc81238c4bfb
 
   unified@11.0.5:
     dependencies:
@@ -8215,8 +8271,13 @@ snapshots:
       '@antfu/utils': 0.7.10
       '@vueuse/core': 10.11.1(vue@3.5.35(typescript@6.0.0-dev.20250807))
       nanoid: 4.0.2
+<<<<<<< HEAD
       pixi-filters: 6.1.5(pixi.js@8.19.0)
       pixi.js: 8.19.0
+=======
+      pixi-filters: 6.1.5(pixi.js@8.18.1)
+      pixi.js: 8.18.1
+>>>>>>> 821d0f7fc2e1ba1b9ee76aa4a9f6fc81238c4bfb
       vue-demi: 0.14.10(vue@3.5.35(typescript@6.0.0-dev.20250807))
     transitivePeerDependencies:
       - '@vue/composition-api'

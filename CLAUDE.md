@@ -6,6 +6,9 @@
 @.cursor/rules/酒馆助手接口.mdc
 @.cursor/rules/前端界面.mdc
 @.cursor/rules/脚本.mdc
+<<<<<<< HEAD
 @.cursor/rules/正则界面.mdc
+=======
+>>>>>>> 821d0f7fc2e1ba1b9ee76aa4a9f6fc81238c4bfb
 @.cursor/rules/mvu变量框架.mdc
 @.cursor/rules/mvu角色卡.mdc
