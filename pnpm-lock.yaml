@@ -232,8 +232,13 @@ importers:
         specifier: ^5.6.1
         version: 5.6.1(postcss@8.5.15)(webpack@5.107.2)
       ts-loader:
+<<<<<<< HEAD
         specifier: ^9.6.1
         version: 9.6.1(loader-utils@1.4.2)(typescript@6.0.0-dev.20250807)(webpack@5.107.2)
+=======
+        specifier: ^9.6.0
+        version: 9.6.0(loader-utils@1.4.2)(typescript@6.0.0-dev.20250807)(webpack@5.107.2)
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
       ts-node:
         specifier: ^10.9.2
         version: 10.9.2(@types/node@25.9.3)(typescript@6.0.0-dev.20250807)
@@ -1758,8 +1763,13 @@ packages:
   earcut@3.0.2:
     resolution: {integrity: sha512-X7hshQbLyMJ/3RPhyObLARM2sNxxmRALLKx1+NVFFnQ9gKzmCrxm9+uLIAdBcvc8FNLpctqlQ2V6AE92Ol9UDQ==}
 
+<<<<<<< HEAD
   electron-to-chromium@1.5.374:
     resolution: {integrity: sha512-HCF5i7izveksHSGqa7mhDh6tr3Uz9Dar2RAjwuh69bw3QGPVObjQIgLwQWeO/Rxp9/r0KdboKy9RbpQDl97fjg==}
+=======
+  electron-to-chromium@1.5.373:
+    resolution: {integrity: sha512-G2Hym8JIf/QreuseqkDibgH8Ci8KfJzqGDKdakbhSx9UltwRBH2cBLAWU/lBX0sCdv0TlhyxQyDCnSfxgMWsjA==}
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
 
   emoji-regex@8.0.0:
     resolution: {integrity: sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A==}
@@ -1775,8 +1785,13 @@ packages:
     resolution: {integrity: sha512-HqD3yTBfnBxIrbnM1DoD6Pcq8NECnh8d4As1Qgh0z5Gg3jRRIqijury0CL3ghu/edArpUYiYqQiDUQBIs4np3Q==}
     engines: {node: '>=10.0.0'}
 
+<<<<<<< HEAD
   engine.io@6.6.9:
     resolution: {integrity: sha512-clKkw4C7nJ22mGgoVcCg6V/W/TxdNyIOTr89k2ONZu81qqkddPFDF0LXcbAwhzPD8DjkiRCjzuiO6Y+fkpD4vg==}
+=======
+  engine.io@6.6.8:
+    resolution: {integrity: sha512-2agL3ueZhqxoVrfmntO8yuVj+uNSlIOnhykYHk3Cq0ShYPdUjjUiSJrQvXjq01I9jAuI0Zl2YO8Evv5Mqytm5g==}
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
     engines: {node: '>=10.2.0'}
 
   enhanced-resolve@5.21.6:
@@ -3533,8 +3548,13 @@ packages:
   slick@1.12.2:
     resolution: {integrity: sha512-4qdtOGcBjral6YIBCWJ0ljFSKNLz9KkhbWtuGvUyRowl1kxfuE1x/Z/aJcaiilpb3do9bl5K7/1h9XC5wWpY/A==}
 
+<<<<<<< HEAD
   socket.io-adapter@2.5.8:
     resolution: {integrity: sha512-6Oy52pbg+kvdCVvjcN+FnY7BvxZ7cIHNScbvztT/It5d0vbwoJoVZmF2gjJmnV0/4WlXRfG15zc45ySk9Ah8bw==}
+=======
+  socket.io-adapter@2.5.7:
+    resolution: {integrity: sha512-e0LyK91f3cUxTmv95/KzoLg47+zF+s/sbxRGDNsyG4dmIP8ZSX8ax6byOxfJXeNNtS/8AZlfD+uP7gBeR7DLlg==}
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
 
   socket.io-parser@4.2.6:
     resolution: {integrity: sha512-asJqbVBDsBCJx0pTqw3WfesSY0iRX+2xzWEWzrpcH7L6fLzrhyF8WPI8UaeM4YCuDfpwA/cgsdugMsmtz8EJeg==}
@@ -3778,8 +3798,13 @@ packages:
     peerDependencies:
       typescript: '>=4.8.4'
 
+<<<<<<< HEAD
   ts-loader@9.6.1:
     resolution: {integrity: sha512-8FMHnmxtpncUAu0ZjkqpXnOTlwc9eY95esH8WVN94guTPPdkg2ofVdiVM5j8L2lmjiGerXd56zXb/D2JyVQPLg==}
+=======
+  ts-loader@9.6.0:
+    resolution: {integrity: sha512-dsJO0S+T7grTDWTc4a0nTygXGjKncVUpx8Y+af8EvI/D5WgTJby5UEk5eoMCB9EcLQmnvitqh99MqtjtHgAwFQ==}
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
     engines: {node: '>=12.0.0'}
     peerDependencies:
       loader-utils: '*'
@@ -4133,8 +4158,13 @@ packages:
     resolution: {integrity: sha512-YVGIj2kamLSTxw6NsZjoBxfSwsn0ycdesmc4p+Q21c5zPuZ1pl+NfxVdxPtdHvmNVOQ6XSYG4AUtyt/Fi7D16Q==}
     engines: {node: '>=10'}
 
+<<<<<<< HEAD
   ws@8.21.0:
     resolution: {integrity: sha512-Vsp28b7DRcimFQvrqu2Wek3z1iYxDCWqHYB8Qsnk/S4RfaCQzPGPyBNuVjJV3cd6UiKtUtp6sNM77gWvzcCH+g==}
+=======
+  ws@8.20.1:
+    resolution: {integrity: sha512-It4dO0K5v//JtTXuPkfEOaI3uUN87iYPnqo/ZzqCoG3g8uhA66QUMs/SrM0YK7/NAu+r4LMh/9dq2A7k+rHs+w==}
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
     engines: {node: '>=10.0.0'}
     peerDependencies:
       bufferutil: ^4.0.1
@@ -5244,7 +5274,11 @@ snapshots:
     dependencies:
       baseline-browser-mapping: 2.10.37
       caniuse-lite: 1.0.30001799
+<<<<<<< HEAD
       electron-to-chromium: 1.5.374
+=======
+      electron-to-chromium: 1.5.373
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
       node-releases: 2.0.47
       update-browserslist-db: 1.2.3(browserslist@4.28.2)
 
@@ -5697,7 +5731,11 @@ snapshots:
 
   earcut@3.0.2: {}
 
+<<<<<<< HEAD
   electron-to-chromium@1.5.374: {}
+=======
+  electron-to-chromium@1.5.373: {}
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
 
   emoji-regex@8.0.0: {}
 
@@ -5710,7 +5748,11 @@ snapshots:
 
   engine.io-parser@5.2.3: {}
 
+<<<<<<< HEAD
   engine.io@6.6.9:
+=======
+  engine.io@6.6.8:
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
     dependencies:
       '@types/cors': 2.8.19
       '@types/node': 25.9.3
@@ -5721,7 +5763,11 @@ snapshots:
       cors: 2.8.6
       debug: 4.4.3
       engine.io-parser: 5.2.3
+<<<<<<< HEAD
       ws: 8.21.0
+=======
+      ws: 8.20.1
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -7686,10 +7732,17 @@ snapshots:
 
   slick@1.12.2: {}
 
+<<<<<<< HEAD
   socket.io-adapter@2.5.8:
     dependencies:
       debug: 4.4.3
       ws: 8.21.0
+=======
+  socket.io-adapter@2.5.7:
+    dependencies:
+      debug: 4.4.3
+      ws: 8.20.1
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
     transitivePeerDependencies:
       - bufferutil
       - supports-color
@@ -7708,8 +7761,13 @@ snapshots:
       base64id: 2.0.0
       cors: 2.8.6
       debug: 4.4.3
+<<<<<<< HEAD
       engine.io: 6.6.9
       socket.io-adapter: 2.5.8
+=======
+      engine.io: 6.6.8
+      socket.io-adapter: 2.5.7
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
       socket.io-parser: 4.2.6
     transitivePeerDependencies:
       - bufferutil
@@ -7911,7 +7969,11 @@ snapshots:
     dependencies:
       typescript: 6.0.0-dev.20250807
 
+<<<<<<< HEAD
   ts-loader@9.6.1(loader-utils@1.4.2)(typescript@6.0.0-dev.20250807)(webpack@5.107.2):
+=======
+  ts-loader@9.6.0(loader-utils@1.4.2)(typescript@6.0.0-dev.20250807)(webpack@5.107.2):
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
     dependencies:
       chalk: 4.1.2
       enhanced-resolve: 5.24.0
@@ -8408,7 +8470,11 @@ snapshots:
       string-width: 4.2.3
       strip-ansi: 6.0.1
 
+<<<<<<< HEAD
   ws@8.21.0: {}
+=======
+  ws@8.20.1: {}
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
 
   xml-name-validator@4.0.0: {}
 

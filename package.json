@@ -1,10 +1,14 @@
 {
   "scripts": {
     "build:dev": "webpack --mode development",
+<<<<<<< HEAD
     "build": "pnpm build:regex && webpack --mode production",
     "build:regex": "node util/build_tavern_regexes.mjs",
     "build:regex:dream-big-discuss": "node util/build_tavern_regexes.mjs src/酒馆助手/梦境讨论正则UI",
     "build:regex:dream-discuss": "pnpm build:regex:dream-big-discuss",
+=======
+    "build": "webpack --mode production",
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
     "watch": "webpack --mode development --watch --progress",
     "format": "prettier --write \"src/**/*.{ts,tsx,js,jsx,css,scss,html,vue}\" --no-error-on-unmatched-pattern",
     "lint": "eslint",
@@ -62,7 +66,11 @@
     "style-loader": "^4.0.0",
     "tailwindcss": "^4.3.1",
     "terser-webpack-plugin": "^5.6.1",
+<<<<<<< HEAD
     "ts-loader": "^9.6.1",
+=======
+    "ts-loader": "^9.6.0",
+>>>>>>> 1fdfca54e89542414750e2c88ad8fca7d4a3f85c
     "ts-node": "^10.9.2",
     "tsconfig-paths-webpack-plugin": "^4.2.0",
     "tslib": "^2.8.1",
