@@ -229,9 +229,15 @@
     return card;
   };
 
+  const getAnswerNodes = function (qNode) {
+    return Array.from(qNode.children).filter(function (node) {
+      return /^[a-z]$/i.test(node.tagName);
+    });
+  };
+
   qNodes.forEach(function (qNode, index) {
     const question = (qNode.getAttribute('content') || '问题 ' + (index + 1)).trim();
-    const answers = Array.from(qNode.querySelectorAll('a'))
+    const answers = getAnswerNodes(qNode)
       .map(node => (node.textContent || '').trim())
       .filter(Boolean);
     grid.appendChild(makeCard(question, answers));

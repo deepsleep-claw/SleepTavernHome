@@ -7,7 +7,7 @@
 - `source/regex.json`: 正则元数据、捕获规则和作用范围。
 - `source/template.html`: 替换后的 HTML 骨架，`$1` 是 `<dream_big_discuss>` 捕获内容。
 - `source/style.css`: PC 三列、手机单列的紧凑 UI 样式。
-- `source/runtime.js`: 解析 `<q>`/`<a>` 并写入 SillyTavern 输入框的交互逻辑。
+- `source/runtime.js`: 解析 `<q>` 和任意单字母回答标签并写入 SillyTavern 输入框的交互逻辑。
 
 ## 输入和输出
 
@@ -18,6 +18,8 @@
 讨论与分析过程
 <q content="问题">
 <a>回答方向</a>
+<b>另一个回答方向</b>
+<c>继续追加的回答方向</c>
 </q>
 </dream_big_discuss>
 ```

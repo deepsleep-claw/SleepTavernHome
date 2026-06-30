@@ -1,0 +1,17 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // 默认 LLM
+  "model": "deepseek/deepseek-v4-pro",
+  // 默认主 Agent，只能是 primary agent
+  "default_agent": "build",
+  // 覆盖内置 agent 或新增 agent
+  "agent": {
+    "creator": {
+      "mode": "all",
+      "description": "以创作者的身份讨论和完善世界设计",
+      "model": "deepseek/deepseek-v4-pro",
+      "prompt": "Creator.md",
+      "temperature": 1
+    }
+  }
+}

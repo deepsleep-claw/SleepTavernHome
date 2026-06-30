@@ -97,6 +97,7 @@
 .dream-big-discuss-ui__grid {
   display: grid !important;
   max-width: 100%;
+  align-items: start;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.55rem !important;
 }
@@ -209,12 +210,12 @@
 }
 
 .dream-big-discuss-ui__answer-text {
-  display: -webkit-box;
-  overflow: hidden;
+  display: block;
+  overflow: visible;
   min-width: 0;
   color: color-mix(in srgb, var(--dream-big-discuss-text) 92%, transparent);
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .dream-big-discuss-ui__custom-form {
@@ -269,7 +270,4 @@
     grid-template-columns: 1fr;
   }
 
-  .dream-big-discuss-ui__answer-text {
-    -webkit-line-clamp: 3;
-  }
 }
