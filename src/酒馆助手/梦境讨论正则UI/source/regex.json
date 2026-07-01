@@ -3,7 +3,7 @@
   "scriptName": "[🦋美化]思客大调查",
   "outputFile": "梦境大讨论正则UI.json",
   "wrapInBody": true,
-  "findRegex": "<dream_big_discuss>\\s*([\\s\\S]*?)\\s*<\\/dream_big_discuss>",
+  "findRegex": "/^<dream_big_discuss>\\s*([\\s\\S]*?)\\s*</dream_big_discuss>/gm",
   "trimStrings": [],
   "placement": [
     2

@@ -1,7 +1,7 @@
 {
   "id": "d42ec189-ed23-4b6c-92a3-c150a42c57e3",
   "scriptName": "[🦋美化]思客大调查",
-  "findRegex": "<dream_big_discuss>\\s*([\\s\\S]*?)\\s*<\\/dream_big_discuss>",
+  "findRegex": "/^<dream_big_discuss>\\s*([\\s\\S]*?)\\s*</dream_big_discuss>/gm",
   "trimStrings": [],
   "placement": [
     2
