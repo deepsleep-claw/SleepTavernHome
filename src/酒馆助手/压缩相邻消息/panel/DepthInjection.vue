@@ -53,6 +53,14 @@
     </template>
 
     <template v-if="store.settings.entry_processing.mode === 'worldbook'">
+      <Checkbox v-model="store.settings.entry_processing.worldbook.aggressive_green_cache.enabled">
+        <span>激进处理绿灯缓存</span>
+      </Checkbox>
+
+      <div class="TR-green-cache-actions">
+        <button type="button" class="menu_button" @click="clearGreenCache">清空绿灯缓存</button>
+      </div>
+
       <Checkbox v-model="store.settings.entry_processing.worldbook.constant.enabled">
         <span>提取无动态宏的蓝灯持久条目到 {{ store.settings.entry_processing.worldbook.constant.placeholder }}</span>
       </Checkbox>
@@ -89,6 +97,7 @@
 </template>
 
 <script setup lang="ts">
+import { clearGreenCacheVariables } from '../green_cache';
 import { WorldbookExtractionPositionOrder, useSettingsStore } from '../store';
 import Checkbox from './component/Checkbox.vue';
 import Field from './component/Field.vue';
@@ -119,10 +128,28 @@ function movePosition(index: number, offset: -1 | 1) {
   }
   [order[index], order[target_index]] = [order[target_index], order[index]];
 }
+
+async function clearGreenCache() {
+  const confirmed = await SillyTavern.callGenericPopup(
+    '确定清空当前聊天的绿灯缓存吗？',
+    SillyTavern.POPUP_TYPE.CONFIRM,
+  );
+  if (confirmed !== true && confirmed !== SillyTavern.POPUP_RESULT.AFFIRMATIVE) {
+    return;
+  }
+  clearGreenCacheVariables();
+  toastr.info('已清空当前聊天的绿灯缓存。', '压缩相邻消息');
+}
 </script>
 
 <style scoped>
 .TR-position-order-item {
   gap: 0.35rem;
+}
+
+.TR-green-cache-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 0.35rem;
 }
 </style>

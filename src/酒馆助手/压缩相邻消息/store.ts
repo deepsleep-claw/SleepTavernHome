@@ -81,6 +81,9 @@ const OldSettings = z
       entry_processing: {
         mode: 'none',
         worldbook: {
+          aggressive_green_cache: {
+            enabled: false,
+          },
           constant: {
             enabled: true,
             placeholder: '{{压缩相邻消息::lora_constant}}',
@@ -151,6 +154,11 @@ export const Settings = z
         mode: z.enum(['none', 'depth', 'worldbook']).default('none').catch('none'),
         worldbook: z
           .object({
+            aggressive_green_cache: z
+              .object({
+                enabled: z.boolean().default(false).catch(false),
+              })
+              .prefault({}),
             constant: z
               .object({
                 enabled: z.boolean().default(true).catch(true),
