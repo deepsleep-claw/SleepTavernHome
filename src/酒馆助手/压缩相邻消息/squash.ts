@@ -11,6 +11,9 @@ import {
 } from './green_cache';
 import { Settings, WorldbookExtractionPositionOrder } from './store';
 
+const GREEN_CACHE_ANCHOR_PREFIX = '<<<TH_SQUASH_GREEN_CACHE_ANCHOR';
+const GREEN_CACHE_ANCHOR_REGEX = /<<<TH_SQUASH_GREEN_CACHE_ANCHOR:([^>]+)>>>/g;
+
 function getPromptContent(prompt: SillyTavern.SendingMessage, settings: Settings): string {
   if (typeof prompt.content === 'string') {
     return prompt.content;
@@ -67,9 +70,15 @@ export function injectSeparators(settings: Settings) {
       content: `【【压缩相邻消息-聊天记录结尾】】`,
     },
   } as const);
+  let green_anchor_prompt_ids: string[] = [];
 
   const inject = () => {
-    injectPrompts(Object.values(separators));
+    if (green_anchor_prompt_ids.length > 0) {
+      uninjectPrompts(green_anchor_prompt_ids);
+    }
+    const green_anchor_prompts = getGreenCacheAnchorInjectionPrompts(settings);
+    green_anchor_prompt_ids = green_anchor_prompts.map(prompt => prompt.id);
+    injectPrompts([...Object.values(separators), ...green_anchor_prompts]);
   };
   eventOn(tavern_events.GENERATION_AFTER_COMMANDS, inject);
 
@@ -77,7 +86,8 @@ export function injectSeparators(settings: Settings) {
     separators,
     uninject: () => {
       eventRemoveListener(tavern_events.GENERATION_AFTER_COMMANDS, inject);
-      uninjectPrompts(Object.values(separators).map(({ id }) => id));
+      uninjectPrompts([...Object.values(separators).map(({ id }) => id), ...green_anchor_prompt_ids]);
+      green_anchor_prompt_ids = [];
     },
   };
 }
@@ -326,6 +336,157 @@ type WorldbookContentAnalysis = {
   getwi_calls: AnalyzedGetwiCall[];
 };
 
+type WorldbookSortedExtractionDebugItem = {
+  sort_order: number;
+  consume_order: number;
+  placeholder: string;
+  trigger_type: ActivatedWorldbookEntry['trigger_type'];
+  key: string;
+  part_index?: number;
+  target_key?: string;
+  target_name?: string;
+  position: WorldbookExtractionPosition;
+  depth: number;
+  entry_order: number;
+  activated_index: number;
+  wrapper_id?: string;
+  candidate_lengths: number[];
+  candidate_has_dynamic_macro: boolean[];
+};
+
+type PromptContentDebugItem = {
+  stage: string;
+  chunk?: 'head' | 'above_chat_history' | 'below_chat_history' | 'tail';
+  index: number;
+  role: SillyTavern.SendingMessage['role'];
+  name?: string;
+  length: number;
+  has_lora_constant_placeholder: boolean;
+  has_lora_key_placeholder: boolean;
+  wrapper_pairs: number;
+  wrapper_orphans: number;
+  content_lines: string[];
+};
+
+type WorldbookWrapperPresenceDebug = {
+  paired: boolean;
+  start_count: number;
+  end_count: number;
+  paired_count: number;
+};
+
+type WorldbookCandidateMatchDebugItem = {
+  index: number;
+  length: number;
+  has_dynamic_macro: boolean;
+  regex_available: boolean;
+  exact_prompt_indexes: number[];
+  regex_prompt_indexes: number[];
+  normalized_prompt_indexes: number[];
+  candidate_lines: string[];
+};
+
+type WorldbookExtractionFailureReason =
+  | 'wrapper_missing_or_already_consumed'
+  | 'wrapper_incomplete'
+  | 'wrapper_present_but_not_consumed'
+  | 'no_content_candidates'
+  | 'no_candidate_match'
+  | 'candidate_match_detected_but_not_consumed';
+
+type GreenCacheInsertionSource =
+  | 'custom_anchor'
+  | 'before_chat_history'
+  | 'before_chat_anchor';
+
+type GreenCacheDebugState = {
+  summary?: {
+    cache_total: number;
+    valid_cache_total: number;
+    deduped_cache_total: number;
+    injectable_cache_total: number;
+    aggressive_activated_total: number;
+    handled_total: number;
+    new_cache_total: number;
+    suppressed_total: number;
+    inserted_entry_total: number;
+    new_anchor_key: string;
+    can_insert_new_anchor: boolean;
+  };
+  chat_messages: {
+    order: number;
+    anchor_key: string;
+    message_id: number;
+    swipe_id: number;
+    role: ChatMessage['role'];
+    is_hidden: boolean;
+    message_hash: string;
+    message_length: number;
+    anchor_depth?: number;
+    prompt_chunk_index?: PromptInsertionLocation['chunk_index'];
+    prompt_index?: number;
+    insertion_source?: GreenCacheInsertionSource;
+    insertion_chunk_index?: PromptInsertionLocation['chunk_index'];
+    insertion_index?: number;
+    insertion_source_anchor_key?: string;
+  }[];
+  cache_entries: {
+    identity: string;
+    world: string;
+    uid: number;
+    name: string;
+    anchor_key: string;
+    message_id: number | null;
+    swipe_id: number | null;
+    message_hash: string | null;
+    created_at: number;
+    can_insert: boolean;
+    will_insert: boolean;
+    suppressed: boolean;
+    content_length: number;
+    insertion_source?: GreenCacheInsertionSource;
+    insertion_chunk_index?: PromptInsertionLocation['chunk_index'];
+    insertion_index?: number;
+    insertion_source_anchor_key?: string;
+  }[];
+  activations: {
+    key: string;
+    identity: string;
+    world: string;
+    uid: number;
+    name: string;
+    action:
+      | 'fixed_cache_consumed'
+      | 'fixed_cache_original_missing'
+      | 'skip_fixed_anchor_unavailable'
+      | 'new_cache_created'
+      | 'skip_new_anchor_unavailable'
+      | 'skip_content_not_found';
+    cached_anchor_key?: string;
+    cached_can_insert?: boolean;
+    cached_insertion_source?: GreenCacheInsertionSource;
+    cached_insertion_chunk_index?: PromptInsertionLocation['chunk_index'];
+    cached_insertion_index?: number;
+    consumed: boolean;
+    consumed_method?: ConsumedPromptContent['method'];
+    consumed_prompt_index?: number;
+    consumed_content_length?: number;
+    new_anchor_key: string;
+  }[];
+  insertions: {
+    anchor_key: string;
+    insertion_source: GreenCacheInsertionSource;
+    chunk_index: PromptInsertionLocation['chunk_index'];
+    insert_index: number;
+    order?: number;
+    entry_count: number;
+    identities: string[];
+    names: string[];
+    content_lengths: number[];
+    source_anchor_key?: string;
+  }[];
+};
+
 function removeSafeGetwiTemplateMacros(content: string): string {
   return content.replace(SAFE_GETWI_TEMPLATE_REGEX, '');
 }
@@ -392,10 +553,20 @@ type WorldbookExtractionDebugState = {
     target_name?: string;
     wrapper_id?: string;
     wrapper_present_before_consume?: boolean;
+    wrapper_presence_before_consume?: WorldbookWrapperPresenceDebug;
+    candidate_count: number;
+    candidate_regex_available_count: number;
+    candidate_exact_match_count: number;
+    candidate_regex_match_count: number;
+    candidate_normalized_match_count: number;
+    candidate_match_debug: WorldbookCandidateMatchDebugItem[];
+    failure_reason?: WorldbookExtractionFailureReason;
     consumed: boolean;
     method?: ConsumedPromptContent['method'];
     content_length?: number;
   }[];
+  sorted_extraction: WorldbookSortedExtractionDebugItem[];
+  green_cache: GreenCacheDebugState;
   wrapper_before_unwrap: {
     paired: number;
     orphan: number;
@@ -417,6 +588,13 @@ function createWorldbookExtractionDebugState(): WorldbookExtractionDebugState {
     },
     activated: [],
     extraction: [],
+    sorted_extraction: [],
+    green_cache: {
+      chat_messages: [],
+      cache_entries: [],
+      activations: [],
+      insertions: [],
+    },
     wrapper_before_unwrap: {
       paired: 0,
       orphan: 0,
@@ -442,6 +620,12 @@ function resetWorldbookExtractionDebugState(state: WorldbookExtractionDebugState
   };
   state.activated.length = 0;
   state.extraction.length = 0;
+  state.sorted_extraction.length = 0;
+  state.green_cache.summary = undefined;
+  state.green_cache.chat_messages.length = 0;
+  state.green_cache.cache_entries.length = 0;
+  state.green_cache.activations.length = 0;
+  state.green_cache.insertions.length = 0;
   state.wrapper_before_unwrap = {
     paired: 0,
     orphan: 0,
@@ -469,12 +653,49 @@ function getWorldbookExtractionWrapperStats(
   );
 }
 
+function printGreenCacheDebugState(state: GreenCacheDebugState) {
+  if (
+    !state.summary &&
+    state.chat_messages.length === 0 &&
+    state.cache_entries.length === 0 &&
+    state.activations.length === 0 &&
+    state.insertions.length === 0
+  ) {
+    return;
+  }
+
+  const title = `[压缩相邻消息] 绿灯缓存调试: 缓存 ${state.summary?.deduped_cache_total ?? 0}, 激活 ${state.summary?.aggressive_activated_total ?? 0}, 插入 ${state.summary?.inserted_entry_total ?? 0}`;
+  if (typeof console.groupCollapsed === 'function') {
+    console.groupCollapsed(title);
+    if (state.summary) {
+      console.info(state.summary);
+    }
+    if (state.chat_messages.length > 0) {
+      console.table(state.chat_messages);
+    }
+    if (state.cache_entries.length > 0) {
+      console.table(state.cache_entries);
+    }
+    if (state.activations.length > 0) {
+      console.table(state.activations);
+    }
+    if (state.insertions.length > 0) {
+      console.table(state.insertions);
+    }
+    console.dir({ green_cache: state }, { depth: null });
+    console.groupEnd();
+  } else {
+    console.info(title, state);
+  }
+}
+
 function printWorldbookExtractionDebugState(state: WorldbookExtractionDebugState) {
   if (state.total_activated === 0 && state.total_extraction === 0 && state.loaded.total === 0) {
     return;
   }
 
   const failed = state.total_extraction - state.total_consumed;
+  const failed_extractions = state.extraction.filter(entry => !entry.consumed);
   const title = `[压缩相邻消息] 世界书提取调试: 激活 ${state.total_activated}, 尝试 ${state.total_extraction}, 成功 ${state.total_consumed}, 失败 ${failed}, 残留包裹 ${state.wrapper_before_unwrap.paired}/${state.wrapper_before_unwrap.orphan}`;
   const summary = {
     loaded: state.loaded,
@@ -495,12 +716,104 @@ function printWorldbookExtractionDebugState(state: WorldbookExtractionDebugState
     if (state.extraction.length > 0) {
       console.table(state.extraction);
     }
+    if (failed_extractions.length > 0) {
+      console.table(failed_extractions);
+      console.dir({ failed_extractions }, { depth: null });
+    }
+    printGreenCacheDebugState(state.green_cache);
     console.groupEnd();
   } else {
     console.info(title, {
       summary,
       activated: state.activated,
       extraction: state.extraction,
+      failed_extractions,
+      green_cache: state.green_cache,
+    });
+  }
+}
+
+function getPromptContentDebugItem(
+  prompt: SillyTavern.SendingMessage,
+  stage: string,
+  index: number,
+  settings: Settings,
+  chunk?: PromptContentDebugItem['chunk'],
+): PromptContentDebugItem {
+  const content = getPromptContent(prompt, settings);
+  const content_without_pairs = content.replace(WORLDBOOK_EXTRACTION_WRAPPER_REGEX, '');
+  const { constant, keyed } = settings.entry_processing.worldbook;
+  return {
+    stage,
+    chunk,
+    index,
+    role: prompt.role,
+    name: _.get(prompt, 'name'),
+    length: content.length,
+    has_lora_constant_placeholder: content.includes(constant.placeholder),
+    has_lora_key_placeholder: content.includes(keyed.placeholder),
+    wrapper_pairs: [...content.matchAll(WORLDBOOK_EXTRACTION_WRAPPER_REGEX)].length,
+    wrapper_orphans: [...content_without_pairs.matchAll(ORPHAN_WORLDBOOK_EXTRACTION_WRAPPER_REGEX)].length,
+    content_lines: content.split('\n'),
+  };
+}
+
+function getChunkPromptContentDebugItems(
+  chunks: SillyTavern.SendingMessage[][],
+  stage: string,
+  settings: Settings,
+): PromptContentDebugItem[] {
+  const chunk_names: PromptContentDebugItem['chunk'][] = [
+    'head',
+    'above_chat_history',
+    'below_chat_history',
+    'tail',
+  ];
+  return chunks.flatMap((chunk, chunk_index) =>
+    chunk.map((prompt, index) => getPromptContentDebugItem(prompt, stage, index, settings, chunk_names[chunk_index])),
+  );
+}
+
+function getPromptContentDebugItems(
+  prompts: SillyTavern.SendingMessage[],
+  stage: string,
+  settings: Settings,
+): PromptContentDebugItem[] {
+  return prompts.map((prompt, index) => getPromptContentDebugItem(prompt, stage, index, settings));
+}
+
+function printWorldbookSortedContentDebugState(
+  state: WorldbookExtractionDebugState,
+  prompt_stages: { stage: string; prompts: PromptContentDebugItem[] }[],
+) {
+  const prompts = prompt_stages.flatMap(({ prompts }) => prompts);
+  if (state.sorted_extraction.length === 0 && prompts.length === 0) {
+    return;
+  }
+
+  const title = `[压缩相邻消息] 世界书排序内容调试: 提取项 ${state.sorted_extraction.length}, prompt ${prompts.length}`;
+  const prompt_summary = prompts.map(({ content_lines, ...summary }) => summary);
+
+  if (typeof console.groupCollapsed === 'function') {
+    console.groupCollapsed(title);
+    if (state.sorted_extraction.length > 0) {
+      console.table(state.sorted_extraction);
+    }
+    if (prompt_summary.length > 0) {
+      console.table(prompt_summary);
+    }
+    console.dir(
+      {
+        sorted_extraction: state.sorted_extraction,
+        prompt_stages,
+      },
+      { depth: null },
+    );
+    console.groupEnd();
+  } else {
+    console.info(title, {
+      sorted_extraction: state.sorted_extraction,
+      prompt_stages,
     });
   }
 }
@@ -799,7 +1112,7 @@ function parseActivatedWorldbookEntry(
   index: number,
   metadata: WorldbookEntryMetadata | undefined,
 ): ActivatedWorldbookEntry | undefined {
-  const content = trimEmptyLines(entry.content ?? '');
+  const content = trimEmptyLines(unwrapWorldbookExtractionWrapperText(entry.content ?? ''));
   if (!content) {
     return undefined;
   }
@@ -875,6 +1188,11 @@ function wrapWorldbookEntryMetadataSourceContent(
   next_wrapper_id: () => string,
 ) {
   const content = unwrapWorldbookExtractionWrapperText(source_entry.content);
+  if (!metadata.is_constant) {
+    source_entry.content = content;
+    return;
+  }
+
   if (metadata.split_getwi_parts.length > 0) {
     let part_index = 0;
     source_entry.content = content.replace(SAFE_GETWI_TEMPLATE_REGEX, template => {
@@ -963,7 +1281,7 @@ type ConsumedPromptContent = {
   prompt: SillyTavern.SendingMessage;
   index: number;
   content: string;
-  method: 'exact' | 'regex' | 'wrapper';
+  method: 'exact' | 'regex' | 'wrapper' | 'normalized';
 };
 
 function clearPromptContent(prompt: SillyTavern.SendingMessage, settings: Settings) {
@@ -1053,6 +1371,64 @@ function consumePromptContentByRegex(
   return undefined;
 }
 
+function getNonWhitespaceContentIndex(content: string): { normalized: string; indexes: number[] } {
+  let normalized = '';
+  const indexes: number[] = [];
+  for (let index = 0; index < content.length; index++) {
+    if (!/\s/.test(content[index])) {
+      normalized += content[index];
+      indexes.push(index);
+    }
+  }
+  return { normalized, indexes };
+}
+
+function findPromptContentByNormalizedWhitespace(content: string, target: string): { start: number; end: number } | undefined {
+  const normalized_target = target.replace(/\s/g, '');
+  if (!normalized_target) {
+    return undefined;
+  }
+
+  const normalized_content = getNonWhitespaceContentIndex(content);
+  const normalized_index = normalized_content.normalized.indexOf(normalized_target);
+  if (normalized_index === -1) {
+    return undefined;
+  }
+
+  let start = normalized_content.indexes[normalized_index];
+  let end = normalized_content.indexes[normalized_index + normalized_target.length - 1] + 1;
+  while (start > 0 && /[ \t]/.test(content[start - 1])) {
+    start--;
+  }
+  while (end < content.length && /[ \t]/.test(content[end])) {
+    end++;
+  }
+  return { start, end };
+}
+
+function consumePromptContentByNormalizedWhitespace(
+  prompts: SillyTavern.SendingMessage[],
+  target: string,
+  settings: Settings,
+): ConsumedPromptContent | undefined {
+  for (const [prompt_index, prompt] of prompts.entries()) {
+    const content = getPromptContent(prompt, settings);
+    const match = findPromptContentByNormalizedWhitespace(content, target);
+    if (!match) {
+      continue;
+    }
+
+    const consumed_content = content.slice(match.start, match.end);
+    updatePromptContentWith(
+      prompt,
+      ({ content }) => content.slice(0, match.start) + content.slice(match.end),
+      settings,
+    );
+    return { prompt, index: prompt_index, content: consumed_content, method: 'normalized' };
+  }
+  return undefined;
+}
+
 function consumeWrappedPromptContent(
   prompts: SillyTavern.SendingMessage[],
   wrapper_id: string,
@@ -1085,18 +1461,85 @@ function consumeWrappedPromptContent(
   return undefined;
 }
 
+function countStringOccurrences(content: string, target: string): number {
+  let count = 0;
+  let index = 0;
+  while ((index = content.indexOf(target, index)) !== -1) {
+    count++;
+    index += target.length;
+  }
+  return count;
+}
+
+function getWorldbookWrapperPresence(
+  prompts: SillyTavern.SendingMessage[],
+  wrapper_id: string,
+  settings: Settings,
+): WorldbookWrapperPresenceDebug {
+  const wrapper_start = getWorldbookExtractionWrapperStart(wrapper_id);
+  const wrapper_end = getWorldbookExtractionWrapperEnd(wrapper_id);
+  const paired_regex = new RegExp(`${_.escapeRegExp(wrapper_start)}[\\s\\S]*?${_.escapeRegExp(wrapper_end)}`, 'g');
+
+  return prompts.reduce(
+    (presence, prompt) => {
+      const content = getPromptContent(prompt, settings);
+      presence.start_count += countStringOccurrences(content, wrapper_start);
+      presence.end_count += countStringOccurrences(content, wrapper_end);
+      presence.paired_count += [...content.matchAll(paired_regex)].length;
+      presence.paired ||= presence.paired_count > 0;
+      return presence;
+    },
+    {
+      paired: false,
+      start_count: 0,
+      end_count: 0,
+      paired_count: 0,
+    },
+  );
+}
+
 function hasWrappedPromptContent(
   prompts: SillyTavern.SendingMessage[],
   wrapper_id: string,
   settings: Settings,
 ): boolean {
-  const wrapper_start = getWorldbookExtractionWrapperStart(wrapper_id);
-  const wrapper_end = getWorldbookExtractionWrapperEnd(wrapper_id);
+  return getWorldbookWrapperPresence(prompts, wrapper_id, settings).paired;
+}
 
-  return prompts.some(prompt => {
-    const content = getPromptContent(prompt, settings);
-    const start_index = content.indexOf(wrapper_start);
-    return start_index !== -1 && content.indexOf(wrapper_end, start_index + wrapper_start.length) !== -1;
+function getWorldbookCandidateMatchDebug(
+  prompts: SillyTavern.SendingMessage[],
+  candidates: string[],
+  settings: Settings,
+): WorldbookCandidateMatchDebugItem[] {
+  return candidates.map((candidate, index) => {
+    const target_regex = getDynamicPromptMacroContentRegex(candidate);
+    const exact_prompt_indexes: number[] = [];
+    const regex_prompt_indexes: number[] = [];
+    const normalized_prompt_indexes: number[] = [];
+
+    prompts.forEach((prompt, prompt_index) => {
+      const content = getPromptContent(prompt, settings);
+      if (content.includes(candidate)) {
+        exact_prompt_indexes.push(prompt_index);
+      }
+      if (target_regex && content.match(target_regex)) {
+        regex_prompt_indexes.push(prompt_index);
+      }
+      if (findPromptContentByNormalizedWhitespace(content, candidate)) {
+        normalized_prompt_indexes.push(prompt_index);
+      }
+    });
+
+    return {
+      index,
+      length: candidate.length,
+      has_dynamic_macro: hasDynamicPromptMacroOrGetwi(candidate),
+      regex_available: !!target_regex,
+      exact_prompt_indexes,
+      regex_prompt_indexes,
+      normalized_prompt_indexes,
+      candidate_lines: candidate.split('\n'),
+    };
   });
 }
 
@@ -1111,7 +1554,8 @@ function consumePromptContentCandidate(
   }
 
   const target_regex = getDynamicPromptMacroContentRegex(target);
-  return target_regex ? consumePromptContentByRegex(prompts, target_regex, settings) : undefined;
+  const regex_consumed = target_regex ? consumePromptContentByRegex(prompts, target_regex, settings) : undefined;
+  return regex_consumed ?? consumePromptContentByNormalizedWhitespace(prompts, target, settings);
 }
 
 function unwrapRemainingWorldbookExtractionWrappers(prompts: SillyTavern.SendingMessage[], settings: Settings) {
@@ -1128,9 +1572,12 @@ const BEFORE_CHAT_GREEN_CACHE_ANCHOR: GreenCacheAnchor = {
   message_hash: null,
 };
 
-type PromptLocation = {
+type PromptInsertionLocation = {
   chunk_index: 1 | 2;
-  prompt_index: number;
+  insert_index: number;
+  order: number;
+  source: GreenCacheInsertionSource;
+  source_anchor_key?: string;
 };
 
 function getGreenCacheIdentity(entry: Pick<GreenCacheEntry, 'world' | 'uid' | 'content_hash'>): string {
@@ -1149,12 +1596,28 @@ function normalizeContentForMatch(content: string): string {
   return trimEmptyLines(content).replace(/\r\n?/g, '\n');
 }
 
-function readUnhiddenChatMessages(): ChatMessage[] {
+function readChatMessagesByHideState(hide_state: 'all' | 'hidden' | 'unhidden'): ChatMessage[] {
   try {
-    return getChatMessages('0-{{lastMessageId}}', { hide_state: 'unhidden' });
+    return getChatMessages('0-{{lastMessageId}}', { hide_state });
   } catch {
     return [];
   }
+}
+
+function readUnhiddenChatMessages(): ChatMessage[] {
+  return readChatMessagesByHideState('unhidden');
+}
+
+function readAllChatMessages(): ChatMessage[] {
+  return readChatMessagesByHideState('all');
+}
+
+function getChatMessageAnchorKey(message: ChatMessage): string {
+  return getAnchorKey({
+    message_id: message.message_id,
+    swipe_id: _.get(message, 'swipe_id') ?? 0,
+    message_hash: null,
+  });
 }
 
 function getLatestUnhiddenChatAnchor(): GreenCacheAnchor {
@@ -1165,9 +1628,63 @@ function getLatestUnhiddenChatAnchor(): GreenCacheAnchor {
   }
   return {
     message_id: latest.message_id,
-    swipe_id: latest.swipe_id ?? 0,
+    swipe_id: _.get(latest, 'swipe_id') ?? 0,
     message_hash: hashGreenCacheContent(normalizeContentForMatch(latest.message)),
   };
+}
+
+function getGreenCacheAnchorDepth(anchor: GreenCacheAnchor): number | undefined {
+  if (anchor.message_id === null || !cacheAnchorExists(anchor)) {
+    return undefined;
+  }
+  return Math.max(0, getLastMessageId() - anchor.message_id);
+}
+
+function getGreenCacheAnchorContent(anchor_key: string): string {
+  return `${GREEN_CACHE_ANCHOR_PREFIX}:${anchor_key}>>>`;
+}
+
+function getGreenCacheAnchorPromptId(anchor_key: string): string {
+  return `\xff压缩相邻消息-green-anchor-${anchor_key}`;
+}
+
+function getGreenCacheAnchorInjectionPrompts(settings: Settings): InjectionPrompt[] {
+  if (
+    settings.entry_processing.mode !== 'worldbook' ||
+    !settings.entry_processing.worldbook.aggressive_green_cache.enabled
+  ) {
+    return [];
+  }
+
+  const anchors = new Map<string, GreenCacheAnchor>();
+  chooseFirstGreenCacheEntries(readGreenCacheVariables().entries)
+    .map(entry => entry.fixed_at)
+    .filter(anchor => anchor.message_id !== null && cacheAnchorExists(anchor))
+    .sort((lhs, rhs) => (lhs.message_id! - rhs.message_id!) || ((lhs.swipe_id ?? 0) - (rhs.swipe_id ?? 0)))
+    .forEach(anchor => {
+      anchors.set(getAnchorKey(anchor), anchor);
+    });
+  const latest_anchor = getLatestUnhiddenChatAnchor();
+  if (latest_anchor.message_id !== null && cacheAnchorExists(latest_anchor)) {
+    anchors.set(getAnchorKey(latest_anchor), latest_anchor);
+  }
+
+  return [...anchors.entries()]
+    .map(([anchor_key, anchor]) => {
+      const depth = getGreenCacheAnchorDepth(anchor);
+      if (depth === undefined) {
+        return undefined;
+      }
+      return {
+        id: getGreenCacheAnchorPromptId(anchor_key),
+        position: 'in_chat',
+        depth,
+        role: 'system',
+        content: getGreenCacheAnchorContent(anchor_key),
+        should_scan: false,
+      } satisfies InjectionPrompt;
+    })
+    .filter((prompt): prompt is InjectionPrompt => Boolean(prompt));
 }
 
 function cacheAnchorExists(anchor: GreenCacheAnchor): boolean {
@@ -1199,41 +1716,63 @@ function cacheAnchorExists(anchor: GreenCacheAnchor): boolean {
   );
 }
 
-function buildChatPromptLocationMap(
+function buildGreenCacheInsertionLocationMap(
   chunks: SillyTavern.SendingMessage[][],
   settings: Settings,
-): Map<string, PromptLocation> {
-  const prompt_refs = ([1, 2] as const).flatMap(chunk_index =>
-    chunks[chunk_index].map((prompt, prompt_index) => ({ chunk_index, prompt_index, prompt })),
-  );
-
-  const locations = new Map<string, PromptLocation>();
-  let prompt_start_index = 0;
-  for (const message of readUnhiddenChatMessages()) {
-    const message_content = normalizeContentForMatch(message.message);
-    if (!message_content) {
-      continue;
-    }
-
-    for (let index = prompt_start_index; index < prompt_refs.length; index++) {
-      const { chunk_index, prompt_index, prompt } = prompt_refs[index];
-      if (prompt.role !== message.role) {
-        continue;
+  debug_state?: GreenCacheDebugState,
+): Map<string, PromptInsertionLocation> {
+  const insertion_locations = new Map<string, PromptInsertionLocation>();
+  const all_messages = readAllChatMessages();
+  ([1, 2] as const).forEach(chunk_index => {
+    chunks[chunk_index].forEach((prompt, prompt_index) => {
+      const content = getPromptContent(prompt, settings);
+      for (const match of content.matchAll(GREEN_CACHE_ANCHOR_REGEX)) {
+        const anchor_key = match[1];
+        insertion_locations.set(anchor_key, {
+          chunk_index,
+          insert_index: prompt_index,
+          order: Number(anchor_key.split('.')[0]),
+          source: 'custom_anchor',
+        });
       }
-      const prompt_content = normalizeContentForMatch(getPromptContent(prompt, settings));
-      if (!prompt_content.includes(message_content)) {
-        continue;
-      }
+    });
+  });
 
-      locations.set(getAnchorKey({ message_id: message.message_id, swipe_id: message.swipe_id ?? 0 }), {
-        chunk_index,
-        prompt_index,
+  if (debug_state) {
+    all_messages.forEach((message, order) => {
+      const anchor_key = getChatMessageAnchorKey(message);
+      const insertion_location = insertion_locations.get(anchor_key);
+      const swipe_id = _.get(message, 'swipe_id') ?? 0;
+      pushDebugLogItem(debug_state.chat_messages, {
+        order,
+        anchor_key,
+        message_id: message.message_id,
+        swipe_id,
+        role: message.role,
+        is_hidden: message.is_hidden,
+        message_hash: hashGreenCacheContent(normalizeContentForMatch(message.message)),
+        message_length: message.message.length,
+        anchor_depth: getGreenCacheAnchorDepth({
+          message_id: message.message_id,
+          swipe_id,
+          message_hash: null,
+        }),
+        prompt_chunk_index: insertion_location?.chunk_index,
+        prompt_index: insertion_location?.insert_index,
+        insertion_source: insertion_location?.source,
+        insertion_chunk_index: insertion_location?.chunk_index,
+        insertion_index: insertion_location?.insert_index,
+        insertion_source_anchor_key: insertion_location?.source_anchor_key,
       });
-      prompt_start_index = index + 1;
-      break;
-    }
+    });
   }
-  return locations;
+  return insertion_locations;
+}
+
+function cleanupGreenCacheAnchorMarkers(prompts: SillyTavern.SendingMessage[], settings: Settings) {
+  prompts.forEach(prompt => {
+    updatePromptContentWith(prompt, ({ content }) => content.replace(GREEN_CACHE_ANCHOR_REGEX, ''), settings);
+  });
 }
 
 function consumeWorldbookEntryContent(
@@ -1321,15 +1860,19 @@ function chooseFirstGreenCacheEntries(entries: GreenCacheEntry[]): GreenCacheEnt
   return [...selected.values()];
 }
 
-function isAnchorInjectable(anchor: GreenCacheAnchor, locations: Map<string, PromptLocation>): boolean {
+function canInsertGreenCacheAnchor(
+  anchor: GreenCacheAnchor,
+  locations: Map<string, PromptInsertionLocation>,
+): boolean {
   return anchor.message_id === null || locations.has(getAnchorKey(anchor));
 }
 
 function insertGreenCacheEntries(
   chunks: SillyTavern.SendingMessage[][],
   entries: GreenCacheEntry[],
-  locations: Map<string, PromptLocation>,
+  locations: Map<string, PromptInsertionLocation>,
   settings: Settings,
+  debug_state?: GreenCacheDebugState,
 ) {
   const grouped_entries = _(entries)
     .sortBy(entry => entry.created_at)
@@ -1338,6 +1881,18 @@ function insertGreenCacheEntries(
 
   const before_chat_entries = grouped_entries[getAnchorKey(BEFORE_CHAT_GREEN_CACHE_ANCHOR)];
   if (before_chat_entries?.length) {
+    if (debug_state) {
+      pushDebugLogItem(debug_state.insertions, {
+        anchor_key: getAnchorKey(BEFORE_CHAT_GREEN_CACHE_ANCHOR),
+        insertion_source: 'before_chat_anchor',
+        chunk_index: 1,
+        insert_index: 0,
+        entry_count: before_chat_entries.length,
+        identities: before_chat_entries.map(getGreenCacheIdentity),
+        names: before_chat_entries.map(entry => entry.name),
+        content_lengths: before_chat_entries.map(entry => entry.content_snapshot.length),
+      });
+    }
     chunks[1].unshift({
       role: 'system',
       content: before_chat_entries.map(entry => entry.content_snapshot).join(settings.delimiter.value),
@@ -1350,10 +1905,29 @@ function insertGreenCacheEntries(
       const location = locations.get(anchor_key);
       return location ? [{ ...location, entries }] : [];
     })
-    .sort((lhs, rhs) => rhs.chunk_index - lhs.chunk_index || rhs.prompt_index - lhs.prompt_index);
+    .sort(
+      (lhs, rhs) =>
+        rhs.chunk_index - lhs.chunk_index || rhs.insert_index - lhs.insert_index || rhs.order - lhs.order,
+    );
 
-  insertions.forEach(({ chunk_index, prompt_index, entries }) => {
-    chunks[chunk_index].splice(prompt_index + 1, 0, {
+  insertions.forEach(({ chunk_index, insert_index, entries }) => {
+    const anchor_key = getAnchorKey(entries[0].fixed_at);
+    const location = locations.get(anchor_key);
+    if (debug_state) {
+      pushDebugLogItem(debug_state.insertions, {
+        anchor_key,
+        insertion_source: location?.source ?? 'before_chat_history',
+        chunk_index,
+        insert_index,
+        order: location?.order,
+        entry_count: entries.length,
+        identities: entries.map(getGreenCacheIdentity),
+        names: entries.map(entry => entry.name),
+        content_lengths: entries.map(entry => entry.content_snapshot.length),
+        source_anchor_key: location?.source_anchor_key,
+      });
+    }
+    chunks[chunk_index].splice(insert_index, 0, {
       role: 'system',
       content: entries.map(entry => entry.content_snapshot).join(settings.delimiter.value),
     });
@@ -1366,53 +1940,122 @@ function processAggressiveGreenCache(
   settings: Settings,
   worldbook_entry_metadata: Map<string, WorldbookEntryMetadata>,
   loaded_worldbook_names: Set<string>,
+  debug_state?: WorldbookExtractionDebugState,
 ): Set<string> {
   const handled_entry_keys = new Set<string>();
   if (!settings.entry_processing.worldbook.aggressive_green_cache.enabled) {
     return handled_entry_keys;
   }
+  const green_cache_debug = debug_state?.green_cache;
 
   const cache = readGreenCacheVariables();
   const valid_cache = getValidGreenCacheEntries(cache.entries, worldbook_entry_metadata, loaded_worldbook_names);
-  const prompt_locations = buildChatPromptLocationMap(chunks, settings);
-  const injectable_cache_entries = chooseFirstGreenCacheEntries(
-    valid_cache.injectable_entries.filter(entry => isAnchorInjectable(entry.fixed_at, prompt_locations)),
+  const valid_cache_entries = chooseFirstGreenCacheEntries(valid_cache.entries);
+  const valid_cache_changed = valid_cache.changed || valid_cache.entries.length !== valid_cache_entries.length;
+  const insertion_locations = buildGreenCacheInsertionLocationMap(chunks, settings, green_cache_debug);
+  const injectable_cache_entries = valid_cache_entries.filter(entry =>
+    canInsertGreenCacheAnchor(entry.fixed_at, insertion_locations),
   );
-  const injectable_cache_identities = new Map(
-    injectable_cache_entries.map(entry => [getGreenCacheIdentity(entry), entry] as const),
-  );
+  const fixed_cache_identities = new Map(valid_cache_entries.map(entry => [getGreenCacheIdentity(entry), entry] as const));
   const new_anchor = getLatestUnhiddenChatAnchor();
-  const can_insert_new_anchor = isAnchorInjectable(new_anchor, prompt_locations);
+  const can_insert_new_anchor = canInsertGreenCacheAnchor(new_anchor, insertion_locations);
   const flattened_chunks = _.flatten(chunks);
   const new_cache_entries: GreenCacheEntry[] = [];
   const suppressed_cache_identities = new Set<string>();
-
-  sortActivatedWorldbookEntries(
+  const aggressive_entries = sortActivatedWorldbookEntries(
     activated_entries.filter(entry => isAggressiveGreenEntry(entry)),
     settings,
-  ).forEach(entry => {
+  );
+
+  aggressive_entries.forEach(entry => {
     const identity = getGreenCacheIdentity(entry);
-    const cached_entry = injectable_cache_identities.get(identity);
+    const cached_entry = fixed_cache_identities.get(identity);
     if (cached_entry) {
+      const cached_anchor_key = getAnchorKey(cached_entry.fixed_at);
+      const cached_location = insertion_locations.get(cached_anchor_key);
+      const cached_can_insert = canInsertGreenCacheAnchor(cached_entry.fixed_at, insertion_locations);
+      if (!cached_can_insert) {
+        if (green_cache_debug) {
+          pushDebugLogItem(green_cache_debug.activations, {
+            key: entry.key,
+            identity,
+            world: entry.world,
+            uid: entry.uid,
+            name: entry.name,
+            action: 'skip_fixed_anchor_unavailable',
+            cached_anchor_key,
+            cached_can_insert,
+            cached_insertion_source: cached_location?.source,
+            cached_insertion_chunk_index: cached_location?.chunk_index,
+            cached_insertion_index: cached_location?.insert_index,
+            consumed: false,
+            new_anchor_key: getAnchorKey(new_anchor),
+          });
+        }
+        return;
+      }
       const consumed = consumeWorldbookEntryContent(flattened_chunks, entry, settings);
-      if (consumed) {
-        handled_entry_keys.add(entry.key);
-      } else {
+      handled_entry_keys.add(entry.key);
+      if (!consumed) {
         suppressed_cache_identities.add(identity);
+      }
+      if (green_cache_debug) {
+        pushDebugLogItem(green_cache_debug.activations, {
+          key: entry.key,
+          identity,
+          world: entry.world,
+          uid: entry.uid,
+          name: entry.name,
+          action: consumed ? 'fixed_cache_consumed' : 'fixed_cache_original_missing',
+          cached_anchor_key,
+          cached_can_insert,
+          cached_insertion_source: cached_location?.source,
+          cached_insertion_chunk_index: cached_location?.chunk_index,
+          cached_insertion_index: cached_location?.insert_index,
+          consumed: !!consumed,
+          consumed_method: consumed?.method,
+          consumed_prompt_index: consumed?.index,
+          consumed_content_length: consumed?.content.length,
+          new_anchor_key: getAnchorKey(new_anchor),
+        });
       }
       return;
     }
 
     if (!can_insert_new_anchor) {
+      if (green_cache_debug) {
+        pushDebugLogItem(green_cache_debug.activations, {
+          key: entry.key,
+          identity,
+          world: entry.world,
+          uid: entry.uid,
+          name: entry.name,
+          action: 'skip_new_anchor_unavailable',
+          consumed: false,
+          new_anchor_key: getAnchorKey(new_anchor),
+        });
+      }
       return;
     }
 
     const consumed = consumeWorldbookEntryContent(flattened_chunks, entry, settings);
     if (!consumed) {
+      if (green_cache_debug) {
+        pushDebugLogItem(green_cache_debug.activations, {
+          key: entry.key,
+          identity,
+          world: entry.world,
+          uid: entry.uid,
+          name: entry.name,
+          action: 'skip_content_not_found',
+          consumed: false,
+          new_anchor_key: getAnchorKey(new_anchor),
+        });
+      }
       return;
     }
 
-    new_cache_entries.push({
+    const new_cache_entry = {
       world: entry.world,
       uid: entry.uid,
       name: entry.name,
@@ -1420,21 +2063,87 @@ function processAggressiveGreenCache(
       content_snapshot: consumed.content,
       fixed_at: { ...new_anchor },
       created_at: Date.now() + new_cache_entries.length,
-    });
+    };
+    new_cache_entries.push(new_cache_entry);
     handled_entry_keys.add(entry.key);
+    if (green_cache_debug) {
+      const new_location = insertion_locations.get(getAnchorKey(new_cache_entry.fixed_at));
+      pushDebugLogItem(green_cache_debug.activations, {
+        key: entry.key,
+        identity,
+        world: entry.world,
+        uid: entry.uid,
+        name: entry.name,
+        action: 'new_cache_created',
+        cached_anchor_key: getAnchorKey(new_cache_entry.fixed_at),
+        cached_can_insert: canInsertGreenCacheAnchor(new_cache_entry.fixed_at, insertion_locations),
+        cached_insertion_source: new_location?.source,
+        cached_insertion_chunk_index: new_location?.chunk_index,
+        cached_insertion_index: new_location?.insert_index,
+        consumed: true,
+        consumed_method: consumed.method,
+        consumed_prompt_index: consumed.index,
+        consumed_content_length: consumed.content.length,
+        new_anchor_key: getAnchorKey(new_anchor),
+      });
+    }
   });
 
   const entries_to_insert = chooseFirstGreenCacheEntries([
     ...injectable_cache_entries.filter(entry => !suppressed_cache_identities.has(getGreenCacheIdentity(entry))),
     ...new_cache_entries,
   ]);
-  insertGreenCacheEntries(chunks, entries_to_insert, prompt_locations, settings);
+  if (green_cache_debug) {
+    const insert_identities = new Set(entries_to_insert.map(getGreenCacheIdentity));
+    [...valid_cache_entries, ...new_cache_entries].forEach(entry => {
+      const anchor_key = getAnchorKey(entry.fixed_at);
+      const insertion_location = insertion_locations.get(anchor_key);
+      const identity = getGreenCacheIdentity(entry);
+      pushDebugLogItem(green_cache_debug.cache_entries, {
+        identity,
+        world: entry.world,
+        uid: entry.uid,
+        name: entry.name,
+        anchor_key,
+        message_id: entry.fixed_at.message_id,
+        swipe_id: entry.fixed_at.swipe_id,
+        message_hash: entry.fixed_at.message_hash,
+        created_at: entry.created_at,
+        can_insert: canInsertGreenCacheAnchor(entry.fixed_at, insertion_locations),
+        will_insert: insert_identities.has(identity),
+        suppressed: suppressed_cache_identities.has(identity),
+        content_length: entry.content_snapshot.length,
+        insertion_source: insertion_location?.source,
+        insertion_chunk_index: insertion_location?.chunk_index,
+        insertion_index: insertion_location?.insert_index,
+        insertion_source_anchor_key: insertion_location?.source_anchor_key,
+      });
+    });
+  }
+  insertGreenCacheEntries(chunks, entries_to_insert, insertion_locations, settings, green_cache_debug);
+  cleanupGreenCacheAnchorMarkers(flattened_chunks, settings);
 
-  if (valid_cache.changed || new_cache_entries.length > 0 || cache.entries.length !== valid_cache.entries.length) {
+  const next_cache_entries = chooseFirstGreenCacheEntries([...valid_cache_entries, ...new_cache_entries]);
+  if (valid_cache_changed || new_cache_entries.length > 0 || cache.entries.length !== next_cache_entries.length) {
     writeGreenCacheVariables({
       version: GREEN_CACHE_VERSION,
-      entries: [...valid_cache.entries, ...new_cache_entries],
+      entries: next_cache_entries,
     });
+  }
+  if (green_cache_debug) {
+    green_cache_debug.summary = {
+      cache_total: cache.entries.length,
+      valid_cache_total: valid_cache.entries.length,
+      deduped_cache_total: valid_cache_entries.length,
+      injectable_cache_total: injectable_cache_entries.length,
+      aggressive_activated_total: aggressive_entries.length,
+      handled_total: handled_entry_keys.size,
+      new_cache_total: new_cache_entries.length,
+      suppressed_total: suppressed_cache_identities.size,
+      inserted_entry_total: entries_to_insert.length,
+      new_anchor_key: getAnchorKey(new_anchor),
+      can_insert_new_anchor,
+    };
   }
 
   return handled_entry_keys;
@@ -1503,6 +2212,44 @@ function consumeWorldbookExtractionItem(
   return undefined;
 }
 
+function getWorldbookExtractionFailureReason(
+  entry: WorldbookExtractionItem,
+  consumed: ConsumedPromptContent | undefined,
+  wrapper_presence: WorldbookWrapperPresenceDebug | undefined,
+  candidate_match_debug: WorldbookCandidateMatchDebugItem[],
+): WorldbookExtractionFailureReason | undefined {
+  if (consumed) {
+    return undefined;
+  }
+
+  if (entry.wrapper_id) {
+    if (wrapper_presence?.paired) {
+      return 'wrapper_present_but_not_consumed';
+    }
+    if ((wrapper_presence?.start_count ?? 0) > 0 || (wrapper_presence?.end_count ?? 0) > 0) {
+      return 'wrapper_incomplete';
+    }
+    return 'wrapper_missing_or_already_consumed';
+  }
+
+  if (entry.content_candidates.length === 0) {
+    return 'no_content_candidates';
+  }
+
+  if (
+    candidate_match_debug.some(
+      candidate =>
+        candidate.exact_prompt_indexes.length ||
+        candidate.regex_prompt_indexes.length ||
+        candidate.normalized_prompt_indexes.length,
+    )
+  ) {
+    return 'candidate_match_detected_but_not_consumed';
+  }
+
+  return 'no_candidate_match';
+}
+
 function extractWorldbookEntriesToPlaceholders(
   chunks: SillyTavern.SendingMessage[][],
   activated_entries: ActivatedWorldbookEntry[],
@@ -1532,43 +2279,88 @@ function extractWorldbookEntriesToPlaceholders(
     );
     const flattened_chunks = _.flatten(chunks);
     const consumed_entry_contents = new Map<string, string>();
-    [...entries]
-      .sort(
-        (lhs, rhs) =>
-          _.max(rhs.content_candidates.map(content => content.length))! -
-          _.max(lhs.content_candidates.map(content => content.length))!,
-      )
-      .forEach(entry => {
-        const wrapper_present_before_consume = entry.wrapper_id
-          ? hasWrappedPromptContent(flattened_chunks, entry.wrapper_id, settings)
-          : undefined;
-        const consumed = consumeWorldbookExtractionItem(flattened_chunks, entry, settings);
-        if (debug_state) {
-          debug_state.total_extraction++;
-          if (consumed) {
-            debug_state.total_consumed++;
-          }
-          pushDebugLogItem(debug_state.extraction, {
-            placeholder,
-            trigger_type,
-            key: entry.key,
-            part_index: entry.part_index,
-            target_key: entry.target_key,
-            target_name: entry.target_name,
-            wrapper_id: entry.wrapper_id,
-            wrapper_present_before_consume,
-            consumed: !!consumed,
-            method: consumed?.method,
-            content_length: consumed?.content.length,
-          });
-        }
-        if (consumed) {
-          if (['before_example_messages', 'after_example_messages'].includes(entry.position)) {
-            cleanupDialogueExampleSeparatorAfterConsumption(flattened_chunks, consumed, settings);
-          }
-          consumed_entry_contents.set(entry.key, consumed.content);
-        }
+    const consuming_entries = [...entries].sort(
+      (lhs, rhs) =>
+        _.max(rhs.content_candidates.map(content => content.length))! -
+        _.max(lhs.content_candidates.map(content => content.length))!,
+    );
+    if (debug_state) {
+      const consuming_order = new Map(consuming_entries.map((entry, index) => [entry, index]));
+      entries.forEach((entry, index) => {
+        pushDebugLogItem(debug_state.sorted_extraction, {
+          sort_order: index,
+          consume_order: consuming_order.get(entry)!,
+          placeholder,
+          trigger_type,
+          key: entry.key,
+          part_index: entry.part_index,
+          target_key: entry.target_key,
+          target_name: entry.target_name,
+          position: entry.position,
+          depth: entry.depth,
+          entry_order: entry.order,
+          activated_index: entry.index,
+          wrapper_id: entry.wrapper_id,
+          candidate_lengths: entry.content_candidates.map(content => content.length),
+          candidate_has_dynamic_macro: entry.content_candidates.map(content => hasDynamicPromptMacroOrGetwi(content)),
+        });
       });
+    }
+    consuming_entries.forEach(entry => {
+      const wrapper_presence_before_consume = entry.wrapper_id
+        ? getWorldbookWrapperPresence(flattened_chunks, entry.wrapper_id, settings)
+        : undefined;
+      const candidate_match_debug = getWorldbookCandidateMatchDebug(
+        flattened_chunks,
+        entry.content_candidates,
+        settings,
+      );
+      const consumed = consumeWorldbookExtractionItem(flattened_chunks, entry, settings);
+      if (debug_state) {
+        debug_state.total_extraction++;
+        if (consumed) {
+          debug_state.total_consumed++;
+        }
+        pushDebugLogItem(debug_state.extraction, {
+          placeholder,
+          trigger_type,
+          key: entry.key,
+          part_index: entry.part_index,
+          target_key: entry.target_key,
+          target_name: entry.target_name,
+          wrapper_id: entry.wrapper_id,
+          wrapper_present_before_consume: wrapper_presence_before_consume?.paired,
+          wrapper_presence_before_consume,
+          candidate_count: entry.content_candidates.length,
+          candidate_regex_available_count: candidate_match_debug.filter(candidate => candidate.regex_available).length,
+          candidate_exact_match_count: candidate_match_debug.filter(
+            candidate => candidate.exact_prompt_indexes.length > 0,
+          ).length,
+          candidate_regex_match_count: candidate_match_debug.filter(
+            candidate => candidate.regex_prompt_indexes.length > 0,
+          ).length,
+          candidate_normalized_match_count: candidate_match_debug.filter(
+            candidate => candidate.normalized_prompt_indexes.length > 0,
+          ).length,
+          candidate_match_debug: consumed ? [] : candidate_match_debug,
+          failure_reason: getWorldbookExtractionFailureReason(
+            entry,
+            consumed,
+            wrapper_presence_before_consume,
+            candidate_match_debug,
+          ),
+          consumed: !!consumed,
+          method: consumed?.method,
+          content_length: consumed?.content.length,
+        });
+      }
+      if (consumed) {
+        if (['before_example_messages', 'after_example_messages'].includes(entry.position)) {
+          cleanupDialogueExampleSeparatorAfterConsumption(flattened_chunks, consumed, settings);
+        }
+        consumed_entry_contents.set(entry.key, consumed.content);
+      }
+    });
 
     const placeholder_content = entries
       .filter(entry => consumed_entry_contents.has(entry.key))
@@ -1736,7 +2528,10 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
       applyInjection(above, 1, 0);
       applyInjection(below, 2, 3);
     }
+    let worldbook_prompt_debug_before_extraction: PromptContentDebugItem[] = [];
+    let worldbook_prompt_debug_after_extraction: PromptContentDebugItem[] = [];
     if (settings.entry_processing.mode === 'worldbook') {
+      worldbook_prompt_debug_before_extraction = getChunkPromptContentDebugItems(chunks, 'before_worldbook', settings);
       const activated_entries = [...activated_worldbook_entries.values()];
       const handled_entry_keys = processAggressiveGreenCache(
         chunks,
@@ -1744,6 +2539,7 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
         settings,
         worldbook_entry_metadata,
         loaded_worldbook_names,
+        worldbook_extraction_debug,
       );
       extractWorldbookEntriesToPlaceholders(
         chunks,
@@ -1751,6 +2547,7 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
         settings,
         worldbook_extraction_debug,
       );
+      worldbook_prompt_debug_after_extraction = getChunkPromptContentDebugItems(chunks, 'after_worldbook', settings);
     }
 
     if (settings.entry_processing.mode === 'worldbook') {
@@ -1775,6 +2572,14 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
           settings,
         );
         break;
+    }
+
+    if (settings.entry_processing.mode === 'worldbook') {
+      printWorldbookSortedContentDebugState(worldbook_extraction_debug, [
+        { stage: 'before_worldbook', prompts: worldbook_prompt_debug_before_extraction },
+        { stage: 'after_worldbook', prompts: worldbook_prompt_debug_after_extraction },
+        { stage: 'final_result', prompts: getPromptContentDebugItems(result, 'final_result', settings) },
+      ]);
     }
 
     assignInplace(prompt, result);

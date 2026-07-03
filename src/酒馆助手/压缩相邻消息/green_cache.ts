@@ -1,5 +1,5 @@
 export const GREEN_CACHE_VARIABLE_PATH = '压缩相邻消息.绿灯缓存';
-export const GREEN_CACHE_VERSION = 1;
+export const GREEN_CACHE_VERSION = 2;
 
 export type GreenCacheEntry = {
   world: string;
@@ -19,6 +19,8 @@ export type GreenCache = {
   version: typeof GREEN_CACHE_VERSION;
   entries: GreenCacheEntry[];
 };
+
+const SUPPORTED_GREEN_CACHE_VERSIONS = [1, GREEN_CACHE_VERSION] as const;
 
 export function hashGreenCacheContent(content: string): string {
   let h1 = 0xdeadbeef ^ content.length;
@@ -69,18 +71,63 @@ function normalizeGreenCacheEntry(entry: any): GreenCacheEntry | undefined {
   };
 }
 
+function getGreenCacheEntryIdentity(entry: Pick<GreenCacheEntry, 'world' | 'uid' | 'content_hash'>): string {
+  return `${entry.world}.${entry.uid}.${entry.content_hash}`;
+}
+
+function dedupeGreenCacheEntries(entries: GreenCacheEntry[]): GreenCacheEntry[] {
+  const selected = new Map<string, GreenCacheEntry>();
+  [...entries]
+    .sort((lhs, rhs) => lhs.created_at - rhs.created_at)
+    .forEach(entry => {
+      const identity = getGreenCacheEntryIdentity(entry);
+      if (!selected.has(identity)) {
+        selected.set(identity, entry);
+      }
+    });
+  return [...selected.values()];
+}
+
 export function normalizeGreenCache(raw: any): GreenCache {
-  if (!_.isPlainObject(raw) || raw.version !== GREEN_CACHE_VERSION || !_.isArray(raw.entries)) {
+  if (
+    !_.isPlainObject(raw) ||
+    !SUPPORTED_GREEN_CACHE_VERSIONS.includes(raw.version) ||
+    !_.isArray(raw.entries)
+  ) {
     return { version: GREEN_CACHE_VERSION, entries: [] };
   }
   return {
     version: GREEN_CACHE_VERSION,
-    entries: raw.entries.map(normalizeGreenCacheEntry).filter((entry): entry is GreenCacheEntry => Boolean(entry)),
+    entries: dedupeGreenCacheEntries(
+      raw.entries.map(normalizeGreenCacheEntry).filter((entry): entry is GreenCacheEntry => Boolean(entry)),
+    ),
   };
 }
 
+function shouldWriteNormalizedGreenCache(raw: any, cache: GreenCache): boolean {
+  if (
+    !_.isPlainObject(raw) ||
+    !SUPPORTED_GREEN_CACHE_VERSIONS.includes(raw.version) ||
+    !_.isArray(raw.entries)
+  ) {
+    return false;
+  }
+  return raw.version !== GREEN_CACHE_VERSION || raw.entries.length !== cache.entries.length;
+}
+
 export function readGreenCacheVariables(): GreenCache {
-  return normalizeGreenCache(_.get(getVariables({ type: 'chat' }), GREEN_CACHE_VARIABLE_PATH));
+  const variables = getVariables({ type: 'chat' });
+  const raw = _.get(variables, GREEN_CACHE_VARIABLE_PATH);
+  const cache = normalizeGreenCache(raw);
+  if (shouldWriteNormalizedGreenCache(raw, cache)) {
+    if (cache.entries.length === 0) {
+      _.unset(variables, GREEN_CACHE_VARIABLE_PATH);
+    } else {
+      _.set(variables, GREEN_CACHE_VARIABLE_PATH, cache);
+    }
+    replaceVariables(variables, { type: 'chat' });
+  }
+  return cache;
 }
 
 export function writeGreenCacheVariables(cache: GreenCache) {
