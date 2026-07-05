@@ -1,0 +1,189 @@
+{
+  "title": "梦鲸思客设置",
+  "description": "这是预设适配器的默认测试配置。它只会切换当前使用中预设的 prompts 开关，不会保存回命名预设文件。",
+  "script_button_name": "梦鲸思客设置",
+  "groups": [
+    {
+      "id": "single_exact_demo",
+      "label": "单选组：精确匹配",
+      "description": "选项数不超过三个时会横排显示；单选组会关闭同组其他选项开启过的提示词。",
+      "mode": "single",
+      "options": [
+        {
+          "id": "string_match",
+          "label": "字符串精确匹配",
+          "description": "用字符串按提示词 name 精确命中。",
+          "enable": [
+            "示例：字符串命中项"
+          ],
+          "disable": [
+            {
+              "name": "示例：对象名称命中项"
+            }
+          ]
+        },
+        {
+          "id": "name_match",
+          "label": "对象名称匹配",
+          "description": "用 { name } 按提示词 name 精确命中。",
+          "enable": [
+            {
+              "name": "示例：对象名称命中项"
+            }
+          ],
+          "disable": [
+            "示例：字符串命中项"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "multiple_regex_demo",
+      "label": "多选组：正则匹配",
+      "description": "多选组选项再次点击时，只关闭它自己的 enable 命中项。",
+      "mode": "multiple",
+      "options": [
+        {
+          "id": "enable_all_prompts",
+          "label": "开启所有命中项",
+          "description": "正则 .+ 会命中所有 prompts。",
+          "enable": [
+            {
+              "regex": ".+"
+            }
+          ]
+        },
+        {
+          "id": "disable_test_prompts",
+          "label": "关闭测试/禁用项",
+          "description": "展示带 flags 的 JS RegExp。",
+          "disable": [
+            {
+              "regex": "测试|test|禁用|disable",
+              "flags": "i"
+            }
+          ]
+        },
+        {
+          "id": "mixed_enable_disable",
+          "label": "组合启停",
+          "description": "同一选项可以同时声明 enable 和 disable。",
+          "enable": [
+            {
+              "regex": "main|system|核心",
+              "flags": "i"
+            }
+          ],
+          "disable": [
+            {
+              "regex": "unused|草稿|临时",
+              "flags": "i"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "unmatched_demo",
+      "label": "状态展示：未命中",
+      "description": "未命中的选项会禁用，但不会阻止其他命中项继续应用。",
+      "mode": "single",
+      "options": [
+        {
+          "id": "unmatched_string",
+          "label": "不存在的精确名称",
+          "description": "用于展示未命中的精确匹配状态。",
+          "enable": [
+            "__预设适配器_故意未命中__"
+          ]
+        },
+        {
+          "id": "unmatched_regex",
+          "label": "不存在的正则",
+          "description": "用于展示未命中的正则匹配状态。",
+          "enable": [
+            {
+              "regex": "^__preset_adapter_unmatched__$"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "grid_layout_demo",
+      "label": "布局展示：四个选项",
+      "description": "选项超过三个时自动改为网格布局，适合较多预设组合。",
+      "mode": "multiple",
+      "options": [
+        {
+          "id": "grid_a",
+          "label": "网格选项 A",
+          "description": "展示第四组的网格排布。",
+          "enable": [
+            {
+              "regex": "A|alpha|甲",
+              "flags": "i"
+            }
+          ]
+        },
+        {
+          "id": "grid_b",
+          "label": "网格选项 B",
+          "description": "多个短选项会自动换行排列。",
+          "enable": [
+            {
+              "regex": "B|beta|乙",
+              "flags": "i"
+            }
+          ]
+        },
+        {
+          "id": "grid_c",
+          "label": "网格选项 C",
+          "description": "小窗较窄时会收缩为单列。",
+          "enable": [
+            {
+              "regex": "C|gamma|丙",
+              "flags": "i"
+            }
+          ]
+        },
+        {
+          "id": "grid_d",
+          "label": "网格选项 D",
+          "description": "用于确认超过三个选项的布局。",
+          "enable": [
+            {
+              "regex": "D|delta|丁",
+              "flags": "i"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "文风设置",
+      "label": "文风设置",
+      "description": "从两个固定标记之间读取提示词，并把中间每个提示词自动变成一个选项；below 或 above 留空时代表预设顶部或底部。",
+      "mode": "single",
+      "options": [
+        {
+          "id": "文风_自定义文风",
+          "label": "{match}",
+          "description": "启用“{match}”，并关闭同组选项展开出的其他文风。",
+          "type": "between",
+          "match": {
+            "below": "/主要文风/",
+            "above": "/次要文风/"
+          },
+          "enable": [
+            "{match}"
+          ],
+          "disable": [
+            "{match}"
+          ]
+        }
+      ]
+    }
+  ]
+}
