@@ -58,7 +58,9 @@
       </Checkbox>
 
       <div class="TR-green-cache-actions">
-        <button type="button" class="menu_button" @click="clearGreenCache">清空绿灯缓存</button>
+        <button type="button" class="menu_button TR-green-cache-clear-button" @click="clearGreenCache">
+          清空绿灯缓存
+        </button>
       </div>
 
       <Checkbox v-model="store.settings.entry_processing.worldbook.constant.enabled">
@@ -149,7 +151,15 @@ async function clearGreenCache() {
 
 .TR-green-cache-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: flex-start;
   margin-bottom: 0.35rem;
+}
+
+.TR-green-cache-clear-button {
+  width: auto;
+  min-width: max-content;
+  white-space: nowrap;
+  writing-mode: horizontal-tb;
 }
 </style>

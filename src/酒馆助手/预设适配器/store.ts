@@ -49,6 +49,24 @@ const AdapterConfigSchema = z
   })
   .prefault({});
 
+const EXPORT_FILE_TYPE = 'sleep-preset-adapter.match-settings';
+const EXPORT_FILE_VERSION = 1;
+
+const ExportFileSchema = z.object({
+  type: z.literal(EXPORT_FILE_TYPE),
+  version: z.literal(EXPORT_FILE_VERSION),
+  exported_at: z.string().optional(),
+  title: z.string().optional(),
+  items: z.array(
+    z.object({
+      group_id: z.string().min(1),
+      match_id: z.string().min(1),
+      name: z.string().min(1),
+      prompt: z.object({ name: z.string().min(1) }).passthrough(),
+    }),
+  ),
+});
+
 const ScriptButtonConfigSchema = z
   .object({
     script_button_name: z.string().min(1).default(DEFAULT_SCRIPT_BUTTON_NAME),
@@ -59,7 +77,15 @@ type PromptMatcher = z.infer<typeof PromptMatcherSchema>;
 type AdapterConfig = z.infer<typeof AdapterConfigSchema>;
 type AdapterGroup = AdapterConfig['groups'][number];
 type AdapterOption = AdapterGroup['options'][number];
-type ResolvedOption = Pick<AdapterOption, 'id' | 'label' | 'description' | 'enable' | 'disable'>;
+type ExportFile = z.infer<typeof ExportFileSchema>;
+type ExportSource = {
+  group_id: string;
+  match_id: string;
+  prompt_index: number;
+};
+type ResolvedOption = Pick<AdapterOption, 'id' | 'label' | 'description' | 'enable' | 'disable'> & {
+  export_source?: ExportSource;
+};
 
 export type OptionStatus = 'active' | 'inactive' | 'unmatched';
 
@@ -67,6 +93,8 @@ export type OptionView = {
   id: string;
   label: string;
   description: string;
+  export_source?: ExportSource;
+  exportable: boolean;
   status: OptionStatus;
   status_icon_class: string;
   matched_summary: string;
@@ -106,6 +134,56 @@ type LoadedState = {
   errors: string[];
 };
 
+type ImportAction = 'create' | 'overwrite';
+
+type ReviewPromptItem = {
+  key: string;
+  group_id: string;
+  group_label: string;
+  match_id: string;
+  name: string;
+  action: 'export' | ImportAction;
+  action_label: string;
+  preview: string;
+  source: ExportFile['items'][number];
+};
+
+type ReviewFailedItem = {
+  key: string;
+  group_id: string;
+  match_id: string;
+  name: string;
+  action_label: string;
+  issue: string;
+  preview: string;
+  source: ExportFile['items'][number];
+};
+
+type ReviewPanel =
+  | {
+      kind: 'export';
+      title: string;
+      filename: string;
+      file: ExportFile;
+      items: ReviewPromptItem[];
+    }
+  | {
+      kind: 'import';
+      title: string;
+      file: ExportFile;
+      items: ReviewPromptItem[];
+      failed_items: ReviewFailedItem[];
+    };
+
+type ImportPlan =
+  | {
+      action: ImportAction;
+      index: number;
+    }
+  | {
+      error: string;
+    };
+
 const EMPTY_CONFIG = AdapterConfigSchema.parse({});
 const DEFAULT_CONFIG = AdapterConfigSchema.parse(JSON.parse(default_config_raw));
 
@@ -123,6 +201,10 @@ function formatZodError(error: z.ZodError): string {
 
 function normalizeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function cloneJson<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
 }
 
 function getScriptVariableScope() {
@@ -389,7 +471,7 @@ function resolveBetweenOptions(option: AdapterOption, preset: Preset): ResolveOp
       errors: [below_result.error],
     };
   }
-  if (below_result.index < 0) {
+  if (match.below !== '' && below_result.index < 0) {
     return { options: [buildUnmatchedBetweenOption(option, `未找到起始标记“${match.below}”。`)], errors: [] };
   }
 
@@ -422,6 +504,11 @@ function resolveBetweenOptions(option: AdapterOption, preset: Preset): ResolveOp
       description: fillMatchPlaceholder(option.description, prompt.name),
       enable: option.enable.map(matcher => fillMatcherPlaceholder(matcher, prompt.name)),
       disable: option.disable.map(matcher => fillMatcherPlaceholder(matcher, prompt.name)),
+      export_source: {
+        group_id: '',
+        match_id: option.id,
+        prompt_index: index,
+      },
     })),
     errors: [],
   };
@@ -432,10 +519,21 @@ function resolveGroupOptions(group: AdapterGroup, preset: Preset): ResolveOption
   const errors: string[] = [];
   for (const option of group.options) {
     const result = resolveBetweenOptions(option, preset);
-    options.push(...result.options);
+    options.push(
+      ...result.options.map(resolved_option => ({
+        ...resolved_option,
+        export_source: resolved_option.export_source
+          ? { ...resolved_option.export_source, group_id: group.id }
+          : undefined,
+      })),
+    );
     errors.push(...result.errors);
   }
   return { options, errors };
+}
+
+function getExportOptionKey(group_id: string, option_id: string): string {
+  return `${group_id}\u0000${option_id}`;
 }
 
 function buildOptionView(option: ResolvedOption, preset: Preset): { view: OptionView; errors: string[] } {
@@ -449,6 +547,8 @@ function buildOptionView(option: ResolvedOption, preset: Preset): { view: Option
       id: option.id,
       label: option.label,
       description: option.description,
+      export_source: option.export_source,
+      exportable: option.export_source !== undefined,
       status,
       status_icon_class: STATUS_ICON_CLASSES[status],
       matched_summary: summarizePromptNames(preset, matched_indexes),
@@ -482,15 +582,196 @@ function buildGroupViews(config: AdapterConfig, preset: Preset): BuildGroupsResu
   return { groups, errors };
 }
 
+function getExportFilename(title: string): string {
+  const timestamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+  return `${title || SCRIPT_NAME}-导出-${timestamp}.json`;
+}
+
+function downloadJson(filename: string, data: unknown) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
+function getPromptPreview(prompt: ExportFile['items'][number]['prompt']): string {
+  const content = (prompt as { content?: unknown }).content;
+  if (typeof content === 'string' && content.trim()) {
+    return content;
+  }
+  return JSON.stringify(prompt, null, 2);
+}
+
+function getReviewItemKey(group_id: string, match_id: string, name: string, index: number): string {
+  return `${group_id}\u0000${match_id}\u0000${name}\u0000${index}`;
+}
+
+function findImportMatchOption(config: AdapterConfig, group_id: string, match_id: string): AdapterOption | undefined {
+  const group = config.groups.find(candidate => candidate.id === group_id);
+  return group?.options.find(option => option.id === match_id && option.type === 'between' && option.match);
+}
+
+function getImportPlan(preset: Preset, match: NonNullable<AdapterOption['match']>, name: string): ImportPlan {
+  const below_result: { index: number; error?: string } =
+    match.below === '' ? { index: -1 } : getPromptIndexByBoundary(preset, match.below);
+  if (below_result.error) {
+    return { error: below_result.error };
+  }
+  if (match.below !== '' && below_result.index < 0) {
+    return { error: `未找到导入起始标记“${match.below}”。` };
+  }
+
+  const start_index = below_result.index + 1;
+  const above_result: { index: number; error?: string } =
+    match.above === '' ? { index: preset.prompts.length } : getPromptIndexByBoundary(preset, match.above, start_index);
+  if (above_result.error) {
+    return { error: above_result.error };
+  }
+  if (above_result.index < 0) {
+    return { error: `未在起始标记之后找到导入位置标记“${match.above}”。` };
+  }
+
+  const existing_index = preset.prompts.findIndex(
+    (prompt, index) => index >= start_index && index < above_result.index && prompt.name === name,
+  );
+  if (existing_index >= 0) {
+    return {
+      action: 'overwrite',
+      index: existing_index,
+    };
+  }
+  return {
+    action: 'create',
+    index: above_result.index,
+  };
+}
+
+function buildImportReview(file: ExportFile, config: AdapterConfig, preset: Preset): Pick<Extract<ReviewPanel, { kind: 'import' }>, 'items' | 'failed_items'> {
+  const items: ReviewPromptItem[] = [];
+  const failed_items: ReviewFailedItem[] = [];
+
+  file.items.forEach((item, index) => {
+    const key = getReviewItemKey(item.group_id, item.match_id, item.name, index);
+    const preview = getPromptPreview(item.prompt);
+    const group = config.groups.find(candidate => candidate.id === item.group_id);
+    const match_option = group?.options.find(option => option.id === item.match_id && option.type === 'between' && option.match);
+    if (!group || !match_option?.match) {
+      failed_items.push({
+        key,
+        group_id: item.group_id,
+        match_id: item.match_id,
+        name: item.name,
+        action_label: '追加到底部',
+        issue: '未找到对应的动态匹配配置',
+        preview,
+        source: item,
+      });
+      return;
+    }
+
+    const plan = getImportPlan(preset, match_option.match, item.name);
+    if ('error' in plan) {
+      failed_items.push({
+        key,
+        group_id: item.group_id,
+        match_id: item.match_id,
+        name: item.name,
+        action_label: '追加到底部',
+        issue: plan.error,
+        preview,
+        source: item,
+      });
+      return;
+    }
+
+    items.push({
+      key,
+      group_id: item.group_id,
+      group_label: group.label,
+      match_id: item.match_id,
+      name: item.name,
+      action: plan.action,
+      action_label: plan.action === 'overwrite' ? '覆盖' : '新增',
+      preview,
+      source: item,
+    });
+  });
+
+  return { failed_items, items };
+}
+
+function cloneImportedPrompt(item: ExportFile['items'][number]): Preset['prompts'][number] {
+  const prompt = cloneJson(item.prompt) as Preset['prompts'][number];
+  prompt.name = item.name;
+  prompt.enabled = false;
+  return prompt;
+}
+
+function applyImportItem(preset: Preset, config: AdapterConfig, item: ExportFile['items'][number]): ImportPlan {
+  const match_option = findImportMatchOption(config, item.group_id, item.match_id);
+  if (!match_option?.match) {
+    return { error: '未找到对应的动态匹配配置' };
+  }
+
+  const plan = getImportPlan(preset, match_option.match, item.name);
+  if ('error' in plan) {
+    return plan;
+  }
+
+  const prompt = cloneImportedPrompt(item);
+  if (plan.action === 'overwrite') {
+    preset.prompts.splice(plan.index, 1, prompt);
+  } else {
+    preset.prompts.splice(plan.index, 0, prompt);
+  }
+  return plan;
+}
+
+function appendImportItem(preset: Preset, item: ExportFile['items'][number]) {
+  preset.prompts.push(cloneImportedPrompt(item));
+}
+
+function formatZodIssues(error: z.ZodError): string {
+  return error.issues.map(issue => `${issue.path.join('.') || '文件'}: ${issue.message}`).join('\n');
+}
+
 export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   const config = ref<AdapterConfig>(EMPTY_CONFIG);
   const title = ref(SCRIPT_NAME);
   const description = ref('');
+  const export_mode = ref(false);
+  const review_panel = ref<ReviewPanel>();
+  const selected_export_keys = ref<Set<string>>(new Set());
   const loaded_preset_name = ref('');
   const groups = ref<GroupView[]>([]);
   const errors = ref<string[]>([]);
   const is_applying = ref(false);
   const has_blocking_errors = computed(() => errors.value.length > 0);
+  const selected_export_count = computed(() =>
+    groups.value.reduce(
+      (total, group) =>
+        total +
+        group.options.filter(option => option.exportable && selected_export_keys.value.has(getExportOptionKey(group.id, option.id))).length,
+      0,
+    ),
+  );
+
+  function pruneSelectedExportKeys() {
+    const valid_keys = new Set<string>();
+    groups.value.forEach(group => {
+      group.options.forEach(option => {
+        if (option.exportable) {
+          valid_keys.add(getExportOptionKey(group.id, option.id));
+        }
+      });
+    });
+    selected_export_keys.value = new Set([...selected_export_keys.value].filter(key => valid_keys.has(key)));
+  }
 
   function loadState(): LoadedState {
     const config_result = readAdapterConfig();
@@ -512,12 +793,246 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
 
     const built = buildGroupViews(config_result.config, preset);
     groups.value = built.groups;
+    pruneSelectedExportKeys();
     errors.value = [...config_result.errors, ...built.errors];
     return { config: config_result.config, preset, groups: built.groups, errors: errors.value };
   }
 
   function refresh() {
     loadState();
+  }
+
+  function startExportMode() {
+    loadState();
+    if (errors.value.length > 0) {
+      toastr.error('配置存在错误，无法进入导出模式。', SCRIPT_NAME);
+      return;
+    }
+    review_panel.value = undefined;
+    export_mode.value = true;
+    selected_export_keys.value = new Set();
+  }
+
+  function cancelExportMode() {
+    review_panel.value = undefined;
+    export_mode.value = false;
+    selected_export_keys.value = new Set();
+  }
+
+  function closeReviewPanel() {
+    review_panel.value = undefined;
+  }
+
+  function isExportOptionSelected(group_id: string, option_id: string): boolean {
+    return selected_export_keys.value.has(getExportOptionKey(group_id, option_id));
+  }
+
+  function toggleExportOption(group_id: string, option_id: string) {
+    const option = groups.value.find(group => group.id === group_id)?.options.find(candidate => candidate.id === option_id);
+    if (!option?.exportable) {
+      toastr.warning('只有动态匹配选项可以导出。', SCRIPT_NAME);
+      return;
+    }
+
+    const key = getExportOptionKey(group_id, option_id);
+    const next_keys = new Set(selected_export_keys.value);
+    if (next_keys.has(key)) {
+      next_keys.delete(key);
+    } else {
+      next_keys.add(key);
+    }
+    selected_export_keys.value = next_keys;
+  }
+
+  function exportSelectedOptions() {
+    const state = loadState();
+    if (state.errors.length > 0 || !state.preset) {
+      toastr.error('配置存在错误，无法导出。', SCRIPT_NAME);
+      return;
+    }
+
+    const selected_keys = selected_export_keys.value;
+    const items: ExportFile['items'] = [];
+    const review_items: ReviewPromptItem[] = [];
+    for (const group of state.groups) {
+      for (const option of group.options) {
+        if (!option.export_source || !selected_keys.has(getExportOptionKey(group.id, option.id))) {
+          continue;
+        }
+
+        const prompt = state.preset.prompts[option.export_source.prompt_index];
+        if (!prompt) {
+          continue;
+        }
+
+        const source: ExportFile['items'][number] = {
+          group_id: option.export_source.group_id,
+          match_id: option.export_source.match_id,
+          name: prompt.name,
+          prompt: cloneJson(prompt),
+        };
+        const item_index = items.length;
+        items.push(source);
+        review_items.push({
+          key: getReviewItemKey(source.group_id, source.match_id, source.name, item_index),
+          group_id: source.group_id,
+          group_label: group.label,
+          match_id: source.match_id,
+          name: source.name,
+          action: 'export',
+          action_label: '导出',
+          preview: getPromptPreview(source.prompt),
+          source,
+        });
+      }
+    }
+
+    if (items.length === 0) {
+      toastr.warning('请先勾选要导出的动态匹配选项。', SCRIPT_NAME);
+      return;
+    }
+
+    const file: ExportFile = {
+      type: EXPORT_FILE_TYPE,
+      version: EXPORT_FILE_VERSION,
+      exported_at: new Date().toISOString(),
+      title: state.config.title,
+      items,
+    };
+    review_panel.value = {
+      kind: 'export',
+      title: `确认导出 ${items.length} 项设置`,
+      filename: getExportFilename(state.config.title),
+      file,
+      items: review_items,
+    };
+  }
+
+  function confirmExportReview() {
+    const panel = review_panel.value;
+    if (panel?.kind !== 'export') {
+      return;
+    }
+
+    downloadJson(panel.filename, panel.file);
+    toastr.success(`已导出 ${panel.items.length} 项设置。`, SCRIPT_NAME);
+    cancelExportMode();
+  }
+
+  async function importPresetSettings(text: string): Promise<void> {
+    if (is_applying.value) {
+      return;
+    }
+
+    try {
+      let parsed_json: unknown;
+      try {
+        parsed_json = JSON.parse(text);
+      } catch (error) {
+        toastr.error(`导入文件不是有效 JSON：${normalizeError(error)}`, SCRIPT_NAME);
+        return;
+      }
+
+      const parsed = ExportFileSchema.safeParse(parsed_json);
+      if (!parsed.success) {
+        console.warn(`[${SCRIPT_NAME}] 导入文件校验失败。`, parsed.error);
+        toastr.error(`只能导入预设适配器导出的设置文件：\n${formatZodIssues(parsed.error)}`, SCRIPT_NAME);
+        return;
+      }
+
+      const state = loadState();
+      if (state.errors.length > 0 || !state.preset) {
+        toastr.error('配置存在错误，无法导入。', SCRIPT_NAME);
+        return;
+      }
+
+      const review = buildImportReview(parsed.data, state.config, state.preset);
+      if (review.items.length === 0 && review.failed_items.length === 0) {
+        toastr.error('导入文件没有设置项。', SCRIPT_NAME);
+        return;
+      }
+
+      review_panel.value = {
+        kind: 'import',
+        title: `确认导入 ${parsed.data.items.length} 项设置`,
+        file: parsed.data,
+        items: review.items,
+        failed_items: review.failed_items,
+      };
+    } finally {
+      is_applying.value = false;
+    }
+  }
+
+  async function confirmImportReview(include_failed: boolean): Promise<void> {
+    const panel = review_panel.value;
+    if (panel?.kind !== 'import' || is_applying.value) {
+      return;
+    }
+
+    is_applying.value = true;
+    try {
+      const state = loadState();
+      if (state.errors.length > 0 || !state.preset) {
+        toastr.error('配置存在错误，无法导入。', SCRIPT_NAME);
+        return;
+      }
+
+      const review = buildImportReview(panel.file, state.config, state.preset);
+      review_panel.value = {
+        ...panel,
+        items: review.items,
+        failed_items: review.failed_items,
+      };
+
+      const skipped: string[] = [];
+      let created_count = 0;
+      let overwritten_count = 0;
+      let appended_count = 0;
+      for (const item of review.items.map(review_item => review_item.source)) {
+        const result = applyImportItem(state.preset, state.config, item);
+        if ('error' in result) {
+          skipped.push(`${item.group_id}/${item.match_id}/${item.name}: ${result.error}`);
+          continue;
+        }
+        if (result.action === 'overwrite') {
+          overwritten_count += 1;
+        } else {
+          created_count += 1;
+        }
+      }
+      if (include_failed) {
+        for (const item of review.failed_items.map(review_item => review_item.source)) {
+          appendImportItem(state.preset, item);
+          appended_count += 1;
+        }
+      }
+
+      const imported_count = created_count + overwritten_count + appended_count;
+      if (imported_count === 0) {
+        toastr.error(skipped.length > 0 ? `没有可导入的匹配项：\n${skipped.slice(0, 4).join('\n')}` : '导入文件没有设置项。', SCRIPT_NAME);
+        return;
+      }
+
+      const preset_name_to_save = getLoadedPresetName();
+      await replacePreset('in_use', state.preset, { render: 'immediate' });
+      if (preset_name_to_save && preset_name_to_save !== 'in_use') {
+        await replacePreset(preset_name_to_save, state.preset, { render: 'none' });
+      }
+      review_panel.value = undefined;
+      refresh();
+      toastr.success(
+        `已导入并保存 ${imported_count} 项设置：新增 ${created_count} 项，覆盖 ${overwritten_count} 项，追加 ${appended_count} 项。`,
+        SCRIPT_NAME,
+      );
+      const skipped_count = (include_failed ? 0 : review.failed_items.length) + skipped.length;
+      if (skipped_count > 0) {
+        toastr.warning(`有 ${skipped_count} 项未导入，请检查 group id、match id 或区间标记。`, SCRIPT_NAME);
+        console.warn(`[${SCRIPT_NAME}] 部分导入项未匹配。`, [...review.failed_items, ...skipped]);
+      }
+    } finally {
+      is_applying.value = false;
+    }
   }
 
   async function applyOption(group_id: string, option_id: string): Promise<void> {
@@ -585,13 +1100,25 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
 
   return {
     applyOption,
+    cancelExportMode,
+    closeReviewPanel,
+    confirmExportReview,
+    confirmImportReview,
     description,
     errors,
+    export_mode,
+    exportSelectedOptions,
     groups,
     has_blocking_errors,
+    importPresetSettings,
+    isExportOptionSelected,
     is_applying,
     loaded_preset_name,
     refresh,
+    review_panel,
+    selected_export_count,
+    startExportMode,
     title,
+    toggleExportOption,
   };
 });

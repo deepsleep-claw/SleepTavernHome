@@ -1,8 +1,10 @@
-# 压缩相邻消息
+# 梦鲸思客消息处理
 
-- **作者:** 青空莉想做舞台少女的狗
-- **版本:** 2025/10/23
-- **源文件:** [点此跳转](https://github.com/StageDog/tavern_resource/tree/main/src)
+- **作者:** Deepsleep
+- **原脚本：** 压缩相邻消息
+- **原作者：** 青空莉想做舞台少女的狗
+- **版本:** 2026/07/05
+- **源文件:** [点此跳转](https://github.com/deepsleep-claw/SleepTavernHome/tree/main/src)
 
 ## 功能
 
