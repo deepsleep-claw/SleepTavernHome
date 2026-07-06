@@ -1,9 +1,11 @@
 import { initPanel } from './panel';
+import { initializeSquashDebugGlobal } from './debug';
 import { initSquashWithoutPanel } from './squash';
 import { Settings, useSettingsStore } from './store';
 
 export function initSquash(settings?: Settings) {
   const { destroy: destroyPanel } = initPanel();
+  const { destroy: destroyDebugGlobal } = initializeSquashDebugGlobal();
 
   const store = useSettingsStore();
   if (settings) {
@@ -23,6 +25,7 @@ export function initSquash(settings?: Settings) {
   return {
     destroy: () => {
       destroyPanel();
+      destroyDebugGlobal();
       destroySquash();
     },
   };

@@ -10,7 +10,7 @@
       "mode": "all",
       "description": "以创作者的身份讨论和完善世界设计",
       "model": "deepseek/deepseek-v4-pro",
-      "prompt": "Creator.md",
+      "prompt": "DreamCreator.md",
       "temperature": 1
     }
   }

@@ -1,7 +1,11 @@
 import default_config_raw from './default_config.json?raw';
 
-export const SCRIPT_NAME = '预设适配器';
-export const DEFAULT_SCRIPT_BUTTON_NAME = '打开预设适配器';
+export const SCRIPT_NAME = '梦鲸思客设置';
+export const DEFAULT_SCRIPT_BUTTON_NAME = '梦鲸思客设置';
+
+const LEGACY_SCRIPT_NAME = '预设适配器';
+const LEGACY_SCRIPT_BUTTON_NAME = '打开预设适配器';
+const SQUASH_DEBUG_GLOBAL_KEY = '__dream_whale_squash_debug_api__';
 
 const PromptMatcherSchema = z.union([
   z.string().min(1),
@@ -132,6 +136,34 @@ type LoadedState = {
   preset?: Preset;
   groups: GroupView[];
   errors: string[];
+};
+
+type TabId = 'preset' | 'debug';
+
+type SquashDebugRecord = {
+  id: string;
+  created_at: string;
+  title: string;
+  summary: {
+    error_count: number;
+    failed: number;
+    green_cache_insertions: number;
+    loaded_total: number;
+    total_rows: number;
+    triggered_rows: number;
+    wrapper_orphan: number;
+    wrapper_paired: number;
+  };
+  state: Record<string, any>;
+};
+
+type SquashDebugApi = {
+  clearRecords: () => void;
+  getRecords: () => SquashDebugRecord[];
+  max_records: number;
+  storage_key: string;
+  subscribe: (callback: (records: SquashDebugRecord[]) => void) => { stop: () => void };
+  version: 1;
 };
 
 type ImportAction = 'create' | 'overwrite';
@@ -266,14 +298,26 @@ function readAdapterConfig(): ReadConfigResult {
   if (errors.length > 0) {
     console.warn(`[${SCRIPT_NAME}] 配置存在重复 id。`, errors);
   }
-  return { config: result.data, errors };
+  return {
+    config: {
+      ...result.data,
+      script_button_name:
+        result.data.script_button_name === LEGACY_SCRIPT_BUTTON_NAME
+          ? DEFAULT_SCRIPT_BUTTON_NAME
+          : result.data.script_button_name,
+      title: result.data.title === LEGACY_SCRIPT_NAME ? SCRIPT_NAME : result.data.title,
+    },
+    errors,
+  };
 }
 
 export function readScriptButtonName(): string {
   const variables = readScriptVariables();
   const result = ScriptButtonConfigSchema.safeParse(variables);
   if (result.success) {
-    return result.data.script_button_name;
+    return result.data.script_button_name === LEGACY_SCRIPT_BUTTON_NAME
+      ? DEFAULT_SCRIPT_BUTTON_NAME
+      : result.data.script_button_name;
   }
 
   console.warn(`[${SCRIPT_NAME}] 脚本按钮名读取失败，已使用默认按钮名。`, result.error);
@@ -740,10 +784,19 @@ function formatZodIssues(error: z.ZodError): string {
   return error.issues.map(issue => `${issue.path.join('.') || '文件'}: ${issue.message}`).join('\n');
 }
 
+function getSquashDebugApi(): SquashDebugApi | undefined {
+  const host_window = (window.parent ?? window) as Window & Partial<Record<typeof SQUASH_DEBUG_GLOBAL_KEY, SquashDebugApi>>;
+  return host_window[SQUASH_DEBUG_GLOBAL_KEY];
+}
+
 export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   const config = ref<AdapterConfig>(EMPTY_CONFIG);
   const title = ref(SCRIPT_NAME);
   const description = ref('');
+  const active_tab = ref<TabId>('preset');
+  const debug_available = ref(false);
+  const debug_records = ref<SquashDebugRecord[]>([]);
+  const selected_debug_record_id = ref('');
   const export_mode = ref(false);
   const review_panel = ref<ReviewPanel>();
   const selected_export_keys = ref<Set<string>>(new Set());
@@ -760,6 +813,75 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
       0,
     ),
   );
+  const selected_debug_record = computed(() =>
+    debug_records.value.find(record => record.id === selected_debug_record_id.value),
+  );
+  let debug_api: SquashDebugApi | undefined;
+  let debug_subscription: { stop: () => void } | undefined;
+  let debug_poll_timer: ReturnType<typeof window.setInterval> | undefined;
+
+  function applyDebugRecords(records: SquashDebugRecord[]) {
+    debug_records.value = records;
+    if (!records.some(record => record.id === selected_debug_record_id.value)) {
+      selected_debug_record_id.value = records[0]?.id ?? '';
+    }
+  }
+
+  function attachDebugApi(api: SquashDebugApi | undefined) {
+    if (api === debug_api) {
+      return;
+    }
+
+    debug_subscription?.stop();
+    debug_subscription = undefined;
+    debug_api = api;
+    debug_available.value = !!api;
+    if (!api) {
+      applyDebugRecords([]);
+      if (active_tab.value === 'debug') {
+        active_tab.value = 'preset';
+      }
+      return;
+    }
+
+    debug_subscription = api.subscribe(applyDebugRecords);
+  }
+
+  function refreshDebugApi() {
+    attachDebugApi(getSquashDebugApi());
+  }
+
+  function startDebugWatch() {
+    refreshDebugApi();
+    if (debug_poll_timer !== undefined) {
+      return;
+    }
+
+    debug_poll_timer = window.setInterval(refreshDebugApi, 1000);
+  }
+
+  function stopDebugWatch() {
+    if (debug_poll_timer !== undefined) {
+      window.clearInterval(debug_poll_timer);
+      debug_poll_timer = undefined;
+    }
+    attachDebugApi(undefined);
+  }
+
+  function setActiveTab(tab: TabId) {
+    if (tab === 'debug' && !debug_available.value) {
+      return;
+    }
+    active_tab.value = tab;
+  }
+
+  function selectDebugRecord(id: string) {
+    selected_debug_record_id.value = id;
+  }
+
+  function clearDebugRecords() {
+    debug_api?.clearRecords();
+  }
 
   function pruneSelectedExportKeys() {
     const valid_keys = new Set<string>();
@@ -800,6 +922,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
 
   function refresh() {
     loadState();
+    refreshDebugApi();
   }
 
   function startExportMode() {
@@ -1099,11 +1222,15 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   }
 
   return {
+    active_tab,
     applyOption,
     cancelExportMode,
+    clearDebugRecords,
     closeReviewPanel,
     confirmExportReview,
     confirmImportReview,
+    debug_available,
+    debug_records,
     description,
     errors,
     export_mode,
@@ -1116,8 +1243,14 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     loaded_preset_name,
     refresh,
     review_panel,
+    selectDebugRecord,
+    selected_debug_record,
+    selected_debug_record_id,
     selected_export_count,
+    setActiveTab,
     startExportMode,
+    startDebugWatch,
+    stopDebugWatch,
     title,
     toggleExportOption,
   };

@@ -95,7 +95,7 @@ export function openPresetAdapterPopup(): Promise<void> {
   if (active_popup) {
     active_popup.refresh();
     active_popup.resetPosition();
-    toastr.info('预设适配器界面已经打开。', SCRIPT_NAME);
+    toastr.info(`${SCRIPT_NAME}界面已经打开。`, SCRIPT_NAME);
     return Promise.resolve();
   }
 

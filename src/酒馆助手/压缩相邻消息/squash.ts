@@ -9,6 +9,7 @@ import {
   readGreenCacheVariables,
   writeGreenCacheVariables,
 } from './green_cache';
+import { publishSquashDebugRecord } from './debug';
 import { Settings, WorldbookExtractionPositionOrder } from './store';
 
 const GREEN_CACHE_ANCHOR_PREFIX = '§§TH_SQUASH_GREEN_CACHE_ANCHOR';
@@ -72,20 +73,28 @@ export function injectSeparators(settings: Settings) {
   } as const);
   let green_anchor_prompt_ids: string[] = [];
 
-  const inject = () => {
+  const injectGreenAnchors = () => {
     if (green_anchor_prompt_ids.length > 0) {
       uninjectPrompts(green_anchor_prompt_ids);
     }
     const green_anchor_prompts = getGreenCacheAnchorInjectionPrompts(settings);
     green_anchor_prompt_ids = green_anchor_prompts.map(prompt => prompt.id);
-    injectPrompts([...Object.values(separators), ...green_anchor_prompts]);
+    if (green_anchor_prompts.length > 0) {
+      injectPrompts(green_anchor_prompts);
+    }
+  };
+  const inject = () => {
+    injectPrompts(Object.values(separators));
+    injectGreenAnchors();
   };
   eventOn(tavern_events.GENERATION_AFTER_COMMANDS, inject);
+  eventOn(tavern_events.MESSAGE_SENT, injectGreenAnchors);
 
   return {
     separators,
     uninject: () => {
       eventRemoveListener(tavern_events.GENERATION_AFTER_COMMANDS, inject);
+      eventRemoveListener(tavern_events.MESSAGE_SENT, injectGreenAnchors);
       uninjectPrompts([...Object.values(separators).map(({ id }) => id), ...green_anchor_prompt_ids]);
       green_anchor_prompt_ids = [];
     },
@@ -385,6 +394,20 @@ type GreenCacheInsertionSource =
   | 'before_chat_history'
   | 'before_chat_anchor';
 
+type ChatDebugRole = 'system' | 'assistant' | 'user';
+
+type ChatPromptSnapshot = {
+  order: number;
+  anchor_key: string;
+  message_id: number;
+  swipe_id: number;
+  role: ChatDebugRole;
+  is_hidden: boolean;
+  content: string;
+  content_hash: string;
+  content_length: number;
+};
+
 type GreenCacheDebugState = {
   summary?: {
     cache_total: number;
@@ -404,7 +427,7 @@ type GreenCacheDebugState = {
     anchor_key: string;
     message_id: number;
     swipe_id: number;
-    role: ChatMessage['role'];
+    role: ChatDebugRole;
     is_hidden: boolean;
     message_hash: string;
     message_length: number;
@@ -734,18 +757,26 @@ function getWorldbookExtractionWrapperStats(
   return { paired, orphan: Math.max(0, marker_count - paired * 2) };
 }
 
-function printWorldbookDebugState(state: WorldbookExtractionDebugState) {
-  if (
+function isWorldbookDebugStateEmpty(state: WorldbookExtractionDebugState): boolean {
+  return (
     state.total_rows.length === 0 &&
     state.triggered_rows.length === 0 &&
     state.error_logs.length === 0 &&
     state.loaded.total === 0
-  ) {
+  );
+}
+
+function getWorldbookDebugTitle(state: WorldbookExtractionDebugState): string {
+  const failed = state.total_extraction - state.total_consumed;
+  return `[压缩相邻消息] Debug: 总排序 ${state.total_rows.length}, 触发 ${state.triggered_rows.length}, 失败 ${failed}, 残留包裹 ${state.wrapper_before_unwrap.paired}/${state.wrapper_before_unwrap.orphan}`;
+}
+
+function printWorldbookDebugState(state: WorldbookExtractionDebugState) {
+  if (isWorldbookDebugStateEmpty(state)) {
     return;
   }
 
-  const failed = state.total_extraction - state.total_consumed;
-  const title = `[压缩相邻消息] Debug: 总排序 ${state.total_rows.length}, 触发 ${state.triggered_rows.length}, 失败 ${failed}, 残留包裹 ${state.wrapper_before_unwrap.paired}/${state.wrapper_before_unwrap.orphan}`;
+  const title = getWorldbookDebugTitle(state);
   if (typeof console.groupCollapsed === 'function') {
     console.groupCollapsed(title);
     console.groupCollapsed('1. 总排序');
@@ -1520,6 +1551,10 @@ function getAnchorKey(anchor: GreenCacheAnchor): string {
   return `${anchor.message_id ?? 'before'}.${anchor.swipe_id ?? 'none'}`;
 }
 
+function getGreenCacheFixedTrigger(anchor: GreenCacheAnchor): string {
+  return anchor.message_id === null ? '绿灯固定所有消息前' : `绿灯固定第 ${anchor.message_id} 层`;
+}
+
 function isAggressiveGreenEntry(entry: ActivatedWorldbookEntry): boolean {
   return entry.is_selective && !entry.has_source_macro;
 }
@@ -1596,7 +1631,7 @@ function recordInsertedGreenCacheDebug(state: WorldbookExtractionDebugState | un
   }
   upsertWorldbookTriggeredRecord(state, `${entry.world}.${entry.uid}`, {
     触发原因: '绿灯缓存固定注入',
-    触发类型: '绿灯固定层数',
+    触发类型: getGreenCacheFixedTrigger(entry.fixed_at),
     固定位置: getAnchorKey(entry.fixed_at),
     提取状态: '成功',
     失败原因: '',
@@ -1645,52 +1680,175 @@ function createWorldbookTotalRow(
   };
 }
 
-function getHistoryDebugType(role: SillyTavern.SendingMessage['role']): string {
+function getRoleDebugName(role: SillyTavern.SendingMessage['role']): string {
   switch (role) {
     case 'user':
-      return '历史信息用户输入';
+      return '用户输入';
     case 'assistant':
-      return '历史信息输出文本';
+      return '助手输出';
     case 'system':
-      return '历史信息系统信息';
+      return '系统信息';
+    default:
+      return String(role);
   }
 }
 
-function buildChatContentMessageIdMap(): Map<string, number[]> {
-  const map = new Map<string, number[]>();
-  SillyTavern.chat.forEach((message, message_id) => {
-    const content = normalizeContentForMatch(message.mes ?? '');
-    if (!content) {
+function getHistoryDebugType(role: SillyTavern.SendingMessage['role']): string {
+  return `历史信息${getRoleDebugName(role)}`;
+}
+
+function getPresetDebugType(role: SillyTavern.SendingMessage['role']): string {
+  return `预设${getRoleDebugName(role)}`;
+}
+
+function getRawChatMessageRole(message: any): ChatDebugRole {
+  if (message.role === 'user' || message.role === 'assistant' || message.role === 'system') {
+    return message.role;
+  }
+  if (message.extra?.type === 'narrator') {
+    return 'system';
+  }
+  return message.is_user ? 'user' : 'assistant';
+}
+
+function getRawChatMessageSwipeId(message: any): number {
+  return _.get(message, 'swipe_id') ?? 0;
+}
+
+function getRawChatMessageContent(message: any): string {
+  const swipe_id = getRawChatMessageSwipeId(message);
+  if (_.isArray(message.swipes)) {
+    const swipe_content = message.swipes[swipe_id];
+    return typeof swipe_content === 'string' ? swipe_content : '';
+  }
+  return typeof message.mes === 'string' ? message.mes : '';
+}
+
+function getRawChatMessageIsHidden(message: any): boolean {
+  return message.is_hidden === true;
+}
+
+function readChatPromptSnapshots(hide_state: 'all' | 'hidden' | 'unhidden'): ChatPromptSnapshot[] {
+  const snapshots: ChatPromptSnapshot[] = [];
+  SillyTavern.chat.forEach((message: any, message_id) => {
+    const is_hidden = getRawChatMessageIsHidden(message);
+    if (hide_state !== 'all' && (hide_state === 'hidden') !== is_hidden) {
       return;
     }
-    const ids = map.get(content) ?? [];
-    ids.push(message_id);
-    map.set(content, ids);
+
+    const swipe_id = getRawChatMessageSwipeId(message);
+    const content = getRawChatMessageContent(message);
+    const anchor_key = getAnchorKey({
+      message_id,
+      swipe_id,
+      message_hash: null,
+    });
+    snapshots.push({
+      order: snapshots.length,
+      anchor_key,
+      message_id,
+      swipe_id,
+      role: getRawChatMessageRole(message),
+      is_hidden,
+      content,
+      content_hash: hashGreenCacheContent(normalizeContentForMatch(content)),
+      content_length: content.length,
+    });
   });
-  return map;
+  return snapshots;
 }
 
-function getPromptHistoryName(
+function getPromptDirectMessageId(prompt: SillyTavern.SendingMessage): number | undefined {
+  const direct_message_id = _.get(prompt, 'message_id') ?? _.get(prompt, 'extra.message_id');
+  return typeof direct_message_id === 'number' ? direct_message_id : undefined;
+}
+
+function getPromptDebugNormalizedContent(content: string): string {
+  return normalizeContentForMatch(content).replace(/\s+/g, ' ').trim();
+}
+
+function getCommonPrefixLength(lhs: string, rhs: string): number {
+  const length = Math.min(lhs.length, rhs.length);
+  let index = 0;
+  while (index < length && lhs[index] === rhs[index]) {
+    index++;
+  }
+  return index;
+}
+
+function getCommonSuffixLength(lhs: string, rhs: string, prefix_length: number): number {
+  const length = Math.min(lhs.length, rhs.length) - prefix_length;
+  let offset = 0;
+  while (offset < length && lhs[lhs.length - 1 - offset] === rhs[rhs.length - 1 - offset]) {
+    offset++;
+  }
+  return offset;
+}
+
+function isPromptLikelySameAsChatMessage(prompt_content: string, chat_content: string): boolean {
+  const prompt_normalized = getPromptDebugNormalizedContent(prompt_content);
+  const chat_normalized = getPromptDebugNormalizedContent(chat_content);
+  if (!prompt_normalized || !chat_normalized) {
+    return false;
+  }
+  if (prompt_normalized === chat_normalized) {
+    return true;
+  }
+  const shorter_length = Math.min(prompt_normalized.length, chat_normalized.length);
+  if (
+    shorter_length >= 40 &&
+    (prompt_normalized.includes(chat_normalized) || chat_normalized.includes(prompt_normalized))
+  ) {
+    return true;
+  }
+  const prefix_length = getCommonPrefixLength(prompt_normalized, chat_normalized);
+  const suffix_length = getCommonSuffixLength(prompt_normalized, chat_normalized, prefix_length);
+  return shorter_length >= 80 && (prefix_length + suffix_length) / shorter_length >= 0.35;
+}
+
+function findPromptChatSnapshotIndex(
   prompt: SillyTavern.SendingMessage,
   content: string,
-  content_message_ids: Map<string, number[]>,
-  used_message_ids: Set<number>,
-  fallback_index: number,
-): string {
-  const direct_message_id = _.get(prompt, 'message_id') ?? _.get(prompt, 'extra.message_id');
-  if (typeof direct_message_id === 'number') {
-    used_message_ids.add(direct_message_id);
-    return `第${direct_message_id}层`;
+  chat_messages: ChatPromptSnapshot[],
+  used_chat_indexes: Set<number>,
+): number | undefined {
+  const direct_message_id = getPromptDirectMessageId(prompt);
+  if (direct_message_id !== undefined) {
+    const direct_index = chat_messages.findIndex(
+      (message, index) => !used_chat_indexes.has(index) && message.message_id === direct_message_id,
+    );
+    if (direct_index !== -1) {
+      return direct_index;
+    }
   }
 
-  const matched_ids = content_message_ids.get(normalizeContentForMatch(content)) ?? [];
-  const matched_id = matched_ids.find(id => !used_message_ids.has(id));
-  if (matched_id !== undefined) {
-    used_message_ids.add(matched_id);
-    return `第${matched_id}层`;
+  const exact_index = chat_messages.findIndex(
+    (message, index) =>
+      !used_chat_indexes.has(index) && normalizeContentForMatch(message.content) === normalizeContentForMatch(content),
+  );
+  if (exact_index !== -1) {
+    return exact_index;
   }
 
-  return `prompt#${fallback_index}`;
+  const fuzzy_index = chat_messages.findIndex(
+    (message, index) => !used_chat_indexes.has(index) && isPromptLikelySameAsChatMessage(content, message.content),
+  );
+  return fuzzy_index === -1 ? undefined : fuzzy_index;
+}
+
+function findNextPromptChatSnapshotIndex(
+  prompt: SillyTavern.SendingMessage,
+  chat_messages: ChatPromptSnapshot[],
+  used_chat_indexes: Set<number>,
+  start_index: number,
+): number | undefined {
+  const prompt_role = prompt.role as ChatDebugRole;
+  for (let index = start_index; index < chat_messages.length; index++) {
+    if (!used_chat_indexes.has(index) && chat_messages[index].role === prompt_role) {
+      return index;
+    }
+  }
+  return undefined;
 }
 
 function captureWorldbookDebugTotalRows(
@@ -1702,52 +1860,66 @@ function captureWorldbookDebugTotalRows(
   state.prompt_rows.forEach(({ prompt, rows }) => {
     prompt_rows.set(prompt, [...(prompt_rows.get(prompt) ?? []), ...rows]);
   });
-  const content_message_ids = buildChatContentMessageIdMap();
-  const used_message_ids = new Set<number>();
-  let prompt_index = 0;
-  state.total_rows = _.flatten(chunks).flatMap(prompt => {
-    const rows = prompt_rows.get(prompt);
-    if (rows) {
-      return rows;
-    }
+  const chat_messages = readUnhiddenChatMessages();
+  const used_chat_indexes = new Set<number>();
+  let chat_cursor = 0;
+  let preset_index = 0;
+  state.total_rows = chunks.flatMap((chunk, chunk_index) =>
+    chunk.flatMap(prompt => {
+      const rows = prompt_rows.get(prompt);
+      if (rows) {
+        return rows;
+      }
 
-    const content = getPromptContent(prompt, settings);
-    if (!content.trim()) {
-      return [];
-    }
+      const content = getPromptContent(prompt, settings);
+      if (!content.trim()) {
+        return [];
+      }
 
-    const row: WorldbookDebugTotalRow = {
-      类型: getHistoryDebugType(prompt.role),
-      触发: '固有',
-      名称: getPromptHistoryName(prompt, content, content_message_ids, used_message_ids, prompt_index),
-      来源: '历史信息',
-      详细内容: content,
-    };
-    prompt_index++;
-    return [row];
-  });
+      let chat_index = findPromptChatSnapshotIndex(prompt, content, chat_messages, used_chat_indexes);
+      if (chat_index === undefined && (chunk_index === 1 || chunk_index === 2)) {
+        chat_index = findNextPromptChatSnapshotIndex(prompt, chat_messages, used_chat_indexes, chat_cursor);
+      }
+      if (chat_index !== undefined) {
+        const chat_message = chat_messages[chat_index];
+        used_chat_indexes.add(chat_index);
+        chat_cursor = Math.max(chat_cursor, chat_index + 1);
+        return [
+          {
+            类型: getHistoryDebugType(prompt.role),
+            触发: '固有',
+            名称: `第${chat_message.message_id}层`,
+            来源: '历史信息',
+            详细内容: content,
+          },
+        ];
+      }
+
+      const row: WorldbookDebugTotalRow = {
+        类型: getPresetDebugType(prompt.role),
+        触发: '固有',
+        名称: `预设#${preset_index}`,
+        来源: '预设',
+        详细内容: content,
+      };
+      preset_index++;
+      return [row];
+    }),
+  );
 }
 
-function readChatMessagesByHideState(hide_state: 'all' | 'hidden' | 'unhidden'): ChatMessage[] {
-  try {
-    return getChatMessages('0-{{lastMessageId}}', { hide_state });
-  } catch {
-    return [];
-  }
+function readUnhiddenChatMessages(): ChatPromptSnapshot[] {
+  return readChatPromptSnapshots('unhidden');
 }
 
-function readUnhiddenChatMessages(): ChatMessage[] {
-  return readChatMessagesByHideState('unhidden');
+function readAllChatMessages(): ChatPromptSnapshot[] {
+  return readChatPromptSnapshots('all');
 }
 
-function readAllChatMessages(): ChatMessage[] {
-  return readChatMessagesByHideState('all');
-}
-
-function getChatMessageAnchorKey(message: ChatMessage): string {
+function getChatMessageAnchorKey(message: Pick<ChatPromptSnapshot, 'message_id' | 'swipe_id'>): string {
   return getAnchorKey({
     message_id: message.message_id,
-    swipe_id: _.get(message, 'swipe_id') ?? 0,
+    swipe_id: message.swipe_id,
     message_hash: null,
   });
 }
@@ -1794,7 +1966,14 @@ function getGreenCacheAnchorDepth(anchor: GreenCacheAnchor): number | undefined 
   if (anchor.message_id === null || !cacheAnchorMessageExists(anchor)) {
     return undefined;
   }
-  return Math.max(0, getLastMessageId() - anchor.message_id);
+  const unhidden_messages = readUnhiddenChatMessages();
+  const message_index = unhidden_messages.findIndex(
+    message => message.message_id === anchor.message_id && message.swipe_id === (anchor.swipe_id ?? 0),
+  );
+  if (message_index === -1) {
+    return undefined;
+  }
+  return Math.max(0, unhidden_messages.length - message_index - 1);
 }
 
 function getGreenCacheAnchorContent(anchor_key: string): string {
@@ -1907,19 +2086,18 @@ function buildGreenCacheInsertionLocationMap(
     all_messages.forEach((message, order) => {
       const anchor_key = getChatMessageAnchorKey(message);
       const insertion_location = insertion_locations.get(anchor_key);
-      const swipe_id = _.get(message, 'swipe_id') ?? 0;
       pushDebugLogItem(debug_state.chat_messages, {
         order,
         anchor_key,
         message_id: message.message_id,
-        swipe_id,
+        swipe_id: message.swipe_id,
         role: message.role,
         is_hidden: message.is_hidden,
-        message_hash: hashGreenCacheContent(normalizeContentForMatch(message.message)),
-        message_length: message.message.length,
+        message_hash: message.content_hash,
+        message_length: message.content_length,
         anchor_depth: getGreenCacheAnchorDepth({
           message_id: message.message_id,
-          swipe_id,
+          swipe_id: message.swipe_id,
           message_hash: null,
         }),
         prompt_chunk_index: insertion_location?.chunk_index,
@@ -2063,7 +2241,13 @@ function insertGreenCacheEntries(
     debug_state?.prompt_rows.push({
       prompt,
       rows: before_chat_entries.map(entry =>
-        createWorldbookTotalRow(true, '绿灯固定层数', entry.name, entry.world, entry.content_snapshot),
+        createWorldbookTotalRow(
+          true,
+          getGreenCacheFixedTrigger(entry.fixed_at),
+          entry.name,
+          entry.world,
+          entry.content_snapshot,
+        ),
       ),
     });
     before_chat_entries.forEach(entry => recordInsertedGreenCacheDebug(debug_state, entry));
@@ -2105,7 +2289,13 @@ function insertGreenCacheEntries(
     debug_state?.prompt_rows.push({
       prompt,
       rows: entries.map(entry =>
-        createWorldbookTotalRow(true, '绿灯固定层数', entry.name, entry.world, entry.content_snapshot),
+        createWorldbookTotalRow(
+          true,
+          getGreenCacheFixedTrigger(entry.fixed_at),
+          entry.name,
+          entry.world,
+          entry.content_snapshot,
+        ),
       ),
     });
     entries.forEach(entry => recordInsertedGreenCacheDebug(debug_state, entry));
@@ -2155,7 +2345,7 @@ function processAggressiveGreenCache(
       const cached_can_insert = canInsertGreenCacheAnchor(cached_entry.fixed_at, insertion_locations);
       if (!cached_can_insert) {
         updateWorldbookTriggeredRecord(debug_state, entry.key, {
-          触发类型: '绿灯固定层数',
+          触发类型: getGreenCacheFixedTrigger(cached_entry.fixed_at),
           固定位置: cached_anchor_key,
           提取状态: '失败',
           失败原因: 'skip_fixed_anchor_unavailable',
@@ -2191,7 +2381,7 @@ function processAggressiveGreenCache(
         suppressed_cache_identities.add(identity);
       }
       updateWorldbookTriggeredRecord(debug_state, entry.key, {
-        触发类型: '绿灯固定层数',
+        触发类型: getGreenCacheFixedTrigger(cached_entry.fixed_at),
         固定位置: cached_anchor_key,
         提取状态: consumed ? '成功' : '失败',
         失败原因: consumed ? '' : 'fixed_cache_original_missing',
@@ -2296,7 +2486,7 @@ function processAggressiveGreenCache(
     new_cache_entries.push(new_cache_entry);
     handled_entry_keys.add(entry.key);
     updateWorldbookTriggeredRecord(debug_state, entry.key, {
-      触发类型: '绿灯固定层数',
+      触发类型: getGreenCacheFixedTrigger(new_anchor),
       固定位置: getAnchorKey(new_anchor),
       提取状态: '成功',
       失败原因: '',
@@ -2867,6 +3057,9 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
     if (settings.entry_processing.mode === 'worldbook') {
       captureWorldbookDebugTotalRows(chunks, worldbook_extraction_debug, settings);
       printWorldbookDebugState(worldbook_extraction_debug);
+      if (!isWorldbookDebugStateEmpty(worldbook_extraction_debug)) {
+        publishSquashDebugRecord(getWorldbookDebugTitle(worldbook_extraction_debug), worldbook_extraction_debug);
+      }
     }
 
     const [head, above_chat_history, below_chat_history, tail] = chunks;

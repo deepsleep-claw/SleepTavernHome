@@ -9,3 +9,5 @@
 @.cursor/rules/正则界面.mdc
 @.cursor/rules/mvu变量框架.mdc
 @.cursor/rules/mvu角色卡.mdc
+
+编译时，使用 pnpm run build，而非 build:dev，除非用户明确说明。
