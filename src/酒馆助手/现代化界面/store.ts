@@ -3,8 +3,10 @@ import { registerAsUniqueScript } from '@util/script';
 export const SCRIPT_NAME = '现代化界面';
 
 const LEGACY_DEFAULT_LEFT_SIDEBAR_WIDTH = 340;
+const LEGACY_DEFAULT_MAIN_CHAT_MAX_WIDTH = 800;
 export const DEFAULT_LEFT_SIDEBAR_WIDTH = 360;
 export const DEFAULT_OVERLAY_PANEL_WIDTH = 960;
+export const DEFAULT_MAIN_CHAT_MAX_WIDTH = 960;
 
 export type ModernLayoutSettings = z.infer<typeof ModernLayoutSettings>;
 export const ModernLayoutSettings = z
@@ -20,9 +22,16 @@ export const ModernLayoutSettings = z
     overlayPanelWidth: z
       .number()
       .min(720)
-      .max(1080)
       .default(DEFAULT_OVERLAY_PANEL_WIDTH)
       .catch(DEFAULT_OVERLAY_PANEL_WIDTH),
+    mainChatMaxWidth: z
+      .number()
+      .min(0)
+      .default(DEFAULT_MAIN_CHAT_MAX_WIDTH)
+      .catch(DEFAULT_MAIN_CHAT_MAX_WIDTH),
+    reduceMotion: z.boolean().default(false).catch(false),
+    reduceAdvancedEffects: z.boolean().default(false).catch(false),
+    modernWorldInfoEditor: z.boolean().default(true).catch(true),
   })
   .prefault({});
 
@@ -35,6 +44,9 @@ function readSettings(): ModernLayoutSettings {
     }
     if (settings.overlayPanelWidth === undefined && settings.leftSidebarWidth === LEGACY_DEFAULT_LEFT_SIDEBAR_WIDTH) {
       settings.leftSidebarWidth = DEFAULT_LEFT_SIDEBAR_WIDTH;
+    }
+    if (settings.mainChatMaxWidth === LEGACY_DEFAULT_MAIN_CHAT_MAX_WIDTH) {
+      settings.mainChatMaxWidth = DEFAULT_MAIN_CHAT_MAX_WIDTH;
     }
   }
 

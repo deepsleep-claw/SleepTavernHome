@@ -1,0 +1,1505 @@
+import { watch } from 'vue';
+
+import type { useModernLayoutStore } from './store';
+
+const WORLD_INFO_ENABLED_CLASS = 'th-modern-wi-enabled';
+const WORLD_INFO_NATIVE_CLASS = 'th-modern-wi-native';
+const SELECTED_ENTRY_CLASS = 'th-modern-wi-selected';
+const SELECTED_ROW_CLASS = 'th-modern-wi-row-checked';
+const MULTI_SELECT_CLASS = 'th-modern-wi-multiselect';
+const NARROW_CLASS = 'th-modern-wi-narrow';
+const DETAIL_OPEN_CLASS = 'th-modern-wi-detail-open';
+const TABS_READY_FLAG = 'thModernTabsReady';
+const SUMMARY_READY_FLAG = 'thModernSummaryReady';
+const CONDITIONAL_READY_FLAG = 'thModernConditionalReady';
+const SHORTCUT_SYNC_READY_FLAG = 'thModernShortcutSyncReady';
+const ENTRY_LAYOUT_VERSION = '2026-07-08-tabs-v4';
+const pendingSummaryUpdates = new WeakMap<HTMLElement, number>();
+const pendingActiveTabsByUid = new Map<number, string>();
+
+type Store = ReturnType<typeof useModernLayoutStore>;
+
+type MovedNode = {
+    marker: Comment;
+    node: Node;
+};
+
+type NativeWorldInfoController = {
+    destroy: () => void;
+};
+
+const SHORTCUT_FIELD_SOURCE_SELECTORS: Array<[string, string]> = [
+    ['th-modern-wi-position-field', 'select[name="position"]'],
+    ['th-modern-wi-depth-field', 'input[name="depth"]'],
+    ['th-modern-wi-outlet-field', 'input[name="outletName"]'],
+    ['th-modern-wi-order-field', 'input[name="order"]'],
+    ['th-modern-wi-no-recursion-field', 'input[name="excludeRecursion"]'],
+    ['th-modern-wi-prevent-recursion-field', 'input[name="preventRecursion"]'],
+];
+
+function getHostDocument(): Document {
+    return window.parent?.document ?? document;
+}
+
+function getEntryUid(entry: HTMLElement): number | undefined {
+    const uid = entry.getAttribute('uid') ?? entry.dataset.uid;
+    const parsed = Number(uid);
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+type ClosestCapableTarget = EventTarget & {
+    closest?: Element['closest'];
+    nodeType?: number;
+    parentElement?: Element | null;
+};
+
+function targetToElement(target: EventTarget | null): Element | null {
+    const candidate = target as ClosestCapableTarget | null;
+    if (!candidate) {
+        return null;
+    }
+
+    if (typeof candidate.closest === 'function') {
+        return candidate as unknown as Element;
+    }
+
+    return candidate.nodeType === 3 ? candidate.parentElement ?? null : null;
+}
+
+function closestEntry(target: EventTarget | null): HTMLElement | null {
+    return targetToElement(target)?.closest<HTMLElement>('.world_entry') ?? null;
+}
+
+function isInteractiveTarget(target: EventTarget | null): boolean {
+    const element = targetToElement(target);
+    if (!element) {
+        return false;
+    }
+
+    return Boolean(element.closest([
+        '.th-modern-wi-tab',
+        '.th-modern-wi-editor-surface',
+        '.th-modern-wi-editor-actions',
+        '.th-modern-wi-toolbar',
+        '.drag-handle',
+        '.inline-drawer-toggle',
+        '.move_entry_button',
+        '.duplicate_entry_button',
+        '.delete_entry_button',
+        'input',
+        'select',
+        'textarea',
+        'button',
+        'a',
+        'label',
+        '.menu_button',
+        '.select2',
+        '.select2-container',
+    ].join(',')));
+}
+
+function getSelectableListEntry(target: EventTarget | null): HTMLElement | null {
+    const element = targetToElement(target);
+    if (!element || !element.closest('#world_popup_entries_list')) {
+        return null;
+    }
+
+    if (isInteractiveTarget(element)) {
+        return null;
+    }
+
+    return closestEntry(element);
+}
+
+function moveNode(node: Node, target: HTMLElement, moved: MovedNode[]): void {
+    const parent = node.parentNode;
+    if (!parent) {
+        return;
+    }
+
+    const marker = getHostDocument().createComment('th-modern-wi-restore');
+    parent.insertBefore(marker, node);
+    target.append(node);
+    moved.push({ marker, node });
+}
+
+function restoreMovedNodes(moved: MovedNode[]): void {
+    for (const item of [...moved].reverse()) {
+        const parent = item.marker.parentNode;
+        if (!parent) {
+            continue;
+        }
+        parent.insertBefore(item.node, item.marker);
+        item.marker.remove();
+    }
+    moved.length = 0;
+}
+
+function makeElement<K extends keyof HTMLElementTagNameMap>(
+    document: Document,
+    tag: K,
+    className?: string,
+    text?: string,
+): HTMLElementTagNameMap[K] {
+    const element = document.createElement(tag);
+    if (className) {
+        element.className = className;
+    }
+    if (text !== undefined) {
+        element.textContent = text;
+    }
+    return element;
+}
+
+function createIconButton(document: Document, className: string, title: string, icon: string): HTMLButtonElement {
+    const button = makeElement(document, 'button', className);
+    button.type = 'button';
+    button.title = title;
+    button.setAttribute('aria-label', title);
+    button.innerHTML = `<i class="${icon}" aria-hidden="true"></i>`;
+    return button;
+}
+
+function wrapField(document: Document, target: HTMLElement, label: string, wide = false): HTMLElement {
+    const wrapper = makeElement(document, 'label', `th-modern-wi-field${wide ? ' th-modern-wi-field-wide' : ''}`);
+    wrapper.classList.add('th-modern-wi-labeled-field');
+    const title = makeElement(document, 'span', 'th-modern-wi-field-label', label);
+    wrapper.append(title, target);
+    return wrapper;
+}
+
+function appendSectionTitle(document: Document, panel: HTMLElement, text: string, className = ''): void {
+    panel.append(makeElement(document, 'div', `th-modern-wi-section-title${className ? ` ${className}` : ''}`, text));
+}
+
+function findControlRoot(control: Element | null): HTMLElement | null {
+    if (!control) {
+        return null;
+    }
+
+    return control.closest<HTMLElement>([
+        '.world_entry_form_control',
+        '.range-block',
+        '.checkbox_label',
+        'label.checkbox',
+        'label',
+        '.flex-container',
+    ].join(',')) ?? control.parentElement;
+}
+
+function appendExistingControl(
+    document: Document,
+    panel: HTMLElement,
+    entry: HTMLElement,
+    selector: string,
+    label?: string,
+    wide = false,
+    fieldClass = '',
+): void {
+    const control = entry.querySelector<HTMLElement>(selector);
+    const root = findControlRoot(control);
+    if (!root || root.closest('.th-modern-wi-panel')) {
+        return;
+    }
+
+    if (label && root === control) {
+        const wrapper = wrapField(document, root, label, wide);
+        if (fieldClass) {
+            wrapper.classList.add(fieldClass);
+        }
+        panel.append(wrapper);
+        return;
+    }
+
+    root.classList.add('th-modern-wi-native-field');
+    if (label) {
+        root.classList.add('th-modern-wi-labeled-field');
+        if (!root.querySelector(':scope > .th-modern-wi-field-label')) {
+            root.prepend(makeElement(document, 'span', 'th-modern-wi-field-label', label));
+        }
+    }
+    if (wide) {
+        root.classList.add('th-modern-wi-native-field-wide');
+    }
+    if (fieldClass) {
+        root.classList.add(fieldClass);
+    }
+    panel.append(root);
+}
+
+function appendExistingControlFromRoot(
+    panel: HTMLElement,
+    entry: HTMLElement,
+    selector: string,
+    rootSelector: string,
+    wide = false,
+    fieldClass = '',
+    label = '',
+): void {
+    const control = entry.querySelector<HTMLElement>(selector);
+    const root = control?.closest<HTMLElement>(rootSelector);
+    if (!root || root.closest('.th-modern-wi-panel')) {
+        return;
+    }
+
+    root.classList.add('th-modern-wi-native-field');
+    if (label) {
+        root.classList.add('th-modern-wi-labeled-field');
+        if (!root.querySelector(':scope > .th-modern-wi-field-label')) {
+            root.prepend(makeElement(getHostDocument(), 'span', 'th-modern-wi-field-label', label));
+        }
+    }
+    if (wide) {
+        root.classList.add('th-modern-wi-native-field-wide');
+    }
+    if (fieldClass) {
+        root.classList.add(fieldClass);
+    }
+    panel.append(root);
+}
+
+function appendHeaderControl(
+    document: Document,
+    panel: HTMLElement,
+    entry: HTMLElement,
+    selector: string,
+    label: string,
+    wide = false,
+    fieldClass = '',
+): void {
+    const control = entry.querySelector<HTMLElement>(selector);
+    if (!control || control.closest('.th-modern-wi-panel')) {
+        return;
+    }
+
+    const wrapper = wrapField(document, control, label, wide);
+    if (fieldClass) {
+        wrapper.classList.add(fieldClass);
+    }
+    panel.append(wrapper);
+}
+
+function dispatchNativeControlEvent(control: HTMLElement): void {
+    const EventCtor = control.ownerDocument.defaultView?.Event ?? Event;
+    control.dispatchEvent(new EventCtor('input', { bubbles: true }));
+    control.dispatchEvent(new EventCtor('change', { bubbles: true }));
+}
+
+function syncControlValue(
+    source: HTMLInputElement | HTMLSelectElement,
+    target: HTMLInputElement | HTMLSelectElement,
+): void {
+    const sourceTag = source.tagName.toLowerCase();
+    const targetTag = target.tagName.toLowerCase();
+    if (sourceTag === 'input' && targetTag === 'input' && (source as HTMLInputElement).type === 'checkbox') {
+        (target as HTMLInputElement).checked = (source as HTMLInputElement).checked;
+        return;
+    }
+    if (sourceTag === 'select' && targetTag === 'select') {
+        (target as HTMLSelectElement).selectedIndex = (source as HTMLSelectElement).selectedIndex;
+        return;
+    }
+    target.value = source.value;
+}
+
+function findNativeShortcutSource(
+    entry: HTMLElement,
+    editor: HTMLElement,
+    selector: string,
+): HTMLInputElement | HTMLSelectElement | null {
+    const controls = [
+        ...Array.from(editor.querySelectorAll<HTMLInputElement | HTMLSelectElement>(selector)),
+        ...Array.from(entry.querySelectorAll<HTMLInputElement | HTMLSelectElement>(selector)),
+    ];
+    return controls.find(control => !control.closest('.th-modern-wi-shortcut-field')) ?? controls[0] ?? null;
+}
+
+function getShortcutSourceSelector(field: HTMLElement): string | undefined {
+    return SHORTCUT_FIELD_SOURCE_SELECTORS.find(([className]) => field.classList.contains(className))?.[1];
+}
+
+function bindShortcutMirrorControls(entry: HTMLElement, editor: HTMLElement): void {
+    for (const field of editor.querySelectorAll<HTMLElement>('.th-modern-wi-shortcut-field')) {
+        const selector = getShortcutSourceSelector(field);
+        if (!selector) {
+            continue;
+        }
+
+        const mirror = field.querySelector<HTMLInputElement | HTMLSelectElement>('input, select');
+        const source = findNativeShortcutSource(entry, editor, selector);
+        if (!mirror || !source || mirror === source || mirror.dataset[SHORTCUT_SYNC_READY_FLAG] === 'true') {
+            continue;
+        }
+
+        const syncToSource = () => {
+            syncControlValue(mirror, source);
+            dispatchNativeControlEvent(source);
+        };
+        const syncFromSource = () => {
+            syncControlValue(source, mirror);
+            mirror.disabled = source.disabled;
+        };
+
+        mirror.addEventListener('input', syncToSource);
+        mirror.addEventListener('change', syncToSource);
+        source.addEventListener('input', syncFromSource);
+        source.addEventListener('change', syncFromSource);
+        mirror.dataset[SHORTCUT_SYNC_READY_FLAG] = 'true';
+        syncFromSource();
+    }
+}
+
+function appendMirrorControl(
+    document: Document,
+    panel: HTMLElement,
+    entry: HTMLElement,
+    selector: string,
+    label: string,
+    wide = false,
+    fieldClass = '',
+): void {
+    const source = entry.querySelector<HTMLInputElement | HTMLSelectElement>(selector);
+    if (!source) {
+        return;
+    }
+
+    const isSelect = source.tagName.toLowerCase() === 'select';
+    const isCheckbox = !isSelect && (source as HTMLInputElement).type === 'checkbox';
+    const mirror = isSelect
+        ? makeElement(document, 'select')
+        : makeElement(document, 'input');
+
+    mirror.classList.add('th-modern-wi-shortcut-control');
+    mirror.setAttribute('aria-label', label);
+
+    if (isSelect) {
+        const selectMirror = mirror as HTMLSelectElement;
+        const selectSource = source as HTMLSelectElement;
+        for (const option of Array.from(selectSource.options)) {
+            const clone = document.createElement('option');
+            for (const attribute of Array.from(option.attributes)) {
+                clone.setAttribute(attribute.name, attribute.value);
+            }
+            clone.textContent = option.textContent;
+            selectMirror.append(clone);
+        }
+        selectMirror.selectedIndex = selectSource.selectedIndex;
+    } else {
+        const inputMirror = mirror as HTMLInputElement;
+        const inputSource = source as HTMLInputElement;
+        inputMirror.type = inputSource.type || 'text';
+        inputMirror.placeholder = inputSource.placeholder;
+        inputMirror.min = inputSource.min;
+        inputMirror.max = inputSource.max;
+        inputMirror.step = inputSource.step;
+        if (isCheckbox) {
+            inputMirror.checked = inputSource.checked;
+        } else {
+            inputMirror.value = inputSource.value;
+        }
+    }
+
+    (mirror as HTMLInputElement | HTMLSelectElement).disabled = source.disabled;
+
+    const syncToSource = () => {
+        if (isCheckbox) {
+            (source as HTMLInputElement).checked = (mirror as HTMLInputElement).checked;
+        } else if (isSelect) {
+            (source as HTMLSelectElement).selectedIndex = (mirror as HTMLSelectElement).selectedIndex;
+        } else {
+            source.value = (mirror as HTMLInputElement | HTMLSelectElement).value;
+        }
+        dispatchNativeControlEvent(source);
+    };
+
+    const syncFromSource = () => {
+        if (isCheckbox) {
+            (mirror as HTMLInputElement).checked = (source as HTMLInputElement).checked;
+        } else if (isSelect) {
+            (mirror as HTMLSelectElement).selectedIndex = (source as HTMLSelectElement).selectedIndex;
+        } else {
+            (mirror as HTMLInputElement | HTMLSelectElement).value = source.value;
+        }
+        (mirror as HTMLInputElement | HTMLSelectElement).disabled = source.disabled;
+    };
+
+    mirror.addEventListener('input', syncToSource);
+    mirror.addEventListener('change', syncToSource);
+    source.addEventListener('input', syncFromSource);
+    source.addEventListener('change', syncFromSource);
+    mirror.dataset[SHORTCUT_SYNC_READY_FLAG] = 'true';
+
+    const wrapper = wrapField(document, mirror, label, wide);
+    wrapper.classList.add('th-modern-wi-shortcut-field');
+    if (fieldClass) {
+        wrapper.classList.add(fieldClass);
+    }
+    panel.append(wrapper);
+}
+
+function appendSharedControlSlot(
+    document: Document,
+    panel: HTMLElement,
+    label: string,
+    sharedName: string,
+    wide = false,
+    fieldClass = '',
+): HTMLElement {
+    const slot = makeElement(document, 'div', 'th-modern-wi-shared-slot');
+    slot.dataset.sharedName = sharedName;
+    const wrapper = wrapField(document, slot, label, wide);
+    wrapper.classList.add('th-modern-wi-shared-field', fieldClass);
+    panel.append(wrapper);
+    return slot;
+}
+
+function appendSharedExistingControl(
+    document: Document,
+    entry: HTMLElement,
+    selector: string,
+    sharedName: string,
+    slots: HTMLElement[],
+): void {
+    const control = entry.querySelector<HTMLElement>(selector);
+    const root = findControlRoot(control);
+    if (!root || root.closest('.th-modern-wi-panel')) {
+        return;
+    }
+
+    root.classList.add('th-modern-wi-shared-control');
+    root.dataset.sharedName = sharedName;
+    slots[0]?.append(root);
+}
+
+function getSharedControlSearchRoots(entry: HTMLElement, editor: HTMLElement): HTMLElement[] {
+    const roots = [
+        editor,
+        editor.closest<HTMLElement>('.inline-drawer-content.inline-drawer-outlet'),
+        editor.closest<HTMLElement>('.th-modern-wi-editor-entry-host'),
+        entry,
+    ];
+    return roots.filter((root, index): root is HTMLElement => Boolean(root) && roots.indexOf(root) === index);
+}
+
+function ensureSharedExistingControl(
+    entry: HTMLElement,
+    editor: HTMLElement,
+    selector: string,
+    sharedName: string,
+): HTMLElement | null {
+    const roots = getSharedControlSearchRoots(entry, editor);
+    for (const root of roots) {
+        const existing = root.querySelector<HTMLElement>(`.th-modern-wi-shared-control[data-shared-name="${sharedName}"]`);
+        if (existing) {
+            return existing;
+        }
+    }
+
+    for (const searchRoot of roots) {
+        const control = searchRoot.querySelector<HTMLElement>(selector);
+        const root = findControlRoot(control);
+        if (!root) {
+            continue;
+        }
+
+        root.classList.add('th-modern-wi-shared-control');
+        root.dataset.sharedName = sharedName;
+        return root;
+    }
+
+    return null;
+}
+
+function syncSharedControls(
+    entry: HTMLElement,
+    editor: HTMLElement,
+    panelName: string,
+): void {
+    const controls = new Set(editor.querySelectorAll<HTMLElement>('.th-modern-wi-shared-control[data-shared-name]'));
+    const primaryControl = ensureSharedExistingControl(entry, editor, '.keyprimary', 'primary-key');
+    if (primaryControl) {
+        controls.add(primaryControl);
+    }
+
+    for (const control of controls) {
+        const sharedName = control.dataset.sharedName;
+        if (!sharedName) {
+            continue;
+        }
+        const targetSlot = editor.querySelector<HTMLElement>(
+            `.th-modern-wi-panel-${panelName} .th-modern-wi-shared-slot[data-shared-name="${sharedName}"]`,
+        );
+        if (targetSlot && control.parentElement !== targetSlot) {
+            targetSlot.append(control);
+        }
+    }
+}
+
+function syncConditionalFields(entry: HTMLElement, editor: HTMLElement): void {
+    const activePanel = editor.querySelector<HTMLElement>('.th-modern-wi-panel:not([hidden])');
+    const activePosition = activePanel?.querySelector<HTMLSelectElement>('.th-modern-wi-position-field select');
+    const positionControls = Array.from(editor.querySelectorAll<HTMLSelectElement>('.th-modern-wi-position-field select, select[name="position"]'));
+    const position = activePosition
+        ?? positionControls.find(control => !control.closest('.th-modern-wi-shortcut-field'))
+        ?? positionControls[0]
+        ?? entry.querySelector<HTMLSelectElement>('select[name="position"]');
+    const delayUntilRecursion = editor.querySelector<HTMLInputElement>('input[name="delay_until_recursion"]')
+        ?? entry.querySelector<HTMLInputElement>('input[name="delay_until_recursion"]');
+    const selectedPositionOption = position?.selectedOptions[0];
+    const positionValue = position?.value;
+    const positionRole = selectedPositionOption?.dataset.role;
+    const positionText = selectedPositionOption?.textContent?.trim().toLowerCase() ?? '';
+    const positionKind = positionValue === '4'
+        || positionRole === '0'
+        || positionRole === '1'
+        || positionRole === '2'
+        || positionText.includes('@d')
+        || positionText.includes('depth')
+        || positionText.includes('深度')
+        ? 'depth'
+        : positionValue === '7' || positionText.includes('outlet') || positionText.includes('锚点')
+            ? 'outlet'
+            : 'normal';
+    const hasRecursionDelay = Boolean(delayUntilRecursion?.checked);
+
+    editor.dataset.thModernPositionKind = positionKind;
+    editor.dataset.thModernRecursionDelay = hasRecursionDelay ? 'true' : 'false';
+
+    for (const field of editor.querySelectorAll<HTMLElement>('.th-modern-wi-depth-field')) {
+        field.hidden = positionKind !== 'depth';
+        for (const input of field.querySelectorAll<HTMLInputElement>('input')) {
+            input.disabled = positionKind !== 'depth';
+            input.style.visibility = positionKind === 'depth' ? 'visible' : 'hidden';
+        }
+    }
+    for (const field of editor.querySelectorAll<HTMLElement>('.th-modern-wi-outlet-field')) {
+        field.hidden = positionKind !== 'outlet';
+    }
+    for (const field of editor.querySelectorAll<HTMLElement>('.th-modern-wi-recursion-level-field')) {
+        field.hidden = !hasRecursionDelay;
+    }
+}
+
+function bindConditionalFields(entry: HTMLElement, editor: HTMLElement): void {
+    const sync = () => syncConditionalFields(entry, editor);
+
+    if (editor.dataset[CONDITIONAL_READY_FLAG] !== 'true') {
+        const handleChange = (event: Event) => {
+            const target = targetToElement(event.target);
+            if (!target?.closest('.th-modern-wi-position-field, select[name="position"], .th-modern-wi-delay-recursion-field, input[name="delay_until_recursion"]')) {
+                return;
+            }
+            sync();
+        };
+        editor.addEventListener('input', handleChange);
+        editor.addEventListener('change', handleChange);
+        editor.dataset[CONDITIONAL_READY_FLAG] = 'true';
+    }
+    sync();
+}
+
+function getEntryTitle(entry: HTMLElement, source: ParentNode = entry): string {
+    const comment = source.querySelector<HTMLTextAreaElement>('textarea[name="comment"]')?.value.trim();
+    return comment || `UID ${getEntryUid(entry) ?? ''}`.trim();
+}
+
+function getEntryMeta(source: ParentNode): string {
+    const key = source.querySelector<HTMLTextAreaElement | HTMLSelectElement>('textarea[name="key"], select[name="key"]');
+    const position = source.querySelector<HTMLSelectElement>('select[name="position"]');
+    const keyText = key instanceof HTMLSelectElement
+        ? Array.from(key.selectedOptions).map(option => option.textContent?.trim()).filter(Boolean).join(', ')
+        : key?.value.trim();
+    const keyCount = keyText ? keyText.split(',').map(item => item.trim()).filter(Boolean).length : 0;
+    const positionText = position?.selectedOptions[0]?.textContent?.trim() || '';
+    return `${keyCount ? `${keyCount} keys` : '常量'}${positionText ? ` · ${positionText}` : ''}`;
+}
+
+function updateEntrySummary(entry: HTMLElement, source: ParentNode = entry): void {
+    const summary = entry.querySelector<HTMLElement>('.th-modern-wi-row-summary');
+    if (!summary) {
+        return;
+    }
+
+    const order = source.querySelector<HTMLInputElement>('input[name="order"]')?.value;
+    const probability = source.querySelector<HTMLInputElement>('input[name="probability"]')?.value;
+    const state = source.querySelector<HTMLSelectElement>('select[name="entryStateSelector"]')?.value;
+    const title = summary.querySelector<HTMLElement>('.th-modern-wi-row-title');
+    const meta = summary.querySelector<HTMLElement>('.th-modern-wi-row-meta');
+    const stats = summary.querySelector<HTMLElement>('.th-modern-wi-row-stats');
+    if (title) {
+        title.textContent = getEntryTitle(entry, source);
+    }
+    if (meta) {
+        meta.textContent = getEntryMeta(source);
+    }
+    if (stats) {
+        stats.textContent = `${order ? `#${order}` : ''}${probability ? `\n${probability}%` : ''}`;
+    }
+    if (state) {
+        entry.dataset.thModernEntryState = state;
+    }
+}
+
+function scheduleEntrySummaryUpdate(entry: HTMLElement): void {
+    if (pendingSummaryUpdates.has(entry)) {
+        return;
+    }
+
+    const frame = requestAnimationFrame(() => {
+        pendingSummaryUpdates.delete(entry);
+        updateEntrySummary(entry);
+    });
+    pendingSummaryUpdates.set(entry, frame);
+}
+
+function ensureEntrySummary(document: Document, entry: HTMLElement): void {
+    if (entry.dataset[SUMMARY_READY_FLAG] === 'true') {
+        return;
+    }
+
+    const header = entry.querySelector<HTMLElement>(':scope > form.world_entry_form > .inline-drawer > .inline-drawer-header');
+    if (!header || header.querySelector('.th-modern-wi-row-summary')) {
+        entry.dataset[SUMMARY_READY_FLAG] = 'true';
+        return;
+    }
+
+    entry.dataset[SUMMARY_READY_FLAG] = 'true';
+    const summary = makeElement(document, 'div', 'th-modern-wi-row-summary');
+    summary.innerHTML = [
+        '<span class="th-modern-wi-select-dot" aria-hidden="true"></span>',
+        '<span class="th-modern-wi-entry-state-icon" aria-hidden="true"></span>',
+        '<span class="th-modern-wi-row-text">',
+        '<strong class="th-modern-wi-row-title"></strong>',
+        '<small class="th-modern-wi-row-meta"></small>',
+        '</span>',
+        '<span class="th-modern-wi-row-stats"></span>',
+    ].join('');
+    header.append(summary);
+
+    entry.addEventListener('input', () => scheduleEntrySummaryUpdate(entry));
+    entry.addEventListener('change', () => scheduleEntrySummaryUpdate(entry));
+    updateEntrySummary(entry);
+}
+
+function showPanel(entry: HTMLElement, panelName: string, root: ParentNode = entry): void {
+    entry.dataset.thModernActiveTab = panelName;
+    for (const button of root.querySelectorAll<HTMLElement>('.th-modern-wi-tab')) {
+        const active = button.dataset.panel === panelName;
+        button.classList.toggle('active', active);
+        button.setAttribute('aria-selected', String(active));
+    }
+    for (const panel of root.querySelectorAll<HTMLElement>('.th-modern-wi-panel')) {
+        panel.hidden = panel.dataset.panel !== panelName;
+    }
+    syncSharedControls(entry, root as HTMLElement, panelName);
+    syncConditionalFields(entry, root as HTMLElement);
+    root.querySelector<HTMLElement>('.th-modern-wi-panels')?.scrollTo({ top: 0, left: 0 });
+}
+
+function takePreferredPanel(entry: HTMLElement): string {
+    const uid = getEntryUid(entry);
+    if (uid !== undefined) {
+        const pendingPanel = pendingActiveTabsByUid.get(uid);
+        if (pendingPanel) {
+            pendingActiveTabsByUid.delete(uid);
+            return pendingPanel;
+        }
+    }
+
+    return entry.dataset.thModernActiveTab || 'main';
+}
+
+function localizeEntryStateSelector(entry: HTMLElement): void {
+    const selector = entry.querySelector<HTMLSelectElement>('select[name="entryStateSelector"]');
+    if (!selector) {
+        return;
+    }
+
+    const labels: Record<string, string> = {
+        constant: '🔵 常量',
+        normal: '🟢 普通',
+        vectorized: '🔗 向量化',
+    };
+    for (const option of selector.options) {
+        const label = labels[option.value];
+        if (label) {
+            option.textContent = label;
+        }
+    }
+}
+
+function bindEntryEditorEvents(entry: HTMLElement, editor: HTMLElement, content: HTMLElement): void {
+    if (editor.dataset.thModernSwitchCaptureReady !== 'true') {
+        editor.addEventListener('click', event => {
+            const target = targetToElement(event.target);
+            if (!target?.closest('.switch_input_type_icon')) {
+                return;
+            }
+            const uid = getEntryUid(entry);
+            if (uid !== undefined) {
+                const panelName = target.closest<HTMLElement>('.th-modern-wi-panel')?.dataset.panel
+                    || entry.dataset.thModernActiveTab
+                    || 'keywords';
+                pendingActiveTabsByUid.set(uid, panelName);
+            }
+        }, true);
+        editor.dataset.thModernSwitchCaptureReady = 'true';
+    }
+
+    editor.onclick = event => {
+        if (event.defaultPrevented) {
+            return;
+        }
+
+        const target = targetToElement(event.target);
+        const tab = target?.closest<HTMLElement>('.th-modern-wi-tab');
+        if (tab && editor.contains(tab)) {
+            const panelName = tab.dataset.panel;
+            if (!panelName) {
+                return;
+            }
+            event.preventDefault();
+            showPanel(entry, panelName, editor);
+            return;
+        }
+
+        const action = target?.closest<HTMLButtonElement>('.th-modern-wi-action');
+        if (!action || !editor.contains(action)) {
+            return;
+        }
+
+        const actionName = action.dataset.action
+            || (action.classList.contains('danger') ? 'delete' : action.title.includes('复制') ? 'duplicate' : 'move');
+        const selector = {
+            move: '.move_entry_button',
+            duplicate: '.duplicate_entry_button',
+            delete: '.delete_entry_button',
+        }[actionName];
+        if (!selector) {
+            return;
+        }
+
+        event.preventDefault();
+        content.querySelector<HTMLElement>(selector)?.click();
+    };
+}
+
+function setupEntryTabs(document: Document, entry: HTMLElement): boolean {
+    const content = entry.querySelector<HTMLElement>(':scope > form.world_entry_form > .inline-drawer > .inline-drawer-content.inline-drawer-outlet');
+    const edit = entry.querySelector<HTMLElement>('.world_entry_edit');
+    if (!content || !edit) {
+        return false;
+    }
+
+    if (entry.dataset[TABS_READY_FLAG] === 'true') {
+        const existingEditor = content.querySelector<HTMLElement>(':scope > .th-modern-wi-editor-surface');
+        if (existingEditor) {
+            existingEditor.dataset.thModernLayoutVersion = ENTRY_LAYOUT_VERSION;
+            localizeEntryStateSelector(entry);
+            bindEntryEditorEvents(entry, existingEditor, content);
+            bindShortcutMirrorControls(entry, existingEditor);
+            bindConditionalFields(entry, existingEditor);
+            showPanel(entry, takePreferredPanel(entry), existingEditor);
+            return true;
+        }
+        delete entry.dataset[TABS_READY_FLAG];
+    }
+
+    entry.dataset[TABS_READY_FLAG] = 'true';
+    ensureEntrySummary(document, entry);
+    localizeEntryStateSelector(entry);
+
+    const editor = makeElement(document, 'div', 'th-modern-wi-editor-surface');
+    editor.dataset.thModernLayoutVersion = ENTRY_LAYOUT_VERSION;
+    const top = makeElement(document, 'div', 'th-modern-wi-editor-top');
+    const enableDock = makeElement(document, 'div', 'th-modern-wi-enable-dock');
+    const actions = makeElement(document, 'div', 'th-modern-wi-editor-actions');
+    const move = createIconButton(document, 'menu_button th-modern-wi-action', '移动/复制到其他世界书', 'fa-solid fa-arrow-right-arrow-left');
+    const duplicate = createIconButton(document, 'menu_button th-modern-wi-action', '复制条目', 'fa-regular fa-copy');
+    const remove = createIconButton(document, 'menu_button th-modern-wi-action danger', '删除条目', 'fa-regular fa-trash-can');
+    move.dataset.action = 'move';
+    duplicate.dataset.action = 'duplicate';
+    remove.dataset.action = 'delete';
+    actions.append(move, duplicate, remove);
+
+    const tabbar = makeElement(document, 'div', 'th-modern-wi-tabs');
+    const panels = makeElement(document, 'div', 'th-modern-wi-panels');
+    const tabDefs = [
+        ['main', '主要'],
+        ['keywords', '关键词'],
+        ['insert', '插入'],
+        ['trigger', '触发'],
+    ] as const;
+
+    const panelMap = new Map<string, HTMLElement>();
+    for (const [name, label] of tabDefs) {
+        const button = makeElement(document, 'button', 'th-modern-wi-tab', label);
+        button.type = 'button';
+        button.dataset.panel = name;
+        button.addEventListener('click', event => {
+            event.preventDefault();
+            showPanel(entry, name, editor);
+        });
+        tabbar.append(button);
+
+        const panel = makeElement(document, 'div', 'th-modern-wi-panel');
+        panel.classList.add(`th-modern-wi-panel-${name}`);
+        panel.dataset.panel = name;
+        panels.append(panel);
+        panelMap.set(name, panel);
+    }
+
+    const contentPanel = makeElement(document, 'div', 'th-modern-wi-content-panel');
+    top.append(enableDock, tabbar, actions);
+    editor.append(top, panels, contentPanel);
+    content.prepend(editor);
+    bindEntryEditorEvents(entry, editor, content);
+
+    appendHeaderControl(document, enableDock, entry, '.killSwitch', '启用', false, 'th-modern-wi-enable-field');
+
+    const main = panelMap.get('main')!;
+    appendHeaderControl(document, main, entry, 'textarea[name="comment"]', '条目标题/备注', true, 'th-modern-wi-title-field');
+    appendHeaderControl(document, main, entry, 'select[name="entryStateSelector"]', '条目状态', false, 'th-modern-wi-state-field');
+    appendMirrorControl(document, main, entry, 'select[name="position"]', '插入位置', true, 'th-modern-wi-position-field');
+    appendMirrorControl(document, main, entry, 'input[name="depth"]', '深度', false, 'th-modern-wi-depth-field');
+    appendMirrorControl(document, main, entry, 'input[name="outletName"]', '锚点名称', false, 'th-modern-wi-outlet-field');
+    appendMirrorControl(document, main, entry, 'input[name="order"]', '顺序', false, 'th-modern-wi-order-field');
+    appendMirrorControl(document, main, entry, 'input[name="excludeRecursion"]', '不可递归', false, 'th-modern-wi-no-recursion-field');
+    const mainPrimaryKeySlot = appendSharedControlSlot(document, main, '主要关键字', 'primary-key', true, 'th-modern-wi-primary-key-field');
+    appendMirrorControl(document, main, entry, 'input[name="preventRecursion"]', '防止进一步递归', false, 'th-modern-wi-prevent-recursion-field');
+
+    const keywords = panelMap.get('keywords')!;
+    const keywordPrimaryKeySlot = appendSharedControlSlot(document, keywords, '主要关键字', 'primary-key', true, 'th-modern-wi-primary-key-field');
+    appendExistingControl(document, keywords, entry, 'select[name="entryLogicType"]', '逻辑', false, 'th-modern-wi-logic-field');
+    appendExistingControl(document, keywords, entry, '.keysecondary', '可选过滤器', true, 'th-modern-wi-secondary-key-field');
+    appendExistingControl(document, keywords, entry, 'select[name="caseSensitive"]', '区分大小写', false, 'th-modern-wi-case-field');
+    appendExistingControl(document, keywords, entry, 'select[name="matchWholeWords"]', '全词匹配', false, 'th-modern-wi-whole-field');
+    appendExistingControl(document, keywords, entry, 'select[name="useGroupScoring"]', '组评分', false, 'th-modern-wi-group-scoring-field');
+    appendExistingControl(document, keywords, entry, 'input[name="scanDepth"]', '扫描深度', false, 'th-modern-wi-scan-field');
+    appendExistingControl(document, keywords, entry, 'input[name="automationId"]', '自动化 ID', false, 'th-modern-wi-automation-field');
+    appendSharedExistingControl(document, entry, '.keyprimary', 'primary-key', [mainPrimaryKeySlot, keywordPrimaryKeySlot]);
+
+    const insert = panelMap.get('insert')!;
+    appendHeaderControl(document, insert, entry, 'select[name="position"]', '插入位置', true, 'th-modern-wi-position-field');
+    appendHeaderControl(document, insert, entry, 'input[name="depth"]', '深度', false, 'th-modern-wi-depth-field');
+    appendExistingControl(document, insert, entry, 'input[name="outletName"]', '锚点名称', false, 'th-modern-wi-outlet-field');
+    appendHeaderControl(document, insert, entry, 'input[name="order"]', '顺序', false, 'th-modern-wi-order-field');
+    appendHeaderControl(document, insert, entry, 'input[name="probability"]', '触发概率', false, 'th-modern-wi-probability-field');
+    appendExistingControl(document, insert, entry, 'input[name="useProbability"]', '使用概率', false, 'th-modern-wi-use-probability-field');
+    appendExistingControl(document, insert, entry, 'input[name="group"]', '包含组', true, 'th-modern-wi-group-field');
+    appendExistingControl(document, insert, entry, 'input[name="groupWeight"]', '分组权重', false, 'th-modern-wi-group-weight-field');
+    appendExistingControl(document, insert, entry, 'input[name="sticky"]', '黏附', false, 'th-modern-wi-sticky-field');
+    appendExistingControl(document, insert, entry, 'input[name="cooldown"]', '冷却', false, 'th-modern-wi-cooldown-field');
+    appendExistingControl(document, insert, entry, 'input[name="delay"]', '延迟', false, 'th-modern-wi-delay-field');
+    appendExistingControlFromRoot(insert, entry, 'select[name="characterFilter"]', '.flex4', true, 'th-modern-wi-character-filter-field', '绑定到角色或标签');
+    appendExistingControlFromRoot(insert, entry, 'select[name="triggers"]', '.flex4', true, 'th-modern-wi-generation-trigger-field', '筛选生成触发器');
+    appendExistingControl(document, insert, entry, 'input[name="delayUntilRecursionLevel"]', '递归等级', false, 'th-modern-wi-recursion-level-field');
+    appendExistingControl(document, insert, entry, 'input[name="excludeRecursion"]', '不可递归', false, 'th-modern-wi-no-recursion-field');
+    appendExistingControl(document, insert, entry, 'input[name="preventRecursion"]', '防止进一步递归', false, 'th-modern-wi-prevent-recursion-field');
+    appendExistingControl(document, insert, entry, 'input[name="delay_until_recursion"]', '延迟到递归', false, 'th-modern-wi-delay-recursion-field');
+    appendExistingControl(document, insert, entry, 'input[name="ignoreBudget"]', '无视回复限额', false, 'th-modern-wi-budget-field');
+
+    const trigger = panelMap.get('trigger')!;
+    appendSectionTitle(document, trigger, '额外匹配来源', 'th-modern-wi-match-source-title');
+    appendExistingControl(document, trigger, entry, 'input[name="matchCharacterDescription"]', '角色描述', false, 'th-modern-wi-match-source-field');
+    appendExistingControl(document, trigger, entry, 'input[name="matchCharacterPersonality"]', '角色性格', false, 'th-modern-wi-match-source-field');
+    appendExistingControl(document, trigger, entry, 'input[name="matchScenario"]', '情景', false, 'th-modern-wi-match-source-field');
+    appendExistingControl(document, trigger, entry, 'input[name="matchPersonaDescription"]', '用户设定描述', false, 'th-modern-wi-match-source-field');
+    appendExistingControl(document, trigger, entry, 'input[name="matchCharacterDepthPrompt"]', '角色备注', false, 'th-modern-wi-match-source-field');
+    appendExistingControl(document, trigger, entry, 'input[name="matchCreatorNotes"]', '创作者的注释', false, 'th-modern-wi-match-source-field');
+
+    appendExistingControl(document, contentPanel, entry, 'textarea[name="content"]', '正文', true);
+    bindShortcutMirrorControls(entry, editor);
+    bindConditionalFields(entry, editor);
+
+    move.addEventListener('click', event => {
+        event.preventDefault();
+        content.querySelector<HTMLElement>('.move_entry_button')?.click();
+    });
+    duplicate.addEventListener('click', event => {
+        event.preventDefault();
+        content.querySelector<HTMLElement>('.duplicate_entry_button')?.click();
+    });
+    remove.addEventListener('click', event => {
+        event.preventDefault();
+        content.querySelector<HTMLElement>('.delete_entry_button')?.click();
+    });
+
+    showPanel(entry, takePreferredPanel(entry), editor);
+    return true;
+}
+
+class NativeWorldInfoEnhancer implements NativeWorldInfoController {
+    private readonly document: Document;
+    private readonly store: Store;
+    private readonly moved: MovedNode[] = [];
+    private observer?: MutationObserver;
+    private shell?: HTMLElement;
+    private toolbar?: HTMLElement;
+    private mainPane?: HTMLElement;
+    private listPane?: HTMLElement;
+    private editorPane?: HTMLElement;
+    private observedList?: HTMLElement;
+    private listClickHandler?: (event: MouseEvent) => void;
+    private documentClickHandler?: (event: MouseEvent) => void;
+    private documentPointerDownHandler?: (event: PointerEvent) => void;
+    private narrowQuery?: MediaQueryList;
+    private narrowQueryHandler?: () => void;
+    private readonly editorMoved: MovedNode[] = [];
+    private multiButton?: HTMLButtonElement;
+    private deleteSelectedButton?: HTMLButtonElement;
+    private selectedUids = new Set<number>();
+    private selectedEntry?: HTMLElement;
+    private mounted = false;
+    private multiSelect = false;
+    private mobileDetailOpen = false;
+    private pendingEnhance = 0;
+
+    constructor(store: Store) {
+        this.document = getHostDocument();
+        this.store = store;
+    }
+
+    mount(): void {
+        if (this.mounted) {
+            return;
+        }
+
+        const worldInfo = this.findWorldInfo();
+        const popup = this.findWorldPopup();
+        const list = this.findEntriesList();
+        if (!worldInfo || !popup || !list) {
+            return;
+        }
+
+        this.mounted = true;
+        worldInfo.classList.add(WORLD_INFO_NATIVE_CLASS);
+        this.buildLayout(popup, list);
+        this.bindResponsiveMode();
+        this.bindEvents(list);
+        this.enhanceEntries();
+        if (!this.isNarrowMode()) {
+            this.selectFirstEntry();
+        }
+    }
+
+    destroy(): void {
+        const worldInfo = this.findWorldInfo();
+        worldInfo?.classList.remove(WORLD_INFO_NATIVE_CLASS, MULTI_SELECT_CLASS);
+        this.observer?.disconnect();
+        this.observer = undefined;
+        this.clearSelection();
+        this.selectedUids.clear();
+        this.multiSelect = false;
+        this.mounted = false;
+        if (this.pendingEnhance) {
+            cancelAnimationFrame(this.pendingEnhance);
+            this.pendingEnhance = 0;
+        }
+        if (this.documentClickHandler) {
+            this.document.removeEventListener('click', this.documentClickHandler, true);
+            this.documentClickHandler = undefined;
+        }
+        if (this.documentPointerDownHandler) {
+            this.document.removeEventListener('pointerdown', this.documentPointerDownHandler, true);
+            this.documentPointerDownHandler = undefined;
+        }
+        if (this.narrowQuery && this.narrowQueryHandler) {
+            this.narrowQuery.removeEventListener('change', this.narrowQueryHandler);
+        }
+        this.narrowQuery = undefined;
+        this.narrowQueryHandler = undefined;
+        this.mobileDetailOpen = false;
+
+        for (const entry of this.document.querySelectorAll<HTMLElement>('.world_entry')) {
+            if (this.listClickHandler) {
+                entry.removeEventListener('click', this.listClickHandler, true);
+            }
+            entry.classList.remove(SELECTED_ENTRY_CLASS, SELECTED_ROW_CLASS);
+        }
+        this.listClickHandler = undefined;
+        this.observedList = undefined;
+
+        restoreMovedNodes(this.moved);
+        this.shell?.remove();
+        this.shell = undefined;
+        this.toolbar = undefined;
+        this.mainPane = undefined;
+        this.listPane = undefined;
+        this.editorPane = undefined;
+    }
+
+    private bindResponsiveMode(): void {
+        this.narrowQuery = window.matchMedia('(max-width: 900px)');
+        this.narrowQueryHandler = () => this.syncResponsiveMode();
+        this.narrowQuery.addEventListener('change', this.narrowQueryHandler);
+        this.syncResponsiveMode();
+    }
+
+    private isNarrowMode(): boolean {
+        return this.narrowQuery?.matches ?? window.matchMedia('(max-width: 900px)').matches;
+    }
+
+    private syncResponsiveMode(): void {
+        const isNarrow = this.isNarrowMode();
+        this.shell?.classList.toggle(NARROW_CLASS, isNarrow);
+        if (!isNarrow) {
+            this.mobileDetailOpen = false;
+            this.shell?.classList.remove(DETAIL_OPEN_CLASS);
+            this.selectFirstEntry();
+            return;
+        }
+        this.shell?.classList.toggle(DETAIL_OPEN_CLASS, this.mobileDetailOpen && Boolean(this.selectedEntry));
+    }
+
+    private openMobileDetail(): void {
+        if (!this.isNarrowMode()) {
+            return;
+        }
+        this.mobileDetailOpen = true;
+        this.syncResponsiveMode();
+        this.shell?.scrollIntoView({ block: 'start' });
+    }
+
+    private closeMobileDetail(): void {
+        this.mobileDetailOpen = false;
+        this.syncResponsiveMode();
+        this.shell?.scrollIntoView({ block: 'start' });
+    }
+
+    private findWorldInfo(): HTMLElement | null {
+        return this.document.querySelector<HTMLElement>('#WorldInfo');
+    }
+
+    private findWorldPopup(): HTMLElement | null {
+        return this.document.querySelector<HTMLElement>('#world_popup');
+    }
+
+    private findEntriesList(): HTMLElement | null {
+        return this.document.querySelector<HTMLElement>('#world_popup_entries_list');
+    }
+
+    private buildLayout(popup: HTMLElement, list: HTMLElement): void {
+        const shell = makeElement(this.document, 'div', 'th-modern-wi-native-shell');
+        const toolbar = makeElement(this.document, 'div', 'th-modern-wi-toolbar');
+        const main = makeElement(this.document, 'div', 'th-modern-wi-native-main');
+        const listPane = makeElement(this.document, 'div', 'th-modern-wi-native-list');
+        const editorPane = makeElement(this.document, 'div', 'th-modern-wi-native-editor');
+
+        shell.append(toolbar, main);
+        main.append(listPane, editorPane);
+        popup.append(shell);
+
+        for (const selector of [
+            '#world_info_search',
+            '#world_info_sort_order',
+            '#world_info_pagination',
+            '#world_popup_new',
+            '#world_refresh',
+            '#OpenAllWIEntries',
+            '#CloseAllWIEntries',
+        ]) {
+            const node = popup.querySelector<HTMLElement>(selector);
+            if (node) {
+                moveNode(node, toolbar, this.moved);
+            }
+        }
+
+        this.multiButton = createIconButton(this.document, 'menu_button th-modern-wi-multi-toggle', '多选条目', 'fa-regular fa-square-check');
+        this.deleteSelectedButton = createIconButton(this.document, 'menu_button th-modern-wi-delete-selected danger', '删除选中条目', 'fa-regular fa-trash-can');
+        this.deleteSelectedButton.hidden = true;
+        this.multiButton.addEventListener('click', () => this.toggleMultiSelect());
+        this.deleteSelectedButton.addEventListener('click', () => void this.deleteSelectedEntries());
+        toolbar.append(this.multiButton, this.deleteSelectedButton);
+
+        moveNode(list, listPane, this.moved);
+        this.shell = shell;
+        this.toolbar = toolbar;
+        this.mainPane = main;
+        this.listPane = listPane;
+        this.editorPane = editorPane;
+    }
+
+    private bindEvents(list: HTMLElement): void {
+        this.listClickHandler = event => this.onEntryClick(event);
+        this.documentClickHandler = event => {
+            if (getSelectableListEntry(event.target)) {
+                this.onEntryClick(event);
+            }
+        };
+        this.documentPointerDownHandler = event => this.onEntryPointerDown(event);
+        this.document.addEventListener('pointerdown', this.documentPointerDownHandler, true);
+        this.document.addEventListener('click', this.documentClickHandler, true);
+
+        this.observer = new MutationObserver(mutations => {
+            if (mutations.some(mutation => mutation.addedNodes.length > 0 || mutation.removedNodes.length > 0)) {
+                this.scheduleEnhance();
+            }
+        });
+        this.observeCurrentList();
+    }
+
+    private observeCurrentList(): void {
+        if (!this.observer) {
+            return;
+        }
+
+        const list = this.findEntriesList();
+        if (!list || this.observedList === list) {
+            return;
+        }
+
+        this.observer.disconnect();
+        if (this.listPane) {
+            this.observer.observe(this.listPane, { childList: true });
+        }
+        this.observer.observe(list, { childList: true });
+        this.observedList = list;
+    }
+
+    private scheduleEnhance(): void {
+        if (this.pendingEnhance) {
+            return;
+        }
+
+        this.pendingEnhance = requestAnimationFrame(() => {
+            this.pendingEnhance = 0;
+            this.observeCurrentList();
+            this.enhanceEntries();
+            this.restoreSelectionAfterRender();
+        });
+    }
+
+    private enhanceEntries(): void {
+        this.observeCurrentList();
+        const list = this.findEntriesList();
+        if (!list) {
+            return;
+        }
+
+        for (const entry of list.querySelectorAll<HTMLElement>(':scope > .world_entry')) {
+            ensureEntrySummary(this.document, entry);
+            if (this.listClickHandler) {
+                entry.removeEventListener('click', this.listClickHandler, true);
+                entry.addEventListener('click', this.listClickHandler, true);
+            }
+            if (this.multiSelect || this.selectedUids.size > 0) {
+                const uid = getEntryUid(entry);
+                entry.classList.toggle(SELECTED_ROW_CLASS, uid !== undefined && this.selectedUids.has(uid));
+            }
+        }
+    }
+
+    private restoreSelectionAfterRender(): void {
+        if (!this.selectedEntry?.isConnected) {
+            this.selectedEntry = undefined;
+            this.mobileDetailOpen = false;
+            this.syncResponsiveMode();
+            if (!this.isNarrowMode()) {
+                this.selectFirstEntry();
+            }
+        }
+    }
+
+    private onEntryPointerDown(event: PointerEvent): void {
+        if (event.button !== 0) {
+            return;
+        }
+
+        const entry = getSelectableListEntry(event.target);
+        if (!entry) {
+            return;
+        }
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        event.stopPropagation();
+
+        if (this.multiSelect) {
+            this.toggleEntrySelected(entry);
+            return;
+        }
+
+        this.selectEntry(entry);
+    }
+
+    private onEntryClick(event: JQuery.ClickEvent | MouseEvent): void {
+        const entry = getSelectableListEntry(event.target);
+        if (!entry) {
+            return;
+        }
+
+        if (this.multiSelect) {
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            event.stopPropagation();
+            this.toggleEntrySelected(entry);
+            return;
+        }
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        event.stopPropagation();
+        this.selectEntry(entry);
+    }
+
+    private selectFirstEntry(): void {
+        if (this.selectedEntry?.isConnected) {
+            return;
+        }
+
+        const first = this.findEntriesList()?.querySelector<HTMLElement>('.world_entry');
+        if (first) {
+            this.selectEntry(first);
+        }
+    }
+
+    private clearSelection(): void {
+        this.detachEntryEditor();
+        this.selectedEntry?.classList.remove(SELECTED_ENTRY_CLASS);
+        this.selectedEntry = undefined;
+    }
+
+    private selectEntry(entry: HTMLElement): void {
+        if (this.selectedEntry === entry) {
+            if (!this.editorPane?.childElementCount) {
+                this.ensureEntryEditor(entry);
+            }
+            this.openMobileDetail();
+            return;
+        }
+
+        this.clearSelection();
+        this.selectedEntry = entry;
+        entry.classList.add(SELECTED_ENTRY_CLASS);
+        this.ensureEntryEditor(entry);
+        this.openMobileDetail();
+    }
+
+    private ensureEntryEditor(entry: HTMLElement): void {
+        ensureEntrySummary(this.document, entry);
+        if (setupEntryTabs(this.document, entry)) {
+            this.attachEntryEditor(entry);
+            return;
+        }
+
+        const toggle = entry.querySelector<HTMLElement>(':scope > form.world_entry_form > .inline-drawer > .inline-drawer-header .inline-drawer-toggle');
+        const content = entry.querySelector<HTMLElement>(':scope > form.world_entry_form > .inline-drawer > .inline-drawer-content.inline-drawer-outlet');
+        if (toggle && !content?.querySelector('.world_entry_edit')) {
+            toggle.click();
+        }
+
+        let attempts = 0;
+        const retry = () => {
+            attempts += 1;
+            if (setupEntryTabs(this.document, entry)) {
+                this.attachEntryEditor(entry);
+                return;
+            }
+            if (attempts > 20) {
+                return;
+            }
+            window.setTimeout(retry, 50);
+        };
+        retry();
+    }
+
+    private detachEntryEditor(): void {
+        const entry = this.selectedEntry;
+        for (const item of this.editorMoved) {
+            if (item.node instanceof HTMLElement) {
+                item.node.classList.remove('th-modern-wi-active-editor-content');
+            }
+        }
+        restoreMovedNodes(this.editorMoved);
+        if (entry) {
+            updateEntrySummary(entry);
+        }
+        this.editorPane?.replaceChildren();
+    }
+
+    private attachEntryEditor(entry: HTMLElement): void {
+        if (!this.editorPane || this.selectedEntry !== entry) {
+            return;
+        }
+
+        const content = entry.querySelector<HTMLElement>(':scope > form.world_entry_form > .inline-drawer > .inline-drawer-content.inline-drawer-outlet');
+        if (!content || content.closest('.th-modern-wi-native-editor')) {
+            return;
+        }
+
+        this.detachEntryEditor();
+
+        const backButton = createIconButton(this.document, 'menu_button th-modern-wi-mobile-back', '返回世界书条目列表', 'fa-solid fa-arrow-left');
+        backButton.append(makeElement(this.document, 'span', '', '返回条目列表'));
+        backButton.addEventListener('click', event => {
+            event.preventDefault();
+            this.closeMobileDetail();
+        });
+
+        const host = makeElement(this.document, 'div', `${entry.className} th-modern-wi-editor-entry-host`);
+        for (const attribute of Array.from(entry.attributes)) {
+            if (attribute.name !== 'class') {
+                host.setAttribute(attribute.name, attribute.value);
+            }
+        }
+
+        const form = makeElement(this.document, 'form', 'world_entry_form');
+        const drawer = makeElement(this.document, 'div', 'inline-drawer');
+        const updateSummaryFromHost = () => updateEntrySummary(entry, host);
+        host.addEventListener('input', updateSummaryFromHost);
+        host.addEventListener('change', updateSummaryFromHost);
+        form.append(drawer);
+        host.append(form);
+        this.editorPane.replaceChildren(backButton, host);
+
+        content.classList.add('th-modern-wi-active-editor-content');
+        moveNode(content, drawer, this.editorMoved);
+        updateEntrySummary(entry, host);
+    }
+
+    private toggleMultiSelect(): void {
+        this.multiSelect = !this.multiSelect;
+        this.findWorldInfo()?.classList.toggle(MULTI_SELECT_CLASS, this.multiSelect);
+        this.multiButton?.classList.toggle('active', this.multiSelect);
+        if (!this.multiSelect) {
+            this.selectedUids.clear();
+            for (const entry of this.document.querySelectorAll<HTMLElement>('.world_entry')) {
+                entry.classList.remove(SELECTED_ROW_CLASS);
+            }
+        }
+        this.updateDeleteSelectedButton();
+    }
+
+    private toggleEntrySelected(entry: HTMLElement): void {
+        const uid = getEntryUid(entry);
+        if (uid === undefined) {
+            return;
+        }
+
+        if (this.selectedUids.has(uid)) {
+            this.selectedUids.delete(uid);
+            entry.classList.remove(SELECTED_ROW_CLASS);
+        } else {
+            this.selectedUids.add(uid);
+            entry.classList.add(SELECTED_ROW_CLASS);
+        }
+        this.updateDeleteSelectedButton();
+    }
+
+    private updateDeleteSelectedButton(): void {
+        if (!this.deleteSelectedButton) {
+            return;
+        }
+
+        const count = this.selectedUids.size;
+        this.deleteSelectedButton.hidden = !this.multiSelect || count === 0;
+        this.deleteSelectedButton.title = `删除选中条目 (${count})`;
+        this.deleteSelectedButton.setAttribute('aria-label', this.deleteSelectedButton.title);
+    }
+
+    private getSelectedWorldName(): string {
+        const selected = this.document.querySelector<HTMLSelectElement>('#world_info')?.selectedOptions[0];
+        return selected?.value || selected?.textContent?.trim() || '';
+    }
+
+    private async deleteSelectedEntries(): Promise<void> {
+        const selected = Array.from(this.selectedUids);
+        if (!selected.length) {
+            return;
+        }
+
+        const selectedEntries = selected
+            .map(uid => this.document.querySelector<HTMLElement>(`.world_entry[uid="${uid}"]`))
+            .filter((entry): entry is HTMLElement => Boolean(entry));
+        const names = selectedEntries.map(getEntryTitle).slice(0, 5).join('、');
+        const suffix = selected.length > 5 ? ` 等 ${selected.length} 项` : '';
+        const message = `确认删除 ${selected.length} 个世界书条目？\n${names}${suffix}`;
+        const confirmed = window.confirm(message);
+        if (!confirmed) {
+            return;
+        }
+
+        const worldName = this.getSelectedWorldName();
+        if (!worldName || typeof window.deleteWorldbookEntries !== 'function') {
+            toastr.error('无法调用世界书批量删除接口');
+            return;
+        }
+
+        await window.deleteWorldbookEntries(worldName, entry => {
+            const uid = Number(entry.uid);
+            return Number.isFinite(uid) && this.selectedUids.has(uid);
+        }, { render: 'immediate' });
+
+        this.selectedUids.clear();
+        this.updateDeleteSelectedButton();
+        this.scheduleEnhance();
+    }
+}
+
+export function mountWorldInfoEditor(store: Store): { destroy: () => void } {
+    const hostDocument = getHostDocument();
+    let controller: NativeWorldInfoEnhancer | undefined;
+    let observer: MutationObserver | undefined;
+    let scheduledSync = 0;
+
+    const findWorldInfo = () => hostDocument.querySelector<HTMLElement>('#WorldInfo');
+
+    const unmount = () => {
+        controller?.destroy();
+        controller = undefined;
+    };
+
+    const sync = () => {
+        scheduledSync = 0;
+        const shouldEnable = store.is_active && store.settings.modernWorldInfoEditor;
+        findWorldInfo()?.classList.toggle(WORLD_INFO_ENABLED_CLASS, shouldEnable);
+        if (shouldEnable) {
+            controller ??= new NativeWorldInfoEnhancer(store);
+            controller.mount();
+        } else {
+            unmount();
+            refreshOriginalEditor();
+        }
+    };
+
+    const scheduleSync = () => {
+        if (scheduledSync) {
+            return;
+        }
+        scheduledSync = requestAnimationFrame(sync);
+    };
+
+    observer = new MutationObserver(scheduleSync);
+    observer.observe(hostDocument.body, { childList: true });
+
+    const stopWatch = watch(
+        () => [store.is_active, store.settings.modernWorldInfoEditor] as const,
+        scheduleSync,
+        { immediate: true },
+    );
+
+    return {
+        destroy() {
+            stopWatch();
+            observer?.disconnect();
+            if (scheduledSync) {
+                cancelAnimationFrame(scheduledSync);
+                scheduledSync = 0;
+            }
+            findWorldInfo()?.classList.remove(WORLD_INFO_ENABLED_CLASS);
+            unmount();
+            refreshOriginalEditor();
+        },
+    };
+}
+
+function refreshOriginalEditor(): void {
+    const worldSelect = document.querySelector<HTMLSelectElement>('#world_info');
+    const worldName = worldSelect?.value || worldSelect?.selectedOptions[0]?.textContent?.trim();
+    if (!worldName || typeof window.reloadWorldInfoEditor !== 'function') {
+        return;
+    }
+
+    window.reloadWorldInfoEditor(worldName, true);
+}
