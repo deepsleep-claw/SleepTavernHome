@@ -180,7 +180,7 @@
                     <dd>
                       <template v-if="field.key === '详细内容'">
                         <span>{{ field.preview }}</span>
-                        <button type="button" class="menu_button" @click="openDebugTextModal('总排序 - 详细内容', field.text)">
+                        <button type="button" class="menu_button" @click="openDebugRowContentModal('总排序 - 详细内容', entry.row)">
                           详情
                         </button>
                       </template>
@@ -205,7 +205,7 @@
                         <button
                           type="button"
                           class="menu_button"
-                          @click="openDebugTextModal('触发蓝灯绿灯 - 详细内容', field.text)"
+                          @click="openDebugRowContentModal('触发蓝灯绿灯 - 详细内容', entry.row)"
                         >
                           详情
                         </button>
@@ -467,11 +467,11 @@ function getDebugRowFields(row: DebugRow): { key: string; preview: string; text:
 }
 
 function getDebugTotalSummary(row: DebugRow): string {
-  return `${getDebugSummaryText(row.类型)} - ${getDebugSummaryText(row.来源)} - ${getDebugSummaryText(row.详细内容)}……`;
+  return `${getDebugSummaryText(row.类型)} - ${getDebugSummaryText(row.来源)} - ${getDebugSummaryText(row.详细内容摘要 ?? row.详细内容)}……`;
 }
 
 function getDebugTriggeredSummary(row: DebugRow): string {
-  return `${getDebugSummaryText(row.触发类型)} - ${getDebugSummaryText(row.名称)} - ${getDebugSummaryText(row.详细内容)}……`;
+  return `${getDebugSummaryText(row.触发类型)} - ${getDebugSummaryText(row.名称)} - ${getDebugSummaryText(row.详细内容摘要 ?? row.详细内容)}……`;
 }
 
 function getDebugMetrics(record: DebugRecord): { label: string; value: number }[] {
@@ -493,6 +493,13 @@ function formatDebugTime(value: string): string {
 
 function openDebugTextModal(title: string, content: string) {
   debug_text_modal.value = { content, title };
+}
+
+function openDebugRowContentModal(title: string, row: DebugRow) {
+  const record_id = selected_debug_record.value?.id;
+  const content_id = typeof row.详细内容缓存键 === 'string' ? row.详细内容缓存键 : undefined;
+  const cached_content = record_id && content_id ? store.getDebugContent(record_id, content_id) : undefined;
+  openDebugTextModal(title, cached_content ?? getDebugValueText(row.详细内容));
 }
 
 function openDebugRawModal() {

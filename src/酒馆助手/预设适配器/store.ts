@@ -159,6 +159,7 @@ type SquashDebugRecord = {
 
 type SquashDebugApi = {
   clearRecords: () => void;
+  getContent: (record_id: string, content_id: string) => string | undefined;
   getRecords: () => SquashDebugRecord[];
   max_records: number;
   storage_key: string;
@@ -883,6 +884,10 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     debug_api?.clearRecords();
   }
 
+  function getDebugContent(record_id: string, content_id: string): string | undefined {
+    return debug_api?.getContent(record_id, content_id);
+  }
+
   function pruneSelectedExportKeys() {
     const valid_keys = new Set<string>();
     groups.value.forEach(group => {
@@ -1235,6 +1240,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     errors,
     export_mode,
     exportSelectedOptions,
+    getDebugContent,
     groups,
     has_blocking_errors,
     importPresetSettings,
