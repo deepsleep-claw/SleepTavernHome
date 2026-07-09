@@ -32,6 +32,7 @@ export const ModernLayoutSettings = z
     reduceMotion: z.boolean().default(false).catch(false),
     reduceAdvancedEffects: z.boolean().default(false).catch(false),
     modernWorldInfoEditor: z.boolean().default(true).catch(true),
+    modernCharacterManagement: z.boolean().default(true).catch(true),
   })
   .prefault({});
 

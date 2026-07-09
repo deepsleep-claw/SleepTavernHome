@@ -1,6 +1,7 @@
 import { checkMinimumVersion } from '@util/common';
 import { createScriptIdDiv, teleportStyle } from '@util/script';
 import { createPinia, getActivePinia, setActivePinia } from 'pinia';
+import { mountCharacterManagement } from './character-management-module';
 import { initPanel } from './panel';
 import {
   DEFAULT_LEFT_SIDEBAR_WIDTH,
@@ -13,6 +14,7 @@ import {
 import { mountWorldInfoEditor } from './world-info-module';
 import './style.css';
 import './world-info.css';
+import './character-management.css';
 
 const BODY_CLASS_ENABLED = 'th-modern-enabled';
 const BODY_CLASS_TWO_COLUMN = 'th-modern-two-column';
@@ -1557,6 +1559,7 @@ $(() => {
   const { destroy: destroyResizeHandles } = mountResizeHandles(store);
   const { destroy: destroyApiPanelEnhancements } = mountApiPanelEnhancements();
   const { destroy: destroyWorldInfoEditor } = mountWorldInfoEditor(store);
+  const { destroy: destroyCharacterManagement } = mountCharacterManagement(store);
 
   const stop_state_watch = watch(
     () => [klona(store.settings), store.is_active, store.should_use_two_column] as const,
@@ -1591,6 +1594,7 @@ $(() => {
     store.destroy({ unregisterUnique: options.unregisterUnique });
     clearBodyState();
     destroyApiPanelEnhancements();
+    destroyCharacterManagement();
     destroyWorldInfoEditor();
     destroyResizeHandles();
     destroyResponsiveMode();
