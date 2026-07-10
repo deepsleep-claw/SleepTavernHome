@@ -3,7 +3,6 @@ import { registerAsUniqueScript } from '@util/script';
 export const SCRIPT_NAME = '现代化界面';
 
 const LEGACY_DEFAULT_LEFT_SIDEBAR_WIDTH = 340;
-const LEGACY_DEFAULT_MAIN_CHAT_MAX_WIDTH = 800;
 export const DEFAULT_LEFT_SIDEBAR_WIDTH = 360;
 export const DEFAULT_OVERLAY_PANEL_WIDTH = 960;
 export const DEFAULT_MAIN_CHAT_MAX_WIDTH = 960;
@@ -46,9 +45,6 @@ function readSettings(): ModernLayoutSettings {
     if (settings.overlayPanelWidth === undefined && settings.leftSidebarWidth === LEGACY_DEFAULT_LEFT_SIDEBAR_WIDTH) {
       settings.leftSidebarWidth = DEFAULT_LEFT_SIDEBAR_WIDTH;
     }
-    if (settings.mainChatMaxWidth === LEGACY_DEFAULT_MAIN_CHAT_MAX_WIDTH) {
-      settings.mainChatMaxWidth = DEFAULT_MAIN_CHAT_MAX_WIDTH;
-    }
   }
 
   const result = ModernLayoutSettings.safeParse(raw_settings);
@@ -73,7 +69,8 @@ export const useModernLayoutStore = defineStore(SCRIPT_NAME, () => {
   const should_use_two_column = computed(() => is_active.value && settings.value.desktopTwoColumn);
 
   watchEffect(() => {
-    replaceVariables(klona(settings.value), { type: 'script', script_id: getScriptId() });
+    const validSettings = ModernLayoutSettings.parse(klona(settings.value));
+    replaceVariables(validSettings, { type: 'script', script_id: getScriptId() });
   });
 
   function resetSettings() {

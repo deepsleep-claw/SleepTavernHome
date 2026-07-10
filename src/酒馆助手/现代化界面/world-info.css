@@ -201,6 +201,12 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-summary
   cursor: pointer !important;
 }
 
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-summary:focus-visible {
+  border-radius: 6px;
+  outline: 2px solid color-mix(in srgb, var(--th-modern-wi-accent) 72%, transparent);
+  outline-offset: 2px;
+}
+
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-select-dot {
   display: none;
   width: 0.95rem;
@@ -1202,7 +1208,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-active-edit
   display: none !important;
 }
 
-@media (max-width: 900px) {
+@media (max-width: 899.98px) {
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled {
     --th-modern-wi-native-list-width: 100%;
     overflow: visible;

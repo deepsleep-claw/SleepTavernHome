@@ -1,5 +1,6 @@
 import { watch } from 'vue';
 
+import { getHostDocument, getHostWindow } from './host-context';
 import type { useModernLayoutStore } from './store';
 
 const BODY_CLASS = 'th-modern-character-management';
@@ -7,112 +8,142 @@ const PANEL_CLASS = 'th-modern-character-panel';
 const LIST_CLASS = 'th-modern-character-list';
 const EDITOR_CLASS = 'th-modern-character-editor';
 const ACTIONS_CLASS = 'th-modern-character-actions';
+const DESKTOP_MEDIA_QUERY = '(min-width: 900px)';
 
 type Store = ReturnType<typeof useModernLayoutStore>;
 
-function getHostDocument(): Document {
-  return window.parent?.document ?? document;
+type MovedCharacterControls = {
+  actions: HTMLElement;
+  controls: HTMLElement;
+  controlsMarker: Comment;
+  tags: HTMLElement;
+  tagsMarker: Comment;
+};
+
+function toggleHostState(doc: Document, enabled: boolean): void {
+  doc.body.classList.toggle(BODY_CLASS, enabled);
+  doc.querySelector('#right-nav-panel')?.classList.toggle(PANEL_CLASS, enabled);
+  doc.querySelector('#rm_characters_block')?.classList.toggle(LIST_CLASS, enabled);
+  doc.querySelector('#rm_ch_create_block')?.classList.toggle(EDITOR_CLASS, enabled);
 }
 
-function getDocuments(): Document[] {
-  return _.uniq([document, getHostDocument()]);
-}
-
-function toggleDocumentState(enabled: boolean): void {
-  getDocuments().forEach(doc => {
-    doc.body?.classList.toggle(BODY_CLASS, enabled);
-    doc.querySelector('#right-nav-panel')?.classList.toggle(PANEL_CLASS, enabled);
-    doc.querySelector('#rm_characters_block')?.classList.toggle(LIST_CLASS, enabled);
-    doc.querySelector('#rm_ch_create_block')?.classList.toggle(EDITOR_CLASS, enabled);
-
-    if (enabled) {
-      enhanceCharacterEditor(doc);
-    } else {
-      restoreCharacterEditor(doc);
-    }
-  });
-}
-
-function clearDocumentState(): void {
-  getDocuments().forEach(doc => {
-    restoreCharacterEditor(doc);
-    doc.body?.classList.remove(BODY_CLASS);
-    doc.querySelector('#right-nav-panel')?.classList.remove(PANEL_CLASS);
-    doc.querySelector('#rm_characters_block')?.classList.remove(LIST_CLASS);
-    doc.querySelector('#rm_ch_create_block')?.classList.remove(EDITOR_CLASS);
-  });
-}
-
-function enhanceCharacterEditor(doc: Document): void {
+function moveCharacterControls(doc: Document): MovedCharacterControls | null {
   const shell = doc.querySelector<HTMLElement>('#avatar-and-name-block > .flex-container');
   const avatar = doc.querySelector<HTMLElement>('#avatar_div');
   const controls = doc.querySelector<HTMLElement>('#avatar_controls');
   const tags = doc.querySelector<HTMLElement>('#tags_div');
 
   if (!shell || !avatar || !controls || !tags) {
-    return;
+    return null;
   }
 
-  let actions = shell.querySelector<HTMLElement>(`:scope > .${ACTIONS_CLASS}`);
-  if (!actions) {
-    actions = doc.createElement('div');
-    actions.className = ACTIONS_CLASS;
-    avatar.after(actions);
-  }
+  const controlsMarker = doc.createComment('th-modern-character-controls');
+  const tagsMarker = doc.createComment('th-modern-character-tags');
+  controls.before(controlsMarker);
+  tags.before(tagsMarker);
 
-  if (controls.parentElement !== actions) {
-    actions.appendChild(controls);
-  }
+  const actions = doc.createElement('div');
+  actions.className = ACTIONS_CLASS;
+  avatar.after(actions);
+  actions.append(controls, tags);
 
-  if (tags.parentElement !== actions) {
-    actions.appendChild(tags);
-  }
+  return { actions, controls, controlsMarker, tags, tagsMarker };
 }
 
-function restoreCharacterEditor(doc: Document): void {
-  const shell = doc.querySelector<HTMLElement>('#avatar-and-name-block > .flex-container');
-  const avatar = doc.querySelector<HTMLElement>('#avatar_div');
-  const actions = shell?.querySelector<HTMLElement>(`:scope > .${ACTIONS_CLASS}`);
-
-  if (!shell || !avatar || !actions) {
+function restoreCharacterControls(state: MovedCharacterControls | null): void {
+  if (!state) {
     return;
   }
 
-  const controls = actions.querySelector<HTMLElement>('#avatar_controls');
-  const tags = actions.querySelector<HTMLElement>('#tags_div');
+  state.controlsMarker.parentNode?.insertBefore(state.controls, state.controlsMarker);
+  state.tagsMarker.parentNode?.insertBefore(state.tags, state.tagsMarker);
+  state.controlsMarker.remove();
+  state.tagsMarker.remove();
+  state.actions.remove();
+}
 
-  if (controls) {
-    avatar.appendChild(controls);
-  }
-
-  if (tags) {
-    shell.appendChild(tags);
-  }
-
-  actions.remove();
+function isCurrentCharacterControls(doc: Document, state: MovedCharacterControls): boolean {
+  return (
+    state.actions.isConnected &&
+    state.controlsMarker.isConnected &&
+    state.tagsMarker.isConnected &&
+    doc.querySelector('#avatar_controls') === state.controls &&
+    doc.querySelector('#tags_div') === state.tags
+  );
 }
 
 export function mountCharacterManagement(store: Store): { destroy: () => void } {
   const hostDocument = getHostDocument();
+  const hostWindow = getHostWindow();
+  const HostMutationObserver = (hostWindow as Window & { MutationObserver: typeof MutationObserver }).MutationObserver;
+  const HostElement = hostWindow.Element;
+  const desktopMedia = hostWindow.matchMedia(DESKTOP_MEDIA_QUERY);
+  let movedControls: MovedCharacterControls | null = null;
   let scheduledSync = 0;
+
+  const clearState = () => {
+    restoreCharacterControls(movedControls);
+    movedControls = null;
+    toggleHostState(hostDocument, false);
+  };
 
   const sync = () => {
     scheduledSync = 0;
-    toggleDocumentState(store.is_active && store.settings.modernCharacterManagement);
+    const enabled =
+      store.is_active &&
+      store.settings.modernCharacterManagement &&
+      store.settings.desktopTwoColumn &&
+      desktopMedia.matches;
+
+    if (!enabled) {
+      clearState();
+      return;
+    }
+
+    toggleHostState(hostDocument, true);
+    if (movedControls && !isCurrentCharacterControls(hostDocument, movedControls)) {
+      restoreCharacterControls(movedControls);
+      movedControls = null;
+    }
+    movedControls ??= moveCharacterControls(hostDocument);
   };
 
   const scheduleSync = () => {
     if (scheduledSync) {
       return;
     }
-    scheduledSync = requestAnimationFrame(sync);
+    scheduledSync = hostWindow.requestAnimationFrame(sync);
   };
 
-  const observer = new MutationObserver(scheduleSync);
-  observer.observe(hostDocument.body, { childList: true });
+  const isRelevantNode = (node: Node): boolean => {
+    if (!(node instanceof HostElement)) {
+      return false;
+    }
+    return (
+      node.matches('#right-nav-panel, #rm_characters_block, #rm_ch_create_block, #avatar_controls, #tags_div') ||
+      Boolean(node.closest('#right-nav-panel')) ||
+      Boolean(node.querySelector('#right-nav-panel, #rm_characters_block, #rm_ch_create_block, #avatar_controls, #tags_div'))
+    );
+  };
+
+  const observer = new HostMutationObserver(mutations => {
+    if (
+      mutations.some(
+        mutation =>
+          isRelevantNode(mutation.target) ||
+          [...mutation.addedNodes].some(isRelevantNode) ||
+          [...mutation.removedNodes].some(isRelevantNode),
+      )
+    ) {
+      scheduleSync();
+    }
+  });
+  observer.observe(hostDocument.body, { childList: true, subtree: true });
+  desktopMedia.addEventListener('change', scheduleSync);
 
   const stopWatch = watch(
-    () => [store.is_active, store.settings.modernCharacterManagement] as const,
+    () =>
+      [store.is_active, store.settings.modernCharacterManagement, store.settings.desktopTwoColumn] as const,
     scheduleSync,
     { immediate: true },
   );
@@ -121,10 +152,12 @@ export function mountCharacterManagement(store: Store): { destroy: () => void } 
     destroy() {
       stopWatch();
       observer.disconnect();
+      desktopMedia.removeEventListener('change', scheduleSync);
       if (scheduledSync) {
-        cancelAnimationFrame(scheduledSync);
+        hostWindow.cancelAnimationFrame(scheduledSync);
+        scheduledSync = 0;
       }
-      clearDocumentState();
+      clearState();
     },
   };
 }

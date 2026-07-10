@@ -1,0 +1,9 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["@types/**/*.d.ts", "src/酒馆助手/现代化界面/**/*", "*.d.ts"],
+  "exclude": ["**/dist/**", "**/node_modules/**"]
+}

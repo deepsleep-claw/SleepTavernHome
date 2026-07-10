@@ -20,34 +20,40 @@
         <label class="modern-layout-field">
           <span>左侧栏宽度</span>
           <input
-            v-model.number="store.settings.leftSidebarWidth"
+            :value="store.settings.leftSidebarWidth"
             class="text_pole"
             type="number"
             min="320"
             max="460"
             step="4"
+            @change="commitNumericSetting($event, 'leftSidebarWidth', 320, 460)"
+            @blur="commitNumericSetting($event, 'leftSidebarWidth', 320, 460)"
           />
         </label>
 
         <label class="modern-layout-field">
           <span>滑出面板偏好宽度</span>
           <input
-            v-model.number="store.settings.overlayPanelWidth"
+            :value="store.settings.overlayPanelWidth"
             class="text_pole"
             type="number"
             min="720"
             step="20"
+            @change="commitNumericSetting($event, 'overlayPanelWidth', 720)"
+            @blur="commitNumericSetting($event, 'overlayPanelWidth', 720)"
           />
         </label>
 
         <label class="modern-layout-field">
           <span>主聊天最大宽度</span>
           <input
-            v-model.number="store.settings.mainChatMaxWidth"
+            :value="store.settings.mainChatMaxWidth"
             class="text_pole"
             type="number"
             min="0"
             step="20"
+            @change="commitNumericSetting($event, 'mainChatMaxWidth', 0)"
+            @blur="commitNumericSetting($event, 'mainChatMaxWidth', 0)"
           />
         </label>
         <small class="modern-layout-hint">0 表示不限制宽度。</small>
@@ -86,6 +92,23 @@
 import { SCRIPT_NAME, useModernLayoutStore } from '../store';
 
 const store = useModernLayoutStore();
+
+type NumericSettingKey = 'leftSidebarWidth' | 'overlayPanelWidth' | 'mainChatMaxWidth';
+
+function commitNumericSetting(event: Event, key: NumericSettingKey, min: number, max = Number.POSITIVE_INFINITY) {
+  const input = event.currentTarget as HTMLInputElement;
+  const previousValue = store.settings[key];
+  const inputValue = input.valueAsNumber;
+
+  if (!Number.isFinite(inputValue)) {
+    input.value = String(previousValue);
+    return;
+  }
+
+  const nextValue = Math.min(max, Math.max(min, inputValue));
+  store.settings[key] = nextValue;
+  input.value = String(nextValue);
+}
 
 async function resetSettings() {
   const confirmed = await SillyTavern.callGenericPopup(

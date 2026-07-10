@@ -1,11 +1,14 @@
 {
   "scripts": {
     "build:dev": "webpack --mode development",
-    "build": "pnpm build:regex && webpack --mode production",
+    "build": "pnpm run check:modern && pnpm run build:regex && webpack --mode production",
     "build:regex": "node util/build_tavern_regexes.mjs",
     "build:regex:dream-big-discuss": "node util/build_tavern_regexes.mjs src/酒馆助手/梦境讨论正则UI",
     "build:regex:dream-discuss": "pnpm build:regex:dream-big-discuss",
     "watch": "webpack --mode development --watch --progress",
+    "typecheck:modern": "tsc --project tsconfig.modern-layout.json --noEmit --pretty false",
+    "lint:modern": "eslint \"src/酒馆助手/现代化界面/**/*.{ts,vue}\" --max-warnings 0",
+    "check:modern": "pnpm run typecheck:modern && pnpm run lint:modern",
     "format": "prettier --write \"src/**/*.{ts,tsx,js,jsx,css,scss,html,vue}\" --no-error-on-unmatched-pattern",
     "lint": "eslint",
     "lint:fix": "eslint --fix",
