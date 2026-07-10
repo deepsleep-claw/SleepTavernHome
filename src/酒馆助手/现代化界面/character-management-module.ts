@@ -7,17 +7,31 @@ const BODY_CLASS = 'th-modern-character-management';
 const PANEL_CLASS = 'th-modern-character-panel';
 const LIST_CLASS = 'th-modern-character-list';
 const EDITOR_CLASS = 'th-modern-character-editor';
-const ACTIONS_CLASS = 'th-modern-character-actions';
-const DESKTOP_MEDIA_QUERY = '(min-width: 900px)';
+const SUMMARY_CLASS = 'th-modern-character-summary';
+const SUMMARY_MAIN_CLASS = 'th-modern-character-summary-main';
+const SUMMARY_IDENTITY_CLASS = 'th-modern-character-summary-identity';
+const SUMMARY_BUTTONS_CLASS = 'th-modern-character-summary-buttons';
+const SUMMARY_FIELDS_CLASS = 'th-modern-character-summary-fields';
 
 type Store = ReturnType<typeof useModernLayoutStore>;
 
-type MovedCharacterControls = {
-  actions: HTMLElement;
-  controls: HTMLElement;
-  controlsMarker: Comment;
+type MovedNode = {
+  marker: Comment;
+  node: HTMLElement;
+};
+
+type ModernCharacterSummary = {
+  buttons: HTMLElement;
+  buttonsBlock: HTMLElement;
+  dropdown: HTMLElement;
+  fields: HTMLElement;
+  identity: HTMLElement;
+  main: HTMLElement;
+  moves: MovedNode[];
+  name: HTMLElement;
+  pinAndTabs: HTMLElement;
+  summary: HTMLElement;
   tags: HTMLElement;
-  tagsMarker: Comment;
 };
 
 function toggleHostState(doc: Document, enabled: boolean): void {
@@ -27,49 +41,93 @@ function toggleHostState(doc: Document, enabled: boolean): void {
   doc.querySelector('#rm_ch_create_block')?.classList.toggle(EDITOR_CLASS, enabled);
 }
 
-function moveCharacterControls(doc: Document): MovedCharacterControls | null {
-  const shell = doc.querySelector<HTMLElement>('#avatar-and-name-block > .flex-container');
-  const avatar = doc.querySelector<HTMLElement>('#avatar_div');
-  const controls = doc.querySelector<HTMLElement>('#avatar_controls');
-  const tags = doc.querySelector<HTMLElement>('#tags_div');
-
-  if (!shell || !avatar || !controls || !tags) {
-    return null;
-  }
-
-  const controlsMarker = doc.createComment('th-modern-character-controls');
-  const tagsMarker = doc.createComment('th-modern-character-tags');
-  controls.before(controlsMarker);
-  tags.before(tagsMarker);
-
-  const actions = doc.createElement('div');
-  actions.className = ACTIONS_CLASS;
-  avatar.after(actions);
-  actions.append(controls, tags);
-
-  return { actions, controls, controlsMarker, tags, tagsMarker };
+function moveNode(doc: Document, node: HTMLElement, target: HTMLElement): MovedNode {
+  const marker = doc.createComment(`th-modern-character-${node.id || node.classList[0] || 'node'}`);
+  node.before(marker);
+  target.append(node);
+  return { marker, node };
 }
 
-function restoreCharacterControls(state: MovedCharacterControls | null): void {
+function restoreMovedNode(move: MovedNode): void {
+  move.marker.parentNode?.insertBefore(move.node, move.marker);
+  move.marker.remove();
+}
+
+function restoreCharacterSummary(state: ModernCharacterSummary | null): void {
   if (!state) {
     return;
   }
 
-  state.controlsMarker.parentNode?.insertBefore(state.controls, state.controlsMarker);
-  state.tagsMarker.parentNode?.insertBefore(state.tags, state.tagsMarker);
-  state.controlsMarker.remove();
-  state.tagsMarker.remove();
-  state.actions.remove();
+  [...state.moves].reverse().forEach(restoreMovedNode);
+  state.summary.classList.remove(SUMMARY_CLASS);
+  state.main.remove();
+  state.fields.remove();
 }
 
-function isCurrentCharacterControls(doc: Document, state: MovedCharacterControls): boolean {
+function createCharacterSummary(doc: Document): ModernCharacterSummary | null {
+  const summary = doc.querySelector<HTMLElement>('#avatar-and-name-block');
+  const avatar = doc.querySelector<HTMLElement>('#avatar_div');
+  const pinAndTabs = doc.querySelector<HTMLElement>('#rm_PinAndTabs');
+  const name = doc.querySelector<HTMLElement>('#name_div');
+  const buttonsBlock = doc.querySelector<HTMLElement>('#avatar_controls > .form_create_bottom_buttons_block');
+  const dropdown = doc.querySelector<HTMLElement>('#char-management-dropdown')?.closest<HTMLElement>('label');
+  const tags = doc.querySelector<HTMLElement>('#tags_div');
+
+  if (!summary || !avatar || !pinAndTabs || !name || !buttonsBlock || !dropdown || !tags) {
+    return null;
+  }
+
+  const main = doc.createElement('div');
+  main.className = SUMMARY_MAIN_CLASS;
+  const identity = doc.createElement('div');
+  identity.className = SUMMARY_IDENTITY_CLASS;
+  const buttons = doc.createElement('div');
+  buttons.className = SUMMARY_BUTTONS_CLASS;
+  const fields = doc.createElement('div');
+  fields.className = SUMMARY_FIELDS_CLASS;
+  const moves: MovedNode[] = [];
+
+  try {
+    moves.push(moveNode(doc, avatar, main));
+    main.append(identity, buttons);
+    moves.push(moveNode(doc, pinAndTabs, identity));
+    moves.push(moveNode(doc, name, identity));
+    moves.push(moveNode(doc, buttonsBlock, buttons));
+    moves.push(moveNode(doc, dropdown, fields));
+    moves.push(moveNode(doc, tags, fields));
+    summary.append(main, fields);
+    summary.classList.add(SUMMARY_CLASS);
+  } catch (error) {
+    [...moves].reverse().forEach(restoreMovedNode);
+    main.remove();
+    fields.remove();
+    throw error;
+  }
+
+  return { buttons, buttonsBlock, dropdown, fields, identity, main, moves, name, pinAndTabs, summary, tags };
+}
+
+function isCurrentCharacterSummary(doc: Document, state: ModernCharacterSummary): boolean {
   return (
-    state.actions.isConnected &&
-    state.controlsMarker.isConnected &&
-    state.tagsMarker.isConnected &&
-    doc.querySelector('#avatar_controls') === state.controls &&
-    doc.querySelector('#tags_div') === state.tags
+    state.summary.isConnected &&
+    state.summary.classList.contains(SUMMARY_CLASS) &&
+    state.main.parentElement === state.summary &&
+    state.fields.parentElement === state.summary &&
+    state.moves.every(move => move.marker.isConnected && move.node.isConnected) &&
+    doc.querySelector('#rm_PinAndTabs') === state.pinAndTabs &&
+    state.pinAndTabs.parentElement === state.identity &&
+    doc.querySelector('#name_div') === state.name &&
+    state.name.parentElement === state.identity &&
+    state.buttonsBlock.parentElement === state.buttons &&
+    doc.querySelector('#char-management-dropdown')?.closest('label') === state.dropdown &&
+    state.dropdown.parentElement === state.fields &&
+    doc.querySelector('#tags_div') === state.tags &&
+    state.tags.parentElement === state.fields
   );
+}
+
+function isEditorMode(panel: HTMLElement | null): boolean {
+  return panel?.dataset.menuType === 'create' || panel?.dataset.menuType === 'character_edit';
 }
 
 export function mountCharacterManagement(store: Store): { destroy: () => void } {
@@ -77,23 +135,22 @@ export function mountCharacterManagement(store: Store): { destroy: () => void } 
   const hostWindow = getHostWindow();
   const HostMutationObserver = (hostWindow as Window & { MutationObserver: typeof MutationObserver }).MutationObserver;
   const HostElement = hostWindow.Element;
-  const desktopMedia = hostWindow.matchMedia(DESKTOP_MEDIA_QUERY);
-  let movedControls: MovedCharacterControls | null = null;
+  let characterSummary: ModernCharacterSummary | null = null;
   let scheduledSync = 0;
 
+  const restoreSummary = () => {
+    restoreCharacterSummary(characterSummary);
+    characterSummary = null;
+  };
+
   const clearState = () => {
-    restoreCharacterControls(movedControls);
-    movedControls = null;
+    restoreSummary();
     toggleHostState(hostDocument, false);
   };
 
   const sync = () => {
     scheduledSync = 0;
-    const enabled =
-      store.is_active &&
-      store.settings.modernCharacterManagement &&
-      store.settings.desktopTwoColumn &&
-      desktopMedia.matches;
+    const enabled = store.is_active && store.settings.modernCharacterManagement;
 
     if (!enabled) {
       clearState();
@@ -101,11 +158,16 @@ export function mountCharacterManagement(store: Store): { destroy: () => void } 
     }
 
     toggleHostState(hostDocument, true);
-    if (movedControls && !isCurrentCharacterControls(hostDocument, movedControls)) {
-      restoreCharacterControls(movedControls);
-      movedControls = null;
+    const panel = hostDocument.querySelector<HTMLElement>('#right-nav-panel');
+    if (!isEditorMode(panel)) {
+      restoreSummary();
+      return;
     }
-    movedControls ??= moveCharacterControls(hostDocument);
+
+    if (characterSummary && !isCurrentCharacterSummary(hostDocument, characterSummary)) {
+      restoreSummary();
+    }
+    characterSummary ??= createCharacterSummary(hostDocument);
   };
 
   const scheduleSync = () => {
@@ -120,9 +182,15 @@ export function mountCharacterManagement(store: Store): { destroy: () => void } 
       return false;
     }
     return (
-      node.matches('#right-nav-panel, #rm_characters_block, #rm_ch_create_block, #avatar_controls, #tags_div') ||
+      node.matches(
+        '#right-nav-panel, #rm_characters_block, #rm_ch_create_block, #avatar-and-name-block, #avatar_div, #avatar_controls, #rm_PinAndTabs, #name_div, #tags_div',
+      ) ||
       Boolean(node.closest('#right-nav-panel')) ||
-      Boolean(node.querySelector('#right-nav-panel, #rm_characters_block, #rm_ch_create_block, #avatar_controls, #tags_div'))
+      Boolean(
+        node.querySelector(
+          '#right-nav-panel, #rm_characters_block, #rm_ch_create_block, #avatar-and-name-block, #avatar_div, #avatar_controls, #rm_PinAndTabs, #name_div, #tags_div',
+        ),
+      )
     );
   };
 
@@ -138,12 +206,15 @@ export function mountCharacterManagement(store: Store): { destroy: () => void } 
       scheduleSync();
     }
   });
-  observer.observe(hostDocument.body, { childList: true, subtree: true });
-  desktopMedia.addEventListener('change', scheduleSync);
+  observer.observe(hostDocument.body, {
+    attributes: true,
+    attributeFilter: ['data-menu-type'],
+    childList: true,
+    subtree: true,
+  });
 
   const stopWatch = watch(
-    () =>
-      [store.is_active, store.settings.modernCharacterManagement, store.settings.desktopTwoColumn] as const,
+    () => [store.is_active, store.settings.modernCharacterManagement] as const,
     scheduleSync,
     { immediate: true },
   );
@@ -152,7 +223,6 @@ export function mountCharacterManagement(store: Store): { destroy: () => void } 
     destroy() {
       stopWatch();
       observer.disconnect();
-      desktopMedia.removeEventListener('change', scheduleSync);
       if (scheduledSync) {
         hostWindow.cancelAnimationFrame(scheduledSync);
         scheduledSync = 0;
