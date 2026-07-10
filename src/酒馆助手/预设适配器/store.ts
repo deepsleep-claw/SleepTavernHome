@@ -44,11 +44,64 @@ const AdapterGroupSchema = z.object({
   options: z.array(AdapterOptionSchema).default([]),
 });
 
+const SummaryHideRulesSchema = z
+  .object({
+    hide_first: z.boolean().default(false),
+    hide_user: z.boolean().default(true),
+    hide_assistant_system: z.boolean().default(true),
+    hide_summary: z.boolean().default(false),
+    auto_hide_after_manual: z.boolean().default(true),
+  })
+  .default({
+    hide_first: false,
+    hide_user: true,
+    hide_assistant_system: true,
+    hide_summary: false,
+    auto_hide_after_manual: true,
+  });
+
+const SummarySettingsSchema = z
+  .object({
+    content_handling: z.enum(['direct', 'worldbook', 'first_message']).default('direct'),
+    after_summary: z.enum(['none', 'hide_summary_message']).default('none'),
+    hide_rules: SummaryHideRulesSchema,
+  })
+  .default({
+    content_handling: 'direct',
+    after_summary: 'none',
+    hide_rules: SummaryHideRulesSchema.parse({}),
+  });
+
+const SummaryConfigSchema = z
+  .object({
+    generation: z
+      .object({
+        group_id: z.string().default(''),
+        option_id: z.string().default(''),
+        detect_regexes: z.array(z.string()).default([]),
+      })
+      .default({
+        group_id: '',
+        option_id: '',
+        detect_regexes: [],
+      }),
+    settings: SummarySettingsSchema,
+  })
+  .default({
+    generation: {
+      group_id: '',
+      option_id: '',
+      detect_regexes: [],
+    },
+    settings: SummarySettingsSchema.parse({}),
+  });
+
 const AdapterConfigSchema = z
   .object({
     title: z.string().min(1).default(SCRIPT_NAME),
     description: z.string().default(''),
     script_button_name: z.string().min(1).default(DEFAULT_SCRIPT_BUTTON_NAME),
+    summary: SummaryConfigSchema,
     groups: z.array(AdapterGroupSchema).default([]),
   })
   .prefault({});
@@ -82,6 +135,11 @@ type AdapterConfig = z.infer<typeof AdapterConfigSchema>;
 type AdapterGroup = AdapterConfig['groups'][number];
 type AdapterOption = AdapterGroup['options'][number];
 type ExportFile = z.infer<typeof ExportFileSchema>;
+export type SummaryConfig = z.infer<typeof SummaryConfigSchema>;
+export type SummarySettings = z.infer<typeof SummarySettingsSchema>;
+export type SummaryHideRules = z.infer<typeof SummaryHideRulesSchema>;
+export type SummaryContentHandling = SummarySettings['content_handling'];
+export type SummaryAfterAction = SummarySettings['after_summary'];
 type ExportSource = {
   group_id: string;
   match_id: string;
@@ -138,7 +196,47 @@ type LoadedState = {
   errors: string[];
 };
 
-type TabId = 'preset' | 'debug';
+type TabId = 'preset' | 'summary' | 'debug';
+
+export type SummaryMessageView = {
+  message_id: number;
+  exists: boolean;
+  role?: ChatMessage['role'];
+  is_hidden?: boolean;
+  content_segments: string[];
+};
+
+export type SummaryFloorRow = {
+  key: string;
+  message_ids: number[];
+  operation_label?: string;
+  operation_target_hidden?: boolean;
+  range: string;
+  status: string;
+  token_count: string;
+  total?: boolean;
+};
+
+export type SummaryViewState = {
+  has_chat: boolean;
+  chat_id: string;
+  total_message_count: number;
+  unhidden_message_count: number;
+  summary_count: number;
+  summary_messages: SummaryMessageView[];
+  floor_rows: SummaryFloorRow[];
+};
+
+export type SummaryGenerationStatus = {
+  group_id: string;
+  option_id: string;
+  group_label: string;
+  option_label: string;
+  status_label: string;
+  matched_summary: string;
+  can_start: boolean;
+  errors: string[];
+};
 
 type SquashDebugRecord = {
   id: string;
@@ -226,6 +324,41 @@ const STATUS_ICON_CLASSES: Record<OptionStatus, string> = {
   unmatched: 'fa-solid fa-triangle-exclamation',
 };
 
+const SUMMARY_VARIABLE_PATH = `${SCRIPT_NAME}.总结`;
+const SUMMARY_VARIABLE_VERSION = 1;
+const EMPTY_SUMMARY_STATE: SummaryViewState = {
+  chat_id: '',
+  floor_rows: [],
+  has_chat: false,
+  summary_count: 0,
+  summary_messages: [],
+  total_message_count: 0,
+  unhidden_message_count: 0,
+};
+type SummaryChatVariables = {
+  version: typeof SUMMARY_VARIABLE_VERSION;
+  summary_message_ids: number[];
+};
+
+type CompiledSummaryRegex = {
+  display: string;
+  regex: RegExp;
+};
+
+let tavern_generation_in_progress = false;
+const tavern_generation_watchers = new Set<(value: boolean) => void>();
+let summary_token_refresh_serial = 0;
+const summary_token_count_cache = new Map<string, number>();
+
+function readTavernGenerationInProgress(): boolean {
+  try {
+    const tavern = SillyTavern as unknown as { isGenerating?: () => boolean };
+    return tavern.isGenerating?.() ?? tavern_generation_in_progress;
+  } catch {
+    return tavern_generation_in_progress;
+  }
+}
+
 function formatZodError(error: z.ZodError): string {
   return error.issues
     .map(issue => `${issue.path.length === 0 ? '配置' : issue.path.join('.')}: ${issue.message}`)
@@ -238,6 +371,360 @@ function normalizeError(error: unknown): string {
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+export function setTavernGenerationInProgress(value: boolean) {
+  tavern_generation_in_progress = value;
+  tavern_generation_watchers.forEach(listener => listener(value));
+}
+
+function subscribeTavernGenerationInProgress(listener: (value: boolean) => void): { stop: () => void } {
+  tavern_generation_watchers.add(listener);
+  listener(tavern_generation_in_progress);
+  return {
+    stop: () => tavern_generation_watchers.delete(listener),
+  };
+}
+
+function getCurrentChatIdSafe(): string {
+  try {
+    return SillyTavern.getCurrentChatId?.() ?? '';
+  } catch {
+    return '';
+  }
+}
+
+function readCurrentChatMessages(): ChatMessage[] {
+  if (!getCurrentChatIdSafe()) {
+    return [];
+  }
+
+  try {
+    const last_message_id = getLastMessageId();
+    if (last_message_id < 0) {
+      return [];
+    }
+    return getChatMessages(`0-${last_message_id}`, { hide_state: 'all' });
+  } catch (error) {
+    console.warn(`[${SCRIPT_NAME}] 读取聊天楼层失败。`, error);
+    return [];
+  }
+}
+
+function normalizeSummaryMessageIds(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [...new Set(value.filter((id): id is number => Number.isInteger(id) && id >= 0))].sort((lhs, rhs) => lhs - rhs);
+}
+
+function normalizeSummaryChatVariables(value: unknown): SummaryChatVariables {
+  if (!_.isPlainObject(value)) {
+    return {
+      version: SUMMARY_VARIABLE_VERSION,
+      summary_message_ids: [],
+    };
+  }
+  return {
+    version: SUMMARY_VARIABLE_VERSION,
+    summary_message_ids: normalizeSummaryMessageIds(value.summary_message_ids),
+  };
+}
+
+function readSummaryChatVariables(): SummaryChatVariables {
+  try {
+    const variables = getVariables({ type: 'chat' });
+    return normalizeSummaryChatVariables(_.get(variables, SUMMARY_VARIABLE_PATH));
+  } catch {
+    return {
+      version: SUMMARY_VARIABLE_VERSION,
+      summary_message_ids: [],
+    };
+  }
+}
+
+function writeSummaryChatVariables(summary: SummaryChatVariables) {
+  const variables = getVariables({ type: 'chat' });
+  const normalized = normalizeSummaryChatVariables(summary);
+  if (normalized.summary_message_ids.length === 0) {
+    _.unset(variables, SUMMARY_VARIABLE_PATH);
+  } else {
+    _.set(variables, SUMMARY_VARIABLE_PATH, normalized);
+  }
+  replaceVariables(variables, { type: 'chat' });
+}
+
+function addSummaryMessageId(message_id: number): boolean {
+  const current = readSummaryChatVariables();
+  if (current.summary_message_ids.includes(message_id)) {
+    return false;
+  }
+  writeSummaryChatVariables({
+    version: SUMMARY_VARIABLE_VERSION,
+    summary_message_ids: [...current.summary_message_ids, message_id],
+  });
+  return true;
+}
+
+function removeSummaryMessageId(message_id: number) {
+  const current = readSummaryChatVariables();
+  writeSummaryChatVariables({
+    version: SUMMARY_VARIABLE_VERSION,
+    summary_message_ids: current.summary_message_ids.filter(id => id !== message_id),
+  });
+}
+
+function splitSummaryContentSegments(content: string): string[] {
+  return content
+    .split(/\n{2,}/)
+    .map(segment => segment.trim())
+    .filter(Boolean);
+}
+
+function getSummaryMessageContent(message: ChatMessage): string {
+  return typeof message.message === 'string' ? message.message : '';
+}
+
+function getSummaryTokenCacheKey(message: ChatMessage): string {
+  const content = getSummaryMessageContent(message);
+  return `${message.message_id}:${content.length}:${content.slice(0, 128)}:${content.slice(-128)}`;
+}
+
+function getCachedSummaryTokenCount(message: ChatMessage): number | undefined {
+  if (message.is_hidden) {
+    return 0;
+  }
+  return summary_token_count_cache.get(getSummaryTokenCacheKey(message));
+}
+
+function getMessagesTokenCountText(messages: ChatMessage[]): string {
+  let total = 0;
+  for (const message of messages) {
+    const token_count = getCachedSummaryTokenCount(message);
+    if (token_count === undefined) {
+      return '统计中';
+    }
+    total += token_count;
+  }
+  return String(total);
+}
+
+function getHiddenLabel(is_hidden: boolean): string {
+  return is_hidden ? '隐藏' : '显示';
+}
+
+function getMessageRangeLabel(messages: ChatMessage[]): string {
+  const first = messages[0].message_id;
+  const last = messages[messages.length - 1].message_id;
+  return first === last ? `第${first}层` : `第${first} - ${last}层`;
+}
+
+function buildFloorRangeRow(messages: ChatMessage[], row_index: number): SummaryFloorRow | undefined {
+  if (messages.length === 0) {
+    return undefined;
+  }
+
+  const hidden_states = [...new Set(messages.map(message => message.is_hidden))];
+  const is_all_hidden = hidden_states.length === 1 && hidden_states[0];
+  const message_ids = messages.map(message => message.message_id);
+  if (hidden_states.length === 1) {
+    return {
+      key: `range-${row_index}`,
+      message_ids,
+      operation_label: is_all_hidden ? '显示' : '隐藏',
+      operation_target_hidden: !is_all_hidden,
+      range: getMessageRangeLabel(messages),
+      status: getHiddenLabel(hidden_states[0]),
+      token_count: getMessagesTokenCountText(messages),
+    };
+  }
+
+  return {
+    key: `range-${row_index}`,
+    message_ids,
+    operation_label: '隐藏',
+    operation_target_hidden: true,
+    range: getMessageRangeLabel(messages),
+    status: '混合',
+    token_count: getMessagesTokenCountText(messages),
+  };
+}
+
+function buildSingleFloorRow(message: ChatMessage, kind: 'first' | 'summary'): SummaryFloorRow {
+  const hidden_label = getHiddenLabel(message.is_hidden);
+  return {
+    key: `${kind}-${message.message_id}`,
+    message_ids: [message.message_id],
+    operation_label: message.is_hidden ? '显示' : '隐藏',
+    operation_target_hidden: !message.is_hidden,
+    range: `第${message.message_id}层`,
+    status: kind === 'summary' ? `总结 ${hidden_label}` : `首层 ${hidden_label}`,
+    token_count: getMessagesTokenCountText([message]),
+  };
+}
+
+function buildFloorSummaryRows(messages: ChatMessage[], summary_ids: Set<number>): SummaryFloorRow[] {
+  const rows: SummaryFloorRow[] = [];
+  let pending_range: ChatMessage[] = [];
+
+  const flushRange = () => {
+    const row = buildFloorRangeRow(pending_range, rows.length);
+    if (row) {
+      rows.push(row);
+    }
+    pending_range = [];
+  };
+
+  messages.forEach(message => {
+    if (message.message_id === 0) {
+      flushRange();
+      rows.push(buildSingleFloorRow(message, summary_ids.has(message.message_id) ? 'summary' : 'first'));
+      return;
+    }
+
+    if (!summary_ids.has(message.message_id)) {
+      pending_range.push(message);
+      return;
+    }
+
+    flushRange();
+    rows.push(buildSingleFloorRow(message, 'summary'));
+  });
+  flushRange();
+
+  if (messages.length === 0) {
+    return rows;
+  }
+  return [
+    ...rows,
+    {
+      key: 'total',
+      message_ids: [],
+      range: '总计',
+      status: '非隐藏楼层',
+      token_count: getMessagesTokenCountText(messages),
+      total: true,
+    },
+  ];
+}
+
+function buildSummaryViewState(messages?: ChatMessage[]): SummaryViewState {
+  const chat_id = getCurrentChatIdSafe();
+  if (!chat_id) {
+    return { ...EMPTY_SUMMARY_STATE };
+  }
+
+  const chat_messages = messages ?? readCurrentChatMessages();
+  const messages_by_id = new Map(chat_messages.map(message => [message.message_id, message] as const));
+  const summary_ids = readSummaryChatVariables().summary_message_ids;
+  const summary_id_set = new Set(summary_ids);
+  return {
+    chat_id,
+    floor_rows: buildFloorSummaryRows(chat_messages, summary_id_set),
+    has_chat: true,
+    summary_count: summary_ids.length,
+    summary_messages: summary_ids.map(message_id => {
+      const message = messages_by_id.get(message_id);
+      if (!message) {
+        return {
+          content_segments: [],
+          exists: false,
+          message_id,
+        };
+      }
+      return {
+        content_segments: splitSummaryContentSegments(message.message),
+        exists: true,
+        is_hidden: message.is_hidden,
+        message_id,
+        role: message.role,
+      };
+    }),
+    total_message_count: chat_messages.length,
+    unhidden_message_count: chat_messages.filter(message => !message.is_hidden).length,
+  };
+}
+
+async function refreshSummaryTokenCounts(messages: ChatMessage[], chat_id: string, serial: number) {
+  const visible_messages = messages.filter(message => !message.is_hidden);
+  const missing_messages = visible_messages.filter(message => !summary_token_count_cache.has(getSummaryTokenCacheKey(message)));
+  if (missing_messages.length === 0) {
+    return;
+  }
+
+  const counts = await Promise.all(
+    missing_messages.map(async message => ({
+      key: getSummaryTokenCacheKey(message),
+      token_count: await SillyTavern.getTokenCountAsync(getSummaryMessageContent(message), 0),
+    })),
+  );
+  if (serial !== summary_token_refresh_serial || getCurrentChatIdSafe() !== chat_id) {
+    return;
+  }
+
+  counts.forEach(({ key, token_count }) => summary_token_count_cache.set(key, token_count));
+}
+
+function shouldHideMessageBySummaryRules(
+  message: ChatMessage,
+  summary_ids: Set<number>,
+  rules: SummaryHideRules,
+): boolean {
+  if (summary_ids.has(message.message_id)) {
+    return rules.hide_summary;
+  }
+  if (message.message_id === 0) {
+    return rules.hide_first;
+  }
+  if (message.role === 'user') {
+    return rules.hide_user;
+  }
+  return rules.hide_assistant_system;
+}
+
+async function applySummaryHideRules(settings: SummarySettings, sync_unmatched: boolean): Promise<number> {
+  const messages = readCurrentChatMessages();
+  const summary_ids = new Set(readSummaryChatVariables().summary_message_ids);
+  const updates = messages.flatMap(message => {
+    const is_hidden = shouldHideMessageBySummaryRules(message, summary_ids, settings.hide_rules);
+    if (sync_unmatched ? message.is_hidden !== is_hidden : is_hidden && !message.is_hidden) {
+      return [{ message_id: message.message_id, is_hidden }];
+    }
+    return [];
+  });
+
+  if (updates.length > 0) {
+    await setChatMessages(updates, { refresh: 'affected' });
+  }
+  return updates.length;
+}
+
+async function unhideAllChatMessages(): Promise<number> {
+  const messages = readCurrentChatMessages();
+  const updates = messages
+    .filter(message => message.is_hidden)
+    .map(message => ({
+      message_id: message.message_id,
+      is_hidden: false,
+    }));
+  if (updates.length > 0) {
+    await setChatMessages(updates, { refresh: 'affected' });
+  }
+  return updates.length;
+}
+
+async function setSummaryFloorRowsHidden(message_ids: number[], is_hidden: boolean): Promise<number> {
+  const message_id_set = new Set(message_ids);
+  const updates = readCurrentChatMessages()
+    .filter(message => message_id_set.has(message.message_id) && message.is_hidden !== is_hidden)
+    .map(message => ({
+      is_hidden,
+      message_id: message.message_id,
+    }));
+  if (updates.length > 0) {
+    await setChatMessages(updates, { refresh: 'affected' });
+  }
+  return updates.length;
 }
 
 function getScriptVariableScope() {
@@ -620,11 +1107,107 @@ function buildGroupViews(config: AdapterConfig, preset: Preset): BuildGroupsResu
       description: group.description,
       mode: group.mode,
       mode_label: group.mode === 'single' ? '单选' : '多选',
-      layout: options.length <= 3 ? 'row' : 'grid',
+      layout: (options.length <= 3 ? 'row' : 'grid') as GroupView['layout'],
       options,
     };
   });
   return { groups, errors };
+}
+
+function buildOptionTargetStates(
+  group_config: AdapterGroup,
+  group_view: GroupView,
+  option_view: OptionView,
+  force_enable: boolean,
+): Map<number, boolean> {
+  const target_states = new Map<number, boolean>();
+  if (group_config.mode === 'single') {
+    group_view.options
+      .filter(option => option.id !== option_view.id)
+      .forEach(option => option.enable_indexes.forEach(index => target_states.set(index, false)));
+    option_view.disable_indexes.forEach(index => target_states.set(index, false));
+    option_view.enable_indexes.forEach(index => target_states.set(index, true));
+    return target_states;
+  }
+
+  if (!force_enable && option_view.status === 'active') {
+    option_view.enable_indexes.forEach(index => target_states.set(index, false));
+    return target_states;
+  }
+
+  option_view.disable_indexes.forEach(index => target_states.set(index, false));
+  option_view.enable_indexes.forEach(index => target_states.set(index, true));
+  return target_states;
+}
+
+function applyPromptTargetStates(preset: Preset, target_states: Map<number, boolean>): boolean {
+  let changed = false;
+  target_states.forEach((enabled, index) => {
+    const prompt = preset.prompts[index];
+    if (prompt && prompt.enabled !== enabled) {
+      prompt.enabled = enabled;
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+function getGroupPromptStateSnapshot(preset: Preset, group_view: GroupView): Map<number, boolean> {
+  const indexes = new Set<number>();
+  group_view.options.forEach(option => {
+    option.enable_indexes.forEach(index => indexes.add(index));
+    option.disable_indexes.forEach(index => indexes.add(index));
+  });
+  return new Map([...indexes].map(index => [index, preset.prompts[index]?.enabled ?? false]));
+}
+
+async function restorePromptStateSnapshot(snapshot: Map<number, boolean>) {
+  if (snapshot.size === 0) {
+    return;
+  }
+  const preset = getPreset('in_use');
+  const changed = applyPromptTargetStates(preset, snapshot);
+  if (changed) {
+    await replacePreset('in_use', preset, { render: 'immediate' });
+  }
+}
+
+function buildSummaryGenerationStatus(config: AdapterConfig, groups: GroupView[]): SummaryGenerationStatus {
+  const { group_id, option_id } = config.summary.generation;
+  const group = groups.find(candidate => candidate.id === group_id);
+  const option = findSummaryOption(group, option_id);
+  const errors: string[] = [];
+  if (!group_id) {
+    errors.push('未配置总结使用的 group_id。');
+  } else if (!group) {
+    errors.push(`未找到总结使用设置组：${group_id}`);
+  }
+  if (!option_id) {
+    errors.push('未配置总结使用的 option_id。');
+  } else if (group && !option) {
+    errors.push(`未在“${group.label}”中找到总结使用选项：${option_id}`);
+  }
+  if (option?.status === 'unmatched') {
+    errors.push('总结使用选项没有命中任何提示词。');
+  }
+
+  return {
+    can_start: errors.length === 0,
+    errors,
+    group_id,
+    group_label: group?.label ?? group_id,
+    matched_summary: option?.matched_summary ?? '',
+    option_id,
+    option_label: option?.label ?? option_id,
+    status_label: option ? (option.status === 'active' ? '已启用' : option.status === 'inactive' ? '未启用' : '未命中') : '未配置',
+  };
+}
+
+function findSummaryOption(group: GroupView | undefined, option_id: string): OptionView | undefined {
+  if (!group || !option_id) {
+    return undefined;
+  }
+  return group.options.find(option => option.id === option_id || option.label === option_id);
 }
 
 function getExportFilename(title: string): string {
@@ -790,11 +1373,202 @@ function getSquashDebugApi(): SquashDebugApi | undefined {
   return host_window[SQUASH_DEBUG_GLOBAL_KEY];
 }
 
+function getSummaryRegexLiteral(value: string): { flags: string; source: string } | undefined {
+  const trimmed = value.trim();
+  const closing_slash = getRegexLiteralClosingSlash(trimmed);
+  if (closing_slash <= 0) {
+    return undefined;
+  }
+  return {
+    flags: trimmed.slice(closing_slash + 1),
+    source: trimmed.slice(1, closing_slash),
+  };
+}
+
+function compileSummaryRegexes(regexes: SummaryConfig['generation']['detect_regexes']): {
+  compiled: CompiledSummaryRegex[];
+  errors: string[];
+} {
+  const compiled: CompiledSummaryRegex[] = [];
+  const errors: string[] = [];
+  regexes.forEach((regex, index) => {
+    const regex_text = regex.trim();
+    if (!regex_text) {
+      return;
+    }
+
+    const literal = getSummaryRegexLiteral(regex_text);
+    const source = literal?.source ?? regex_text;
+    const actual_flags = literal?.flags ?? '';
+    const display = literal ? regex_text : `/${source}/`;
+    try {
+      compiled.push({
+        display,
+        regex: new RegExp(source, actual_flags),
+      });
+    } catch (error) {
+      const message = `第 ${index + 1} 条总结识别正则无效：${display}：${normalizeError(error)}`;
+      errors.push(message);
+      console.warn(`[${SCRIPT_NAME}] ${message}`, error);
+    }
+  });
+  return { compiled, errors };
+}
+
+function isCompiledSummaryRegexMatched(text: string, regexes: CompiledSummaryRegex[]): boolean {
+  return regexes.some(({ regex }) => {
+    regex.lastIndex = 0;
+    return regex.test(text);
+  });
+}
+
+function getSummaryErrorDetail(stage: string, error: unknown, context?: Record<string, unknown>): string {
+  const details = [`阶段：${stage}`, `错误：${normalizeError(error)}`];
+  if (context && Object.keys(context).length > 0) {
+    details.push(`上下文：${JSON.stringify(context, null, 2)}`);
+  }
+  return details.join('\n');
+}
+
+function notifySummaryError(stage: string, error: unknown, context?: Record<string, unknown>) {
+  const detail = getSummaryErrorDetail(stage, error, context);
+  toastr.error(detail, SCRIPT_NAME, { extendedTimeOut: 30000, timeOut: 15000 });
+  console.error(`[${SCRIPT_NAME}] ${stage}失败。`, { context, error });
+}
+
+async function confirmAction(message: string): Promise<boolean> {
+  const confirmed = await SillyTavern.callGenericPopup(message, SillyTavern.POPUP_TYPE.CONFIRM);
+  return confirmed === true || confirmed === SillyTavern.POPUP_RESULT.AFFIRMATIVE;
+}
+
+function buildSummaryWorldbookEntry(message_id: number, content: string): TypeFest.PartialDeep<WorldbookEntry> {
+  return {
+    content,
+    effect: {
+      cooldown: null,
+      delay: null,
+      sticky: null,
+    },
+    enabled: true,
+    name: `[Dream]梦境思客总结 第 ${message_id} 层`,
+    position: {
+      depth: 0,
+      order: message_id,
+      role: 'system',
+      type: 'after_character_definition',
+    },
+    probability: 100,
+    recursion: {
+      delay_until: null,
+      prevent_incoming: false,
+      prevent_outgoing: false,
+    },
+    strategy: {
+      keys: [],
+      keys_secondary: {
+        keys: [],
+        logic: 'and_any',
+      },
+      scan_depth: 'same_as_global',
+      type: 'constant',
+    },
+  };
+}
+
+async function writeSummaryToChatWorldbook(message_id: number, content: string): Promise<boolean> {
+  const worldbook_name = getChatWorldbookName('current');
+  if (!worldbook_name) {
+    toastr.error('当前聊天没有绑定世界书，无法放置总结。', SCRIPT_NAME);
+    return false;
+  }
+
+  const entry = buildSummaryWorldbookEntry(message_id, content);
+  const entry_name = entry.name!;
+  const worldbook = await getWorldbook(worldbook_name);
+  const existing = worldbook.find(candidate => candidate.name === entry_name);
+  if (existing) {
+    const confirmed = await confirmAction(`世界书“${worldbook_name}”中已存在“${entry_name}”。是否覆盖？`);
+    if (!confirmed) {
+      return false;
+    }
+    await updateWorldbookWith(
+      worldbook_name,
+      entries =>
+        entries.map(candidate =>
+          candidate.uid === existing.uid
+            ? {
+                ...candidate,
+                ...entry,
+                uid: candidate.uid,
+              }
+            : candidate,
+        ),
+      { render: 'immediate' },
+    );
+    return true;
+  }
+
+  await createWorldbookEntries(worldbook_name, [entry], { render: 'immediate' });
+  return true;
+}
+
+async function appendSummaryToFirstMessage(message_id: number, content: string): Promise<boolean> {
+  const first_message = getChatMessages(0)[0];
+  if (!first_message) {
+    toastr.error('未找到第 0 层，无法把总结放置于首层。', SCRIPT_NAME);
+    return false;
+  }
+
+  const block = `\n\n---\n\n## [Dream]梦境思客总结 第 ${message_id} 层\n\n${content}`;
+  await setChatMessages([{ message_id: 0, message: `${first_message.message}${block}` }], { refresh: 'affected' });
+  return true;
+}
+
+async function processGeneratedSummaryMessage(message_id: number, content: string, settings: SummarySettings) {
+  if (settings.content_handling === 'worldbook') {
+    await writeSummaryToChatWorldbook(message_id, content);
+  } else if (settings.content_handling === 'first_message') {
+    await appendSummaryToFirstMessage(message_id, content);
+  }
+
+  if (settings.after_summary === 'hide_summary_message') {
+    await setChatMessages([{ message_id, is_hidden: true }], { refresh: 'affected' });
+  }
+  if (settings.hide_rules.auto_hide_after_manual) {
+    await applySummaryHideRules(settings, false);
+  }
+}
+
+export function markGeneratedMessageAsSummaryIfMatched(message_id: number): boolean {
+  const config_result = readAdapterConfig();
+  const regexes = config_result.config.summary.generation.detect_regexes;
+  if (regexes.length === 0 || !getCurrentChatIdSafe()) {
+    return false;
+  }
+
+  const candidate_ids = [...new Set([message_id, message_id - 1, getLastMessageId()].filter(id => id >= 0))];
+  const { compiled } = compileSummaryRegexes(regexes);
+  try {
+    for (const candidate_id of candidate_ids) {
+      const candidate = getChatMessages(candidate_id)[0];
+      if (candidate && isCompiledSummaryRegexMatched(candidate.message, compiled)) {
+        return addSummaryMessageId(candidate.message_id);
+      }
+    }
+  } catch (error) {
+    console.warn(`[${SCRIPT_NAME}] 读取生成楼层失败，无法自动标记总结。`, error);
+    return false;
+  }
+  return false;
+}
+
 export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   const config = ref<AdapterConfig>(EMPTY_CONFIG);
   const title = ref(SCRIPT_NAME);
   const description = ref('');
   const active_tab = ref<TabId>('preset');
+  const summary_settings = ref<SummarySettings>(cloneJson(EMPTY_CONFIG.summary.settings));
+  const summary_state = ref<SummaryViewState>({ ...EMPTY_SUMMARY_STATE });
   const debug_available = ref(false);
   const debug_records = ref<SquashDebugRecord[]>([]);
   const selected_debug_record_id = ref('');
@@ -805,6 +1579,8 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   const groups = ref<GroupView[]>([]);
   const errors = ref<string[]>([]);
   const is_applying = ref(false);
+  const is_generation_in_progress = ref(tavern_generation_in_progress);
+  const is_summary_running = ref(false);
   const has_blocking_errors = computed(() => errors.value.length > 0);
   const selected_export_count = computed(() =>
     groups.value.reduce(
@@ -817,9 +1593,13 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   const selected_debug_record = computed(() =>
     debug_records.value.find(record => record.id === selected_debug_record_id.value),
   );
+  const summary_generation_status = computed(() => buildSummaryGenerationStatus(config.value, groups.value));
   let debug_api: SquashDebugApi | undefined;
   let debug_subscription: { stop: () => void } | undefined;
   let debug_poll_timer: ReturnType<typeof window.setInterval> | undefined;
+  let summary_event_stops: EventOnReturn[] = [];
+  let tavern_generation_poll_timer: ReturnType<typeof window.setInterval> | undefined;
+  let tavern_generation_subscription: { stop: () => void } | undefined;
 
   function applyDebugRecords(records: SquashDebugRecord[]) {
     debug_records.value = records;
@@ -876,6 +1656,381 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     active_tab.value = tab;
   }
 
+  function refreshSummaryState() {
+    const messages = readCurrentChatMessages();
+    const state = buildSummaryViewState(messages);
+    summary_state.value = state;
+    if (!state.has_chat) {
+      return;
+    }
+
+    const serial = ++summary_token_refresh_serial;
+    refreshSummaryTokenCounts(messages, state.chat_id, serial)
+      .then(() => {
+        if (serial === summary_token_refresh_serial && getCurrentChatIdSafe() === state.chat_id) {
+          summary_state.value = buildSummaryViewState(readCurrentChatMessages());
+        }
+      })
+      .catch(error => {
+        console.warn(`[${SCRIPT_NAME}] 统计楼层 Token 数失败。`, error);
+      });
+  }
+
+  function saveSummarySettings(settings: SummarySettings) {
+    const normalized_settings = SummarySettingsSchema.parse(settings);
+    const variables = readScriptVariables();
+    _.set(variables, 'summary.settings', normalized_settings);
+    replaceVariables(variables, getScriptVariableScope());
+    config.value = AdapterConfigSchema.parse({
+      ...config.value,
+      summary: {
+        ...config.value.summary,
+        settings: normalized_settings,
+      },
+    });
+    summary_settings.value = cloneJson(normalized_settings);
+    refreshSummaryState();
+  }
+
+  function setSummaryContentHandling(content_handling: SummaryContentHandling) {
+    saveSummarySettings({
+      ...summary_settings.value,
+      content_handling,
+    });
+  }
+
+  function setSummaryAfterAction(after_summary: SummaryAfterAction) {
+    saveSummarySettings({
+      ...summary_settings.value,
+      after_summary,
+    });
+  }
+
+  function setSummaryHideRule(rule: keyof SummaryHideRules, value: boolean) {
+    saveSummarySettings({
+      ...summary_settings.value,
+      hide_rules: {
+        ...summary_settings.value.hide_rules,
+        [rule]: value,
+      },
+    });
+  }
+
+  function addSummaryMessageIdFromInput(message_id: number): boolean {
+    if (!Number.isInteger(message_id) || message_id < 0) {
+      toastr.error('总结楼层必须是大于等于 0 的整数。', SCRIPT_NAME);
+      return false;
+    }
+
+    const exists = readCurrentChatMessages().some(message => message.message_id === message_id);
+    if (!exists) {
+      toastr.error(`第 ${message_id} 层不存在，不能标记为总结层。`, SCRIPT_NAME);
+      return false;
+    }
+
+    const changed = addSummaryMessageId(message_id);
+    refreshSummaryState();
+    if (changed) {
+      toastr.success(`已标记第 ${message_id} 层为总结层。`, SCRIPT_NAME);
+    } else {
+      toastr.info(`第 ${message_id} 层已经是总结层。`, SCRIPT_NAME);
+    }
+    return changed;
+  }
+
+  function deleteSummaryMessageId(message_id: number) {
+    removeSummaryMessageId(message_id);
+    refreshSummaryState();
+    toastr.success(`已移除第 ${message_id} 层的总结标记。`, SCRIPT_NAME);
+  }
+
+  async function applySummaryHideOnly() {
+    if (is_applying.value) {
+      return;
+    }
+
+    is_applying.value = true;
+    try {
+      const changed_count = await applySummaryHideRules(summary_settings.value, false);
+      refreshSummaryState();
+      toastr.success(`已隐藏 ${changed_count} 个命中楼层。`, SCRIPT_NAME);
+    } finally {
+      is_applying.value = false;
+    }
+  }
+
+  async function syncSummaryHideRules() {
+    if (is_applying.value) {
+      return;
+    }
+
+    is_applying.value = true;
+    try {
+      const changed_count = await applySummaryHideRules(summary_settings.value, true);
+      refreshSummaryState();
+      toastr.success(`已同步 ${changed_count} 个楼层的隐藏状态。`, SCRIPT_NAME);
+    } finally {
+      is_applying.value = false;
+    }
+  }
+
+  async function unhideSummaryAll() {
+    if (is_applying.value) {
+      return;
+    }
+
+    is_applying.value = true;
+    try {
+      const changed_count = await unhideAllChatMessages();
+      refreshSummaryState();
+      toastr.success(`已取消隐藏 ${changed_count} 个楼层。`, SCRIPT_NAME);
+    } finally {
+      is_applying.value = false;
+    }
+  }
+
+  async function setSummaryFloorRowHidden(row: SummaryFloorRow) {
+    if (is_applying.value || row.operation_target_hidden === undefined || row.message_ids.length === 0) {
+      return;
+    }
+
+    is_applying.value = true;
+    try {
+      const changed_count = await setSummaryFloorRowsHidden(row.message_ids, row.operation_target_hidden);
+      refreshSummaryState();
+      toastr.success(
+        `已${row.operation_target_hidden ? '隐藏' : '显示'} ${changed_count} 个楼层。`,
+        SCRIPT_NAME,
+      );
+    } finally {
+      is_applying.value = false;
+    }
+  }
+
+  function startSummaryWatch() {
+    refreshSummaryState();
+    is_generation_in_progress.value = readTavernGenerationInProgress();
+    tavern_generation_subscription ??= subscribeTavernGenerationInProgress(value => {
+      is_generation_in_progress.value = value;
+    });
+    tavern_generation_poll_timer ??= window.setInterval(() => {
+      const current_value = readTavernGenerationInProgress();
+      if (!current_value && is_generation_in_progress.value) {
+        setTavernGenerationInProgress(false);
+      }
+    }, 1000);
+    if (summary_event_stops.length > 0) {
+      return;
+    }
+
+    const refresh_handler = () => {
+      refreshSummaryState();
+    };
+    summary_event_stops = [
+      eventOn(tavern_events.CHAT_CHANGED, refresh_handler),
+      eventOn(tavern_events.MESSAGE_SENT, refresh_handler),
+      eventOn(tavern_events.MESSAGE_RECEIVED, refresh_handler),
+      eventOn(tavern_events.MESSAGE_EDITED, refresh_handler),
+      eventOn(tavern_events.MESSAGE_DELETED, refresh_handler),
+      eventOn(tavern_events.MESSAGE_UPDATED, refresh_handler),
+      eventOn(tavern_events.MESSAGE_SWIPED, refresh_handler),
+      eventOn(tavern_events.GENERATION_ENDED, refresh_handler),
+    ];
+  }
+
+  function stopSummaryWatch() {
+    summary_event_stops.forEach(event => event.stop());
+    summary_event_stops = [];
+    tavern_generation_subscription?.stop();
+    tavern_generation_subscription = undefined;
+    if (tavern_generation_poll_timer !== undefined) {
+      window.clearInterval(tavern_generation_poll_timer);
+      tavern_generation_poll_timer = undefined;
+    }
+  }
+
+  function scanCurrentSummaryMessages() {
+    const config_result = readAdapterConfig();
+    const regexes = config_result.config.summary.generation.detect_regexes;
+    if (regexes.length === 0) {
+      toastr.error('未配置总结识别正则，无法手动扫描。', SCRIPT_NAME);
+      return;
+    }
+
+    const { compiled, errors: regex_errors } = compileSummaryRegexes(regexes);
+    if (compiled.length === 0) {
+      toastr.error(`没有可用的总结识别正则：\n${regex_errors.join('\n')}`, SCRIPT_NAME);
+      return;
+    }
+
+    const messages = readCurrentChatMessages();
+    const matched_ids = messages
+      .filter(message => isCompiledSummaryRegexMatched(message.message, compiled))
+      .map(message => message.message_id);
+    let added_count = 0;
+    matched_ids.forEach(message_id => {
+      if (addSummaryMessageId(message_id)) {
+        added_count += 1;
+      }
+    });
+    refreshSummaryState();
+
+    const warning = regex_errors.length > 0 ? `\n有 ${regex_errors.length} 条正则无效：\n${regex_errors.slice(0, 3).join('\n')}` : '';
+    toastr.success(
+      `扫描完成：共扫描 ${messages.length} 层，命中 ${matched_ids.length} 层，新增 ${added_count} 个总结标记。${warning}`,
+      SCRIPT_NAME,
+    );
+  }
+
+  async function startManualSummary() {
+    if (is_summary_running.value || is_applying.value) {
+      return;
+    }
+    if (is_generation_in_progress.value) {
+      toastr.warning('当前已有生成正在进行，不能开始手动总结。', SCRIPT_NAME);
+      return;
+    }
+
+    const state = loadState();
+    refreshSummaryState();
+    if (!summary_state.value.has_chat) {
+      toastr.error('需要先打开一个聊天。', SCRIPT_NAME);
+      return;
+    }
+
+    if (state.errors.length > 0 || !state.preset) {
+      toastr.error('配置存在错误，无法开始总结。', SCRIPT_NAME);
+      return;
+    }
+
+    const status = buildSummaryGenerationStatus(state.config, state.groups);
+    if (!status.can_start) {
+      toastr.error(`总结使用设置不可用：\n${status.errors.join('\n')}`, SCRIPT_NAME);
+      return;
+    }
+
+    if (summary_settings.value.content_handling === 'worldbook' && !getChatWorldbookName('current')) {
+      toastr.error('当前聊天没有绑定世界书，无法使用“放置于世界书”。', SCRIPT_NAME);
+      return;
+    }
+
+    is_summary_running.value = true;
+    is_applying.value = true;
+    let confirmed = false;
+    try {
+      confirmed = await confirmAction('确认开始总结？当前预设会临时切换到配置的总结选项，生成结束后恢复。');
+    } catch (error) {
+      notifySummaryError('总结确认弹窗', error);
+      is_summary_running.value = false;
+      is_applying.value = false;
+      return;
+    }
+    if (!confirmed) {
+      is_summary_running.value = false;
+      is_applying.value = false;
+      return;
+    }
+    if (is_generation_in_progress.value) {
+      toastr.warning('当前已有生成正在进行，不能开始手动总结。', SCRIPT_NAME);
+      is_summary_running.value = false;
+      is_applying.value = false;
+      return;
+    }
+
+    const group_config = state.config.groups.find(group => group.id === status.group_id);
+    const group_view = state.groups.find(group => group.id === status.group_id);
+    const option_view = findSummaryOption(group_view, status.option_id);
+    if (!group_config || !group_view || !option_view) {
+      toastr.error('总结使用设置已失效，请刷新后重试。', SCRIPT_NAME);
+      is_summary_running.value = false;
+      is_applying.value = false;
+      return;
+    }
+
+    const target_states = buildOptionTargetStates(group_config, group_view, option_view, true);
+    if (target_states.size === 0) {
+      toastr.error('总结使用选项没有命中任何提示词。', SCRIPT_NAME);
+      is_summary_running.value = false;
+      is_applying.value = false;
+      return;
+    }
+
+    let generated_message_id: number | undefined;
+    let generation_failed = false;
+    let restore_failed = false;
+    const snapshot = getGroupPromptStateSnapshot(state.preset, group_view);
+    try {
+      const preset = getPreset('in_use');
+      const changed = applyPromptTargetStates(preset, target_states);
+      if (changed) {
+        await replacePreset('in_use', preset, { render: 'immediate' });
+      }
+
+      const before_last_message_id = getLastMessageId();
+      await Promise.resolve(SillyTavern.generate('normal'));
+      const latest_message = getChatMessages(-1)[0];
+      if (latest_message && latest_message.message_id > before_last_message_id) {
+        generated_message_id = latest_message.message_id;
+      }
+    } catch (error) {
+      generation_failed = true;
+      notifySummaryError('总结生成', error, {
+        group_id: status.group_id,
+        option_id: status.option_id,
+        option: status.option_label,
+      });
+    } finally {
+      try {
+        await restorePromptStateSnapshot(snapshot);
+      } catch (error) {
+        restore_failed = true;
+        notifySummaryError('恢复总结预设状态', error, {
+          group_id: status.group_id,
+          option_id: status.option_id,
+          option: status.option_label,
+        });
+      }
+    }
+
+    if (generation_failed || restore_failed) {
+      setTavernGenerationInProgress(false);
+      is_generation_in_progress.value = false;
+      is_summary_running.value = false;
+      is_applying.value = false;
+      refresh();
+      return;
+    }
+
+    try {
+      if (generated_message_id === undefined) {
+        toastr.warning('生成结束，但没有检测到新的总结楼层。', SCRIPT_NAME);
+        return;
+      }
+
+      const generated_message = getChatMessages(generated_message_id)[0];
+      if (!generated_message) {
+        toastr.warning(`生成结束，但第 ${generated_message_id} 层已不存在。`, SCRIPT_NAME);
+        return;
+      }
+
+      addSummaryMessageId(generated_message_id);
+      await processGeneratedSummaryMessage(generated_message_id, generated_message.message, summary_settings.value);
+      toastr.success(`已完成第 ${generated_message_id} 层总结。`, SCRIPT_NAME);
+    } catch (error) {
+      notifySummaryError('总结后处理', error, {
+        content_handling: summary_settings.value.content_handling,
+        generated_message_id,
+        hide_after_summary: summary_settings.value.after_summary,
+      });
+    } finally {
+      setTavernGenerationInProgress(false);
+      is_generation_in_progress.value = false;
+      is_summary_running.value = false;
+      is_applying.value = false;
+      refresh();
+    }
+  }
+
   function selectDebugRecord(id: string) {
     selected_debug_record_id.value = id;
   }
@@ -905,6 +2060,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     config.value = config_result.config;
     title.value = config_result.config.title;
     description.value = config_result.config.description;
+    summary_settings.value = cloneJson(config_result.config.summary.settings);
     loaded_preset_name.value = getLoadedPresetName();
 
     let preset: Preset | undefined;
@@ -915,6 +2071,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
       console.warn(`[${SCRIPT_NAME}] ${message}`, error);
       groups.value = [];
       errors.value = [...config_result.errors, message];
+      refreshSummaryState();
       return { config: config_result.config, groups: [], errors: errors.value };
     }
 
@@ -922,6 +2079,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     groups.value = built.groups;
     pruneSelectedExportKeys();
     errors.value = [...config_result.errors, ...built.errors];
+    refreshSummaryState();
     return { config: config_result.config, preset, groups: built.groups, errors: errors.value };
   }
 
@@ -1228,7 +2386,9 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
 
   return {
     active_tab,
+    addSummaryMessageIdFromInput,
     applyOption,
+    applySummaryHideOnly,
     cancelExportMode,
     clearDebugRecords,
     closeReviewPanel,
@@ -1244,20 +2404,37 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     groups,
     has_blocking_errors,
     importPresetSettings,
+    is_generation_in_progress,
     isExportOptionSelected,
     is_applying,
+    is_summary_running,
     loaded_preset_name,
     refresh,
+    refreshSummaryState,
     review_panel,
+    scanCurrentSummaryMessages,
     selectDebugRecord,
     selected_debug_record,
     selected_debug_record_id,
     selected_export_count,
     setActiveTab,
+    setSummaryFloorRowHidden,
+    setSummaryAfterAction,
+    setSummaryContentHandling,
+    setSummaryHideRule,
     startExportMode,
     startDebugWatch,
+    startManualSummary,
+    startSummaryWatch,
+    stopSummaryWatch,
+    summary_generation_status,
+    summary_settings,
+    summary_state,
+    syncSummaryHideRules,
     stopDebugWatch,
     title,
     toggleExportOption,
+    deleteSummaryMessageId,
+    unhideSummaryAll,
   };
 });

@@ -1,5 +1,5 @@
 <template>
-  <div class="preset-adapter-root">
+  <div class="preset-adapter-root" :class="`preset-adapter-root-${store.active_tab}`">
     <header class="preset-adapter-header">
       <div>
         <h3>{{ store.title }}</h3>
@@ -11,7 +11,7 @@
       </button>
     </header>
 
-    <nav v-if="store.debug_available" class="preset-adapter-tabs" aria-label="梦鲸思客设置页签">
+    <nav class="preset-adapter-tabs" aria-label="梦鲸思客设置页签">
       <button
         type="button"
         class="preset-adapter-tab"
@@ -23,7 +23,17 @@
       <button
         type="button"
         class="preset-adapter-tab"
+        :class="{ 'preset-adapter-tab-active': store.active_tab === 'summary' }"
+        @click="store.setActiveTab('summary')"
+      >
+        总结
+        <span v-if="store.summary_state.summary_count > 0">{{ store.summary_state.summary_count }}</span>
+      </button>
+      <button
+        type="button"
+        class="preset-adapter-tab"
         :class="{ 'preset-adapter-tab-active': store.active_tab === 'debug' }"
+        :disabled="!store.debug_available"
         @click="store.setActiveTab('debug')"
       >
         Debug
@@ -116,7 +126,229 @@
       </section>
     </template>
 
-    <section v-else class="preset-adapter-debug">
+    <section v-else-if="store.active_tab === 'summary'" class="preset-adapter-summary">
+      <div v-if="!store.summary_state.has_chat" class="preset-adapter-empty">需要打开一个聊天后才能使用总结功能。</div>
+
+      <template v-else>
+        <div class="preset-adapter-stats">
+          <span>已总结 {{ store.summary_state.summary_count }} 次</span>
+          <span>发送楼层 {{ store.summary_state.unhidden_message_count }} / {{ store.summary_state.total_message_count }}</span>
+        </div>
+
+        <section class="preset-adapter-summary-section">
+          <header class="preset-adapter-summary-inline-header">
+            <h4>当前总结楼层</h4>
+            <div class="preset-adapter-summary-inline-actions">
+              <button type="button" class="menu_button" :disabled="store.is_applying" @click="addSummaryMessage()">添加</button>
+              <button type="button" class="menu_button" :disabled="store.is_applying" @click="store.scanCurrentSummaryMessages()">
+                扫描
+              </button>
+            </div>
+          </header>
+          <div v-if="store.summary_state.summary_messages.length === 0" class="preset-adapter-empty">暂无总结楼层</div>
+          <table v-else class="preset-adapter-summary-table">
+            <thead>
+              <tr>
+                <th>楼层</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="message in store.summary_state.summary_messages" :key="message.message_id">
+                <td>第 {{ message.message_id }} 层</td>
+                <td>{{ message.exists ? (message.is_hidden ? '隐藏' : '显示') : '失效' }}</td>
+                <td>
+                  <button
+                    type="button"
+                    class="menu_button"
+                    :disabled="store.is_applying"
+                    @click="store.deleteSummaryMessageId(message.message_id)"
+                  >
+                    删除标记
+                  </button>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <details class="preset-adapter-summary-section preset-adapter-summary-panel">
+          <summary>当前总结内容</summary>
+          <div v-if="store.summary_state.summary_messages.length === 0" class="preset-adapter-empty">暂无总结楼层</div>
+          <div v-else class="preset-adapter-summary-message-list">
+            <details
+              v-for="message in store.summary_state.summary_messages"
+              :key="message.message_id"
+              class="preset-adapter-summary-message"
+            >
+              <summary>
+                <span>第 {{ message.message_id }} 层总结</span>
+                <small v-if="!message.exists">失效</small>
+                <small v-else>{{ message.is_hidden ? '隐藏' : '显示' }}</small>
+              </summary>
+              <div v-if="!message.exists" class="preset-adapter-empty">该楼层已不存在。</div>
+              <div v-else class="preset-adapter-summary-content">
+                <div
+                  v-for="(segment, segment_index) in message.content_segments"
+                  :key="segment_index"
+                  class="preset-adapter-summary-rendered"
+                  v-html="renderSummarySegment(segment, message.message_id)"
+                ></div>
+              </div>
+            </details>
+          </div>
+        </details>
+
+        <details class="preset-adapter-summary-section preset-adapter-summary-panel">
+          <summary>楼层信息摘要</summary>
+          <div v-if="store.summary_state.floor_rows.length === 0" class="preset-adapter-empty">暂无楼层信息</div>
+          <table v-else class="preset-adapter-summary-table">
+            <thead>
+              <tr>
+                <th>楼层</th>
+                <th>状态</th>
+                <th>Token数</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="row in store.summary_state.floor_rows" :key="row.key" :class="{ 'preset-adapter-summary-total-row': row.total }">
+                <td>{{ row.range }}</td>
+                <td>{{ row.status }}</td>
+                <td>{{ row.token_count }}</td>
+                <td>
+                  <button
+                    v-if="row.operation_label"
+                    type="button"
+                    class="menu_button"
+                    :disabled="store.is_applying"
+                    @click="store.setSummaryFloorRowHidden(row)"
+                  >
+                    {{ row.operation_label }}
+                  </button>
+                  <span v-else>-</span>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </details>
+
+        <details class="preset-adapter-summary-section preset-adapter-summary-panel preset-adapter-summary-settings">
+          <summary>总结功能设置</summary>
+
+          <div class="preset-adapter-summary-setting-block">
+            <h4>总结使用设置</h4>
+            <dl class="preset-adapter-summary-definition">
+              <dt>设置组</dt>
+              <dd>{{ store.summary_generation_status.group_label || '未配置' }}</dd>
+              <dt>选项</dt>
+              <dd>{{ store.summary_generation_status.option_label || '未配置' }}</dd>
+              <dt>当前状态</dt>
+              <dd>{{ store.summary_generation_status.status_label }}</dd>
+              <dt>命中提示词</dt>
+              <dd>{{ store.summary_generation_status.matched_summary || '无' }}</dd>
+            </dl>
+            <ul v-if="store.summary_generation_status.errors.length > 0" class="preset-adapter-summary-error-list">
+              <li v-for="error in store.summary_generation_status.errors" :key="error">{{ error }}</li>
+            </ul>
+          </div>
+
+          <div class="preset-adapter-summary-setting-grid">
+            <label>
+              <span>总结内容处理</span>
+              <select :value="store.summary_settings.content_handling" @change="setSummaryContentHandling">
+                <option value="direct">直接总结</option>
+                <option value="worldbook">放置于世界书</option>
+                <option value="first_message">放置于首层</option>
+              </select>
+            </label>
+            <label>
+              <span>总结结束后</span>
+              <select :value="store.summary_settings.after_summary" @change="setSummaryAfterAction">
+                <option value="none">无动作</option>
+                <option value="hide_summary_message">隐藏总结楼层</option>
+              </select>
+            </label>
+          </div>
+          <p class="preset-adapter-description">若总结内容处理为放置于世界书或放置于首层，推荐开启隐藏总结楼层。</p>
+        </details>
+
+        <section class="preset-adapter-summary-section">
+          <h4>隐藏楼层设置</h4>
+          <div class="preset-adapter-summary-checkbox-grid">
+            <label>
+              <input
+                type="checkbox"
+                :checked="store.summary_settings.hide_rules.hide_first"
+                @change="setSummaryHideRule('hide_first', $event)"
+              />
+              <span>隐藏首层</span>
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                :checked="store.summary_settings.hide_rules.hide_user"
+                @change="setSummaryHideRule('hide_user', $event)"
+              />
+              <span>隐藏用户输入楼层</span>
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                :checked="store.summary_settings.hide_rules.hide_assistant_system"
+                @change="setSummaryHideRule('hide_assistant_system', $event)"
+              />
+              <span>隐藏系统/助手楼层</span>
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                :checked="store.summary_settings.hide_rules.hide_summary"
+                @change="setSummaryHideRule('hide_summary', $event)"
+              />
+              <span>隐藏总结楼层</span>
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                :checked="store.summary_settings.hide_rules.auto_hide_after_manual"
+                @change="setSummaryHideRule('auto_hide_after_manual', $event)"
+              />
+              <span>手动总结后自动隐藏楼层</span>
+            </label>
+          </div>
+
+          <div class="preset-adapter-actions">
+            <button type="button" class="menu_button" :disabled="store.is_applying" @click="confirmApplySummaryHideOnly()">
+              一键隐藏
+            </button>
+            <button type="button" class="menu_button" :disabled="store.is_applying" @click="confirmSyncSummaryHideRules()">
+              一键隐藏（取消隐藏非设置楼层）
+            </button>
+            <button type="button" class="menu_button" :disabled="store.is_applying" @click="confirmUnhideSummaryAll()">
+              全部取消隐藏
+            </button>
+          </div>
+        </section>
+
+        <button
+          type="button"
+          class="menu_button preset-adapter-summary-start"
+          :disabled="
+            store.is_applying ||
+            store.is_summary_running ||
+            store.is_generation_in_progress ||
+            !store.summary_generation_status.can_start
+          "
+          @click="confirmStartSummary()"
+        >
+          {{ store.is_generation_in_progress && !store.is_summary_running ? '生成中...' : store.is_summary_running ? '总结中...' : '开始总结' }}
+        </button>
+      </template>
+    </section>
+
+    <section v-else-if="store.active_tab === 'debug'" class="preset-adapter-debug">
       <div class="preset-adapter-debug-layout">
         <aside class="preset-adapter-debug-records">
           <header class="preset-adapter-debug-pane-header">
@@ -353,7 +585,12 @@
 </template>
 
 <script setup lang="ts">
-import { usePresetAdapterStore } from './store';
+import {
+  type SummaryAfterAction,
+  type SummaryContentHandling,
+  type SummaryHideRules,
+  usePresetAdapterStore,
+} from './store';
 
 const store = usePresetAdapterStore();
 const option_count = computed(() => store.groups.reduce((total, group) => total + group.options.length, 0));
@@ -371,10 +608,12 @@ type DebugRow = Record<string, unknown>;
 
 onMounted(() => {
   store.startDebugWatch();
+  store.startSummaryWatch();
 });
 
 onBeforeUnmount(() => {
   store.stopDebugWatch();
+  store.stopSummaryWatch();
 });
 
 function openImportFilePicker() {
@@ -402,6 +641,76 @@ async function importPresetSettings(event: Event) {
 
 function confirmImport(include_failed: boolean) {
   void store.confirmImportReview(include_failed);
+}
+
+function isConfirmed(result: unknown): boolean {
+  return result === true || result === SillyTavern.POPUP_RESULT.AFFIRMATIVE;
+}
+
+async function confirmPopup(message: string): Promise<boolean> {
+  return isConfirmed(await SillyTavern.callGenericPopup(message, SillyTavern.POPUP_TYPE.CONFIRM));
+}
+
+function getEventValue(event: Event): string {
+  return (event.target as HTMLSelectElement).value;
+}
+
+function getEventChecked(event: Event): boolean {
+  return (event.target as HTMLInputElement).checked;
+}
+
+function setSummaryContentHandling(event: Event) {
+  store.setSummaryContentHandling(getEventValue(event) as SummaryContentHandling);
+}
+
+function setSummaryAfterAction(event: Event) {
+  store.setSummaryAfterAction(getEventValue(event) as SummaryAfterAction);
+}
+
+function setSummaryHideRule(rule: keyof SummaryHideRules, event: Event) {
+  store.setSummaryHideRule(rule, getEventChecked(event));
+}
+
+function renderSummarySegment(segment: string, message_id: number): string {
+  return SillyTavern.messageFormatting(segment, '', false, false, message_id);
+}
+
+async function addSummaryMessage() {
+  const result = await SillyTavern.callGenericPopup('请输入要标记为总结层的楼层号。', SillyTavern.POPUP_TYPE.INPUT);
+  if (result === undefined || result === false || result === SillyTavern.POPUP_RESULT.CANCELLED) {
+    return;
+  }
+
+  const input = String(result).trim();
+  if (!/^\d+$/.test(input)) {
+    toastr.error('请输入有效的楼层号。');
+    return;
+  }
+
+  const message_id = Number(input);
+  store.addSummaryMessageIdFromInput(message_id);
+}
+
+async function confirmApplySummaryHideOnly() {
+  if (await confirmPopup('确认按当前规则隐藏命中楼层？不会取消隐藏未命中的楼层。')) {
+    await store.applySummaryHideOnly();
+  }
+}
+
+async function confirmSyncSummaryHideRules() {
+  if (await confirmPopup('确认按当前规则同步所有楼层隐藏状态？未命中的楼层会被取消隐藏。')) {
+    await store.syncSummaryHideRules();
+  }
+}
+
+async function confirmUnhideSummaryAll() {
+  if (await confirmPopup('确认取消隐藏当前聊天的所有楼层？')) {
+    await store.unhideSummaryAll();
+  }
+}
+
+async function confirmStartSummary() {
+  await store.startManualSummary();
 }
 
 function isDebugObject(value: unknown): value is DebugRow {
@@ -458,12 +767,16 @@ function getTriggeredDebugRows(value: unknown): { key: string; row: DebugRow }[]
   });
 }
 
+const debug_content_metadata_keys = new Set(['详细内容摘要', '详细内容长度', '详细内容hash', '详细内容缓存键']);
+
 function getDebugRowFields(row: DebugRow): { key: string; preview: string; text: string }[] {
-  return Object.entries(row).map(([key, value]) => ({
-    key,
-    preview: getDebugPreview(value),
-    text: getDebugValueText(value),
-  }));
+  return Object.entries(row)
+    .filter(([key]) => !debug_content_metadata_keys.has(key))
+    .map(([key, value]) => ({
+      key,
+      preview: getDebugPreview(value),
+      text: getDebugValueText(value),
+    }));
 }
 
 function getDebugTotalSummary(row: DebugRow): string {
@@ -625,6 +938,11 @@ function closeDebugTextModal() {
   container-type: inline-size;
 }
 
+.preset-adapter-root-summary {
+  flex: 0 0 auto;
+  min-height: 100%;
+}
+
 .preset-adapter-header {
   display: flex;
   align-items: flex-start;
@@ -685,6 +1003,11 @@ function closeDebugTextModal() {
   background-color: var(--black50a);
 }
 
+.preset-adapter-tab:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 .preset-adapter-tab span {
   border: 1px solid var(--SmartThemeBorderColor);
   border-radius: 999px;
@@ -730,6 +1053,272 @@ function closeDebugTextModal() {
 .preset-adapter-selection-count {
   color: var(--SmartThemeEmColor);
   font-size: 0.88rem;
+}
+
+.preset-adapter-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-height: 0;
+  padding-bottom: 1.25rem;
+}
+
+.preset-adapter-summary-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  border-top: 1px solid var(--SmartThemeBorderColor);
+  padding-top: 0.75rem;
+}
+
+.preset-adapter-summary-section > h4,
+.preset-adapter-summary-setting-block h4,
+.preset-adapter-summary-inline-header h4 {
+  margin: 0;
+  line-height: 1.25;
+}
+
+.preset-adapter-summary-message-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.preset-adapter-summary-message {
+  margin-left: 0.75rem;
+  border: 1px solid var(--SmartThemeBorderColor);
+  border-radius: 8px;
+  background-color: var(--black30a);
+}
+
+.preset-adapter-summary-message summary {
+  padding-left: 0.95rem;
+}
+
+.preset-adapter-summary-message summary,
+.preset-adapter-summary-panel > summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.65rem;
+  padding: 0.55rem 0.65rem;
+  cursor: pointer;
+  font-weight: 700;
+  list-style: none;
+}
+
+.preset-adapter-summary-message summary::-webkit-details-marker,
+.preset-adapter-summary-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.preset-adapter-summary-message summary::before,
+.preset-adapter-summary-panel > summary::before {
+  content: '';
+  width: 0;
+  height: 0;
+  border-top: 0.32rem solid transparent;
+  border-bottom: 0.32rem solid transparent;
+  border-left: 0.42rem solid var(--SmartThemeEmColor);
+  transition: transform 120ms ease;
+}
+
+.preset-adapter-summary-message[open] > summary::before,
+.preset-adapter-summary-panel[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.preset-adapter-summary-message small {
+  margin-left: auto;
+  color: var(--SmartThemeEmColor);
+  font-weight: 400;
+}
+
+.preset-adapter-summary-content {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: min(28rem, 55vh);
+  overflow: auto;
+  border-top: 1px solid var(--SmartThemeBorderColor);
+  padding: 0.65rem;
+}
+
+.preset-adapter-summary-rendered {
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.preset-adapter-summary-rendered table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-block: 0.75rem;
+  border: 1px solid var(--SmartThemeBorderColor);
+  font-size: 0.92em;
+}
+
+.preset-adapter-summary-rendered th,
+.preset-adapter-summary-rendered td {
+  border: 1px solid var(--SmartThemeBorderColor);
+  padding: 0.42rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.preset-adapter-summary-rendered thead th {
+  background-color: var(--black50a);
+  color: var(--SmartThemeEmColor);
+  font-weight: 700;
+}
+
+.preset-adapter-summary-rendered tbody tr:nth-child(odd) {
+  background-color: var(--black30a);
+}
+
+.preset-adapter-summary-rendered tbody tr:nth-child(even) {
+  background-color: color-mix(in srgb, var(--black30a) 45%, transparent);
+}
+
+.preset-adapter-summary-table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+  border: 1px solid var(--SmartThemeBorderColor);
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.preset-adapter-summary-table th,
+.preset-adapter-summary-table td {
+  border-bottom: 1px solid var(--SmartThemeBorderColor);
+  padding: 0.45rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.preset-adapter-summary-table th {
+  background-color: var(--black30a);
+  color: var(--SmartThemeEmColor);
+  font-weight: 700;
+}
+
+.preset-adapter-summary-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.preset-adapter-summary-total-row td {
+  background-color: var(--black50a);
+  color: var(--SmartThemeEmColor);
+  font-weight: 700;
+}
+
+.preset-adapter-summary-table .menu_button {
+  width: auto;
+  min-height: 1.75rem;
+  padding-inline: 0.55rem;
+  white-space: nowrap;
+}
+
+.preset-adapter-summary-settings {
+  border-top: 1px solid var(--SmartThemeBorderColor);
+  padding-top: 0.75rem;
+}
+
+.preset-adapter-summary-panel > summary {
+  border: 1px solid var(--SmartThemeBorderColor);
+  border-radius: 8px;
+  background-color: var(--black30a);
+}
+
+.preset-adapter-summary-setting-block {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.preset-adapter-summary-definition {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.35rem 0.65rem;
+  margin: 0;
+}
+
+.preset-adapter-summary-definition dt {
+  color: var(--SmartThemeEmColor);
+}
+
+.preset-adapter-summary-definition dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.preset-adapter-summary-error-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  color: var(--SmartThemeQuoteColor);
+  white-space: pre-wrap;
+}
+
+.preset-adapter-summary-setting-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(15rem, 100%), 1fr));
+  gap: 0.55rem;
+}
+
+.preset-adapter-summary-setting-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  color: var(--SmartThemeEmColor);
+  font-size: 0.88rem;
+}
+
+.preset-adapter-summary-setting-grid select {
+  width: 100%;
+}
+
+.preset-adapter-summary-inline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.preset-adapter-summary-inline-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.preset-adapter-summary-inline-actions .menu_button {
+  width: auto;
+  min-height: 2rem;
+  padding-inline: 0.75rem;
+}
+
+.preset-adapter-summary-checkbox-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(16rem, 100%), 1fr));
+  gap: 0.45rem 0.75rem;
+}
+
+.preset-adapter-summary-checkbox-grid label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.preset-adapter-summary-start {
+  flex-shrink: 0;
+  justify-content: center;
+  width: 100%;
+  min-height: 2.75rem;
+  margin-bottom: 1.25rem;
+  font-size: 1rem;
+  font-weight: 700;
 }
 
 .preset-adapter-icon-button {

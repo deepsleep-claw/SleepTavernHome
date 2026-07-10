@@ -1,6 +1,27 @@
 {
   "title": "梦鲸思客设置",
   "script_button_name": "梦鲸思客设置",
+  "summary": {
+    "generation": {
+      "group_id": "输出模式",
+      "option_id": "大总结模式",
+      "detect_regexes": [
+        "# 梦鲸思客大总结",
+        "/^剧情总结\\n/m"
+      ]
+    },
+    "settings": {
+      "content_handling": "direct",
+      "after_summary": "none",
+      "hide_rules": {
+        "hide_first": false,
+        "hide_user": true,
+        "hide_assistant_system": true,
+        "hide_summary": false,
+        "auto_hide_after_manual": true
+      }
+    }
+  },
   "groups": [
     {
       "id": "模型适配",
@@ -15,6 +36,7 @@
           ],
           "disable": [
             "☆Gemini预填充",
+            "☆混元3预填充",
             "硅基流动或其他"
           ]
         },
@@ -26,6 +48,7 @@
           ],
           "disable": [
             "☆Gemini预填充",
+            "☆混元3预填充",
             "Deepseek官方"
           ]
         },
@@ -37,6 +60,19 @@
             "☆Gemini预填充"
           ],
           "disable": [
+            "☆混元3预填充",
+            "Deepseek官方"
+          ]
+        },
+        {
+          "id": "混元3",
+          "label": "混元3",
+          "enable": [
+            "硅基流动或其他",
+            "☆混元3预填充"
+          ],
+          "disable": [
+            "☆Gemini预填充",
             "Deepseek官方"
           ]
         },
@@ -48,8 +84,24 @@
             "硅基流动或其他"
           ],
           "disable": [
+            "☆混元3预填充",
             "☆Gemini预填充",
             "Deepseek官方"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "MVU适配",
+      "label": "MVU适配",
+      "mode": "multiple",
+      "options": [
+        {
+          "id": "MVU适配",
+          "label": "强制输出Mvu变量",
+          "description": "仅Mvu卡打开",
+          "enable": [
+            "MVU强制 - 掉格式打开"
           ]
         }
       ]
@@ -150,6 +202,25 @@
       ]
     },
     {
+      "id": "叙事者",
+      "label": "叙事者",
+      "mode": "single",
+      "options": [
+        {
+          "id": "叙事者",
+          "label": "{match}",
+          "type": "between",
+          "match": {
+            "below": "/(.*)===叙事者(.*)===/",
+            "above": "/(.*)===字数要求(.*)===/"
+          },
+          "enable": [
+            "{match}"
+          ]
+        }
+      ]
+    },
+    {
       "id": "字数要求",
       "label": "字数要求",
       "mode": "single",
@@ -180,6 +251,25 @@
           "match": {
             "below": "/(.*)===其他设定(.*)===/",
             "above": "/(.*)===设定结束(.*)===/"
+          },
+          "enable": [
+            "{match}"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "输出模式",
+      "label": "输出模式",
+      "mode": "single",
+      "options": [
+        {
+          "id": "输出模式",
+          "label": "{match}",
+          "type": "between",
+          "match": {
+            "below": "/(.*)===输出模式(.*)===/",
+            "above": "/(.*)===预填充(.*)===/"
           },
           "enable": [
             "{match}"

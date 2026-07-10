@@ -1,0 +1,18 @@
+{
+  "id": "77be6471-bf48-40e7-9215-ddaad572dbfa",
+  "scriptName": "[🦋美化]梦境状态栏",
+  "outputFile": "梦境状态栏正则UI.json",
+  "wrapInBody": false,
+  "findRegex": "/<dream_scene>\\s*<date>\\s*([\\s\\S]*?)\\s*<\\/date>\\s*<time>\\s*([\\s\\S]*?)\\s*<\\/time>\\s*<location>\\s*([\\s\\S]*?)\\s*<\\/location>\\s*<\\/dream_scene>/gm",
+  "trimStrings": [],
+  "placement": [
+    2
+  ],
+  "disabled": false,
+  "markdownOnly": true,
+  "promptOnly": false,
+  "runOnEdit": true,
+  "substituteRegex": 0,
+  "minDepth": null,
+  "maxDepth": null
+}

@@ -1,6 +1,11 @@
 import { checkMinimumVersion } from '@util/common';
 import { destroyPresetAdapterPopup, openPresetAdapterPopup, refreshPresetAdapterPopup } from './popup';
-import { SCRIPT_NAME, readScriptButtonName } from './store';
+import {
+  SCRIPT_NAME,
+  markGeneratedMessageAsSummaryIfMatched,
+  readScriptButtonName,
+  setTavernGenerationInProgress,
+} from './store';
 
 const WAND_CONTAINER_ID = 'sleep-preset-adapter-wand-container';
 const WAND_BUTTON_ID = 'sleep-preset-adapter-wand-button';
@@ -100,11 +105,27 @@ $(() => {
   const preset_changed_event = eventOn(tavern_events.PRESET_CHANGED, () => {
     refreshPresetAdapterPopup();
   });
+  const generation_started_event = eventOn(tavern_events.GENERATION_STARTED, () => {
+    setTavernGenerationInProgress(true);
+    refreshPresetAdapterPopup();
+  });
+  const generation_stopped_event = eventOn(tavern_events.GENERATION_STOPPED, () => {
+    setTavernGenerationInProgress(false);
+    refreshPresetAdapterPopup();
+  });
+  const summary_detect_event = eventOn(tavern_events.GENERATION_ENDED, message_id => {
+    setTavernGenerationInProgress(false);
+    markGeneratedMessageAsSummaryIfMatched(message_id);
+    refreshPresetAdapterPopup();
+  });
   const { destroy: destroyWandMenuButton } = mountWandMenuButton();
 
   $(window).on('pagehide', () => {
     script_button_event.stop();
     preset_changed_event.stop();
+    generation_started_event.stop();
+    generation_stopped_event.stop();
+    summary_detect_event.stop();
     destroyWandMenuButton();
     destroyPresetAdapterPopup();
   });
