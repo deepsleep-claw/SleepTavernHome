@@ -1,12 +1,18 @@
+import {
+  type DebugContentStore,
+  IndexedDbDebugStorage,
+  openIndexedDbDebugStorage,
+  SQUASH_DEBUG_DATABASE_NAME,
+} from './debug_storage';
+
 export const SQUASH_DEBUG_GLOBAL_KEY = '__dream_whale_squash_debug_api__';
 
-const STORAGE_KEY = 'dream-whale:squash-debug-records';
-const CONTENT_STORAGE_KEY = 'dream-whale:squash-debug-contents';
+const LEGACY_STORAGE_KEY = 'dream-whale:squash-debug-records';
+const LEGACY_CONTENT_STORAGE_KEY = 'dream-whale:squash-debug-contents';
 const MAX_RECORDS = 50;
 const CONTENT_PREVIEW_LENGTH = 120;
 
 type DebugState = Record<string, any>;
-type DebugContentStore = Record<string, Record<string, string>>;
 
 export type SquashDebugRecord = {
   id: string;
@@ -26,18 +32,30 @@ export type SquashDebugRecord = {
 };
 
 export type SquashDebugApi = {
-  clearRecords: () => void;
-  getContent: (record_id: string, content_id: string) => string | undefined;
+  clearRecords: () => Promise<void>;
+  database_name: string;
+  getContent: (record_id: string, content_id: string) => Promise<string | undefined>;
   getRecords: () => SquashDebugRecord[];
   max_records: number;
-  storage_key: string;
+  ready: Promise<void>;
   subscribe: (callback: (records: SquashDebugRecord[]) => void) => { stop: () => void };
-  version: 1;
+  version: 2;
+};
+
+type LegacyDebugData = {
+  contents: DebugContentStore;
+  has_data: boolean;
+  records: SquashDebugRecord[];
 };
 
 const listeners = new Set<(records: SquashDebugRecord[]) => void>();
-let records = readRecords();
-let content_store = readContentStore();
+const session_content_store = new Map<string, Record<string, string>>();
+let records: SquashDebugRecord[] = [];
+let storage: IndexedDbDebugStorage<SquashDebugRecord> | undefined;
+let storage_initialization_started = false;
+let storage_ready: Promise<void> = Promise.resolve();
+let storage_queue: Promise<void> = Promise.resolve();
+let storage_warning_emitted = false;
 
 function getHostWindow(): Window {
   return window.parent ?? window;
@@ -47,66 +65,171 @@ function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
-function readRecords(): SquashDebugRecord[] {
+function getRecordTimestamp(record: SquashDebugRecord): number {
+  const timestamp = Date.parse(record.created_at);
+  return Number.isNaN(timestamp) ? 0 : timestamp;
+}
+
+function sortAndLimitRecords(values: SquashDebugRecord[]): SquashDebugRecord[] {
+  return values
+    .sort((left, right) => getRecordTimestamp(right) - getRecordTimestamp(left) || right.id.localeCompare(left.id))
+    .slice(0, MAX_RECORDS);
+}
+
+function isSquashDebugRecord(value: unknown): value is SquashDebugRecord {
+  return (
+    _.isPlainObject(value) &&
+    typeof (value as SquashDebugRecord).id === 'string' &&
+    typeof (value as SquashDebugRecord).created_at === 'string' &&
+    typeof (value as SquashDebugRecord).title === 'string' &&
+    _.isPlainObject((value as SquashDebugRecord).summary) &&
+    _.isPlainObject((value as SquashDebugRecord).state)
+  );
+}
+
+function readLegacyDebugData(): LegacyDebugData {
+  let records_raw: string | null;
+  let contents_raw: string | null;
   try {
-    const raw = getHostWindow().localStorage.getItem(STORAGE_KEY);
-    if (!raw) {
-      return [];
+    const local_storage = getHostWindow().localStorage;
+    records_raw = local_storage.getItem(LEGACY_STORAGE_KEY);
+    contents_raw = local_storage.getItem(LEGACY_CONTENT_STORAGE_KEY);
+  } catch (error) {
+    console.warn('[压缩相邻消息] 无法读取旧版 Debug 数据，将跳过迁移。', error);
+    return { contents: {}, has_data: false, records: [] };
+  }
+
+  let legacy_records: SquashDebugRecord[] = [];
+  if (records_raw) {
+    try {
+      const parsed = JSON.parse(records_raw) as unknown;
+      legacy_records = Array.isArray(parsed) ? parsed.filter(isSquashDebugRecord) : [];
+    } catch (error) {
+      console.warn('[压缩相邻消息] 旧版 Debug 记录格式无效，将忽略记录列表。', error);
     }
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.slice(0, MAX_RECORDS) : [];
-  } catch (error) {
-    console.warn('[压缩相邻消息] 读取 Debug 本地记录失败。', error);
-    return [];
   }
-}
 
-function readContentStore(): DebugContentStore {
-  try {
-    const raw = getHostWindow().localStorage.getItem(CONTENT_STORAGE_KEY);
-    if (!raw) {
-      return {};
+  const legacy_contents: DebugContentStore = {};
+  if (contents_raw) {
+    try {
+      const parsed = JSON.parse(contents_raw) as unknown;
+      if (_.isPlainObject(parsed)) {
+        Object.entries(parsed as Record<string, unknown>).forEach(([record_id, value]) => {
+          if (!_.isPlainObject(value)) {
+            return;
+          }
+          const record_contents = Object.fromEntries(
+            Object.entries(value as Record<string, unknown>).filter(
+              (entry): entry is [string, string] => typeof entry[1] === 'string',
+            ),
+          );
+          if (Object.keys(record_contents).length > 0) {
+            legacy_contents[record_id] = record_contents;
+          }
+        });
+      }
+    } catch (error) {
+      console.warn('[压缩相邻消息] 旧版 Debug 正文格式无效，将忽略正文缓存。', error);
     }
-    const parsed = JSON.parse(raw);
-    return _.isPlainObject(parsed) ? parsed : {};
-  } catch (error) {
-    console.warn('[压缩相邻消息] 读取 Debug 正文缓存失败。', error);
-    return {};
   }
+
+  return {
+    contents: legacy_contents,
+    has_data: records_raw !== null || contents_raw !== null,
+    records: legacy_records,
+  };
 }
 
-function writeRecords() {
+function removeLegacyDebugData() {
   try {
-    getHostWindow().localStorage.setItem(STORAGE_KEY, JSON.stringify(records.slice(0, MAX_RECORDS)));
+    const local_storage = getHostWindow().localStorage;
+    local_storage.removeItem(LEGACY_STORAGE_KEY);
+    local_storage.removeItem(LEGACY_CONTENT_STORAGE_KEY);
   } catch (error) {
-    console.warn('[压缩相邻消息] 保存 Debug 本地记录失败。', error);
+    console.warn('[压缩相邻消息] 清理旧版 Debug 数据失败。', error);
   }
 }
 
-function writeContentStore() {
-  try {
-    getHostWindow().localStorage.setItem(CONTENT_STORAGE_KEY, JSON.stringify(content_store));
-  } catch (error) {
-    console.warn('[压缩相邻消息] 保存 Debug 正文缓存失败。', error);
+function fallBackToMemory(error: unknown) {
+  storage?.close();
+  storage = undefined;
+  if (!storage_warning_emitted) {
+    storage_warning_emitted = true;
+    console.warn('[压缩相邻消息] IndexedDB 不可用，Debug 将仅保留在当前会话内存中。', error);
   }
-}
-
-function pruneContentStore() {
-  const record_ids = new Set(records.map(record => record.id));
-  Object.keys(content_store).forEach(record_id => {
-    if (!record_ids.has(record_id)) {
-      delete content_store[record_id];
-    }
-  });
 }
 
 function emitRecords() {
   const snapshot = getRecords();
-  listeners.forEach(listener => listener(snapshot));
+  listeners.forEach(listener => {
+    try {
+      listener(snapshot);
+    } catch (error) {
+      console.warn('[压缩相邻消息] 推送 Debug 记录给订阅者失败。', error);
+    }
+  });
 }
 
 function getRecords(): SquashDebugRecord[] {
   return cloneJson(records);
+}
+
+function pruneSessionContents() {
+  const retained_ids = new Set(records.map(record => record.id));
+  session_content_store.forEach((_contents, record_id) => {
+    if (!retained_ids.has(record_id)) {
+      session_content_store.delete(record_id);
+    }
+  });
+}
+
+async function initializeStorage(): Promise<void> {
+  try {
+    const backend = await openIndexedDbDebugStorage<SquashDebugRecord>(getHostWindow());
+    storage = backend;
+    const legacy = readLegacyDebugData();
+    if (legacy.has_data) {
+      await backend.importLegacy(legacy.records, legacy.contents, MAX_RECORDS);
+      removeLegacyDebugData();
+    } else {
+      await backend.cleanup(MAX_RECORDS);
+    }
+
+    const stored_records = await backend.loadRecords(MAX_RECORDS);
+    const merged_records = new Map(stored_records.map(record => [record.id, record]));
+    records.forEach(record => merged_records.set(record.id, record));
+    records = sortAndLimitRecords([...merged_records.values()]);
+    pruneSessionContents();
+    emitRecords();
+  } catch (error) {
+    fallBackToMemory(error);
+  }
+}
+
+function ensureStorageInitialized(): Promise<void> {
+  if (!storage_initialization_started) {
+    storage_initialization_started = true;
+    storage_ready = initializeStorage();
+  }
+  return storage_ready;
+}
+
+function enqueueStorage(
+  operation: (backend: IndexedDbDebugStorage<SquashDebugRecord>) => Promise<void>,
+): Promise<void> {
+  storage_queue = storage_queue.then(async () => {
+    await ensureStorageInitialized();
+    const backend = storage;
+    if (!backend) {
+      return;
+    }
+    try {
+      await operation(backend);
+    } catch (error) {
+      fallBackToMemory(error);
+    }
+  });
+  return storage_queue;
 }
 
 function getRecordId(): string {
@@ -179,41 +302,67 @@ function getSummary(state: DebugState): SquashDebugRecord['summary'] {
 }
 
 export function publishSquashDebugRecord(title: string, state: DebugState) {
+  void ensureStorageInitialized();
   const id = getRecordId();
   const { state: state_snapshot, contents } = createSanitizedDebugState(state);
-  records = [
-    {
-      id,
-      created_at: new Date().toISOString(),
-      title,
-      summary: getSummary(state_snapshot),
-      state: state_snapshot,
-    },
-    ...records,
-  ].slice(0, MAX_RECORDS);
+  const record: SquashDebugRecord = {
+    id,
+    created_at: new Date().toISOString(),
+    title,
+    summary: getSummary(state_snapshot),
+    state: state_snapshot,
+  };
+  records = sortAndLimitRecords([record, ...records]);
   if (Object.keys(contents).length > 0) {
-    content_store[id] = contents;
+    session_content_store.set(id, contents);
   }
-  pruneContentStore();
-  writeRecords();
-  writeContentStore();
+  pruneSessionContents();
   emitRecords();
+
+  void enqueueStorage(async backend => {
+    await backend.saveRecord(record, contents, MAX_RECORDS);
+    if (session_content_store.get(id) === contents) {
+      session_content_store.delete(id);
+    }
+  });
+}
+
+async function getContent(record_id: string, content_id: string): Promise<string | undefined> {
+  const session_contents = session_content_store.get(record_id);
+  if (session_contents && Object.hasOwn(session_contents, content_id)) {
+    return session_contents[content_id];
+  }
+
+  await ensureStorageInitialized();
+  const backend = storage;
+  if (!backend) {
+    return undefined;
+  }
+  try {
+    return await backend.getContent(record_id, content_id);
+  } catch (error) {
+    fallBackToMemory(error);
+    return undefined;
+  }
+}
+
+async function clearRecords(): Promise<void> {
+  records = [];
+  session_content_store.clear();
+  emitRecords();
+  await enqueueStorage(backend => backend.clear());
+  removeLegacyDebugData();
 }
 
 export function initializeSquashDebugGlobal(): { destroy: () => void } {
   const host_window = getHostWindow() as Window & { [SQUASH_DEBUG_GLOBAL_KEY]?: SquashDebugApi };
   const api: SquashDebugApi = {
-    clearRecords: () => {
-      records = [];
-      content_store = {};
-      writeRecords();
-      writeContentStore();
-      emitRecords();
-    },
-    getContent: (record_id, content_id) => content_store[record_id]?.[content_id],
+    clearRecords,
+    database_name: SQUASH_DEBUG_DATABASE_NAME,
+    getContent,
     getRecords,
     max_records: MAX_RECORDS,
-    storage_key: STORAGE_KEY,
+    ready: ensureStorageInitialized(),
     subscribe: callback => {
       listeners.add(callback);
       callback(getRecords());
@@ -223,7 +372,7 @@ export function initializeSquashDebugGlobal(): { destroy: () => void } {
         },
       };
     },
-    version: 1,
+    version: 2,
   };
 
   host_window[SQUASH_DEBUG_GLOBAL_KEY] = api;

@@ -1409,15 +1409,8 @@ function mountResponsiveMode(store: ReturnType<typeof useModernLayoutStore>): { 
       return;
     }
 
-    if (body.classList.contains(BODY_CLASS_TEMP_EXPANDED)) {
-      if (!is_sidebar_area) {
-        body.classList.remove(BODY_CLASS_TEMP_EXPANDED);
-      }
-      return;
-    }
-
-    if (is_sidebar_area) {
-      body.classList.add(BODY_CLASS_TEMP_EXPANDED);
+    if (body.classList.contains(BODY_CLASS_TEMP_EXPANDED) && !is_sidebar_area) {
+      body.classList.remove(BODY_CLASS_TEMP_EXPANDED);
     }
   };
 

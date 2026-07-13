@@ -15,9 +15,9 @@ body.th-modern-enabled {
   --th-modern-overlay-reserved-width: 24px;
   --th-modern-overlay-soft-max-width: max(
     0px,
-    calc(100vw - var(--th-modern-left-visual-width) - var(--th-modern-overlay-reserved-width))
+    calc(100vw - var(--th-modern-left-layout-width) - var(--th-modern-overlay-reserved-width))
   );
-  --th-modern-overlay-fullscreen-width: max(0px, calc(100vw - var(--th-modern-left-visual-width)));
+  --th-modern-overlay-fullscreen-width: max(0px, calc(100vw - var(--th-modern-left-layout-width)));
   --th-modern-main-max-width-fallback: 960px;
   --th-modern-main-width-limit: var(--th-modern-main-max-width, var(--th-modern-main-max-width-fallback));
   --th-modern-left-nav-top: 66px;
@@ -1103,11 +1103,11 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
 
   body.th-modern-enabled.th-modern-two-column #top-settings-holder > .drawer > .drawer-content {
     position: fixed !important;
-    inset: 0 auto 0 var(--th-modern-left-visual-width) !important;
+    inset: 0 auto 0 var(--th-modern-left-layout-width) !important;
     top: 0 !important;
     right: auto !important;
     bottom: 0 !important;
-    left: var(--th-modern-left-visual-width) !important;
+    left: var(--th-modern-left-layout-width) !important;
     z-index: var(--th-modern-overlay-z);
     display: flex !important;
     width: min(
@@ -1607,7 +1607,7 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
   body.th-modern-enabled.th-modern-two-column.th-modern-drawer-open:not(.th-modern-drawer-fullscreen)
     #th-modern-overlay-resize-handle {
     left: calc(
-      var(--th-modern-left-visual-width) +
+      var(--th-modern-left-layout-width) +
         min(
           var(--th-modern-overlay-width, var(--th-modern-overlay-width-fallback)),
           var(--th-modern-overlay-soft-max-width)

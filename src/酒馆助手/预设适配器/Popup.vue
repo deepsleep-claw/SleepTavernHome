@@ -50,7 +50,12 @@
       <div class="preset-adapter-actions">
         <template v-if="store.export_mode">
           <span class="preset-adapter-selection-count">已选 {{ store.selected_export_count }} 项</span>
-          <button type="button" class="menu_button" :disabled="store.is_applying" @click="store.exportSelectedOptions()">
+          <button
+            type="button"
+            class="menu_button"
+            :disabled="store.is_applying"
+            @click="store.exportSelectedOptions()"
+          >
             导出
           </button>
           <button type="button" class="menu_button" :disabled="store.is_applying" @click="store.cancelExportMode()">
@@ -75,7 +80,13 @@
             导出
           </button>
         </template>
-        <input ref="import_file_input" type="file" accept="application/json,.json" hidden @change="importPresetSettings" />
+        <input
+          ref="import_file_input"
+          type="file"
+          accept="application/json,.json"
+          hidden
+          @change="importPresetSettings"
+        />
       </div>
 
       <section v-if="store.errors.length > 0" class="preset-adapter-errors">
@@ -110,7 +121,9 @@
                 'preset-adapter-option-export-unavailable': store.export_mode && !option.exportable,
               },
             ]"
-            :disabled="store.is_applying || store.has_blocking_errors || (!store.export_mode && option.status === 'unmatched')"
+            :disabled="
+              store.is_applying || store.has_blocking_errors || (!store.export_mode && option.status === 'unmatched')
+            "
             :title="option.matched_summary"
             @click="handleOptionClick(group.id, option.id)"
           >
@@ -132,15 +145,25 @@
       <template v-else>
         <div class="preset-adapter-stats">
           <span>已总结 {{ store.summary_state.summary_count }} 次</span>
-          <span>发送楼层 {{ store.summary_state.unhidden_message_count }} / {{ store.summary_state.total_message_count }}</span>
+          <span
+            >发送楼层 {{ store.summary_state.unhidden_message_count }} /
+            {{ store.summary_state.total_message_count }}</span
+          >
         </div>
 
         <section class="preset-adapter-summary-section">
           <header class="preset-adapter-summary-inline-header">
             <h4>当前总结楼层</h4>
             <div class="preset-adapter-summary-inline-actions">
-              <button type="button" class="menu_button" :disabled="store.is_applying" @click="addSummaryMessage()">添加</button>
-              <button type="button" class="menu_button" :disabled="store.is_applying" @click="store.scanCurrentSummaryMessages()">
+              <button type="button" class="menu_button" :disabled="store.is_applying" @click="addSummaryMessage()">
+                添加
+              </button>
+              <button
+                type="button"
+                class="menu_button"
+                :disabled="store.is_applying"
+                @click="store.scanCurrentSummaryMessages()"
+              >
                 扫描
               </button>
             </div>
@@ -175,6 +198,17 @@
 
         <details class="preset-adapter-summary-section preset-adapter-summary-panel">
           <summary>当前总结内容</summary>
+          <div class="preset-adapter-summary-content-filter">
+            <label>
+              <input
+                type="checkbox"
+                :checked="store.summary_settings.filter_html_code_blocks"
+                @change="setSummaryFilterHtmlCodeBlocks"
+              />
+              <span>自动过滤 <code>```html</code> 代码块</span>
+            </label>
+            <p class="preset-adapter-description">仅影响此处的总结楼层渲染，不修改聊天原文或转存内容。</p>
+          </div>
           <div v-if="store.summary_state.summary_messages.length === 0" class="preset-adapter-empty">暂无总结楼层</div>
           <div v-else class="preset-adapter-summary-message-list">
             <details
@@ -189,6 +223,7 @@
               </summary>
               <div v-if="!message.exists" class="preset-adapter-empty">该楼层已不存在。</div>
               <div v-else class="preset-adapter-summary-content">
+                <div v-if="message.content_segments.length === 0" class="preset-adapter-empty">过滤后无可显示内容。</div>
                 <div
                   v-for="(segment, segment_index) in message.content_segments"
                   :key="segment_index"
@@ -213,7 +248,11 @@
               </tr>
             </thead>
             <tbody>
-              <tr v-for="row in store.summary_state.floor_rows" :key="row.key" :class="{ 'preset-adapter-summary-total-row': row.total }">
+              <tr
+                v-for="row in store.summary_state.floor_rows"
+                :key="row.key"
+                :class="{ 'preset-adapter-summary-total-row': row.total }"
+              >
                 <td>{{ row.range }}</td>
                 <td>{{ row.status }}</td>
                 <td>{{ row.token_count }}</td>
@@ -234,7 +273,7 @@
           </table>
         </details>
 
-        <details class="preset-adapter-summary-section preset-adapter-summary-panel preset-adapter-summary-settings">
+        <details class="preset-adapter-summary-section preset-adapter-summary-panel preset-adapter-summary-settings" open>
           <summary>总结功能设置</summary>
 
           <div class="preset-adapter-summary-setting-block">
@@ -263,87 +302,106 @@
                 <option value="first_message">放置于首层</option>
               </select>
             </label>
-            <label>
-              <span>总结结束后</span>
-              <select :value="store.summary_settings.after_summary" @change="setSummaryAfterAction">
-                <option value="none">无动作</option>
-                <option value="hide_summary_message">隐藏总结楼层</option>
-              </select>
-            </label>
           </div>
-          <p class="preset-adapter-description">若总结内容处理为放置于世界书或放置于首层，推荐开启隐藏总结楼层。</p>
+
+          <label class="preset-adapter-summary-standalone-option">
+            <input
+              type="checkbox"
+              :checked="store.summary_settings.manual_prompt_enabled"
+              @change="setSummaryManualPromptEnabled"
+            />
+            <span>
+              <strong>手动输入总结需求</strong>
+              <small>开始总结时弹出输入框；未开启时发送“开始总结”。</small>
+            </span>
+          </label>
+
+          <section class="preset-adapter-summary-subsettings">
+            <h4>总结后隐藏楼层设置</h4>
+            <div class="preset-adapter-summary-subsettings-body">
+              <p class="preset-adapter-description">
+                若总结内容处理为放置于世界书或放置于首层，推荐开启隐藏总结楼层。
+              </p>
+              <div class="preset-adapter-summary-checkbox-grid">
+                <label>
+                  <input
+                    type="checkbox"
+                    :checked="store.summary_settings.hide_rules.hide_first"
+                    @change="setSummaryHideRule('hide_first', $event)"
+                  />
+                  <span>隐藏首层</span>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    :checked="store.summary_settings.hide_rules.hide_user"
+                    @change="setSummaryHideRule('hide_user', $event)"
+                  />
+                  <span>隐藏用户输入楼层</span>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    :checked="store.summary_settings.hide_rules.hide_assistant_system"
+                    @change="setSummaryHideRule('hide_assistant_system', $event)"
+                  />
+                  <span>隐藏系统/助手楼层</span>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    :checked="store.summary_settings.hide_rules.hide_summary"
+                    @change="setSummaryHideRule('hide_summary', $event)"
+                  />
+                  <span>隐藏总结楼层</span>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    :checked="store.summary_settings.hide_rules.auto_hide_after_manual"
+                    @change="setSummaryHideRule('auto_hide_after_manual', $event)"
+                  />
+                  <span>手动总结后自动隐藏楼层</span>
+                </label>
+              </div>
+
+              <div class="preset-adapter-actions">
+                <button
+                  type="button"
+                  class="menu_button"
+                  :disabled="store.is_applying"
+                  @click="confirmApplySummaryHideOnly()"
+                >
+                  一键隐藏
+                </button>
+                <button
+                  type="button"
+                  class="menu_button"
+                  :disabled="store.is_applying"
+                  @click="confirmSyncSummaryHideRules()"
+                >
+                  一键隐藏（取消隐藏非设置楼层）
+                </button>
+                <button
+                  type="button"
+                  class="menu_button"
+                  :disabled="store.is_applying"
+                  @click="confirmUnhideSummaryAll()"
+                >
+                  全部取消隐藏
+                </button>
+              </div>
+            </div>
+          </section>
         </details>
-
-        <section class="preset-adapter-summary-section">
-          <h4>隐藏楼层设置</h4>
-          <div class="preset-adapter-summary-checkbox-grid">
-            <label>
-              <input
-                type="checkbox"
-                :checked="store.summary_settings.hide_rules.hide_first"
-                @change="setSummaryHideRule('hide_first', $event)"
-              />
-              <span>隐藏首层</span>
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                :checked="store.summary_settings.hide_rules.hide_user"
-                @change="setSummaryHideRule('hide_user', $event)"
-              />
-              <span>隐藏用户输入楼层</span>
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                :checked="store.summary_settings.hide_rules.hide_assistant_system"
-                @change="setSummaryHideRule('hide_assistant_system', $event)"
-              />
-              <span>隐藏系统/助手楼层</span>
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                :checked="store.summary_settings.hide_rules.hide_summary"
-                @change="setSummaryHideRule('hide_summary', $event)"
-              />
-              <span>隐藏总结楼层</span>
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                :checked="store.summary_settings.hide_rules.auto_hide_after_manual"
-                @change="setSummaryHideRule('auto_hide_after_manual', $event)"
-              />
-              <span>手动总结后自动隐藏楼层</span>
-            </label>
-          </div>
-
-          <div class="preset-adapter-actions">
-            <button type="button" class="menu_button" :disabled="store.is_applying" @click="confirmApplySummaryHideOnly()">
-              一键隐藏
-            </button>
-            <button type="button" class="menu_button" :disabled="store.is_applying" @click="confirmSyncSummaryHideRules()">
-              一键隐藏（取消隐藏非设置楼层）
-            </button>
-            <button type="button" class="menu_button" :disabled="store.is_applying" @click="confirmUnhideSummaryAll()">
-              全部取消隐藏
-            </button>
-          </div>
-        </section>
 
         <button
           type="button"
           class="menu_button preset-adapter-summary-start"
-          :disabled="
-            store.is_applying ||
-            store.is_summary_running ||
-            store.is_generation_in_progress ||
-            !store.summary_generation_status.can_start
-          "
+          :disabled="store.is_applying || store.is_summary_running || !store.summary_generation_status.can_start"
           @click="confirmStartSummary()"
         >
-          {{ store.is_generation_in_progress && !store.is_summary_running ? '生成中...' : store.is_summary_running ? '总结中...' : '开始总结' }}
+          {{ store.is_summary_running ? '总结中...' : '开始总结' }}
         </button>
       </template>
     </section>
@@ -359,14 +417,15 @@
             <button
               type="button"
               class="menu_button"
-              :disabled="store.debug_records.length === 0"
+              :disabled="store.debug_loading || store.debug_records.length === 0"
               @click="store.clearDebugRecords()"
             >
               清空
             </button>
           </header>
 
-          <div v-if="store.debug_records.length === 0" class="preset-adapter-empty">暂无 Debug 信息</div>
+          <div v-if="store.debug_loading" class="preset-adapter-empty">正在载入 Debug 信息…</div>
+          <div v-else-if="store.debug_records.length === 0" class="preset-adapter-empty">暂无 Debug 信息</div>
           <div v-else class="preset-adapter-debug-record-list">
             <button
               v-for="record in store.debug_records"
@@ -379,7 +438,8 @@
               <strong>{{ record.title }}</strong>
               <small>{{ formatDebugTime(record.created_at) }}</small>
               <span class="preset-adapter-debug-record-summary">
-                总排序 {{ record.summary.total_rows }} · 触发 {{ record.summary.triggered_rows }} · 错误 {{ record.summary.error_count }}
+                总排序 {{ record.summary.total_rows }} · 触发 {{ record.summary.triggered_rows }} · 错误
+                {{ record.summary.error_count }}
               </span>
             </button>
           </div>
@@ -412,7 +472,11 @@
                     <dd>
                       <template v-if="field.key === '详细内容'">
                         <span>{{ field.preview }}</span>
-                        <button type="button" class="menu_button" @click="openDebugRowContentModal('总排序 - 详细内容', entry.row)">
+                        <button
+                          type="button"
+                          class="menu_button"
+                          @click="openDebugRowContentModal('总排序 - 详细内容', entry.row)"
+                        >
                           详情
                         </button>
                       </template>
@@ -489,7 +553,8 @@
               文件名：{{ store.review_panel.filename }}
             </p>
             <p v-else class="preset-adapter-description">
-              匹配成功 {{ store.review_panel.items.length }} 项，匹配失败 {{ store.review_panel.failed_items.length }} 项。导入后会自动保存当前预设，所有导入项默认关闭。
+              匹配成功 {{ store.review_panel.items.length }} 项，匹配失败
+              {{ store.review_panel.failed_items.length }} 项。导入后会自动保存当前预设，所有导入项默认关闭。
             </p>
           </div>
           <button
@@ -516,7 +581,9 @@
             >
               <div class="preset-adapter-review-item-main">
                 <span class="preset-adapter-review-badge preset-adapter-review-badge-failed">匹配失败</span>
-                <span class="preset-adapter-review-badge preset-adapter-review-badge-append">{{ item.action_label }}</span>
+                <span class="preset-adapter-review-badge preset-adapter-review-badge-append">{{
+                  item.action_label
+                }}</span>
                 <strong>{{ item.name }}</strong>
               </div>
               <p>{{ item.group_id }} / {{ item.match_id }}</p>
@@ -533,10 +600,7 @@
             <div v-if="store.review_panel.items.length === 0" class="preset-adapter-empty">没有匹配成功的设置</div>
             <article v-for="item in store.review_panel.items" :key="item.key" class="preset-adapter-review-item">
               <div class="preset-adapter-review-item-main">
-                <span
-                  class="preset-adapter-review-badge"
-                  :class="`preset-adapter-review-badge-${item.action}`"
-                >
+                <span class="preset-adapter-review-badge" :class="`preset-adapter-review-badge-${item.action}`">
                   {{ item.action_label }}
                 </span>
                 <strong>{{ item.name }}</strong>
@@ -552,7 +616,12 @@
 
         <footer class="preset-adapter-review-footer">
           <template v-if="store.review_panel.kind === 'export'">
-            <button type="button" class="menu_button" :disabled="store.is_applying" @click="store.confirmExportReview()">
+            <button
+              type="button"
+              class="menu_button"
+              :disabled="store.is_applying"
+              @click="store.confirmExportReview()"
+            >
               导出
             </button>
             <button type="button" class="menu_button" :disabled="store.is_applying" @click="store.closeReviewPanel()">
@@ -586,7 +655,6 @@
 
 <script setup lang="ts">
 import {
-  type SummaryAfterAction,
   type SummaryContentHandling,
   type SummaryHideRules,
   usePresetAdapterStore,
@@ -596,6 +664,7 @@ const store = usePresetAdapterStore();
 const option_count = computed(() => store.groups.reduce((total, group) => total + group.options.length, 0));
 const import_file_input = ref<HTMLInputElement>();
 const debug_text_modal = ref<{ content: string; title: string }>();
+let debug_content_request_serial = 0;
 const selected_debug_record = computed(() => store.selected_debug_record);
 const debug_total_rows = computed(() => getDebugRows(selected_debug_record.value?.state.total_rows));
 const debug_triggered_rows = computed(() => getTriggeredDebugRows(selected_debug_record.value?.state.triggered_rows));
@@ -663,8 +732,12 @@ function setSummaryContentHandling(event: Event) {
   store.setSummaryContentHandling(getEventValue(event) as SummaryContentHandling);
 }
 
-function setSummaryAfterAction(event: Event) {
-  store.setSummaryAfterAction(getEventValue(event) as SummaryAfterAction);
+function setSummaryFilterHtmlCodeBlocks(event: Event) {
+  store.setSummaryFilterHtmlCodeBlocks(getEventChecked(event));
+}
+
+function setSummaryManualPromptEnabled(event: Event) {
+  store.setSummaryManualPromptEnabled(getEventChecked(event));
 }
 
 function setSummaryHideRule(rule: keyof SummaryHideRules, event: Event) {
@@ -805,14 +878,38 @@ function formatDebugTime(value: string): string {
 }
 
 function openDebugTextModal(title: string, content: string) {
+  debug_content_request_serial += 1;
   debug_text_modal.value = { content, title };
 }
 
-function openDebugRowContentModal(title: string, row: DebugRow) {
+async function openDebugRowContentModal(title: string, row: DebugRow) {
   const record_id = selected_debug_record.value?.id;
   const content_id = typeof row.详细内容缓存键 === 'string' ? row.详细内容缓存键 : undefined;
-  const cached_content = record_id && content_id ? store.getDebugContent(record_id, content_id) : undefined;
-  openDebugTextModal(title, cached_content ?? getDebugValueText(row.详细内容));
+  const fallback_content = getDebugValueText(row.详细内容);
+  if (!record_id || !content_id) {
+    openDebugTextModal(title, fallback_content);
+    return;
+  }
+
+  const request_serial = ++debug_content_request_serial;
+  debug_text_modal.value = { content: '正在从 Debug 存储读取完整正文…', title };
+  try {
+    const content = await store.getDebugContent(record_id, content_id);
+    if (debug_content_request_serial !== request_serial) {
+      return;
+    }
+    if (content === undefined) {
+      toastr.warning('未找到完整 Debug 正文，已显示现有预览。');
+    }
+    debug_text_modal.value = { content: content ?? fallback_content, title };
+  } catch (error) {
+    if (debug_content_request_serial !== request_serial) {
+      return;
+    }
+    console.warn('[预设适配器] 读取 Debug 正文失败。', { content_id, error, record_id });
+    toastr.warning('读取完整 Debug 正文失败，已显示现有预览。');
+    debug_text_modal.value = { content: fallback_content, title };
+  }
 }
 
 function openDebugRawModal() {
@@ -823,6 +920,7 @@ function openDebugRawModal() {
 }
 
 function closeDebugTextModal() {
+  debug_content_request_serial += 1;
   debug_text_modal.value = undefined;
 }
 </script>
@@ -831,8 +929,8 @@ function closeDebugTextModal() {
 .preset-adapter-floating-window {
   position: fixed;
   z-index: 4000;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   box-sizing: border-box;
   overflow: hidden;
   border: 1px solid var(--SmartThemeBorderColor);
@@ -885,13 +983,16 @@ function closeDebugTextModal() {
 }
 
 .preset-adapter-floating-body {
-  display: flex;
-  flex-direction: column;
-  flex: 1 1 auto;
+  box-sizing: border-box;
+  min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 0.75rem;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   scrollbar-gutter: stable;
+  touch-action: pan-y;
 }
 
 .preset-adapter-floating-resize {
@@ -931,16 +1032,11 @@ function closeDebugTextModal() {
 .preset-adapter-root {
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
   gap: 0.7rem;
-  min-height: 0;
+  min-width: 0;
+  min-height: 100%;
   color: var(--SmartThemeBodyColor);
   container-type: inline-size;
-}
-
-.preset-adapter-root-summary {
-  flex: 0 0 auto;
-  min-height: 100%;
 }
 
 .preset-adapter-header {
@@ -1144,6 +1240,27 @@ function closeDebugTextModal() {
   padding: 0.65rem;
 }
 
+.preset-adapter-summary-content-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-left: 0.75rem;
+  border: 1px solid var(--SmartThemeBorderColor);
+  border-radius: 8px;
+  padding: 0.55rem 0.65rem;
+  background-color: var(--black30a);
+}
+
+.preset-adapter-summary-content-filter label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.preset-adapter-summary-content-filter code {
+  color: var(--SmartThemeQuoteColor);
+}
+
 .preset-adapter-summary-rendered {
   line-height: 1.55;
   overflow-wrap: anywhere;
@@ -1276,6 +1393,54 @@ function closeDebugTextModal() {
 
 .preset-adapter-summary-setting-grid select {
   width: 100%;
+}
+
+.preset-adapter-summary-standalone-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  border: 1px solid var(--SmartThemeBorderColor);
+  border-radius: 8px;
+  padding: 0.65rem;
+  background-color: var(--black30a);
+  cursor: pointer;
+}
+
+.preset-adapter-summary-standalone-option input {
+  flex: 0 0 auto;
+  margin-top: 0.2rem;
+}
+
+.preset-adapter-summary-standalone-option > span {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.15rem;
+}
+
+.preset-adapter-summary-standalone-option small {
+  color: var(--SmartThemeEmColor);
+  font-weight: 400;
+  line-height: 1.4;
+}
+
+.preset-adapter-summary-subsettings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  border-top: 1px solid var(--SmartThemeBorderColor);
+  padding-top: 0.65rem;
+}
+
+.preset-adapter-summary-subsettings > h4 {
+  margin: 0;
+  line-height: 1.25;
+}
+
+.preset-adapter-summary-subsettings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
 }
 
 .preset-adapter-summary-inline-header {

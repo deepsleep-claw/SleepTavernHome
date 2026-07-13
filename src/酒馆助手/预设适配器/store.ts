@@ -13,28 +13,30 @@ const PromptMatcherSchema = z.union([
   z.object({ regex: z.string().min(1), flags: z.string().default('') }),
 ]);
 
-const AdapterOptionSchema = z.object({
-  id: z.string().min(1),
-  label: z.string().min(1),
-  description: z.string().default(''),
-  type: z.enum(['between']).optional(),
-  match: z
-    .object({
-      below: z.string(),
-      above: z.string(),
-    })
-    .optional(),
-  enable: z.array(PromptMatcherSchema).default([]),
-  disable: z.array(PromptMatcherSchema).default([]),
-}).superRefine((option, context) => {
-  if (option.type === 'between' && !option.match) {
-    context.addIssue({
-      code: 'custom',
-      path: ['match'],
-      message: 'type 为 between 时必须填写 match.below 和 match.above',
-    });
-  }
-});
+const AdapterOptionSchema = z
+  .object({
+    id: z.string().min(1),
+    label: z.string().min(1),
+    description: z.string().default(''),
+    type: z.enum(['between']).optional(),
+    match: z
+      .object({
+        below: z.string(),
+        above: z.string(),
+      })
+      .optional(),
+    enable: z.array(PromptMatcherSchema).default([]),
+    disable: z.array(PromptMatcherSchema).default([]),
+  })
+  .superRefine((option, context) => {
+    if (option.type === 'between' && !option.match) {
+      context.addIssue({
+        code: 'custom',
+        path: ['match'],
+        message: 'type 为 between 时必须填写 match.below 和 match.above',
+      });
+    }
+  });
 
 const AdapterGroupSchema = z.object({
   id: z.string().min(1),
@@ -63,12 +65,14 @@ const SummaryHideRulesSchema = z
 const SummarySettingsSchema = z
   .object({
     content_handling: z.enum(['direct', 'worldbook', 'first_message']).default('direct'),
-    after_summary: z.enum(['none', 'hide_summary_message']).default('none'),
+    filter_html_code_blocks: z.boolean().default(true),
+    manual_prompt_enabled: z.boolean().default(false),
     hide_rules: SummaryHideRulesSchema,
   })
   .default({
     content_handling: 'direct',
-    after_summary: 'none',
+    filter_html_code_blocks: true,
+    manual_prompt_enabled: false,
     hide_rules: SummaryHideRulesSchema.parse({}),
   });
 
@@ -139,7 +143,6 @@ export type SummaryConfig = z.infer<typeof SummaryConfigSchema>;
 export type SummarySettings = z.infer<typeof SummarySettingsSchema>;
 export type SummaryHideRules = z.infer<typeof SummaryHideRulesSchema>;
 export type SummaryContentHandling = SummarySettings['content_handling'];
-export type SummaryAfterAction = SummarySettings['after_summary'];
 type ExportSource = {
   group_id: string;
   match_id: string;
@@ -255,15 +258,28 @@ type SquashDebugRecord = {
   state: Record<string, any>;
 };
 
-type SquashDebugApi = {
-  clearRecords: () => void;
-  getContent: (record_id: string, content_id: string) => string | undefined;
+type SquashDebugApiCommon = {
   getRecords: () => SquashDebugRecord[];
   max_records: number;
-  storage_key: string;
   subscribe: (callback: (records: SquashDebugRecord[]) => void) => { stop: () => void };
+};
+
+type SquashDebugApiV1 = SquashDebugApiCommon & {
+  clearRecords: () => void;
+  getContent: (record_id: string, content_id: string) => string | undefined;
+  storage_key: string;
   version: 1;
 };
+
+type SquashDebugApiV2 = SquashDebugApiCommon & {
+  clearRecords: () => Promise<void>;
+  database_name: string;
+  getContent: (record_id: string, content_id: string) => Promise<string | undefined>;
+  ready: Promise<void>;
+  version: 2;
+};
+
+type SquashDebugApi = SquashDebugApiV1 | SquashDebugApiV2;
 
 type ImportAction = 'create' | 'overwrite';
 
@@ -345,17 +361,26 @@ type CompiledSummaryRegex = {
   regex: RegExp;
 };
 
-let tavern_generation_in_progress = false;
-const tavern_generation_watchers = new Set<(value: boolean) => void>();
+const manual_summary_running = ref(false);
+let manual_summary_task: Promise<void> | undefined;
 let summary_token_refresh_serial = 0;
 const summary_token_count_cache = new Map<string, number>();
 
-function readTavernGenerationInProgress(): boolean {
+function isHostGenerationInProgress(): boolean {
   try {
-    const tavern = SillyTavern as unknown as { isGenerating?: () => boolean };
-    return tavern.isGenerating?.() ?? tavern_generation_in_progress;
+    const host_window = window.parent ?? window;
+    const host_document = host_window.document;
+    const generating = host_document.body?.getAttribute('data-generating');
+    if (generating !== null && generating !== 'false') {
+      return true;
+    }
+
+    return [...host_document.querySelectorAll<HTMLElement>('#mes_stop, .mes_stop')].some(element => {
+      const style = host_window.getComputedStyle(element);
+      return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0;
+    });
   } catch {
-    return tavern_generation_in_progress;
+    return false;
   }
 }
 
@@ -371,19 +396,6 @@ function normalizeError(error: unknown): string {
 
 function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
-}
-
-export function setTavernGenerationInProgress(value: boolean) {
-  tavern_generation_in_progress = value;
-  tavern_generation_watchers.forEach(listener => listener(value));
-}
-
-function subscribeTavernGenerationInProgress(listener: (value: boolean) => void): { stop: () => void } {
-  tavern_generation_watchers.add(listener);
-  listener(tavern_generation_in_progress);
-  return {
-    stop: () => tavern_generation_watchers.delete(listener),
-  };
 }
 
 function getCurrentChatIdSafe(): string {
@@ -415,7 +427,9 @@ function normalizeSummaryMessageIds(value: unknown): number[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return [...new Set(value.filter((id): id is number => Number.isInteger(id) && id >= 0))].sort((lhs, rhs) => lhs - rhs);
+  return [...new Set(value.filter((id): id is number => Number.isInteger(id) && id >= 0))].sort(
+    (lhs, rhs) => lhs - rhs,
+  );
 }
 
 function normalizeSummaryChatVariables(value: unknown): SummaryChatVariables {
@@ -425,9 +439,10 @@ function normalizeSummaryChatVariables(value: unknown): SummaryChatVariables {
       summary_message_ids: [],
     };
   }
+  const variables = value as Record<string, unknown>;
   return {
     version: SUMMARY_VARIABLE_VERSION,
-    summary_message_ids: normalizeSummaryMessageIds(value.summary_message_ids),
+    summary_message_ids: normalizeSummaryMessageIds(variables.summary_message_ids),
   };
 }
 
@@ -474,8 +489,13 @@ function removeSummaryMessageId(message_id: number) {
   });
 }
 
-function splitSummaryContentSegments(content: string): string[] {
-  return content
+function filterHtmlCodeBlocksForSummaryRender(content: string): string {
+  return content.replace(/```[ \t]*html\b[^\r\n]*(?:\r?\n|$)[\s\S]*?(?:```|$)/gi, '');
+}
+
+function splitSummaryContentSegments(content: string, filter_html_code_blocks: boolean): string[] {
+  const render_content = filter_html_code_blocks ? filterHtmlCodeBlocksForSummaryRender(content) : content;
+  return render_content
     .split(/\n{2,}/)
     .map(segment => segment.trim())
     .filter(Boolean);
@@ -608,7 +628,7 @@ function buildFloorSummaryRows(messages: ChatMessage[], summary_ids: Set<number>
   ];
 }
 
-function buildSummaryViewState(messages?: ChatMessage[]): SummaryViewState {
+function buildSummaryViewState(messages: ChatMessage[] | undefined, filter_html_code_blocks: boolean): SummaryViewState {
   const chat_id = getCurrentChatIdSafe();
   if (!chat_id) {
     return { ...EMPTY_SUMMARY_STATE };
@@ -633,7 +653,7 @@ function buildSummaryViewState(messages?: ChatMessage[]): SummaryViewState {
         };
       }
       return {
-        content_segments: splitSummaryContentSegments(message.message),
+        content_segments: splitSummaryContentSegments(message.message, filter_html_code_blocks),
         exists: true,
         is_hidden: message.is_hidden,
         message_id,
@@ -647,7 +667,9 @@ function buildSummaryViewState(messages?: ChatMessage[]): SummaryViewState {
 
 async function refreshSummaryTokenCounts(messages: ChatMessage[], chat_id: string, serial: number) {
   const visible_messages = messages.filter(message => !message.is_hidden);
-  const missing_messages = visible_messages.filter(message => !summary_token_count_cache.has(getSummaryTokenCacheKey(message)));
+  const missing_messages = visible_messages.filter(
+    message => !summary_token_count_cache.has(getSummaryTokenCacheKey(message)),
+  );
   if (missing_messages.length === 0) {
     return;
   }
@@ -896,7 +918,9 @@ function resolveStatus(preset: Preset, enable_indexes: number[], disable_indexes
 }
 
 function summarizePromptNames(preset: Preset, indexes: number[]): string {
-  const names = [...new Set(indexes.map(index => preset.prompts[index]?.name).filter((name): name is string => !!name))];
+  const names = [
+    ...new Set(indexes.map(index => preset.prompts[index]?.name).filter((name): name is string => !!name)),
+  ];
   if (names.length === 0) {
     return '无命中';
   }
@@ -973,7 +997,11 @@ function parseBetweenBoundaryMatcher(boundary: string): { test: (name: string) =
   }
 }
 
-function getPromptIndexByBoundary(preset: Preset, boundary: string, start_index = 0): { index: number; error?: string } {
+function getPromptIndexByBoundary(
+  preset: Preset,
+  boundary: string,
+  start_index = 0,
+): { index: number; error?: string } {
   const matcher = parseBetweenBoundaryMatcher(boundary);
   if (matcher.error) {
     console.warn(`[${SCRIPT_NAME}] ${matcher.error}`);
@@ -1008,7 +1036,9 @@ function resolveBetweenOptions(option: AdapterOption, preset: Preset): ResolveOp
   }
 
   const above_result: { index: number; error?: string } =
-    match.above === '' ? { index: preset.prompts.length } : getPromptIndexByBoundary(preset, match.above, below_result.index + 1);
+    match.above === ''
+      ? { index: preset.prompts.length }
+      : getPromptIndexByBoundary(preset, match.above, below_result.index + 1);
   if (above_result.error) {
     return {
       options: [buildUnmatchedBetweenOption(option, above_result.error)],
@@ -1026,7 +1056,10 @@ function resolveBetweenOptions(option: AdapterOption, preset: Preset): ResolveOp
     .map((prompt, index) => ({ prompt, index }))
     .slice(below_result.index + 1, above_result.index);
   if (matched_prompts.length === 0) {
-    return { options: [buildUnmatchedBetweenOption(option, `“${match.below}”和“${match.above}”之间没有提示词。`)], errors: [] };
+    return {
+      options: [buildUnmatchedBetweenOption(option, `“${match.below}”和“${match.above}”之间没有提示词。`)],
+      errors: [],
+    };
   }
 
   return {
@@ -1199,7 +1232,13 @@ function buildSummaryGenerationStatus(config: AdapterConfig, groups: GroupView[]
     matched_summary: option?.matched_summary ?? '',
     option_id,
     option_label: option?.label ?? option_id,
-    status_label: option ? (option.status === 'active' ? '已启用' : option.status === 'inactive' ? '未启用' : '未命中') : '未配置',
+    status_label: option
+      ? option.status === 'active'
+        ? '已启用'
+        : option.status === 'inactive'
+          ? '未启用'
+          : '未命中'
+      : '未配置',
   };
 }
 
@@ -1279,7 +1318,11 @@ function getImportPlan(preset: Preset, match: NonNullable<AdapterOption['match']
   };
 }
 
-function buildImportReview(file: ExportFile, config: AdapterConfig, preset: Preset): Pick<Extract<ReviewPanel, { kind: 'import' }>, 'items' | 'failed_items'> {
+function buildImportReview(
+  file: ExportFile,
+  config: AdapterConfig,
+  preset: Preset,
+): Pick<Extract<ReviewPanel, { kind: 'import' }>, 'items' | 'failed_items'> {
   const items: ReviewPromptItem[] = [];
   const failed_items: ReviewFailedItem[] = [];
 
@@ -1287,7 +1330,9 @@ function buildImportReview(file: ExportFile, config: AdapterConfig, preset: Pres
     const key = getReviewItemKey(item.group_id, item.match_id, item.name, index);
     const preview = getPromptPreview(item.prompt);
     const group = config.groups.find(candidate => candidate.id === item.group_id);
-    const match_option = group?.options.find(option => option.id === item.match_id && option.type === 'between' && option.match);
+    const match_option = group?.options.find(
+      option => option.id === item.match_id && option.type === 'between' && option.match,
+    );
     if (!group || !match_option?.match) {
       failed_items.push({
         key,
@@ -1369,7 +1414,8 @@ function formatZodIssues(error: z.ZodError): string {
 }
 
 function getSquashDebugApi(): SquashDebugApi | undefined {
-  const host_window = (window.parent ?? window) as Window & Partial<Record<typeof SQUASH_DEBUG_GLOBAL_KEY, SquashDebugApi>>;
+  const host_window = (window.parent ?? window) as Window &
+    Partial<Record<typeof SQUASH_DEBUG_GLOBAL_KEY, SquashDebugApi>>;
   return host_window[SQUASH_DEBUG_GLOBAL_KEY];
 }
 
@@ -1439,6 +1485,26 @@ function notifySummaryError(stage: string, error: unknown, context?: Record<stri
 async function confirmAction(message: string): Promise<boolean> {
   const confirmed = await SillyTavern.callGenericPopup(message, SillyTavern.POPUP_TYPE.CONFIRM);
   return confirmed === true || confirmed === SillyTavern.POPUP_RESULT.AFFIRMATIVE;
+}
+
+async function requestManualSummaryPrompt(settings: SummarySettings): Promise<string | undefined> {
+  if (!settings.manual_prompt_enabled) {
+    const confirmed = await confirmAction(
+      '确认开始总结？当前预设会临时切换到配置的总结选项，并发送“开始总结”，生成结束后恢复。',
+    );
+    return confirmed ? '开始总结' : undefined;
+  }
+
+  const result = await SillyTavern.callGenericPopup('请输入本次总结需求。', SillyTavern.POPUP_TYPE.INPUT);
+  if (result === undefined || result === false || result === SillyTavern.POPUP_RESULT.CANCELLED) {
+    return undefined;
+  }
+  const prompt = String(result).trim();
+  if (!prompt) {
+    toastr.warning('总结需求不能为空。', SCRIPT_NAME);
+    return undefined;
+  }
+  return prompt;
 }
 
 function buildSummaryWorldbookEntry(message_id: number, content: string): TypeFest.PartialDeep<WorldbookEntry> {
@@ -1531,9 +1597,6 @@ async function processGeneratedSummaryMessage(message_id: number, content: strin
     await appendSummaryToFirstMessage(message_id, content);
   }
 
-  if (settings.after_summary === 'hide_summary_message') {
-    await setChatMessages([{ message_id, is_hidden: true }], { refresh: 'affected' });
-  }
   if (settings.hide_rules.auto_hide_after_manual) {
     await applySummaryHideRules(settings, false);
   }
@@ -1570,6 +1633,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   const summary_settings = ref<SummarySettings>(cloneJson(EMPTY_CONFIG.summary.settings));
   const summary_state = ref<SummaryViewState>({ ...EMPTY_SUMMARY_STATE });
   const debug_available = ref(false);
+  const debug_loading = ref(false);
   const debug_records = ref<SquashDebugRecord[]>([]);
   const selected_debug_record_id = ref('');
   const export_mode = ref(false);
@@ -1579,14 +1643,15 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   const groups = ref<GroupView[]>([]);
   const errors = ref<string[]>([]);
   const is_applying = ref(false);
-  const is_generation_in_progress = ref(tavern_generation_in_progress);
-  const is_summary_running = ref(false);
+  const is_summary_running = manual_summary_running;
   const has_blocking_errors = computed(() => errors.value.length > 0);
   const selected_export_count = computed(() =>
     groups.value.reduce(
       (total, group) =>
         total +
-        group.options.filter(option => option.exportable && selected_export_keys.value.has(getExportOptionKey(group.id, option.id))).length,
+        group.options.filter(
+          option => option.exportable && selected_export_keys.value.has(getExportOptionKey(group.id, option.id)),
+        ).length,
       0,
     ),
   );
@@ -1597,9 +1662,8 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   let debug_api: SquashDebugApi | undefined;
   let debug_subscription: { stop: () => void } | undefined;
   let debug_poll_timer: ReturnType<typeof window.setInterval> | undefined;
+  let debug_attach_serial = 0;
   let summary_event_stops: EventOnReturn[] = [];
-  let tavern_generation_poll_timer: ReturnType<typeof window.setInterval> | undefined;
-  let tavern_generation_subscription: { stop: () => void } | undefined;
 
   function applyDebugRecords(records: SquashDebugRecord[]) {
     debug_records.value = records;
@@ -1613,11 +1677,13 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
       return;
     }
 
+    const attach_serial = ++debug_attach_serial;
     debug_subscription?.stop();
     debug_subscription = undefined;
     debug_api = api;
     debug_available.value = !!api;
     if (!api) {
+      debug_loading.value = false;
       applyDebugRecords([]);
       if (active_tab.value === 'debug') {
         active_tab.value = 'preset';
@@ -1625,7 +1691,24 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
       return;
     }
 
+    debug_loading.value = api.version === 2;
     debug_subscription = api.subscribe(applyDebugRecords);
+    if (api.version === 2) {
+      void (async () => {
+        try {
+          await api.ready;
+          if (debug_api === api && debug_attach_serial === attach_serial) {
+            applyDebugRecords(api.getRecords());
+          }
+        } catch (error) {
+          console.warn(`[${SCRIPT_NAME}] 等待压缩 Debug 存储就绪失败。`, error);
+        } finally {
+          if (debug_api === api && debug_attach_serial === attach_serial) {
+            debug_loading.value = false;
+          }
+        }
+      })();
+    }
   }
 
   function refreshDebugApi() {
@@ -1658,7 +1741,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
 
   function refreshSummaryState() {
     const messages = readCurrentChatMessages();
-    const state = buildSummaryViewState(messages);
+    const state = buildSummaryViewState(messages, summary_settings.value.filter_html_code_blocks);
     summary_state.value = state;
     if (!state.has_chat) {
       return;
@@ -1668,7 +1751,10 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     refreshSummaryTokenCounts(messages, state.chat_id, serial)
       .then(() => {
         if (serial === summary_token_refresh_serial && getCurrentChatIdSafe() === state.chat_id) {
-          summary_state.value = buildSummaryViewState(readCurrentChatMessages());
+          summary_state.value = buildSummaryViewState(
+            readCurrentChatMessages(),
+            summary_settings.value.filter_html_code_blocks,
+          );
         }
       })
       .catch(error => {
@@ -1699,10 +1785,17 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     });
   }
 
-  function setSummaryAfterAction(after_summary: SummaryAfterAction) {
+  function setSummaryFilterHtmlCodeBlocks(filter_html_code_blocks: boolean) {
     saveSummarySettings({
       ...summary_settings.value,
-      after_summary,
+      filter_html_code_blocks,
+    });
+  }
+
+  function setSummaryManualPromptEnabled(manual_prompt_enabled: boolean) {
+    saveSummarySettings({
+      ...summary_settings.value,
+      manual_prompt_enabled,
     });
   }
 
@@ -1798,10 +1891,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     try {
       const changed_count = await setSummaryFloorRowsHidden(row.message_ids, row.operation_target_hidden);
       refreshSummaryState();
-      toastr.success(
-        `已${row.operation_target_hidden ? '隐藏' : '显示'} ${changed_count} 个楼层。`,
-        SCRIPT_NAME,
-      );
+      toastr.success(`已${row.operation_target_hidden ? '隐藏' : '显示'} ${changed_count} 个楼层。`, SCRIPT_NAME);
     } finally {
       is_applying.value = false;
     }
@@ -1809,16 +1899,6 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
 
   function startSummaryWatch() {
     refreshSummaryState();
-    is_generation_in_progress.value = readTavernGenerationInProgress();
-    tavern_generation_subscription ??= subscribeTavernGenerationInProgress(value => {
-      is_generation_in_progress.value = value;
-    });
-    tavern_generation_poll_timer ??= window.setInterval(() => {
-      const current_value = readTavernGenerationInProgress();
-      if (!current_value && is_generation_in_progress.value) {
-        setTavernGenerationInProgress(false);
-      }
-    }, 1000);
     if (summary_event_stops.length > 0) {
       return;
     }
@@ -1841,12 +1921,6 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   function stopSummaryWatch() {
     summary_event_stops.forEach(event => event.stop());
     summary_event_stops = [];
-    tavern_generation_subscription?.stop();
-    tavern_generation_subscription = undefined;
-    if (tavern_generation_poll_timer !== undefined) {
-      window.clearInterval(tavern_generation_poll_timer);
-      tavern_generation_poll_timer = undefined;
-    }
   }
 
   function scanCurrentSummaryMessages() {
@@ -1875,19 +1949,16 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     });
     refreshSummaryState();
 
-    const warning = regex_errors.length > 0 ? `\n有 ${regex_errors.length} 条正则无效：\n${regex_errors.slice(0, 3).join('\n')}` : '';
+    const warning =
+      regex_errors.length > 0 ? `\n有 ${regex_errors.length} 条正则无效：\n${regex_errors.slice(0, 3).join('\n')}` : '';
     toastr.success(
       `扫描完成：共扫描 ${messages.length} 层，命中 ${matched_ids.length} 层，新增 ${added_count} 个总结标记。${warning}`,
       SCRIPT_NAME,
     );
   }
 
-  async function startManualSummary() {
-    if (is_summary_running.value || is_applying.value) {
-      return;
-    }
-    if (is_generation_in_progress.value) {
-      toastr.warning('当前已有生成正在进行，不能开始手动总结。', SCRIPT_NAME);
+  async function runManualSummary() {
+    if (is_applying.value) {
       return;
     }
 
@@ -1897,7 +1968,6 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
       toastr.error('需要先打开一个聊天。', SCRIPT_NAME);
       return;
     }
-
     if (state.errors.length > 0 || !state.preset) {
       toastr.error('配置存在错误，无法开始总结。', SCRIPT_NAME);
       return;
@@ -1908,32 +1978,25 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
       toastr.error(`总结使用设置不可用：\n${status.errors.join('\n')}`, SCRIPT_NAME);
       return;
     }
-
     if (summary_settings.value.content_handling === 'worldbook' && !getChatWorldbookName('current')) {
       toastr.error('当前聊天没有绑定世界书，无法使用“放置于世界书”。', SCRIPT_NAME);
       return;
     }
 
-    is_summary_running.value = true;
-    is_applying.value = true;
-    let confirmed = false;
+    const settings_snapshot = cloneJson(summary_settings.value);
+    let summary_prompt: string | undefined;
     try {
-      confirmed = await confirmAction('确认开始总结？当前预设会临时切换到配置的总结选项，生成结束后恢复。');
+      summary_prompt = await requestManualSummaryPrompt(settings_snapshot);
     } catch (error) {
-      notifySummaryError('总结确认弹窗', error);
-      is_summary_running.value = false;
-      is_applying.value = false;
+      notifySummaryError(settings_snapshot.manual_prompt_enabled ? '输入总结需求' : '总结确认弹窗', error);
       return;
     }
-    if (!confirmed) {
-      is_summary_running.value = false;
-      is_applying.value = false;
+    if (summary_prompt === undefined) {
       return;
     }
-    if (is_generation_in_progress.value) {
-      toastr.warning('当前已有生成正在进行，不能开始手动总结。', SCRIPT_NAME);
-      is_summary_running.value = false;
-      is_applying.value = false;
+
+    if (isHostGenerationInProgress()) {
+      toastr.warning('当前已有普通回复正在生成，请稍后重试。', SCRIPT_NAME);
       return;
     }
 
@@ -1942,66 +2005,68 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     const option_view = findSummaryOption(group_view, status.option_id);
     if (!group_config || !group_view || !option_view) {
       toastr.error('总结使用设置已失效，请刷新后重试。', SCRIPT_NAME);
-      is_summary_running.value = false;
-      is_applying.value = false;
       return;
     }
 
     const target_states = buildOptionTargetStates(group_config, group_view, option_view, true);
     if (target_states.size === 0) {
       toastr.error('总结使用选项没有命中任何提示词。', SCRIPT_NAME);
-      is_summary_running.value = false;
-      is_applying.value = false;
       return;
     }
 
-    let generated_message_id: number | undefined;
-    let generation_failed = false;
-    let restore_failed = false;
-    const snapshot = getGroupPromptStateSnapshot(state.preset, group_view);
+    manual_summary_running.value = true;
+    is_applying.value = true;
     try {
-      const preset = getPreset('in_use');
-      const changed = applyPromptTargetStates(preset, target_states);
-      if (changed) {
-        await replacePreset('in_use', preset, { render: 'immediate' });
-      }
-
-      const before_last_message_id = getLastMessageId();
-      await Promise.resolve(SillyTavern.generate('normal'));
-      const latest_message = getChatMessages(-1)[0];
-      if (latest_message && latest_message.message_id > before_last_message_id) {
-        generated_message_id = latest_message.message_id;
-      }
-    } catch (error) {
-      generation_failed = true;
-      notifySummaryError('总结生成', error, {
-        group_id: status.group_id,
-        option_id: status.option_id,
-        option: status.option_label,
-      });
-    } finally {
+      let generated_message_id: number | undefined;
+      let generation_failed = false;
+      let restore_failed = false;
+      let generation_stage = '切换总结预设';
+      const snapshot = getGroupPromptStateSnapshot(state.preset, group_view);
       try {
-        await restorePromptStateSnapshot(snapshot);
+        const preset = getPreset('in_use');
+        const changed = applyPromptTargetStates(preset, target_states);
+        if (changed) {
+          await replacePreset('in_use', preset, { render: 'immediate' });
+        }
+
+        generation_stage = '发送总结需求';
+        const before_request_message_id = getLastMessageId();
+        await createChatMessages([{ message: summary_prompt, role: 'user' }], { refresh: 'affected' });
+        const before_last_message_id = getLastMessageId();
+        if (before_last_message_id <= before_request_message_id) {
+          throw new Error('发送总结需求后没有检测到新的用户楼层。');
+        }
+
+        generation_stage = '总结生成';
+        await Promise.resolve(SillyTavern.generate('normal'));
+        const latest_message = getChatMessages(-1)[0];
+        if (latest_message && latest_message.message_id > before_last_message_id) {
+          generated_message_id = latest_message.message_id;
+        }
       } catch (error) {
-        restore_failed = true;
-        notifySummaryError('恢复总结预设状态', error, {
+        generation_failed = true;
+        notifySummaryError(generation_stage, error, {
           group_id: status.group_id,
+          manual_prompt_enabled: settings_snapshot.manual_prompt_enabled,
           option_id: status.option_id,
           option: status.option_label,
         });
+      } finally {
+        try {
+          await restorePromptStateSnapshot(snapshot);
+        } catch (error) {
+          restore_failed = true;
+          notifySummaryError('恢复总结预设状态', error, {
+            group_id: status.group_id,
+            option_id: status.option_id,
+            option: status.option_label,
+          });
+        }
       }
-    }
 
-    if (generation_failed || restore_failed) {
-      setTavernGenerationInProgress(false);
-      is_generation_in_progress.value = false;
-      is_summary_running.value = false;
-      is_applying.value = false;
-      refresh();
-      return;
-    }
-
-    try {
+      if (generation_failed || restore_failed) {
+        return;
+      }
       if (generated_message_id === undefined) {
         toastr.warning('生成结束，但没有检测到新的总结楼层。', SCRIPT_NAME);
         return;
@@ -2013,21 +2078,45 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
         return;
       }
 
-      addSummaryMessageId(generated_message_id);
-      await processGeneratedSummaryMessage(generated_message_id, generated_message.message, summary_settings.value);
-      toastr.success(`已完成第 ${generated_message_id} 层总结。`, SCRIPT_NAME);
+      try {
+        addSummaryMessageId(generated_message_id);
+        await processGeneratedSummaryMessage(generated_message_id, generated_message.message, settings_snapshot);
+        toastr.success(`已完成第 ${generated_message_id} 层总结。`, SCRIPT_NAME);
+      } catch (error) {
+        notifySummaryError('总结后处理', error, {
+          content_handling: settings_snapshot.content_handling,
+          generated_message_id,
+          auto_hide_after_manual: settings_snapshot.hide_rules.auto_hide_after_manual,
+          hide_summary: settings_snapshot.hide_rules.hide_summary,
+        });
+      }
     } catch (error) {
-      notifySummaryError('总结后处理', error, {
-        content_handling: summary_settings.value.content_handling,
-        generated_message_id,
-        hide_after_summary: summary_settings.value.after_summary,
+      notifySummaryError('手动总结流程', error, {
+        group_id: status.group_id,
+        option_id: status.option_id,
+        option: status.option_label,
       });
     } finally {
-      setTavernGenerationInProgress(false);
-      is_generation_in_progress.value = false;
-      is_summary_running.value = false;
+      manual_summary_running.value = false;
       is_applying.value = false;
       refresh();
+    }
+  }
+
+  async function startManualSummary() {
+    if (manual_summary_task) {
+      await manual_summary_task;
+      return;
+    }
+
+    const task = runManualSummary();
+    manual_summary_task = task;
+    try {
+      await task;
+    } finally {
+      if (manual_summary_task === task) {
+        manual_summary_task = undefined;
+      }
     }
   }
 
@@ -2035,12 +2124,25 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     selected_debug_record_id.value = id;
   }
 
-  function clearDebugRecords() {
-    debug_api?.clearRecords();
+  async function clearDebugRecords() {
+    const api = debug_api;
+    if (!api) {
+      return;
+    }
+    try {
+      await Promise.resolve(api.clearRecords());
+    } catch (error) {
+      toastr.error(`清空 Debug 记录失败：${normalizeError(error)}`, SCRIPT_NAME);
+      console.error(`[${SCRIPT_NAME}] 清空 Debug 记录失败。`, error);
+    }
   }
 
-  function getDebugContent(record_id: string, content_id: string): string | undefined {
-    return debug_api?.getContent(record_id, content_id);
+  async function getDebugContent(record_id: string, content_id: string): Promise<string | undefined> {
+    const api = debug_api;
+    if (!api) {
+      return undefined;
+    }
+    return await Promise.resolve(api.getContent(record_id, content_id));
   }
 
   function pruneSelectedExportKeys() {
@@ -2114,7 +2216,9 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   }
 
   function toggleExportOption(group_id: string, option_id: string) {
-    const option = groups.value.find(group => group.id === group_id)?.options.find(candidate => candidate.id === option_id);
+    const option = groups.value
+      .find(group => group.id === group_id)
+      ?.options.find(candidate => candidate.id === option_id);
     if (!option?.exportable) {
       toastr.warning('只有动态匹配选项可以导出。', SCRIPT_NAME);
       return;
@@ -2296,7 +2400,10 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
 
       const imported_count = created_count + overwritten_count + appended_count;
       if (imported_count === 0) {
-        toastr.error(skipped.length > 0 ? `没有可导入的匹配项：\n${skipped.slice(0, 4).join('\n')}` : '导入文件没有设置项。', SCRIPT_NAME);
+        toastr.error(
+          skipped.length > 0 ? `没有可导入的匹配项：\n${skipped.slice(0, 4).join('\n')}` : '导入文件没有设置项。',
+          SCRIPT_NAME,
+        );
         return;
       }
 
@@ -2395,6 +2502,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     confirmExportReview,
     confirmImportReview,
     debug_available,
+    debug_loading,
     debug_records,
     description,
     errors,
@@ -2404,7 +2512,6 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     groups,
     has_blocking_errors,
     importPresetSettings,
-    is_generation_in_progress,
     isExportOptionSelected,
     is_applying,
     is_summary_running,
@@ -2419,9 +2526,10 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     selected_export_count,
     setActiveTab,
     setSummaryFloorRowHidden,
-    setSummaryAfterAction,
     setSummaryContentHandling,
+    setSummaryFilterHtmlCodeBlocks,
     setSummaryHideRule,
+    setSummaryManualPromptEnabled,
     startExportMode,
     startDebugWatch,
     startManualSummary,

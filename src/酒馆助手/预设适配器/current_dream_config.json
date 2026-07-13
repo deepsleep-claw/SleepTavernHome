@@ -12,7 +12,8 @@
     },
     "settings": {
       "content_handling": "direct",
-      "after_summary": "none",
+      "filter_html_code_blocks": true,
+      "manual_prompt_enabled": false,
       "hide_rules": {
         "hide_first": false,
         "hide_user": true,

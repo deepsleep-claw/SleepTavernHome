@@ -11,6 +11,13 @@ type Frame = {
   y: number;
 };
 
+type ViewportInsets = {
+  bottom: number;
+  left: number;
+  right: number;
+  top: number;
+};
+
 type ActivePopup = {
   destroy: () => void;
   resetPosition: () => void;
@@ -27,48 +34,75 @@ function getHostWindow(): Window {
   return window.parent;
 }
 
+// TauriTavern 在移动端通过这些变量公布原生安全区；标准酒馆中读取结果为 0。
 function getViewport() {
   const host_window = getHostWindow();
+  const root_style = host_window.getComputedStyle(host_window.document.documentElement);
+  const body_style = host_window.document.body ? host_window.getComputedStyle(host_window.document.body) : undefined;
+  const readInset = (property: string): number => {
+    const value = Number.parseFloat(body_style?.getPropertyValue(property) || root_style.getPropertyValue(property));
+    return Number.isFinite(value) ? Math.max(0, value) : 0;
+  };
   return {
     height: host_window.innerHeight,
+    insets: {
+      bottom: readInset('--tt-inset-bottom'),
+      left: readInset('--tt-inset-left'),
+      right: readInset('--tt-inset-right'),
+      top: readInset('--tt-inset-top'),
+    } satisfies ViewportInsets,
     width: host_window.innerWidth,
   };
 }
 
 function clampFrame(frame: Frame): Frame {
   const viewport = getViewport();
-  const min_width = Math.min(MIN_WIDTH, Math.max(240, viewport.width - VIEWPORT_MARGIN * 2));
-  const min_height = Math.min(MIN_HEIGHT, Math.max(220, viewport.height - VIEWPORT_MARGIN * 2));
-  const max_width = Math.max(min_width, viewport.width - VIEWPORT_MARGIN * 2);
-  const max_height = Math.max(min_height, viewport.height - VIEWPORT_MARGIN * 2);
+  const min_x = viewport.insets.left + VIEWPORT_MARGIN;
+  const min_y = viewport.insets.top + VIEWPORT_MARGIN;
+  const boundary_x = Math.max(min_x, viewport.width - viewport.insets.right - VIEWPORT_MARGIN);
+  const boundary_y = Math.max(min_y, viewport.height - viewport.insets.bottom - VIEWPORT_MARGIN);
+  const available_width = Math.max(1, boundary_x - min_x);
+  const available_height = Math.max(1, boundary_y - min_y);
+  const min_width = Math.min(MIN_WIDTH, available_width);
+  const min_height = Math.min(MIN_HEIGHT, available_height);
+  const max_width = Math.max(min_width, available_width);
+  const max_height = Math.max(min_height, available_height);
   const width = Math.min(Math.max(frame.width, min_width), max_width);
   const height = Math.min(Math.max(frame.height, min_height), max_height);
-  const max_x = Math.max(VIEWPORT_MARGIN, viewport.width - width - VIEWPORT_MARGIN);
-  const max_y = Math.max(VIEWPORT_MARGIN, viewport.height - height - VIEWPORT_MARGIN);
+  const max_x = Math.max(min_x, boundary_x - width);
+  const max_y = Math.max(min_y, boundary_y - height);
 
   return {
     height,
     width,
-    x: Math.min(Math.max(frame.x, VIEWPORT_MARGIN), max_x),
-    y: Math.min(Math.max(frame.y, VIEWPORT_MARGIN), max_y),
+    x: Math.min(Math.max(frame.x, min_x), max_x),
+    y: Math.min(Math.max(frame.y, min_y), max_y),
   };
 }
 
 function getDefaultFrame(): Frame {
   const viewport = getViewport();
+  const min_x = viewport.insets.left + VIEWPORT_MARGIN;
+  const min_y = viewport.insets.top + VIEWPORT_MARGIN;
+  const available_width = Math.max(
+    1,
+    viewport.width - viewport.insets.left - viewport.insets.right - VIEWPORT_MARGIN * 2,
+  );
+  const available_height = Math.max(
+    1,
+    viewport.height - viewport.insets.top - viewport.insets.bottom - VIEWPORT_MARGIN * 2,
+  );
   const is_mobile = viewport.width <= 720;
-  const width = is_mobile
-    ? viewport.width - VIEWPORT_MARGIN * 2
-    : Math.min(760, Math.max(430, Math.round(viewport.width * 0.42)));
+  const width = is_mobile ? available_width : Math.min(760, Math.max(430, Math.round(available_width * 0.42)));
   const height = is_mobile
-    ? Math.min(620, viewport.height - VIEWPORT_MARGIN * 2)
-    : Math.min(viewport.height - VIEWPORT_MARGIN * 2, Math.max(420, Math.round(viewport.height * 0.72)));
+    ? Math.min(620, available_height)
+    : Math.min(available_height, Math.max(420, Math.round(available_height * 0.72)));
 
   return clampFrame({
     height,
     width,
-    x: is_mobile ? VIEWPORT_MARGIN : viewport.width - width - 28,
-    y: is_mobile ? VIEWPORT_MARGIN : Math.round((viewport.height - height) / 2),
+    x: is_mobile ? min_x : viewport.width - viewport.insets.right - width - 28,
+    y: is_mobile ? min_y : min_y + Math.round((available_height - height) / 2),
   });
 }
 
@@ -103,6 +137,7 @@ export function openPresetAdapterPopup(): Promise<void> {
   const host_document = host_window.document;
   const $window = $('<section>')
     .attr({
+      'data-tt-mobile-surface': 'free-window',
       role: 'dialog',
       script_id: getScriptId(),
     })
@@ -124,10 +159,7 @@ export function openPresetAdapterPopup(): Promise<void> {
     .append($('<i>').addClass('fa-solid fa-xmark').attr('aria-hidden', 'true'))
     .appendTo($titlebar);
   const $body = $('<div>').addClass('preset-adapter-floating-body').appendTo($window);
-  const $resize = $('<div>')
-    .attr({ title: '调整大小' })
-    .addClass('preset-adapter-floating-resize')
-    .appendTo($window);
+  const $resize = $('<div>').attr({ title: '调整大小' }).addClass('preset-adapter-floating-resize').appendTo($window);
 
   const pinia = createPinia();
   const app = createApp(Popup).use(pinia);
