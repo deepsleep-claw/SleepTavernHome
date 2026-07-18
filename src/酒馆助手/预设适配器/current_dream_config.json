@@ -161,6 +161,13 @@
           "enable": [
             "{match}"
           ]
+        },
+        {
+          "id": "自定义角色",
+          "label": "自定义扮演角色名",
+          "description": "用户自定义扮演的角色名称。需要注意，世界书中的{{user}}依然是用户设置里的user。\n此处设置的是实际游玩中扮演的角色。\n该设置与聊天绑定。",
+          "type": "var_input",
+          "variable_id": "sleep_var_juese_define"
         }
       ]
     },
@@ -237,6 +244,12 @@
           "enable": [
             "{match}"
           ]
+        },
+        {
+          "type": "global_var_input",
+          "variable_id": "sleep_var_zishu_define",
+          "label": "自定义字数",
+          "description": "需要AI输出的自定义字数。"
         }
       ]
     },

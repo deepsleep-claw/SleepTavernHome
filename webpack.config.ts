@@ -19,6 +19,7 @@ import webpack from 'webpack';
 import WebpackObfuscator from 'webpack-obfuscator';
 const require = createRequire(import.meta.url);
 const HTMLInlineCSSWebpackPlugin = require('html-inline-css-webpack-plugin').default;
+const pinia_version = (require('pinia/package.json') as { version: string }).version;
 
 interface Config {
   port: number;
@@ -559,6 +560,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
         return callback(null, 'var ' + global[request as keyof typeof global]);
       }
       const cdn = {
+        pinia: `https://testingcf.jsdelivr.net/npm/pinia@${pinia_version}/+esm`,
         sass: 'https://jspm.dev/sass',
       };
       return callback(

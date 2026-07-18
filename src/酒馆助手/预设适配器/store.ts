@@ -13,7 +13,7 @@ const PromptMatcherSchema = z.union([
   z.object({ regex: z.string().min(1), flags: z.string().default('') }),
 ]);
 
-const AdapterOptionSchema = z
+const PresetAdapterOptionSchema = z
   .object({
     id: z.string().min(1),
     label: z.string().min(1),
@@ -37,6 +37,21 @@ const AdapterOptionSchema = z
       });
     }
   });
+
+const VariableInputOptionSchema = z
+  .object({
+    id: z.string().min(1).optional(),
+    label: z.string().min(1),
+    description: z.string().default(''),
+    type: z.enum(['var_input', 'global_var_input']),
+    variable_id: z.string().trim().min(1),
+  })
+  .transform(option => ({
+    ...option,
+    id: option.id ?? `${option.type}:${option.variable_id}`,
+  }));
+
+const AdapterOptionSchema = z.union([VariableInputOptionSchema, PresetAdapterOptionSchema]);
 
 const AdapterGroupSchema = z.object({
   id: z.string().min(1),
@@ -138,6 +153,8 @@ type PromptMatcher = z.infer<typeof PromptMatcherSchema>;
 type AdapterConfig = z.infer<typeof AdapterConfigSchema>;
 type AdapterGroup = AdapterConfig['groups'][number];
 type AdapterOption = AdapterGroup['options'][number];
+type PresetAdapterOption = z.infer<typeof PresetAdapterOptionSchema>;
+type VariableInputOption = z.infer<typeof VariableInputOptionSchema>;
 type ExportFile = z.infer<typeof ExportFileSchema>;
 export type SummaryConfig = z.infer<typeof SummaryConfigSchema>;
 export type SummarySettings = z.infer<typeof SummarySettingsSchema>;
@@ -148,7 +165,7 @@ type ExportSource = {
   match_id: string;
   prompt_index: number;
 };
-type ResolvedOption = Pick<AdapterOption, 'id' | 'label' | 'description' | 'enable' | 'disable'> & {
+type ResolvedOption = Pick<PresetAdapterOption, 'id' | 'label' | 'description' | 'enable' | 'disable'> & {
   export_source?: ExportSource;
 };
 
@@ -167,6 +184,16 @@ export type OptionView = {
   disable_indexes: number[];
 };
 
+export type VariableInputView = {
+  id: string;
+  label: string;
+  description: string;
+  scope: 'chat' | 'global';
+  variable_id: string;
+  value: string;
+  disabled: boolean;
+};
+
 export type GroupView = {
   id: string;
   label: string;
@@ -175,6 +202,7 @@ export type GroupView = {
   mode_label: string;
   layout: 'row' | 'grid';
   options: OptionView[];
+  variable_inputs: VariableInputView[];
 };
 
 type ReadConfigResult = {
@@ -197,6 +225,11 @@ type LoadedState = {
   preset?: Preset;
   groups: GroupView[];
   errors: string[];
+};
+
+type CurrentChatVariableContext = {
+  has_chat: boolean;
+  variables: Record<string, any>;
 };
 
 type TabId = 'preset' | 'summary' | 'debug';
@@ -398,12 +431,59 @@ function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function isVariableInputOption(option: AdapterOption): option is VariableInputOption {
+  return option.type === 'var_input' || option.type === 'global_var_input';
+}
+
+function isPresetAdapterOption(option: AdapterOption): option is PresetAdapterOption {
+  return !isVariableInputOption(option);
+}
+
 function getCurrentChatIdSafe(): string {
   try {
     return SillyTavern.getCurrentChatId?.() ?? '';
   } catch {
     return '';
   }
+}
+
+function readCurrentChatVariableContext(): CurrentChatVariableContext {
+  if (!getCurrentChatIdSafe()) {
+    return { has_chat: false, variables: {} };
+  }
+
+  try {
+    return { has_chat: true, variables: getVariables({ type: 'chat' }) };
+  } catch (error) {
+    console.warn(`[${SCRIPT_NAME}] 读取当前聊天变量失败。`, error);
+    return { has_chat: true, variables: {} };
+  }
+}
+
+function readGlobalVariables(): Record<string, any> {
+  try {
+    return getVariables({ type: 'global' });
+  } catch (error) {
+    console.warn(`[${SCRIPT_NAME}] 读取全局变量失败。`, error);
+    return {};
+  }
+}
+
+function formatVariableInputValue(value: unknown): string {
+  if (value === undefined || value === null) {
+    return '';
+  }
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (typeof value === 'object') {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
 }
 
 function readCurrentChatMessages(): ChatMessage[] {
@@ -947,7 +1027,7 @@ function fillMatcherPlaceholder(matcher: PromptMatcher, match: string): PromptMa
   };
 }
 
-function buildUnmatchedBetweenOption(option: AdapterOption, message: string): ResolvedOption {
+function buildUnmatchedBetweenOption(option: PresetAdapterOption, message: string): ResolvedOption {
   return {
     id: `${option.id}:between-unmatched`,
     label: option.label === '{match}' ? '未找到区间选项' : option.label,
@@ -1013,7 +1093,7 @@ function getPromptIndexByBoundary(
   };
 }
 
-function resolveBetweenOptions(option: AdapterOption, preset: Preset): ResolveOptionsResult {
+function resolveBetweenOptions(option: PresetAdapterOption, preset: Preset): ResolveOptionsResult {
   if (option.type !== 'between') {
     return { options: [option], errors: [] };
   }
@@ -1083,6 +1163,9 @@ function resolveGroupOptions(group: AdapterGroup, preset: Preset): ResolveOption
   const options: ResolvedOption[] = [];
   const errors: string[] = [];
   for (const option of group.options) {
+    if (!isPresetAdapterOption(option)) {
+      continue;
+    }
     const result = resolveBetweenOptions(option, preset);
     options.push(
       ...result.options.map(resolved_option => ({
@@ -1126,6 +1209,8 @@ function buildOptionView(option: ResolvedOption, preset: Preset): { view: Option
 
 function buildGroupViews(config: AdapterConfig, preset: Preset): BuildGroupsResult {
   const errors: string[] = [];
+  const chat_variable_context = readCurrentChatVariableContext();
+  const global_variables = readGlobalVariables();
   const groups = config.groups.map(group => {
     const resolved_options = resolveGroupOptions(group, preset);
     errors.push(...resolved_options.errors);
@@ -1134,14 +1219,30 @@ function buildGroupViews(config: AdapterConfig, preset: Preset): BuildGroupsResu
       errors.push(...result.errors);
       return result.view;
     });
+    const variable_inputs = group.options.filter(isVariableInputOption).map(option => {
+      const scope = option.type === 'global_var_input' ? 'global' : 'chat';
+      const available = scope === 'global' || chat_variable_context.has_chat;
+      const variables = scope === 'global' ? global_variables : chat_variable_context.variables;
+      return {
+        id: option.id,
+        label: option.label,
+        description: option.description,
+        scope,
+        variable_id: option.variable_id,
+        value: available ? formatVariableInputValue(_.get(variables, option.variable_id)) : '',
+        disabled: !available,
+      };
+    });
     return {
       id: group.id,
       label: group.label,
       description: group.description,
       mode: group.mode,
-      mode_label: group.mode === 'single' ? '单选' : '多选',
+      mode_label:
+        options.length === 0 && variable_inputs.length > 0 ? '变量输入' : group.mode === 'single' ? '单选' : '多选',
       layout: (options.length <= 3 ? 'row' : 'grid') as GroupView['layout'],
       options,
+      variable_inputs,
     };
   });
   return { groups, errors };
@@ -1278,12 +1379,19 @@ function getReviewItemKey(group_id: string, match_id: string, name: string, inde
   return `${group_id}\u0000${match_id}\u0000${name}\u0000${index}`;
 }
 
-function findImportMatchOption(config: AdapterConfig, group_id: string, match_id: string): AdapterOption | undefined {
+function findImportMatchOption(
+  config: AdapterConfig,
+  group_id: string,
+  match_id: string,
+): PresetAdapterOption | undefined {
   const group = config.groups.find(candidate => candidate.id === group_id);
-  return group?.options.find(option => option.id === match_id && option.type === 'between' && option.match);
+  return group?.options.find(
+    (option): option is PresetAdapterOption =>
+      isPresetAdapterOption(option) && option.id === match_id && option.type === 'between' && !!option.match,
+  );
 }
 
-function getImportPlan(preset: Preset, match: NonNullable<AdapterOption['match']>, name: string): ImportPlan {
+function getImportPlan(preset: Preset, match: NonNullable<PresetAdapterOption['match']>, name: string): ImportPlan {
   const below_result: { index: number; error?: string } =
     match.below === '' ? { index: -1 } : getPromptIndexByBoundary(preset, match.below);
   if (below_result.error) {
@@ -1330,9 +1438,7 @@ function buildImportReview(
     const key = getReviewItemKey(item.group_id, item.match_id, item.name, index);
     const preview = getPromptPreview(item.prompt);
     const group = config.groups.find(candidate => candidate.id === item.group_id);
-    const match_option = group?.options.find(
-      option => option.id === item.match_id && option.type === 'between' && option.match,
-    );
+    const match_option = findImportMatchOption(config, item.group_id, item.match_id);
     if (!group || !match_option?.match) {
       failed_items.push({
         key,
@@ -1664,6 +1770,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   let debug_poll_timer: ReturnType<typeof window.setInterval> | undefined;
   let debug_attach_serial = 0;
   let summary_event_stops: EventOnReturn[] = [];
+  let variable_write_error_notified = false;
 
   function applyDebugRecords(records: SquashDebugRecord[]) {
     debug_records.value = records;
@@ -1737,6 +1844,58 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
       return;
     }
     active_tab.value = tab;
+  }
+
+  function refreshVariableInputs() {
+    const chat_context = readCurrentChatVariableContext();
+    const global_variables = readGlobalVariables();
+    groups.value.forEach(group => {
+      group.variable_inputs.forEach(input => {
+        const available = input.scope === 'global' || chat_context.has_chat;
+        const variables = input.scope === 'global' ? global_variables : chat_context.variables;
+        input.disabled = !available;
+        input.value = available ? formatVariableInputValue(_.get(variables, input.variable_id)) : '';
+      });
+    });
+  }
+
+  function updateVariableInput(group_id: string, input_id: string, value: string) {
+    const input = groups.value
+      .find(group => group.id === group_id)
+      ?.variable_inputs.find(candidate => candidate.id === input_id);
+    if (!input) {
+      console.warn(`[${SCRIPT_NAME}] 没有找到变量输入项：${group_id}/${input_id}`);
+      return;
+    }
+    if (input.scope === 'chat' && !getCurrentChatIdSafe()) {
+      refreshVariableInputs();
+      return;
+    }
+
+    groups.value.forEach(group => {
+      group.variable_inputs.forEach(candidate => {
+        if (candidate.scope === input.scope && candidate.variable_id === input.variable_id) {
+          candidate.value = value;
+          candidate.disabled = false;
+        }
+      });
+    });
+
+    const variable_scope = input.scope === 'global' ? ({ type: 'global' } as const) : ({ type: 'chat' } as const);
+    const scope_label = input.scope === 'global' ? '全局变量' : '聊天变量';
+    try {
+      const variables = getVariables(variable_scope);
+      _.set(variables, input.variable_id, value);
+      replaceVariables(variables, variable_scope);
+      variable_write_error_notified = false;
+    } catch (error) {
+      console.error(`[${SCRIPT_NAME}] 写入${scope_label}“${input.variable_id}”失败。`, error);
+      if (!variable_write_error_notified) {
+        toastr.error(`写入${scope_label}“${input.variable_id}”失败：${normalizeError(error)}`, SCRIPT_NAME);
+        variable_write_error_notified = true;
+      }
+      refreshVariableInputs();
+    }
   }
 
   function refreshSummaryState() {
@@ -1899,15 +2058,17 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
 
   function startSummaryWatch() {
     refreshSummaryState();
+    refreshVariableInputs();
     if (summary_event_stops.length > 0) {
       return;
     }
 
     const refresh_handler = () => {
       refreshSummaryState();
+      refreshVariableInputs();
     };
     summary_event_stops = [
-      eventOn(tavern_events.CHAT_CHANGED, refresh_handler),
+      eventOn(tavern_events.CHAT_CHANGED, refresh),
       eventOn(tavern_events.MESSAGE_SENT, refresh_handler),
       eventOn(tavern_events.MESSAGE_RECEIVED, refresh_handler),
       eventOn(tavern_events.MESSAGE_EDITED, refresh_handler),
@@ -2530,6 +2691,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     setSummaryFilterHtmlCodeBlocks,
     setSummaryHideRule,
     setSummaryManualPromptEnabled,
+    updateVariableInput,
     startExportMode,
     startDebugWatch,
     startManualSummary,

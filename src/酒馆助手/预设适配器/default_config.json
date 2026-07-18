@@ -181,6 +181,26 @@
       ]
     },
     {
+      "id": "chat_variable_input_demo",
+      "label": "变量输入",
+      "description": "变量输入不会参与组内单选或多选切换。\n聊天变量需要先打开聊天；全局变量始终可以修改。",
+      "mode": "single",
+      "options": [
+        {
+          "label": "示例聊天变量",
+          "description": "绑定聊天变量“示例变量.文本”。未打开聊天时输入框不可用。",
+          "type": "var_input",
+          "variable_id": "示例变量.文本"
+        },
+        {
+          "label": "示例全局变量",
+          "description": "绑定全局变量“示例变量.全局文本”，无需打开聊天即可修改。",
+          "type": "global_var_input",
+          "variable_id": "示例变量.全局文本"
+        }
+      ]
+    },
+    {
       "id": "文风设置",
       "label": "文风设置",
       "description": "从两个固定标记之间读取提示词，并把中间每个提示词自动变成一个选项；below 或 above 留空时代表预设顶部或底部。",

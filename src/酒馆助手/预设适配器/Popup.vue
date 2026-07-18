@@ -45,6 +45,7 @@
       <div class="preset-adapter-stats">
         <span>{{ store.groups.length }} 组</span>
         <span>{{ option_count }} 个选项</span>
+        <span v-if="variable_input_count > 0">{{ variable_input_count }} 个变量输入</span>
       </div>
 
       <div class="preset-adapter-actions">
@@ -107,7 +108,11 @@
           <span>{{ group.mode_label }}</span>
         </div>
 
-        <div class="preset-adapter-options" :class="`preset-adapter-options-${group.layout}`">
+        <div
+          v-if="group.options.length > 0"
+          class="preset-adapter-options"
+          :class="`preset-adapter-options-${group.layout}`"
+        >
           <button
             v-for="option in group.options"
             :key="option.id"
@@ -135,6 +140,29 @@
               </span>
             </span>
           </button>
+        </div>
+
+        <div v-if="group.variable_inputs.length > 0" class="preset-adapter-variable-inputs">
+          <label
+            v-for="input in group.variable_inputs"
+            :key="input.id"
+            class="preset-adapter-variable-input"
+          >
+            <span class="preset-adapter-variable-input-label">
+              <strong>{{ input.label }}</strong>
+              <small v-if="input.description">{{ input.description }}</small>
+            </span>
+            <input
+              class="text_pole preset-adapter-variable-input-control"
+              type="text"
+              :value="input.value"
+              :disabled="input.disabled"
+              :placeholder="input.disabled ? '请先打开一个聊天' : ''"
+              :title="input.variable_id"
+              autocomplete="off"
+              @input="handleVariableInput(group.id, input.id, $event)"
+            />
+          </label>
         </div>
       </section>
     </template>
@@ -662,6 +690,9 @@ import {
 
 const store = usePresetAdapterStore();
 const option_count = computed(() => store.groups.reduce((total, group) => total + group.options.length, 0));
+const variable_input_count = computed(() =>
+  store.groups.reduce((total, group) => total + group.variable_inputs.length, 0),
+);
 const import_file_input = ref<HTMLInputElement>();
 const debug_text_modal = ref<{ content: string; title: string }>();
 let debug_content_request_serial = 0;
@@ -695,6 +726,10 @@ function handleOptionClick(group_id: string, option_id: string) {
     return;
   }
   void store.applyOption(group_id, option_id);
+}
+
+function handleVariableInput(group_id: string, input_id: string, event: Event) {
+  store.updateVariableInput(group_id, input_id, (event.target as HTMLInputElement).value);
 }
 
 async function importPresetSettings(event: Event) {
@@ -1062,6 +1097,7 @@ function closeDebugTextModal() {
   color: var(--SmartThemeEmColor);
   font-size: 0.88rem;
   line-height: 1.45;
+  white-space: pre-line;
 }
 
 .preset-adapter-preset {
@@ -1341,6 +1377,10 @@ function closeDebugTextModal() {
   padding-top: 0.75rem;
 }
 
+.preset-adapter-summary-settings > :not(summary) {
+  margin-left: 0.75rem;
+}
+
 .preset-adapter-summary-panel > summary {
   border: 1px solid var(--SmartThemeBorderColor);
   border-radius: 8px;
@@ -1559,6 +1599,55 @@ function closeDebugTextModal() {
   min-width: 0;
 }
 
+.preset-adapter-variable-inputs {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.preset-adapter-variable-input {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.8fr) minmax(12rem, 1.2fr);
+  align-items: center;
+  gap: 0.6rem 0.8rem;
+  border: 1px solid var(--SmartThemeBorderColor);
+  border-radius: 8px;
+  padding: 0.65rem;
+  background-color: var(--black30a);
+}
+
+.preset-adapter-variable-input-label {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.12rem;
+}
+
+.preset-adapter-variable-input-label strong {
+  overflow-wrap: anywhere;
+}
+
+.preset-adapter-variable-input-label small {
+  color: var(--SmartThemeEmColor);
+  font-size: 0.8rem;
+  font-weight: 400;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
+}
+
+.preset-adapter-variable-input-control {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  margin: 0;
+}
+
+.preset-adapter-variable-input-control:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .preset-adapter-option {
   display: grid;
   grid-template-columns: 1fr;
@@ -1620,13 +1709,12 @@ function closeDebugTextModal() {
 }
 
 .preset-adapter-option-title small {
-  overflow: hidden;
   color: var(--SmartThemeEmColor);
   font-size: 0.8rem;
   font-weight: 400;
   line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 .preset-adapter-option-active .preset-adapter-option-main i {
@@ -2045,6 +2133,14 @@ function closeDebugTextModal() {
 }
 
 @container (max-width: 720px) {
+  .preset-adapter-summary-settings > :not(summary) {
+    margin-left: 0.45rem;
+  }
+
+  .preset-adapter-variable-input {
+    grid-template-columns: 1fr;
+  }
+
   .preset-adapter-debug {
     flex: 0 0 auto;
     overflow: visible;
