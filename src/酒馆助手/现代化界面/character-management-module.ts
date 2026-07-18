@@ -135,6 +135,7 @@ export function mountCharacterManagement(store: Store): { destroy: () => void } 
   const hostWindow = getHostWindow();
   const HostMutationObserver = (hostWindow as Window & { MutationObserver: typeof MutationObserver }).MutationObserver;
   let characterSummary: ModernCharacterSummary | null = null;
+  let panelPinMove: MovedNode | null = null;
   let observedPanel: HTMLElement | null = null;
   let scheduledSync = 0;
 
@@ -143,8 +144,35 @@ export function mountCharacterManagement(store: Store): { destroy: () => void } 
     characterSummary = null;
   };
 
+  const restorePanelPin = () => {
+    if (!panelPinMove) {
+      return;
+    }
+    restoreMovedNode(panelPinMove);
+    panelPinMove = null;
+  };
+
+  const syncPanelPin = (panel: HTMLElement | null) => {
+    const pin = hostDocument.querySelector<HTMLElement>('#rm_button_panel_pin_div');
+    const actions = panel?.querySelector<HTMLElement>(':scope > .th-modern-drawer-titlebar .th-modern-drawer-actions');
+    const is_current =
+      panelPinMove &&
+      panelPinMove.marker.isConnected &&
+      panelPinMove.node === pin &&
+      panelPinMove.node.parentElement === actions;
+    if (is_current) {
+      return;
+    }
+
+    restorePanelPin();
+    if (pin && actions) {
+      panelPinMove = moveNode(hostDocument, pin, actions);
+    }
+  };
+
   const clearState = () => {
     restoreSummary();
+    restorePanelPin();
     toggleHostState(hostDocument, false);
   };
 
@@ -161,6 +189,7 @@ export function mountCharacterManagement(store: Store): { destroy: () => void } 
     toggleHostState(hostDocument, true);
     const panel = hostDocument.querySelector<HTMLElement>('#right-nav-panel');
     observePanel(panel);
+    syncPanelPin(panel);
     if (!isEditorMode(panel)) {
       restoreSummary();
       return;

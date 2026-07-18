@@ -16,6 +16,7 @@ import {
 import { mountWorldInfoEditor } from './world-info-module';
 import './style.css';
 import './world-info.css';
+import './mobile-world-select.css';
 import './character-management.css';
 import './extension-settings.css';
 
@@ -47,7 +48,8 @@ const DRAWER_FULLSCREEN_WAS_PINNED_DATA = 'thModernFullscreenWasPinned';
 const API_SOURCE_GROUP_CLASS = 'th-modern-api-source-group';
 const API_FOOTER_CLASS = 'th-modern-api-footer';
 const FAILSAFE_KEY_SEQUENCE = 'th-reset';
-const FAILSAFE_TOUCH_HOLD_MS = 5000;
+const FAILSAFE_SHORTCUT_CLASS = 'th-modern-failsafe-shortcut';
+const DEFAULT_PRODUCT_NAME = 'SillyTavern';
 const LEGACY_RUNTIME_DISPOSE_PATH = 'TavernHelper.modernLayout.dispose';
 const RUNTIME_REGISTRY_PATH = 'TavernHelper.modernLayout.runtimes';
 const SIDEBAR_COLLAPSED_STORAGE_KEY = 'TavernHelper.modernLayout.sidebarCollapsed';
@@ -539,16 +541,78 @@ async function openRecentChat(
   throw new Error('最近聊天缺少角色或群组标识。');
 }
 
+function normalizeProductName(raw_value: string | null | undefined, source: 'version' | 'logo' | 'plain'): string | undefined {
+  let value = String(raw_value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!value) {
+    return undefined;
+  }
+
+  if (source === 'version') {
+    const version_match = value.match(/^(.+?)\s+v?\d+(?:\.\d+){1,3}(?:[-+][0-9a-z.-]+)?(?:\s|$)/i);
+    if (!version_match) {
+      return undefined;
+    }
+    value = version_match[1].trim();
+  } else if (source === 'logo') {
+    value = value.replace(/\s+(?:logo|徽标|標誌|标志)$/i, '').trim();
+  }
+
+  if (!value || value.length > 64 || value.includes('://')) {
+    return undefined;
+  }
+  return value;
+}
+
+function getHostProductName(host_document = getHostDocument()): string {
+  for (const selector of ['.welcomeHeaderVersionDisplay', '#version_display_welcome', '#version_display']) {
+    const product_name = normalizeProductName(host_document.querySelector(selector)?.textContent, 'version');
+    if (product_name) {
+      return product_name;
+    }
+  }
+
+  const application_name = normalizeProductName(
+    host_document.querySelector<HTMLMetaElement>('meta[name="application-name"]')?.content,
+    'plain',
+  );
+  if (application_name) {
+    return application_name;
+  }
+
+  const logo_name = normalizeProductName(
+    host_document.querySelector<HTMLImageElement>('.welcomePanel .welcomeHeaderLogo')?.alt,
+    'logo',
+  );
+  if (logo_name) {
+    return logo_name;
+  }
+
+  return normalizeProductName(host_document.title, 'plain') ?? DEFAULT_PRODUCT_NAME;
+}
+
 function mountSidebar(on_refresh: () => void): { $list: JQuery<HTMLElement>; destroy: () => void } {
   const host_window = getHostWindow();
+  const host_document = getHostDocument();
   const $sidebar = createScriptIdDiv().attr('id', SIDEBAR_ID).addClass('th-modern-sidebar recentChat');
   const $brand = $('<div>').addClass('th-modern-sidebar-brand');
   const $brand_main = $('<span>').addClass('th-modern-brand-main').appendTo($brand);
-  $('<img>')
-    .addClass('th-modern-brand-logo welcomeHeaderLogo')
-    .attr({ src: 'img/logo.png', alt: 'SillyTavern Logo', 'data-i18n': '[alt]SillyTavern Logo' })
-    .appendTo($brand_main);
-  $('<span>').addClass('th-modern-brand-name').text('SillyTavern').appendTo($brand_main);
+  const $brand_logo = $('<img>').addClass('th-modern-brand-logo welcomeHeaderLogo').attr('src', 'img/logo.png').appendTo($brand_main);
+  const $brand_name = $('<span>').addClass('th-modern-brand-name').appendTo($brand_main);
+  const syncBrand = () => {
+    const product_name = getHostProductName(host_document);
+    $brand_name.text(product_name);
+    $brand_logo.attr('alt', `${product_name} Logo`);
+  };
+  syncBrand();
+  const brand_observer = new host_window.MutationObserver(syncBrand);
+  ['.welcomeHeaderVersionDisplay', '#version_display_welcome', '#version_display'].forEach(selector => {
+    const element = host_document.querySelector(selector);
+    if (element) {
+      brand_observer.observe(element, { childList: true, characterData: true, subtree: true });
+    }
+  });
   const $sidebar_collapse_button = $('<button>')
     .attr({ type: 'button', title: '折叠侧边栏', 'aria-pressed': 'false' })
     .addClass('th-modern-icon-button th-modern-sidebar-toggle bi bi-chevron-left')
@@ -645,6 +709,7 @@ function mountSidebar(on_refresh: () => void): { $list: JQuery<HTMLElement>; des
     $list,
     destroy: () => {
       body_observer.disconnect();
+      brand_observer.disconnect();
       $(getHostDocument().body).removeClass(BODY_CLASS_SIDEBAR_COLLAPSED);
       $sidebar.remove();
     },
@@ -1115,7 +1180,7 @@ function showFailsafeRestoreConfirm(
   $('<strong>').attr('id', title_id).text('关闭现代化界面？').appendTo($dialog);
   $('<p>')
     .attr('id', description_id)
-    .text('将立即还原 SillyTavern 原始布局，并保持关闭状态。之后可以在酒馆助手设置里重新启用。')
+    .text(`将立即还原 ${getHostProductName(host_document)} 原始布局，并保持关闭状态。之后可以在酒馆助手设置里重新启用。`)
     .appendTo($dialog);
   const $actions = $('<div>').addClass('th-modern-failsafe-actions').appendTo($dialog);
   let closed = false;
@@ -1187,7 +1252,6 @@ function mountFailsafeRestore(store: ReturnType<typeof useModernLayoutStore>): {
   const host_window = getHostWindow();
   let typed_buffer = '';
   let is_prompt_open = false;
-  let touch_timer: number | undefined;
   let close_prompt: (() => void) | undefined;
 
   const openConfirm = () => {
@@ -1212,42 +1276,68 @@ function mountFailsafeRestore(store: ReturnType<typeof useModernLayoutStore>): {
     }
   };
 
-  const cancelTouchTimer = () => {
-    if (touch_timer !== undefined) {
-      host_window.clearTimeout(touch_timer);
-      touch_timer = undefined;
-    }
-  };
-
-  const onTouchStart = (event: TouchEvent) => {
-    if (event.touches.length < 3 || touch_timer !== undefined) {
+  const appendShortcut = (panel: Element) => {
+    const shortcuts = panel.querySelector<HTMLElement>('.welcomeShortcuts');
+    if (!shortcuts || shortcuts.querySelector(`.${FAILSAFE_SHORTCUT_CLASS}`)) {
       return;
     }
-    touch_timer = host_window.setTimeout(() => {
-      touch_timer = undefined;
-      openConfirm();
-    }, FAILSAFE_TOUCH_HOLD_MS);
+
+    const button = host_document.createElement('button');
+    button.type = 'button';
+    button.className = `menu_button menu_button_icon ${FAILSAFE_SHORTCUT_CLASS}`;
+    button.title = '关闭现代化界面并还原原始布局';
+    button.setAttribute('aria-label', '重置界面');
+    const icon = host_document.createElement('i');
+    icon.className = 'fa-solid fa-arrow-rotate-left';
+    icon.setAttribute('aria-hidden', 'true');
+    const label = host_document.createElement('span');
+    label.textContent = '重置界面';
+    button.append(icon, label);
+    shortcuts.append(button);
   };
 
-  const onTouchEnd = (event: TouchEvent) => {
-    if (event.touches.length < 3) {
-      cancelTouchTimer();
+  const scanForWelcomePanels = (root: ParentNode) => {
+    if (root instanceof host_window.Element && root.matches('.welcomePanel')) {
+      appendShortcut(root);
     }
+    root.querySelectorAll('.welcomePanel').forEach(appendShortcut);
   };
+
+  const onFailsafeShortcutClick = (event: MouseEvent) => {
+    const target = event.target instanceof host_window.Element ? event.target : null;
+    if (!target?.closest(`.${FAILSAFE_SHORTCUT_CLASS}`)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    openConfirm();
+  };
+
+  scanForWelcomePanels(host_document);
+  const welcome_observer = new host_window.MutationObserver(mutations => {
+    mutations.forEach(mutation => {
+      mutation.addedNodes.forEach(node => {
+        if (node instanceof host_window.Element) {
+          scanForWelcomePanels(node);
+        }
+      });
+    });
+  });
+  const chat = host_document.querySelector('#chat');
+  if (chat) {
+    welcome_observer.observe(chat, { childList: true, subtree: true });
+  }
 
   host_document.addEventListener('keydown', onKeyDown, true);
-  host_document.addEventListener('touchstart', onTouchStart, { passive: true });
-  host_document.addEventListener('touchend', onTouchEnd, { passive: true });
-  host_document.addEventListener('touchcancel', cancelTouchTimer, { passive: true });
+  host_document.addEventListener('click', onFailsafeShortcutClick, true);
 
   return {
     destroy: () => {
-      cancelTouchTimer();
+      welcome_observer.disconnect();
       close_prompt?.();
       host_document.removeEventListener('keydown', onKeyDown, true);
-      host_document.removeEventListener('touchstart', onTouchStart);
-      host_document.removeEventListener('touchend', onTouchEnd);
-      host_document.removeEventListener('touchcancel', cancelTouchTimer);
+      host_document.removeEventListener('click', onFailsafeShortcutClick, true);
+      host_document.querySelectorAll(`.${FAILSAFE_SHORTCUT_CLASS}`).forEach(button => button.remove());
     },
   };
 }

@@ -3,6 +3,48 @@ body.th-modern-enabled.th-modern-character-management #right-nav-panel.th-modern
   container-type: inline-size;
 }
 
+body.th-modern-enabled.th-modern-character-management
+  #right-nav-panel
+  > .th-modern-drawer-titlebar
+  .th-modern-drawer-actions
+  #rm_button_panel_pin_div {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  margin: 0;
+  border-radius: var(--th-modern-radius-xs);
+  background: color-mix(in srgb, var(--SmartThemeQuoteColor) 12%, transparent);
+  color: var(--SmartThemeBodyColor);
+}
+
+body.th-modern-enabled.th-modern-character-management
+  #right-nav-panel
+  > .th-modern-drawer-titlebar
+  .th-modern-drawer-actions
+  #rm_button_panel_pin_div
+  label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+body.th-modern-enabled.th-modern-character-management
+  #right-nav-panel
+  > .th-modern-drawer-titlebar
+  .th-modern-drawer-actions
+  #rm_button_panel_pin_div
+  label
+  > div {
+  margin: 0;
+}
+
 body.th-modern-enabled.th-modern-character-management #character_popup.open > .inline-drawer {
   flex: 0 0 auto;
 }

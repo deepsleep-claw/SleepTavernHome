@@ -1,6 +1,7 @@
 import { watch } from 'vue';
 
 import { getHostDocument, getHostWindow } from './host-context';
+import { mountMobileWorldSelects } from './mobile-world-select-module';
 import type { useModernLayoutStore } from './store';
 
 const WORLD_INFO_ENABLED_CLASS = 'th-modern-wi-enabled';
@@ -997,6 +998,7 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
     private pendingEnhance = 0;
     private pendingEditorRetry = 0;
     private editorRetryRevision = 0;
+    private mobileWorldSelects?: ReturnType<typeof mountMobileWorldSelects>;
 
     constructor() {
         this.document = getHostDocument();
@@ -1033,6 +1035,7 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
         this.selectedWorldName = getSelectedWorldName(this.document);
         worldInfo.classList.add(WORLD_INFO_NATIVE_CLASS);
         this.buildLayout(popup, list);
+        this.mobileWorldSelects = mountMobileWorldSelects();
         this.bindResponsiveMode();
         this.bindEvents();
         this.enhanceEntries();
@@ -1085,6 +1088,8 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
         this.narrowQueryHandler = undefined;
         this.mobileDetailOpen = false;
         this.mobileListScrollTop = 0;
+        this.mobileWorldSelects?.destroy();
+        this.mobileWorldSelects = undefined;
 
         for (const entry of this.document.querySelectorAll<HTMLElement>('.world_entry')) {
             entry.classList.remove(SELECTED_ENTRY_CLASS, SELECTED_ROW_CLASS);

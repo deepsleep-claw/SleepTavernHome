@@ -516,6 +516,11 @@ body.th-modern-enabled .th-modern-failsafe-overlay {
   inset: 0;
   z-index: 10050;
   display: flex;
+  box-sizing: border-box;
+  width: 100vw;
+  width: 100dvw;
+  height: 100vh;
+  height: 100dvh;
   align-items: center;
   justify-content: center;
   padding: 18px;
@@ -547,8 +552,19 @@ body.th-modern-enabled .th-modern-failsafe-dialog p {
 
 body.th-modern-enabled .th-modern-failsafe-actions {
   display: flex;
-  justify-content: flex-end;
-  gap: 8px;
+  align-self: center;
+  justify-content: center;
+  flex-wrap: nowrap;
+  gap: 20px;
+}
+
+body.th-modern-enabled .th-modern-failsafe-actions .menu_button {
+  width: unset;
+  min-width: 5.5rem;
+  min-height: 36px;
+  margin: 0;
+  padding: 0.42rem 0.82rem;
+  white-space: nowrap;
 }
 
 body.th-modern-enabled .th-modern-failsafe-confirm {
@@ -560,6 +576,16 @@ body.th-modern-enabled .th-modern-failsafe-dialog button:focus-visible,
 body.th-modern-enabled .th-modern-failsafe-dialog [tabindex]:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 78%, white 22%);
   outline-offset: 2px;
+}
+
+body.th-modern-enabled .th-modern-failsafe-shortcut {
+  display: inline-flex !important;
+  border-color: color-mix(in srgb, crimson 38%, var(--th-modern-line));
+  background: color-mix(in srgb, crimson 14%, var(--SmartThemeBlurTintColor) 72%);
+}
+
+body.th-modern-enabled .welcomePanel .welcomeShortcuts .th-modern-failsafe-shortcut:hover {
+  background: color-mix(in srgb, crimson 24%, var(--SmartThemeBlurTintColor) 68%);
 }
 
 body.th-modern-enabled #top-settings-holder > .drawer > .drawer-content {
