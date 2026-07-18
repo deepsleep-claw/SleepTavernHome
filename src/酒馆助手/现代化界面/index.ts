@@ -1020,28 +1020,42 @@ function mountDrawerEnhancements(): { destroy: () => void } {
     closeDrawerContent(content);
   };
 
-  enhanceDrawers();
   const holder = $('#top-settings-holder')[0];
+  const content_class_observer =
+    holder instanceof host_window.HTMLElement
+      ? new host_window.MutationObserver(() => {
+          scheduleReconcileDrawerFullscreen();
+        })
+      : undefined;
+  const observeDrawerContentClasses = () => {
+    content_class_observer?.disconnect();
+    holder
+      ?.querySelectorAll<HTMLElement>(':scope > .drawer > .drawer-content')
+      .forEach(content => content_class_observer?.observe(content, { attributes: true, attributeFilter: ['class'] }));
+  };
+  const enhanceAndObserveDrawers = () => {
+    enhanceDrawers();
+    observeDrawerContentClasses();
+  };
+
+  enhanceAndObserveDrawers();
   const observer =
     holder instanceof host_window.HTMLElement
       ? new host_window.MutationObserver(mutations => {
-          if (mutations.some(mutation => mutation.type === 'childList')) {
-            enhanceDrawers();
-            return;
-          }
           if (
             mutations.some(
               mutation =>
-                mutation.type === 'attributes' &&
-                mutation.target instanceof host_window.Element &&
-                mutation.target.matches('#top-settings-holder > .drawer > .drawer-content'),
+                mutation.type === 'childList' &&
+                (mutation.target === holder ||
+                  (mutation.target instanceof host_window.Element &&
+                    mutation.target.matches('#top-settings-holder > .drawer'))),
             )
           ) {
-            scheduleReconcileDrawerFullscreen();
+            enhanceAndObserveDrawers();
           }
         })
       : undefined;
-  observer?.observe(holder, { childList: true, subtree: true, attributes: true, attributeFilter: ['class'] });
+  observer?.observe(holder, { childList: true, subtree: true });
   host_document.addEventListener('click', handleDrawerActionClick, true);
 
   return {
@@ -1050,6 +1064,7 @@ function mountDrawerEnhancements(): { destroy: () => void } {
         host_window.cancelAnimationFrame(scheduled_reconcile);
       }
       observer?.disconnect();
+      content_class_observer?.disconnect();
       host_document.removeEventListener('click', handleDrawerActionClick, true);
       clearDrawerFullscreen();
       $(`.${TOPBAR_LABEL_CLASS}`).remove();
@@ -1277,7 +1292,11 @@ function setTrackedFloatingStyle(
 function clampFloatingElement(element: HTMLElement, records: Map<HTMLElement, FloatingStyleRecord>) {
   const host_window = element.ownerDocument.defaultView ?? getHostWindow();
   const style = host_window.getComputedStyle(element);
-  if (style.position !== 'absolute' && style.position !== 'fixed') {
+  if (
+    style.display === 'none' ||
+    style.visibility === 'hidden' ||
+    (style.position !== 'absolute' && style.position !== 'fixed')
+  ) {
     return;
   }
 
@@ -1291,33 +1310,43 @@ function clampFloatingElement(element: HTMLElement, records: Map<HTMLElement, Fl
   const max_height = Math.max(120, host_window.innerHeight - margin * 2);
   const max_width_value = `${max_width}px`;
   const max_height_value = `${max_height}px`;
-  setTrackedFloatingStyle(element, 'maxWidth', max_width_value, records);
-  setTrackedFloatingStyle(element, 'maxHeight', max_height_value, records);
 
   const next_left = Math.min(Math.max(rect.left, margin), host_window.innerWidth - Math.min(rect.width, max_width) - margin);
   const next_top = Math.min(Math.max(rect.top, margin), host_window.innerHeight - Math.min(rect.height, max_height) - margin);
-  const offset_parent = style.position === 'absolute' ? element.offsetParent : null;
+  const should_adjust_left = Math.abs(next_left - rect.left) > 1;
+  const should_adjust_top = Math.abs(next_top - rect.top) > 1;
+  const offset_parent = (should_adjust_left || should_adjust_top) && style.position === 'absolute' ? element.offsetParent : null;
   const offset_parent_rect = offset_parent?.getBoundingClientRect();
-  const margin_left = parseCssPixelValue(style.marginLeft, 0);
-  const margin_top = parseCssPixelValue(style.marginTop, 0);
-  if (Math.abs(next_left - rect.left) > 1) {
+  let left_value: string | undefined;
+  let top_value: string | undefined;
+
+  if (should_adjust_left) {
+    const margin_left = parseCssPixelValue(style.marginLeft, 0);
     const left =
       style.position === 'fixed'
         ? next_left
         : offset_parent && offset_parent_rect
           ? next_left - offset_parent_rect.left - offset_parent.clientLeft + offset_parent.scrollLeft - margin_left
           : next_left + host_window.scrollX - margin_left;
-    const left_value = `${left}px`;
-    setTrackedFloatingStyle(element, 'left', left_value, records);
+    left_value = `${left}px`;
   }
-  if (Math.abs(next_top - rect.top) > 1) {
+  if (should_adjust_top) {
+    const margin_top = parseCssPixelValue(style.marginTop, 0);
     const top =
       style.position === 'fixed'
         ? next_top
         : offset_parent && offset_parent_rect
           ? next_top - offset_parent_rect.top - offset_parent.clientTop + offset_parent.scrollTop - margin_top
           : next_top + host_window.scrollY - margin_top;
-    const top_value = `${top}px`;
+    top_value = `${top}px`;
+  }
+
+  setTrackedFloatingStyle(element, 'maxWidth', max_width_value, records);
+  setTrackedFloatingStyle(element, 'maxHeight', max_height_value, records);
+  if (left_value !== undefined) {
+    setTrackedFloatingStyle(element, 'left', left_value, records);
+  }
+  if (top_value !== undefined) {
     setTrackedFloatingStyle(element, 'top', top_value, records);
   }
 }
@@ -1333,18 +1362,19 @@ function mountFloatingMenuPositioner(): { destroy: () => void } {
     '#export_format_popup',
     '#rawPromptPopup',
   ];
+  const selector = selectors.join(', ');
   const style_records = new Map<HTMLElement, FloatingStyleRecord>();
   let frame = 0;
 
   const clampAll = () => {
     frame = 0;
-    selectors.forEach(selector => {
-      host_document.querySelectorAll<HTMLElement>(selector).forEach(element => {
-        const style = host_window.getComputedStyle(element);
-        if (style.display !== 'none' && style.visibility !== 'hidden') {
-          clampFloatingElement(element, style_records);
-        }
-      });
+    style_records.forEach((_, element) => {
+      if (!element.isConnected) {
+        style_records.delete(element);
+      }
+    });
+    host_document.querySelectorAll<HTMLElement>(selector).forEach(element => {
+      clampFloatingElement(element, style_records);
     });
   };
 
@@ -1355,16 +1385,29 @@ function mountFloatingMenuPositioner(): { destroy: () => void } {
     if (frame !== 0) {
       return;
     }
-    frame = host_window.requestAnimationFrame(() => {
-      frame = host_window.requestAnimationFrame(clampAll);
-    });
+    frame = host_window.requestAnimationFrame(clampAll);
   };
 
-  const observer = new host_window.MutationObserver(schedule);
-  observer.observe(host_document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
+  const containsFloatingElement = (node: Node) =>
+    node instanceof host_window.Element && (node.matches(selector) || Boolean(node.querySelector(selector)));
+  const observer = new host_window.MutationObserver(mutations => {
+    if (mutations.some(mutation => [...mutation.addedNodes].some(containsFloatingElement))) {
+      schedule();
+    }
+  });
+  observer.observe(host_document.body, { childList: true });
+  const handlePopupInput = (event: Event) => {
+    if (
+      event.target instanceof host_window.Element &&
+      event.target.matches('.ui-autocomplete-input, .select2-search__field')
+    ) {
+      schedule();
+    }
+  };
   host_document.addEventListener('click', schedule, true);
   host_document.addEventListener('focusin', schedule, true);
-  host_document.addEventListener('keydown', schedule, true);
+  host_document.addEventListener('input', handlePopupInput, true);
+  host_window.addEventListener('resize', schedule);
 
   return {
     destroy: () => {
@@ -1374,7 +1417,8 @@ function mountFloatingMenuPositioner(): { destroy: () => void } {
       observer.disconnect();
       host_document.removeEventListener('click', schedule, true);
       host_document.removeEventListener('focusin', schedule, true);
-      host_document.removeEventListener('keydown', schedule, true);
+      host_document.removeEventListener('input', handlePopupInput, true);
+      host_window.removeEventListener('resize', schedule);
       style_records.forEach((record, element) => {
         (Object.keys(record.applied) as Array<keyof FloatingInlineStyles>).forEach(property => {
           if (element.style[property] === record.applied[property]) {
@@ -1482,12 +1526,44 @@ function mountSidebarNavSizer(): { destroy: () => void } {
     frame = host_window.requestAnimationFrame(update);
   };
 
+  const toggle_resize_observer =
+    holder instanceof host_window.HTMLElement ? new host_window.ResizeObserver(schedule) : undefined;
+  const observeDrawerToggles = () => {
+    toggle_resize_observer?.disconnect();
+    holder
+      ?.querySelectorAll<HTMLElement>(':scope > .drawer > .drawer-toggle')
+      .forEach(toggle => toggle_resize_observer?.observe(toggle));
+  };
   const holder_observer =
     holder instanceof host_window.HTMLElement
-      ? new host_window.MutationObserver(schedule)
+      ? new host_window.MutationObserver(mutations => {
+          if (
+            mutations.some(
+              mutation =>
+                mutation.target === holder ||
+                (mutation.target instanceof host_window.Element &&
+                  mutation.target.matches('#top-settings-holder > .drawer')),
+            )
+          ) {
+            observeDrawerToggles();
+            schedule();
+          }
+        })
       : undefined;
-  holder_observer?.observe(holder!, { childList: true, subtree: true, attributes: true, attributeFilter: ['class', 'style'] });
-  const body_observer = new host_window.MutationObserver(schedule);
+  holder_observer?.observe(holder!, { childList: true, subtree: true });
+  observeDrawerToggles();
+  let is_two_column_active =
+    host_document.body.classList.contains(BODY_CLASS_ENABLED) &&
+    host_document.body.classList.contains(BODY_CLASS_TWO_COLUMN);
+  const body_observer = new host_window.MutationObserver(() => {
+    const next_is_two_column_active =
+      host_document.body.classList.contains(BODY_CLASS_ENABLED) &&
+      host_document.body.classList.contains(BODY_CLASS_TWO_COLUMN);
+    if (next_is_two_column_active !== is_two_column_active) {
+      is_two_column_active = next_is_two_column_active;
+      schedule();
+    }
+  });
   body_observer.observe(host_document.body, { attributes: true, attributeFilter: ['class'] });
   host_window.addEventListener('resize', schedule);
   schedule();
@@ -1498,6 +1574,7 @@ function mountSidebarNavSizer(): { destroy: () => void } {
         host_window.cancelAnimationFrame(frame);
       }
       holder_observer?.disconnect();
+      toggle_resize_observer?.disconnect();
       body_observer.disconnect();
       host_window.removeEventListener('resize', schedule);
       removeHostCssVariable(LEFT_NAV_HEIGHT_VARIABLE);
@@ -1633,7 +1710,6 @@ function mountApiPanelEnhancements(): { destroy: () => void } {
   let active_source_restore: (() => void) | undefined;
   let active_source_selector: string | undefined;
   let scheduled_enhance_frame = 0;
-  let scheduled_enhance_timers: number[] = [];
 
   const shouldUseExpandedSelectors = () => {
     return desktop_query.matches && host_document.body.classList.contains(BODY_CLASS_TWO_COLUMN);
@@ -1648,8 +1724,10 @@ function mountApiPanelEnhancements(): { destroy: () => void } {
       return;
     }
     if (original_size === null) {
-      select.removeAttribute('size');
-    } else {
+      if (select.hasAttribute('size')) {
+        select.removeAttribute('size');
+      }
+    } else if (select.getAttribute('size') !== original_size) {
       select.setAttribute('size', original_size);
     }
   };
@@ -1668,7 +1746,10 @@ function mountApiPanelEnhancements(): { destroy: () => void } {
     if (!original_select_sizes.has(select)) {
       original_select_sizes.set(select, select.getAttribute('size'));
     }
-    select.setAttribute('size', String(Math.max(2, select.options.length)));
+    const size = String(Math.max(2, select.options.length));
+    if (select.getAttribute('size') !== size) {
+      select.setAttribute('size', size);
+    }
   };
 
   const clearApiSourceGroup = () => {
@@ -1700,8 +1781,15 @@ function mountApiPanelEnhancements(): { destroy: () => void } {
   };
 
   const updateApiSourceGroup = (main_api_block: Element | null, use_expanded_selectors: boolean) => {
-    setSelectListMode('#rm_api_block #chat_completion_source', false);
-    setSelectListMode('#rm_api_block #textgen_type', false);
+    const source_config = getApiSourceSelector();
+    setSelectListMode(
+      '#rm_api_block #chat_completion_source',
+      Boolean(main_api_block && source_config?.selector === '#rm_api_block #chat_completion_source' && use_expanded_selectors),
+    );
+    setSelectListMode(
+      '#rm_api_block #textgen_type',
+      Boolean(main_api_block && source_config?.selector === '#rm_api_block #textgen_type' && use_expanded_selectors),
+    );
 
     if (!main_api_block) {
       clearApiSourceGroup();
@@ -1715,7 +1803,6 @@ function mountApiPanelEnhancements(): { destroy: () => void } {
       main_api_block.append(source_group);
     }
 
-    const source_config = getApiSourceSelector();
     const source_select = source_config ? host_document.querySelector<HTMLSelectElement>(source_config.selector) : null;
     if (!source_config || !source_select) {
       clearApiSourceGroup();
@@ -1743,11 +1830,17 @@ function mountApiPanelEnhancements(): { destroy: () => void } {
       };
       active_source_selector = source_config.selector;
     }
-
-    setSelectListMode(source_config.selector, use_expanded_selectors);
   };
 
   const enhanceApiPanel = () => {
+    const api_panel = host_document.querySelector<HTMLElement>('#rm_api_block');
+    if (!api_panel?.classList.contains('openDrawer')) {
+      setSelectListMode('#rm_api_block #main_api', false);
+      setSelectListMode('#rm_api_block #chat_completion_source', false);
+      setSelectListMode('#rm_api_block #textgen_type', false);
+      return;
+    }
+
     const main_api_block = host_document.querySelector('#rm_api_block #main-API-selector-block');
 
     const api_holder = host_document.querySelector('#rm_api_block > .flex-container.flexFlowColumn');
@@ -1769,17 +1862,16 @@ function mountApiPanelEnhancements(): { destroy: () => void } {
       host_window.cancelAnimationFrame(scheduled_enhance_frame);
       scheduled_enhance_frame = 0;
     }
-    scheduled_enhance_timers.forEach(timer => host_window.clearTimeout(timer));
-    scheduled_enhance_timers = [];
   };
 
   const scheduleApiPanelEnhancement = () => {
-    clearScheduledApiPanelEnhancement();
+    if (scheduled_enhance_frame !== 0) {
+      return;
+    }
     scheduled_enhance_frame = host_window.requestAnimationFrame(() => {
       scheduled_enhance_frame = 0;
       enhanceApiPanel();
     });
-    scheduled_enhance_timers = [0, 80, 200].map(delay => host_window.setTimeout(enhanceApiPanel, delay));
   };
 
   enhanceApiPanel();
@@ -1793,8 +1885,24 @@ function mountApiPanelEnhancements(): { destroy: () => void } {
   if (api_panel instanceof host_window.HTMLElement) {
     observer?.observe(api_panel, { childList: true, subtree: true });
   }
-  const body_observer = new host_window.MutationObserver(() => {
+  const panel_state_observer =
+    api_panel instanceof host_window.HTMLElement
+      ? new host_window.MutationObserver(() => {
+          scheduleApiPanelEnhancement();
+        })
+      : undefined;
+  panel_state_observer?.observe(api_panel!, { attributes: true, attributeFilter: ['class'] });
+  let use_expanded_selectors = shouldUseExpandedSelectors();
+  const handleApiLayoutChange = () => {
+    const next_use_expanded_selectors = shouldUseExpandedSelectors();
+    if (next_use_expanded_selectors === use_expanded_selectors) {
+      return;
+    }
+    use_expanded_selectors = next_use_expanded_selectors;
     scheduleApiPanelEnhancement();
+  };
+  const body_observer = new host_window.MutationObserver(() => {
+    handleApiLayoutChange();
   });
   body_observer.observe(host_document.body, { attributes: true, attributeFilter: ['class'] });
   const handleApiSelectorChange = (event: Event) => {
@@ -1807,16 +1915,17 @@ function mountApiPanelEnhancements(): { destroy: () => void } {
   };
   host_document.addEventListener('input', handleApiSelectorChange);
   host_document.addEventListener('change', handleApiSelectorChange);
-  desktop_query.addEventListener('change', scheduleApiPanelEnhancement);
+  desktop_query.addEventListener('change', handleApiLayoutChange);
 
   return {
     destroy: () => {
       clearScheduledApiPanelEnhancement();
       observer?.disconnect();
+      panel_state_observer?.disconnect();
       body_observer.disconnect();
       host_document.removeEventListener('input', handleApiSelectorChange);
       host_document.removeEventListener('change', handleApiSelectorChange);
-      desktop_query.removeEventListener('change', scheduleApiPanelEnhancement);
+      desktop_query.removeEventListener('change', handleApiLayoutChange);
       clearApiSourceGroup();
       moved_restores.reverse().forEach(restore => restore());
       host_document.querySelectorAll(`.${API_SOURCE_GROUP_CLASS}:empty`).forEach(element => element.remove());

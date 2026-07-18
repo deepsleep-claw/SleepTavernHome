@@ -134,8 +134,8 @@ export function mountCharacterManagement(store: Store): { destroy: () => void } 
   const hostDocument = getHostDocument();
   const hostWindow = getHostWindow();
   const HostMutationObserver = (hostWindow as Window & { MutationObserver: typeof MutationObserver }).MutationObserver;
-  const HostElement = hostWindow.Element;
   let characterSummary: ModernCharacterSummary | null = null;
+  let observedPanel: HTMLElement | null = null;
   let scheduledSync = 0;
 
   const restoreSummary = () => {
@@ -153,12 +153,14 @@ export function mountCharacterManagement(store: Store): { destroy: () => void } 
     const enabled = store.is_active && store.settings.modernCharacterManagement;
 
     if (!enabled) {
+      observePanel(null);
       clearState();
       return;
     }
 
     toggleHostState(hostDocument, true);
     const panel = hostDocument.querySelector<HTMLElement>('#right-nav-panel');
+    observePanel(panel);
     if (!isEditorMode(panel)) {
       restoreSummary();
       return;
@@ -177,41 +179,24 @@ export function mountCharacterManagement(store: Store): { destroy: () => void } 
     scheduledSync = hostWindow.requestAnimationFrame(sync);
   };
 
-  const isRelevantNode = (node: Node): boolean => {
-    if (!(node instanceof HostElement)) {
-      return false;
-    }
-    return (
-      node.matches(
-        '#right-nav-panel, #rm_characters_block, #rm_ch_create_block, #avatar-and-name-block, #avatar_div, #avatar_controls, #rm_PinAndTabs, #name_div, #tags_div',
-      ) ||
-      Boolean(node.closest('#right-nav-panel')) ||
-      Boolean(
-        node.querySelector(
-          '#right-nav-panel, #rm_characters_block, #rm_ch_create_block, #avatar-and-name-block, #avatar_div, #avatar_controls, #rm_PinAndTabs, #name_div, #tags_div',
-        ),
-      )
-    );
-  };
+  const observer = new HostMutationObserver(scheduleSync);
 
-  const observer = new HostMutationObserver(mutations => {
-    if (
-      mutations.some(
-        mutation =>
-          isRelevantNode(mutation.target) ||
-          [...mutation.addedNodes].some(isRelevantNode) ||
-          [...mutation.removedNodes].some(isRelevantNode),
-      )
-    ) {
-      scheduleSync();
+  function observePanel(panel: HTMLElement | null) {
+    if (panel === observedPanel) {
+      return;
     }
-  });
-  observer.observe(hostDocument.body, {
-    attributes: true,
-    attributeFilter: ['data-menu-type'],
-    childList: true,
-    subtree: true,
-  });
+
+    observer.disconnect();
+    observedPanel = panel;
+    if (panel) {
+      observer.observe(panel, {
+        attributes: true,
+        attributeFilter: ['data-menu-type'],
+        childList: true,
+        subtree: true,
+      });
+    }
+  }
 
   const stopWatch = watch(
     () => [store.is_active, store.settings.modernCharacterManagement] as const,

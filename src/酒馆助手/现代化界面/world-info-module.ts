@@ -1656,6 +1656,7 @@ export function mountWorldInfoEditor(store: Store): { destroy: () => void } {
     const hostDocument = getHostDocument();
     const hostWindow = getHostWindow() as HostWindow;
     let controller: NativeWorldInfoEnhancer | undefined;
+    let observedWorldInfo: HTMLElement | null = null;
     let scheduledSync = 0;
 
     const findWorldInfo = () => hostDocument.querySelector<HTMLElement>('#WorldInfo');
@@ -1669,11 +1670,14 @@ export function mountWorldInfoEditor(store: Store): { destroy: () => void } {
     const sync = () => {
         scheduledSync = 0;
         const shouldEnable = store.is_active && store.settings.modernWorldInfoEditor;
-        findWorldInfo()?.classList.toggle(WORLD_INFO_ENABLED_CLASS, shouldEnable);
-        if (shouldEnable) {
+        const worldInfo = findWorldInfo();
+        observeWorldInfo(worldInfo);
+        const isOpen = worldInfo?.classList.contains('openDrawer') ?? false;
+        worldInfo?.classList.toggle(WORLD_INFO_ENABLED_CLASS, shouldEnable && (isOpen || Boolean(controller)));
+        if (shouldEnable && isOpen) {
             controller ??= new NativeWorldInfoEnhancer();
             controller.mount();
-        } else if (unmount()) {
+        } else if (!shouldEnable && unmount()) {
             refreshOriginalEditor(hostDocument);
         }
     };
@@ -1686,7 +1690,18 @@ export function mountWorldInfoEditor(store: Store): { destroy: () => void } {
     };
 
     const observer = new hostWindow.MutationObserver(scheduleSync);
-    observer.observe(hostDocument.body, { childList: true });
+
+    function observeWorldInfo(worldInfo: HTMLElement | null): void {
+        if (worldInfo === observedWorldInfo) {
+            return;
+        }
+
+        observer.disconnect();
+        observedWorldInfo = worldInfo;
+        if (worldInfo) {
+            observer.observe(worldInfo, { attributes: true, attributeFilter: ['class'] });
+        }
+    }
 
     const stopWatch = watch(
         () => [store.is_active, store.settings.modernWorldInfoEditor] as const,

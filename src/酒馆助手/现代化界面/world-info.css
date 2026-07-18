@@ -113,8 +113,6 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-native-list
   border-radius: 8px;
   background-color: var(--th-modern-wi-panel);
   box-shadow: var(--th-modern-glass-shadow);
-  backdrop-filter: var(--th-modern-glass-filter);
-  -webkit-backdrop-filter: var(--th-modern-glass-filter);
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-native-editor {
@@ -125,8 +123,6 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-native-edit
   border-radius: 8px;
   background-color: var(--th-modern-wi-panel);
   box-shadow: var(--th-modern-glass-shadow);
-  backdrop-filter: var(--th-modern-glass-filter);
-  -webkit-backdrop-filter: var(--th-modern-glass-filter);
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #world_popup_entries_list {

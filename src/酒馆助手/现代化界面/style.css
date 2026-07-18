@@ -51,7 +51,6 @@ body.th-modern-enabled {
   --th-modern-soft-shadow:
     0 12px 26px color-mix(in srgb, var(--SmartThemeShadowColor) 24%, transparent),
     0 2px 8px color-mix(in srgb, var(--SmartThemeShadowColor) 18%, transparent);
-  --th-modern-glass-filter: blur(var(--SmartThemeBlurStrength));
   --th-modern-glass-shadow:
     8px 8px 8px color-mix(in srgb, var(--SmartThemeShadowColor) 46%, transparent),
     12px 12px 14px color-mix(in srgb, var(--SmartThemeShadowColor) 34%, transparent),
@@ -97,7 +96,6 @@ body.th-modern-enabled.th-modern-reduce-motion *::after {
 body.th-modern-enabled.th-modern-reduce-advanced-effects {
   --th-modern-input-shadow: 0 0 0 transparent;
   --th-modern-soft-shadow: 0 0 0 transparent;
-  --th-modern-glass-filter: none;
   --th-modern-glass-shadow: 0 0 0 transparent;
 }
 
@@ -107,10 +105,8 @@ body.th-modern-enabled.th-modern-reduce-advanced-effects {
 :where(body.th-modern-enabled #send_form #file_form:not(.displayNone)),
 :where(body.th-modern-enabled #qr--bar > .qr--buttons .qr--button),
 :where(body.th-modern-enabled .th-modern-recent-list),
-:where(body.th-modern-enabled .th-modern-failsafe-dialog) {
+  :where(body.th-modern-enabled .th-modern-failsafe-dialog) {
   background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, black 10%);
-  backdrop-filter: var(--th-modern-glass-filter);
-  -webkit-backdrop-filter: var(--th-modern-glass-filter);
   box-shadow: var(--th-modern-glass-shadow);
 }
 
@@ -266,8 +262,6 @@ body.th-modern-enabled #send_form {
   background: transparent !important;
   box-shadow: none !important;
   outline: none !important;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
 }
 
 body.th-modern-enabled #send_form:focus-within,
@@ -295,8 +289,6 @@ body.th-modern-enabled #nonQRFormItems {
   border-radius: 18px;
   background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, black 10%);
   box-shadow: var(--th-modern-input-shadow);
-  backdrop-filter: var(--th-modern-glass-filter);
-  -webkit-backdrop-filter: var(--th-modern-glass-filter);
   transition:
     border-color var(--th-modern-motion-duration),
     box-shadow var(--th-modern-motion-duration),
@@ -460,8 +452,6 @@ body.th-modern-enabled #qr--bar > .qr--buttons .qr--button {
   color: color-mix(in srgb, var(--SmartThemeBodyColor) 82%, transparent);
   overflow: hidden;
   white-space: nowrap;
-  backdrop-filter: var(--th-modern-glass-filter);
-  -webkit-backdrop-filter: var(--th-modern-glass-filter);
   transition:
     transform var(--th-modern-motion-duration),
     border-color var(--th-modern-motion-duration),
@@ -649,8 +639,6 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
     border-bottom: 1px solid var(--th-modern-line);
     background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, black 10%);
     box-shadow: 0 8px 24px color-mix(in srgb, var(--SmartThemeShadowColor) 18%, transparent);
-    backdrop-filter: var(--th-modern-glass-filter);
-    -webkit-backdrop-filter: var(--th-modern-glass-filter);
   }
 
   body.th-modern-enabled #top-settings-holder > .drawer > .drawer-toggle {
@@ -955,8 +943,6 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
     color: color-mix(in srgb, var(--SmartThemeBodyColor) 82%, transparent);
     overflow: hidden;
     white-space: nowrap;
-    backdrop-filter: var(--th-modern-glass-filter);
-    -webkit-backdrop-filter: var(--th-modern-glass-filter);
     transition:
       transform var(--th-modern-motion-duration),
       border-color var(--th-modern-motion-duration),
@@ -1096,11 +1082,6 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
     color: inherit;
   }
 
-  body.th-modern-enabled.th-modern-two-column #top-settings-holder > .drawer > .drawer-content.openDrawer {
-    height: 100dvh !important;
-    max-height: 100dvh !important;
-  }
-
   body.th-modern-enabled.th-modern-two-column #top-settings-holder > .drawer > .drawer-content {
     position: fixed !important;
     inset: 0 auto 0 var(--th-modern-left-layout-width) !important;
@@ -1109,42 +1090,29 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
     bottom: 0 !important;
     left: var(--th-modern-left-layout-width) !important;
     z-index: var(--th-modern-overlay-z);
-    display: flex !important;
+    display: none !important;
     width: min(
       var(--th-modern-overlay-width, var(--th-modern-overlay-width-fallback)),
       var(--th-modern-overlay-soft-max-width)
     ) !important;
     max-width: var(--th-modern-overlay-soft-max-width) !important;
-    height: 100dvh !important;
-    max-height: 100dvh !important;
-    min-height: 100dvh !important;
     margin: 0;
     padding: 5px;
-    clip-path: inset(0 100% 0 0);
-    opacity: 0;
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
-    pointer-events: none;
     transform: none;
-    transform-origin: left center;
-    transition:
-      opacity var(--th-modern-motion-duration) ease,
-      clip-path var(--th-modern-motion-duration) cubic-bezier(0.2, 0.8, 0.2, 1),
-      visibility 0s linear var(--th-modern-motion-duration) !important;
-    transition-property: opacity, clip-path, visibility !important;
-    visibility: hidden;
-    will-change: clip-path, opacity;
+    transition: none !important;
     animation: none !important;
   }
 
   body.th-modern-enabled.th-modern-two-column #top-settings-holder > .drawer > .drawer-content.openDrawer {
-    clip-path: inset(0 0 0 0);
-    opacity: 1;
+    display: flex !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    min-height: 100dvh !important;
     pointer-events: auto;
     transform: none;
-    transition-delay: 0s !important;
-    visibility: visible;
   }
 
   body.th-modern-enabled.th-modern-two-column.th-modern-drawer-fullscreen
@@ -1158,15 +1126,7 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
   }
 
   body.th-modern-enabled.th-modern-two-column #top-settings-holder > .drawer > .drawer-content.closedDrawer {
-    display: flex !important;
-    height: 100dvh !important;
-    max-height: 100dvh !important;
-    min-height: 100dvh !important;
-    clip-path: inset(0 100% 0 0);
-    opacity: 0;
-    pointer-events: none;
-    transform: none;
-    visibility: hidden;
+    display: none !important;
   }
 
   body.th-modern-enabled.th-modern-two-column .th-modern-sidebar-brand,
