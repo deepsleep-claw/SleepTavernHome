@@ -78,6 +78,11 @@
           <span>启用现代角色管理界面</span>
         </label>
 
+        <label class="checkbox_label modern-layout-checkbox">
+          <input v-model="store.settings.modernExtensionSettings" type="checkbox" class="checkbox" />
+          <span>启用现代扩展程序界面</span>
+        </label>
+
         <div class="modern-layout-actions">
           <button type="button" class="menu_button" title="重置现代化界面设置" @click="resetSettings">
             <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>

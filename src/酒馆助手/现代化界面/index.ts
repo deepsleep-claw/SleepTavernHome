@@ -2,6 +2,7 @@ import { checkMinimumVersion } from '@util/common';
 import { createScriptIdDiv, teleportStyle } from '@util/script';
 import { createPinia, getActivePinia, setActivePinia } from 'pinia';
 import { mountCharacterManagement } from './character-management-module';
+import { mountExtensionSettings } from './extension-settings-module';
 import { getHostDocument, getHostWindow } from './host-context';
 import { initPanel } from './panel';
 import {
@@ -16,6 +17,7 @@ import { mountWorldInfoEditor } from './world-info-module';
 import './style.css';
 import './world-info.css';
 import './character-management.css';
+import './extension-settings.css';
 
 const BODY_CLASS_ENABLED = 'th-modern-enabled';
 const BODY_CLASS_TWO_COLUMN = 'th-modern-two-column';
@@ -2022,6 +2024,7 @@ function mountActiveRuntime(store: ReturnType<typeof useModernLayoutStore>): { d
     recent_chats = mountRecentChats(sidebar.$list);
     cleanups.push(recent_chats.destroy);
     cleanups.push(mountDrawerEnhancements().destroy);
+    cleanups.push(mountExtensionSettings(store).destroy);
     cleanups.push(mountSidebarNavSizer().destroy);
     cleanups.push(mountFailsafeRestore(store).destroy);
     cleanups.push(mountFloatingMenuPositioner().destroy);
