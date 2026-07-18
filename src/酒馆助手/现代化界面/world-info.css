@@ -1,13 +1,48 @@
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled {
-  --th-modern-wi-panel: color-mix(in srgb, var(--SmartThemeBlurTintColor) 82%, transparent);
-  --th-modern-wi-panel-soft: color-mix(in srgb, var(--SmartThemeBlurTintColor) 66%, transparent);
-  --th-modern-wi-border: color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
+  --th-modern-wi-panel: color-mix(in srgb, var(--SmartThemeBlurTintColor) 86%, transparent);
+  --th-modern-wi-panel-soft: color-mix(in srgb, var(--SmartThemeBlurTintColor) 68%, transparent);
+  --th-modern-wi-card: color-mix(in srgb, var(--SmartThemeBlurTintColor) 56%, var(--SmartThemeBodyColor) 3%);
+  --th-modern-wi-border: color-mix(in srgb, var(--SmartThemeBorderColor) 78%, transparent);
   --th-modern-wi-muted: color-mix(in srgb, var(--SmartThemeBodyColor) 58%, transparent);
   --th-modern-wi-accent: var(--SmartThemeQuoteColor);
   --th-modern-wi-button-bg: color-mix(in srgb, var(--SmartThemeBlurTintColor) 62%, var(--SmartThemeBodyColor) 6%);
   --th-modern-wi-button-bg-hover: color-mix(in srgb, var(--th-modern-wi-accent) 16%, var(--SmartThemeBlurTintColor) 62%);
+  --th-modern-wi-control-size: 2rem;
   --th-modern-wi-native-list-width: minmax(260px, 1fr);
   overflow: hidden;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled > #WorldInfoheader + .flex-container {
+  display: none !important;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled > .th-modern-drawer-titlebar .th-modern-drawer-actions #WI_panel_pin_div,
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled > .th-modern-drawer-titlebar .th-modern-drawer-actions .notes-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  margin: 0;
+  border-radius: var(--th-modern-radius-xs);
+  background: color-mix(in srgb, var(--SmartThemeQuoteColor) 12%, transparent);
+  color: var(--SmartThemeBodyColor);
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled > .th-modern-drawer-titlebar .th-modern-drawer-actions #WI_panel_pin_div label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled > .th-modern-drawer-titlebar .th-modern-drawer-actions #WI_panel_pin_div label > div,
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled > .th-modern-drawer-titlebar .th-modern-drawer-actions .notes-link .note-link-span {
+  margin: 0;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #world_popup {
@@ -15,7 +50,11 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #world_popup {
   flex-direction: column;
   min-height: 0;
   height: 100%;
-  gap: 0.55rem;
+  gap: 0.4rem;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #world_popup > hr {
+  display: none;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wi-holder {
@@ -23,32 +62,187 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wi-holder {
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
+  gap: 0.4rem;
   overflow: hidden;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(17rem, 0.8fr);
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0.38rem 0.5rem;
+  border: 1px solid var(--th-modern-wi-border);
+  border-radius: 8px;
+  background-color: var(--th-modern-wi-panel-soft);
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock > .range-block {
+  display: grid !important;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  align-self: stretch;
+  gap: 0.45rem;
+  min-width: 0;
+  margin: 0 !important;
+  padding: 0;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock > .range-block:nth-child(2) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock .range-block-title,
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock .range-block-range {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock .range-block-title small {
+  display: block;
+  overflow: hidden;
+  color: var(--th-modern-wi-muted);
+  font-size: 0.76rem;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock .select2-container {
+  width: 100% !important;
+  min-width: 0;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock .inline-drawer,
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock .inline-drawer-toggle {
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock .inline-drawer-toggle {
+  min-height: var(--th-modern-wi-control-size);
+  padding: 0.3rem 0.5rem;
+  border-radius: 7px;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-native-shell {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   min-height: 0;
   flex: 1 1 auto;
-  gap: 0.55rem;
+  gap: 0.4rem;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar {
+  min-width: 0;
+  padding: 0.28rem;
+  border: 1px solid var(--th-modern-wi-border);
+  border-radius: 8px;
+  background-color: var(--th-modern-wi-panel-soft);
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar:empty {
+  display: none;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar > .flex-container {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.35rem;
+  min-width: 0;
+  margin: 0;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar > .flex-container > small {
+  display: none;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar #world_create_button,
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar .menu_button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: var(--th-modern-wi-control-size);
+  min-width: var(--th-modern-wi-control-size);
+  height: var(--th-modern-wi-control-size);
+  min-height: var(--th-modern-wi-control-size);
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--th-modern-wi-border);
+  border-radius: 7px;
+  background-color: var(--th-modern-wi-button-bg);
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar #world_create_button {
+  width: auto;
+  padding-inline: 0.55rem;
+  gap: 0.35rem;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar #world_editor_select,
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar .select2-container {
+  flex: 1 1 10rem;
+  width: auto !important;
+  min-width: 8rem;
+  height: var(--th-modern-wi-control-size);
+  margin: 0;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar .select2-selection {
+  min-height: var(--th-modern-wi-control-size);
+  border-color: var(--th-modern-wi-border);
+  border-radius: 7px;
+  background-color: color-mix(in srgb, var(--SmartThemeBlurTintColor) 76%, transparent);
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar .select2-selection__rendered {
+  line-height: calc(var(--th-modern-wi-control-size) - 2px);
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar .select2-selection__arrow {
+  height: var(--th-modern-wi-control-size);
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar .menu_button:hover,
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar #world_create_button:hover {
+  background-color: var(--th-modern-wi-button-bg-hover);
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
+  gap: 0.35rem;
   min-width: 0;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar > .flex-container {
+  display: contents;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_search {
   flex: 1 1 16rem;
-  min-width: 10rem;
+  min-width: 8rem;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_sort_order {
-  flex: 0 0 11rem;
+  flex: 0 1 10rem;
   min-width: 8rem;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_search,
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_sort_order {
+  box-sizing: border-box;
+  height: var(--th-modern-wi-control-size);
+  min-height: var(--th-modern-wi-control-size);
+  margin: 0;
+  border-color: var(--th-modern-wi-border);
+  border-radius: 7px;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_pagination {
@@ -57,12 +251,35 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #wo
   gap: 0.25rem;
   flex: 0 1 auto;
   min-width: 0;
+  min-height: var(--th-modern-wi-control-size);
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_pagination .paginationjs {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
+  min-height: var(--th-modern-wi-control-size);
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_pagination .paginationjs-pages ul {
+  display: flex;
+  align-items: center;
+  gap: 0.18rem;
+  margin: 0;
+  padding: 0;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_pagination .paginationjs-pages a,
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_pagination .paginationjs-size-changer,
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_pagination select {
+  box-sizing: border-box;
+  min-height: 1.85rem;
+  margin: 0;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_pagination .paginationjs-nav {
+  color: var(--th-modern-wi-muted);
+  font-size: 0.76rem;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar .menu_button {
@@ -70,8 +287,8 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar .me
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 2.15rem;
-  height: 2.15rem;
+  width: var(--th-modern-wi-control-size);
+  height: var(--th-modern-wi-control-size);
   padding: 0;
   border: 1px solid var(--th-modern-wi-border);
   border-radius: 8px;
@@ -84,21 +301,76 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-action:hove
   background-color: var(--th-modern-wi-button-bg-hover);
 }
 
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #OpenAllWIEntries,
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #CloseAllWIEntries {
-  display: none !important;
-}
-
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar .danger,
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-action.danger {
   color: color-mix(in srgb, #ff7676 82%, var(--SmartThemeBodyColor));
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-more-menu {
+  position: relative;
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled.th-modern-wi-multiselect .th-modern-wi-more-menu {
+  display: none;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-more-toggle {
+  list-style: none;
+  cursor: pointer;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-more-toggle::-webkit-details-marker {
+  display: none;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-more-popover {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 12;
+  display: grid;
+  gap: 0.25rem;
+  width: min(15rem, 72vw);
+  padding: 0.35rem;
+  border: 1px solid var(--th-modern-wi-border);
+  border-radius: 8px;
+  background-color: color-mix(in srgb, var(--SmartThemeBlurTintColor) 96%, black 4%);
+  box-shadow: var(--th-modern-glass-shadow);
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-more-menu:not([open]) > .th-modern-wi-more-popover {
+  display: none;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-more-popover .menu_button {
+  display: grid !important;
+  grid-template-columns: 1.2rem minmax(0, 1fr);
+  align-items: center;
+  justify-content: start;
+  gap: 0.45rem;
+  width: 100%;
+  height: var(--th-modern-wi-control-size);
+  padding: 0 0.5rem;
+  text-align: left;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-more-popover .menu_button::after {
+  content: attr(title);
+  overflow: hidden;
+  font-family: var(--mainFontFamily);
+  font-size: 0.82rem;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-native-main {
   position: relative;
   display: grid;
   grid-template-columns: var(--th-modern-wi-native-list-width) minmax(0, 2fr);
-  gap: 0.75rem;
+  gap: 0.55rem;
   flex: 1 1 auto;
   min-height: 0;
   height: 100%;
@@ -111,7 +383,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-native-list
   overflow: hidden;
   border: 1px solid var(--th-modern-wi-border);
   border-radius: 8px;
-  background-color: var(--th-modern-wi-panel);
+  background-color: var(--th-modern-wi-panel-soft);
   box-shadow: var(--th-modern-glass-shadow);
 }
 
@@ -130,7 +402,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #world_popup_entries_list
   height: 100%;
   min-height: 0;
   margin: 0;
-  padding: 0.55rem;
+  padding: 0.38rem;
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-gutter: stable;
@@ -141,10 +413,10 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #world_popup_entries_list
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #world_popup_entries_list .world_entry {
-  margin: 0 0 0.45rem;
+  margin: 0 0 0.18rem;
   border: 1px solid transparent;
-  border-radius: 8px;
-  background-color: color-mix(in srgb, var(--SmartThemeBlurTintColor) 58%, transparent);
+  border-radius: 7px;
+  background-color: var(--th-modern-wi-card);
   color: var(--SmartThemeBodyColor);
   cursor: pointer !important;
 }
@@ -169,9 +441,9 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .world_entry > form.world
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
-  min-height: 4.1rem;
-  gap: 0.55rem;
-  padding: 0.55rem 0.65rem;
+  min-height: 2.7rem;
+  gap: 0.34rem;
+  padding: 0.22rem 0.42rem;
   cursor: pointer !important;
 }
 
@@ -192,7 +464,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-summary
   display: grid;
   grid-template-columns: auto auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 0.5rem;
+  gap: 0.34rem;
   min-width: 0;
   cursor: pointer !important;
 }
@@ -221,9 +493,9 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .world_entry.th-modern-wi
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-entry-state-icon {
-  width: 1.35rem;
-  height: 1.35rem;
-  border: 0.32rem solid var(--th-modern-wi-accent);
+  width: 0.98rem;
+  height: 0.98rem;
+  border: 0.22rem solid var(--th-modern-wi-accent);
   border-radius: 999px;
 }
 
@@ -249,7 +521,17 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .world_entry[disabled="tr
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-text {
   display: grid;
   min-width: 0;
-  gap: 0.16rem;
+  gap: 0;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-title {
+  font-size: 0.9rem;
+  line-height: 1.15;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-meta {
+  font-size: 0.72rem;
+  line-height: 1.1;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-title,
@@ -267,7 +549,8 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-field-label
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-stats {
   justify-self: end;
-  font-size: 0.82em;
+  font-size: 0.7rem;
+  line-height: 1.12;
   text-align: right;
   white-space: pre-line;
 }
@@ -307,8 +590,8 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surf
   grid-template-rows: auto minmax(0, auto) minmax(0, 1fr);
   height: 100%;
   min-height: 0;
-  padding: 0.65rem;
-  gap: 0.5rem;
+  padding: 0.5rem;
+  gap: 0.4rem;
   overflow: hidden;
 }
 
@@ -316,21 +599,22 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-top 
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 0.5rem;
-  padding-bottom: 0.45rem;
+  gap: 0.4rem;
+  min-height: var(--th-modern-wi-control-size);
+  padding-bottom: 0.32rem;
   border-bottom: 1px solid var(--th-modern-wi-border);
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-enable-dock {
   display: flex;
   align-items: center;
-  min-width: 4.8rem;
+  min-width: 4.5rem;
   max-width: 7rem;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-actions {
   display: inline-flex;
-  gap: 0.35rem;
+  gap: 0.3rem;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-action {
@@ -338,8 +622,8 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2.05rem;
-  height: 2.05rem;
+  width: var(--th-modern-wi-control-size);
+  height: var(--th-modern-wi-control-size);
   padding: 0;
   border: 1px solid var(--th-modern-wi-border);
   border-radius: 8px;
@@ -354,19 +638,19 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-mobile-back
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-tabs {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: 0.18rem;
   width: max-content;
   max-width: 100%;
-  padding: 0.18rem;
+  padding: 0.14rem;
   border: 1px solid var(--th-modern-wi-border);
   border-radius: 999px;
   background-color: color-mix(in srgb, var(--SmartThemeBlurTintColor) 46%, transparent);
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-tab {
-  min-width: 3.4rem;
-  height: 1.85rem;
-  padding: 0 0.65rem;
+  min-width: 3.25rem;
+  height: 1.72rem;
+  padding: 0 0.55rem;
   border: 0;
   border-radius: 999px;
   background: transparent;
@@ -383,16 +667,23 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panels {
   max-height: clamp(10rem, 26vh, 16.5rem);
   overflow: auto;
   scrollbar-gutter: stable;
-  padding: 0.5rem;
+  padding: 0.42rem;
   border: 1px solid var(--th-modern-wi-border);
   border-radius: 8px;
   background-color: var(--th-modern-wi-panel-soft);
 }
 
+@media (min-width: 900px) {
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled
+    .th-modern-wi-panels:has(> .th-modern-wi-panel-insert:not([hidden])) {
+    max-height: clamp(14rem, 36vh, 16rem);
+  }
+}
+
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel {
   display: grid;
   grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: 0.5rem 0.6rem;
+  gap: 0.42rem 0.5rem;
   align-items: start;
   min-width: 0;
 }
@@ -406,56 +697,44 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled [hidden] {
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main {
-  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 2fr) minmax(5.25rem, 0.55fr) minmax(7.25rem, 0.7fr) minmax(8.5rem, 0.8fr);
+  grid-template-areas:
+    "title title state order"
+    "position detail no-recursion prevent-recursion"
+    "primary primary primary primary";
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-title-field {
-  grid-column: 1 / span 6;
-  grid-row: 1;
-}
-
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-state-field,
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-order-field {
-  grid-row: 1;
+  grid-area: title;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-state-field {
-  grid-column: 7 / span 4;
+  grid-area: state;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-order-field {
-  grid-column: 11 / span 2;
+  grid-area: order;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-position-field {
-  grid-column: 1 / span 6;
-  grid-row: 2;
-}
-
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-position-kind="depth"] .th-modern-wi-panel-main .th-modern-wi-position-field,
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-position-kind="outlet"] .th-modern-wi-panel-main .th-modern-wi-position-field {
-  grid-column: 1 / span 4;
+  grid-area: position;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-depth-field,
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-outlet-field {
-  grid-column: 5 / span 2;
-  grid-row: 2;
+  grid-area: detail;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-no-recursion-field {
-  grid-column: 7 / span 3;
-  grid-row: 2;
+  grid-area: no-recursion;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-primary-key-field {
-  grid-column: 1 / -1;
-  grid-row: 3;
+  grid-area: primary;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-prevent-recursion-field {
-  grid-column: 10 / span 3;
-  grid-row: 2;
+  grid-area: prevent-recursion;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-keywords {
@@ -505,131 +784,113 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-keywo
   grid-column: 9 / span 4;
 }
 
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert {
-  grid-template-columns: repeat(12, minmax(0, 1fr));
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel.th-modern-wi-panel-insert {
+  grid-template-columns: repeat(20, minmax(0, 1fr));
+  grid-template-areas:
+    "position position position position position position position position position position position order order order probability probability probability use-probability use-probability use-probability"
+    "group group group group group group group group group-weight group-weight group-weight sticky sticky sticky cooldown cooldown cooldown delay delay delay"
+    "character character character character character character character character character character character character trigger trigger trigger trigger trigger trigger trigger trigger"
+    "no-recursion no-recursion no-recursion no-recursion no-recursion prevent-recursion prevent-recursion prevent-recursion prevent-recursion prevent-recursion delay-recursion delay-recursion delay-recursion delay-recursion delay-recursion budget budget budget budget budget";
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-position-field {
-  grid-column: 1 / span 6;
-  grid-row: 1;
+  grid-area: position;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-position-kind="depth"] .th-modern-wi-panel-insert .th-modern-wi-position-field,
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-position-kind="outlet"] .th-modern-wi-panel-insert .th-modern-wi-position-field {
-  grid-column: 1 / span 4;
+  grid-area: position;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-depth-field,
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-outlet-field {
-  grid-column: 5 / span 3;
-  grid-row: 1;
+  grid-area: depth;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-order-field {
-  grid-column: 7 / span 2;
-  grid-row: 1;
-}
-
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-position-kind="depth"] .th-modern-wi-panel-insert .th-modern-wi-order-field,
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-position-kind="outlet"] .th-modern-wi-panel-insert .th-modern-wi-order-field {
-  grid-column: 8 / span 2;
+  grid-area: order;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-probability-field {
-  grid-column: 9 / span 2;
-  grid-row: 1;
-}
-
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-position-kind="depth"] .th-modern-wi-panel-insert .th-modern-wi-probability-field,
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-position-kind="outlet"] .th-modern-wi-panel-insert .th-modern-wi-probability-field {
-  grid-column: 10 / span 2;
+  grid-area: probability;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-use-probability-field {
-  grid-column: 11 / span 2;
-  grid-row: 1;
-}
-
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-position-kind="depth"] .th-modern-wi-panel-insert .th-modern-wi-use-probability-field,
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-position-kind="outlet"] .th-modern-wi-panel-insert .th-modern-wi-use-probability-field {
-  grid-column: 12 / span 1;
+  grid-area: use-probability;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-group-field {
-  grid-column: 1 / span 4;
-  grid-row: 2;
-}
-
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-group-weight-field,
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-sticky-field,
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-cooldown-field,
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-delay-field {
-  grid-row: 2;
+  grid-area: group;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-group-weight-field {
-  grid-column: 5 / span 2;
+  grid-area: group-weight;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-sticky-field {
-  grid-column: 7 / span 2;
+  grid-area: sticky;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-cooldown-field {
-  grid-column: 9 / span 2;
+  grid-area: cooldown;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-delay-field {
-  grid-column: 11 / span 2;
-}
-
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-character-filter-field,
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-generation-trigger-field {
-  grid-row: 3;
+  grid-area: delay;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-character-filter-field {
-  grid-column: 1 / span 8;
+  grid-area: character;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-generation-trigger-field {
-  grid-column: 9 / span 4;
-}
-
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-recursion-delay="true"] .th-modern-wi-panel-insert .th-modern-wi-character-filter-field {
-  grid-column: 1 / span 6;
-}
-
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-recursion-delay="true"] .th-modern-wi-panel-insert .th-modern-wi-generation-trigger-field {
-  grid-column: 7 / span 4;
+  grid-area: trigger;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-recursion-level-field {
-  grid-column: 11 / span 2;
-  grid-row: 3;
-}
-
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-no-recursion-field,
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-prevent-recursion-field,
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-delay-recursion-field,
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-budget-field {
-  grid-row: 4;
+  grid-area: recursion;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-no-recursion-field {
-  grid-column: 1 / span 3;
+  grid-area: no-recursion;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-prevent-recursion-field {
-  grid-column: 4 / span 3;
+  grid-area: prevent-recursion;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-delay-recursion-field {
-  grid-column: 7 / span 3;
+  grid-area: delay-recursion;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert .th-modern-wi-budget-field {
-  grid-column: 10 / span 3;
+  grid-area: budget;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-position-kind="depth"] .th-modern-wi-panel-insert,
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-position-kind="outlet"] .th-modern-wi-panel-insert {
+  grid-template-areas:
+    "position position position position position position position position depth depth depth order order order probability probability probability use-probability use-probability use-probability"
+    "group group group group group group group group group-weight group-weight group-weight sticky sticky sticky cooldown cooldown cooldown delay delay delay"
+    "character character character character character character character character character character character character trigger trigger trigger trigger trigger trigger trigger trigger"
+    "no-recursion no-recursion no-recursion no-recursion no-recursion prevent-recursion prevent-recursion prevent-recursion prevent-recursion prevent-recursion delay-recursion delay-recursion delay-recursion delay-recursion delay-recursion budget budget budget budget budget";
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-recursion-delay="true"] .th-modern-wi-panel-insert {
+  grid-template-areas:
+    "position position position position position position position position position position position order order order probability probability probability use-probability use-probability use-probability"
+    "group group group group group group group group group-weight group-weight group-weight sticky sticky sticky cooldown cooldown cooldown delay delay delay"
+    "character character character character character character character character trigger trigger trigger trigger trigger trigger trigger trigger recursion recursion recursion recursion"
+    "no-recursion no-recursion no-recursion no-recursion no-recursion prevent-recursion prevent-recursion prevent-recursion prevent-recursion prevent-recursion delay-recursion delay-recursion delay-recursion delay-recursion delay-recursion budget budget budget budget budget";
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-recursion-delay="true"][data-th-modern-position-kind="depth"] .th-modern-wi-panel-insert,
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-recursion-delay="true"][data-th-modern-position-kind="outlet"] .th-modern-wi-panel-insert {
+  grid-template-areas:
+    "position position position position position position position position depth depth depth order order order probability probability probability use-probability use-probability use-probability"
+    "group group group group group group group group group-weight group-weight group-weight sticky sticky sticky cooldown cooldown cooldown delay delay delay"
+    "character character character character character character character character trigger trigger trigger trigger trigger trigger trigger trigger recursion recursion recursion recursion"
+    "no-recursion no-recursion no-recursion no-recursion no-recursion prevent-recursion prevent-recursion prevent-recursion prevent-recursion prevent-recursion delay-recursion delay-recursion delay-recursion delay-recursion delay-recursion budget budget budget budget budget";
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-trigger {
@@ -918,17 +1179,17 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-match-sourc
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-shortcut-field.th-modern-wi-no-recursion-field,
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-shortcut-field.th-modern-wi-prevent-recursion-field {
-  display: grid !important;
-  grid-template-rows: min-content 1.05rem;
-  justify-items: start;
-  align-self: start;
-  gap: 0.22rem;
-  min-height: 0;
-  overflow: visible;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  align-self: stretch;
+  gap: 0.4rem;
+  min-height: var(--th-modern-wi-control-size);
+  overflow: hidden;
+  padding: 0.25rem 0.45rem;
+  border: 1px solid var(--th-modern-wi-border);
+  border-radius: 7px;
+  background-color: color-mix(in srgb, var(--SmartThemeBlurTintColor) 50%, transparent);
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel .th-modern-wi-selective-field,
@@ -966,7 +1227,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel .th-m
   width: 1.05rem !important;
   min-width: 1.05rem;
   height: 1.05rem;
-  margin: 0.42rem 0 0 !important;
+  margin: 0 !important;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel .th-modern-wi-selective-field > span:not(.th-modern-wi-field-label),
@@ -978,6 +1239,22 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel .th-m
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel .th-modern-wi-delay-recursion-field > span:not(.th-modern-wi-field-label),
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel .th-modern-wi-match-source-field > span:not(.th-modern-wi-field-label) {
   display: none !important;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-insert
+  :is(
+    .th-modern-wi-use-probability-field,
+    .th-modern-wi-no-recursion-field,
+    .th-modern-wi-prevent-recursion-field,
+    .th-modern-wi-delay-recursion-field,
+    .th-modern-wi-budget-field
+  )
+  > .th-modern-wi-field-label {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-enable-dock .th-modern-wi-enable-field {
@@ -1239,6 +1516,9 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-active-edit
     display: none;
   }
 
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled.th-modern-wi-mobile-detail-open > .th-modern-drawer-titlebar,
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled.th-modern-wi-mobile-detail-open #wiTopBlock,
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-native-shell.th-modern-wi-detail-open .th-modern-wi-worldbar,
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-native-shell.th-modern-wi-detail-open .th-modern-wi-toolbar,
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-native-shell.th-modern-wi-detail-open .th-modern-wi-native-list {
     display: none;
@@ -1257,32 +1537,34 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-active-edit
 
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(7rem, 0.85fr) repeat(4, 2.15rem);
+    grid-template-columns: minmax(0, 1fr) minmax(6.5rem, 0.72fr) repeat(4, var(--th-modern-wi-control-size));
+    grid-template-areas:
+      "search sort new refresh multi more"
+      "pagination pagination pagination pagination pagination pagination";
     align-items: center;
-    gap: 0.4rem;
+    gap: 0.32rem;
   }
 
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_search {
-    grid-column: 1;
+    grid-area: search;
     min-width: 0;
     width: 100%;
   }
 
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_sort_order {
-    grid-column: 2;
+    grid-area: sort;
     min-width: 0;
     width: 100%;
   }
 
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_pagination {
-    grid-column: 1 / -1;
-    grid-row: 2;
+    grid-area: pagination;
     justify-content: flex-start;
     width: 100%;
-    min-height: 2.9rem;
-    padding: 0.35rem;
+    min-height: var(--th-modern-wi-control-size);
+    padding: 0.16rem 0.25rem;
     border: 1px solid var(--th-modern-wi-border);
-    border-radius: 10px;
+    border-radius: 8px;
     background-color: color-mix(in srgb, var(--SmartThemeBlurTintColor) 54%, transparent);
     overflow-x: auto;
     overflow-y: hidden;
@@ -1297,8 +1579,8 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-active-edit
     display: flex;
     flex: 1 0 max-content;
     align-items: center;
-    gap: 0.35rem;
-    min-height: 2.15rem;
+    gap: 0.25rem;
+    min-height: 1.75rem;
   }
 
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_pagination .paginationjs-pages ul {
@@ -1313,8 +1595,8 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-active-edit
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_pagination .paginationjs-pages a,
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_pagination .paginationjs-size-changer,
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_pagination select {
-    min-width: 2.35rem;
-    min-height: 2.15rem;
+    min-width: 1.9rem;
+    min-height: 1.75rem;
   }
 
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_pagination .paginationjs-pages a,
@@ -1323,7 +1605,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-active-edit
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    padding-inline: 0.65rem;
+    padding-inline: 0.5rem;
     border: 1px solid var(--th-modern-wi-border);
     border-radius: 8px;
     background-color: var(--th-modern-wi-button-bg);
@@ -1339,33 +1621,36 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-active-edit
   }
 
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_popup_new {
-    grid-column: 3;
-    grid-row: 1;
+    grid-area: new;
   }
 
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_refresh {
-    grid-column: 4;
-    grid-row: 1;
+    grid-area: refresh;
   }
 
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar .th-modern-wi-multi-toggle {
-    grid-column: 5;
-    grid-row: 1;
+    grid-area: multi;
   }
 
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar .th-modern-wi-delete-selected {
-    grid-column: 6;
-    grid-row: 1;
+    grid-area: more;
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar .th-modern-wi-more-menu {
+    grid-area: more;
   }
 
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-mobile-back {
+    position: sticky;
+    top: 0;
+    z-index: 5;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 0.45rem;
     width: 100%;
-    min-height: 2.35rem;
-    margin-bottom: 0.55rem;
+    min-height: var(--th-modern-wi-control-size);
+    margin-bottom: 0.35rem;
     border: 1px solid var(--th-modern-wi-border);
     border-radius: 8px;
     background-color: var(--th-modern-wi-button-bg);
@@ -1428,6 +1713,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-active-edit
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panels,
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-content-panel {
     height: auto;
+    max-height: none;
     overflow: visible;
   }
 
@@ -1486,33 +1772,126 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-active-edit
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-order-field {
     grid-column: span 2;
   }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel.th-modern-wi-panel-main {
+    grid-template-columns: minmax(0, 2fr) minmax(5.25rem, 0.55fr) minmax(7.25rem, 0.7fr) minmax(8.5rem, 0.8fr);
+    grid-template-areas:
+      "title title state order"
+      "position detail no-recursion prevent-recursion"
+      "primary primary primary primary";
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-title-field {
+    grid-area: title;
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-state-field {
+    grid-area: state;
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-order-field {
+    grid-area: order;
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-position-field {
+    grid-area: position;
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-depth-field,
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-outlet-field {
+    grid-area: detail;
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-no-recursion-field {
+    grid-area: no-recursion;
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-prevent-recursion-field {
+    grid-area: prevent-recursion;
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel-main .th-modern-wi-primary-key-field {
+    grid-area: primary;
+  }
 }
 
 @media (max-width: 560px) {
-  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar {
-    grid-template-columns: minmax(0, 1fr) minmax(6.5rem, 0.9fr) repeat(2, 2.15rem);
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock {
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar .th-modern-wi-multi-toggle {
-    grid-column: 3;
-    grid-row: 2;
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock > .range-block,
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock > .range-block:nth-child(2) {
+    grid-template-columns: minmax(5.5rem, auto) minmax(0, 1fr);
   }
 
-  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar .th-modern-wi-delete-selected {
-    grid-column: 4;
-    grid-row: 2;
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar > .flex-container {
+    flex-wrap: wrap;
   }
 
-  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_pagination {
-    grid-row: 3;
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar #world_editor_select,
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-worldbar .select2-container {
+    min-width: 7rem;
   }
 
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel > * {
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel:not(.th-modern-wi-panel-main):not(.th-modern-wi-panel-insert) > * {
     grid-column: 1 / -1 !important;
+    grid-row: auto !important;
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel.th-modern-wi-panel-insert {
+    grid-template-columns: minmax(0, 1.65fr) repeat(3, minmax(4.5rem, 0.72fr));
+    grid-template-areas:
+      "position position order probability"
+      "use-probability group group group"
+      "group-weight sticky cooldown delay"
+      "character character trigger trigger"
+      "no-recursion prevent-recursion delay-recursion budget";
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-position-kind="depth"] .th-modern-wi-panel-insert,
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-position-kind="outlet"] .th-modern-wi-panel-insert {
+    grid-template-areas:
+      "position position depth order"
+      "probability use-probability group group"
+      "group-weight sticky cooldown delay"
+      "character character trigger trigger"
+      "no-recursion prevent-recursion delay-recursion budget";
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-recursion-delay="true"] .th-modern-wi-panel-insert {
+    grid-template-areas:
+      "position position order probability"
+      "use-probability group group group"
+      "group-weight sticky cooldown delay"
+      "character character trigger trigger"
+      "recursion no-recursion prevent-recursion delay-recursion"
+      "budget budget budget budget";
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-recursion-delay="true"][data-th-modern-position-kind="depth"] .th-modern-wi-panel-insert,
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-surface[data-th-modern-recursion-delay="true"][data-th-modern-position-kind="outlet"] .th-modern-wi-panel-insert {
+    grid-template-areas:
+      "position position depth order"
+      "probability use-probability group group"
+      "group-weight sticky cooldown delay"
+      "character character trigger trigger"
+      "recursion no-recursion prevent-recursion delay-recursion"
+      "budget budget budget budget";
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel.th-modern-wi-panel-main {
+    grid-template-columns: minmax(0, 1fr) minmax(6.5rem, 0.48fr);
+    grid-template-areas:
+      "title title"
+      "state order"
+      "position detail"
+      "no-recursion prevent-recursion"
+      "primary primary";
   }
 
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-field-wide,

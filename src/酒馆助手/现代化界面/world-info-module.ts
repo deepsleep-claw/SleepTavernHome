@@ -10,6 +10,7 @@ const SELECTED_ROW_CLASS = 'th-modern-wi-row-checked';
 const MULTI_SELECT_CLASS = 'th-modern-wi-multiselect';
 const NARROW_CLASS = 'th-modern-wi-narrow';
 const DETAIL_OPEN_CLASS = 'th-modern-wi-detail-open';
+const ROOT_DETAIL_OPEN_CLASS = 'th-modern-wi-mobile-detail-open';
 const TABS_READY_FLAG = 'thModernTabsReady';
 const SUMMARY_READY_FLAG = 'thModernSummaryReady';
 const CONDITIONAL_READY_FLAG = 'thModernConditionalReady';
@@ -973,6 +974,7 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
     private readonly pendingSummaryUpdates = new Map<HTMLElement, number>();
     private multiButton?: HTMLButtonElement;
     private deleteSelectedButton?: HTMLButtonElement;
+    private moreMenu?: HTMLDetailsElement;
     private selectedUids = new Set<number>();
     private selectedEntry?: HTMLElement;
     private selectedWorldName = '';
@@ -982,6 +984,7 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
     private mounted = false;
     private multiSelect = false;
     private mobileDetailOpen = false;
+    private mobileListScrollTop = 0;
     private pendingEnhance = 0;
     private pendingEditorRetry = 0;
     private editorRetryRevision = 0;
@@ -1034,7 +1037,7 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
         this.worldRevision += 1;
         this.setDeleteBusy(false);
         const worldInfo = this.findWorldInfo();
-        worldInfo?.classList.remove(WORLD_INFO_NATIVE_CLASS, MULTI_SELECT_CLASS);
+        worldInfo?.classList.remove(WORLD_INFO_NATIVE_CLASS, MULTI_SELECT_CLASS, ROOT_DETAIL_OPEN_CLASS);
         this.observer?.disconnect();
         this.observer = undefined;
         this.cancelPendingEditorRetry();
@@ -1072,6 +1075,7 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
         this.narrowQuery = undefined;
         this.narrowQueryHandler = undefined;
         this.mobileDetailOpen = false;
+        this.mobileListScrollTop = 0;
 
         for (const entry of this.document.querySelectorAll<HTMLElement>('.world_entry')) {
             entry.classList.remove(SELECTED_ENTRY_CLASS, SELECTED_ROW_CLASS);
@@ -1083,6 +1087,7 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
         this.shell = undefined;
         this.listPane = undefined;
         this.editorPane = undefined;
+        this.moreMenu = undefined;
         return wasMounted;
     }
 
@@ -1099,29 +1104,38 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
 
     private syncResponsiveMode(): void {
         const isNarrow = this.isNarrowMode();
+        const detailOpen = isNarrow && this.mobileDetailOpen && Boolean(this.selectedEntry);
         this.shell?.classList.toggle(NARROW_CLASS, isNarrow);
+        this.findWorldInfo()?.classList.toggle(ROOT_DETAIL_OPEN_CLASS, detailOpen);
         if (!isNarrow) {
             this.mobileDetailOpen = false;
             this.shell?.classList.remove(DETAIL_OPEN_CLASS);
             this.selectFirstEntry();
             return;
         }
-        this.shell?.classList.toggle(DETAIL_OPEN_CLASS, this.mobileDetailOpen && Boolean(this.selectedEntry));
+        this.shell?.classList.toggle(DETAIL_OPEN_CLASS, detailOpen);
     }
 
     private openMobileDetail(): void {
         if (!this.isNarrowMode()) {
             return;
         }
+        const worldInfo = this.findWorldInfo();
+        this.mobileListScrollTop = worldInfo?.scrollTop ?? 0;
         this.mobileDetailOpen = true;
         this.syncResponsiveMode();
-        this.shell?.scrollIntoView({ block: 'start' });
+        worldInfo?.scrollTo({ top: 0, left: 0, behavior: 'auto' });
     }
 
     private closeMobileDetail(): void {
+        const worldInfo = this.findWorldInfo();
         this.mobileDetailOpen = false;
         this.syncResponsiveMode();
-        this.shell?.scrollIntoView({ block: 'start' });
+        this.window.requestAnimationFrame(() => {
+            if (this.mounted && this.isNarrowMode()) {
+                worldInfo?.scrollTo({ top: this.mobileListScrollTop, left: 0, behavior: 'auto' });
+            }
+        });
     }
 
     private findWorldInfo(): HTMLElement | null {
@@ -1138,28 +1152,24 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
 
     private buildLayout(popup: HTMLElement, list: HTMLElement): void {
         const shell = makeElement(this.document, 'div', 'th-modern-wi-native-shell');
+        const worldbar = makeElement(this.document, 'div', 'th-modern-wi-worldbar');
         const toolbar = makeElement(this.document, 'div', 'th-modern-wi-toolbar');
         const main = makeElement(this.document, 'div', 'th-modern-wi-native-main');
         const listPane = makeElement(this.document, 'div', 'th-modern-wi-native-list');
         const editorPane = makeElement(this.document, 'div', 'th-modern-wi-native-editor');
 
-        shell.append(toolbar, main);
+        shell.append(worldbar, toolbar, main);
         main.append(listPane, editorPane);
         popup.append(shell);
 
-        for (const selector of [
-            '#world_info_search',
-            '#world_info_sort_order',
-            '#world_info_pagination',
-            '#world_popup_new',
-            '#world_refresh',
-            '#OpenAllWIEntries',
-            '#CloseAllWIEntries',
-        ]) {
-            const node = popup.querySelector<HTMLElement>(selector);
-            if (node) {
-                moveNode(node, toolbar, this.moved);
-            }
+        const worldControls = popup.querySelector<HTMLElement>('#world_create_button')?.closest<HTMLElement>('.flex-container');
+        if (worldControls) {
+            moveNode(worldControls, worldbar, this.moved);
+        }
+
+        const nativeTools = popup.querySelector<HTMLElement>('#world_info_search')?.closest<HTMLElement>('.flex-container');
+        if (nativeTools) {
+            moveNode(nativeTools, toolbar, this.moved);
         }
 
         this.multiButton = createIconButton(this.document, 'menu_button th-modern-wi-multi-toggle', '多选条目', 'fa-regular fa-square-check');
@@ -1167,7 +1177,43 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
         this.deleteSelectedButton.hidden = true;
         this.multiButton.addEventListener('click', () => this.toggleMultiSelect());
         this.deleteSelectedButton.addEventListener('click', () => void this.deleteSelectedEntries());
-        toolbar.append(this.multiButton, this.deleteSelectedButton);
+
+        const moreMenu = makeElement(this.document, 'details', 'th-modern-wi-more-menu');
+        const moreToggle = makeElement(this.document, 'summary', 'menu_button th-modern-wi-more-toggle');
+        moreToggle.title = '更多条目操作';
+        moreToggle.setAttribute('aria-label', '更多条目操作');
+        moreToggle.innerHTML = '<i class="fa-solid fa-ellipsis" aria-hidden="true"></i>';
+        const morePanel = makeElement(this.document, 'div', 'th-modern-wi-more-popover');
+        moreMenu.append(moreToggle, morePanel);
+        for (const selector of [
+            '#OpenAllWIEntries',
+            '#CloseAllWIEntries',
+            '#world_backfill_memos',
+            '#world_apply_current_sorting',
+        ]) {
+            const node = popup.querySelector<HTMLElement>(selector) ?? toolbar.querySelector<HTMLElement>(selector);
+            if (node) {
+                moveNode(node, morePanel, this.moved);
+            }
+        }
+        moreMenu.addEventListener('click', event => {
+            const action = targetToElement(event.target)?.closest('#OpenAllWIEntries, #CloseAllWIEntries, #world_backfill_memos, #world_apply_current_sorting');
+            if (action) {
+                moreMenu.open = false;
+            }
+        });
+        this.moreMenu = moreMenu;
+        toolbar.append(this.multiButton, this.deleteSelectedButton, moreMenu);
+
+        const titlebarActions = this.findWorldInfo()?.querySelector<HTMLElement>(':scope > .th-modern-drawer-titlebar .th-modern-drawer-actions');
+        if (titlebarActions) {
+            for (const selector of ['#WI_panel_pin_div', '#WorldInfoheader + .flex-container .notes-link']) {
+                const node = this.findWorldInfo()?.querySelector<HTMLElement>(selector);
+                if (node) {
+                    moveNode(node, titlebarActions, this.moved);
+                }
+            }
+        }
 
         moveNode(list, listPane, this.moved);
         this.shell = shell;
@@ -1177,6 +1223,10 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
 
     private bindEvents(): void {
         this.documentClickHandler = event => {
+            const target = targetToElement(event.target);
+            if (this.moreMenu?.open && target && !this.moreMenu.contains(target)) {
+                this.moreMenu.open = false;
+            }
             if (getSelectableListEntry(event.target)) {
                 this.onEntryClick(event);
             }
