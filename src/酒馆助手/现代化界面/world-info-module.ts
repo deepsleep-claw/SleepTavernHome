@@ -13,6 +13,7 @@ const DETAIL_OPEN_CLASS = 'th-modern-wi-detail-open';
 const ROOT_DETAIL_OPEN_CLASS = 'th-modern-wi-mobile-detail-open';
 const TABS_READY_FLAG = 'thModernTabsReady';
 const SUMMARY_READY_FLAG = 'thModernSummaryReady';
+const SUMMARY_LAYOUT_VERSION = '2026-07-18-compact-v2';
 const CONDITIONAL_READY_FLAG = 'thModernConditionalReady';
 const SHORTCUT_SYNC_READY_FLAG = 'thModernShortcutSyncReady';
 const ENTRY_LAYOUT_VERSION = '2026-07-08-tabs-v4';
@@ -592,17 +593,9 @@ function syncConditionalFields(entry: HTMLElement, editor: HTMLElement): void {
         ?? entry.querySelector<HTMLSelectElement>('select[name="position"]');
     const delayUntilRecursion = editor.querySelector<HTMLInputElement>('input[name="delay_until_recursion"]')
         ?? entry.querySelector<HTMLInputElement>('input[name="delay_until_recursion"]');
-    const selectedPositionOption = position?.selectedOptions[0];
     const positionValue = position?.value;
-    const positionRole = selectedPositionOption?.dataset.role;
-    const positionText = selectedPositionOption?.textContent?.trim().toLowerCase() ?? '';
-    const positionKind = positionValue === '4'
-        || positionRole === '0'
-        || positionRole === '1'
-        || positionRole === '2'
-        || positionText.includes('@d')
-        || positionText.includes('depth')
-        || positionText.includes('深度')
+    const positionText = position?.selectedOptions[0]?.textContent?.trim().toLowerCase() ?? '';
+    const positionKind = isDepthPosition(position)
         ? 'depth'
         : positionValue === '7' || positionText.includes('outlet') || positionText.includes('锚点')
             ? 'outlet'
@@ -650,15 +643,25 @@ function getEntryTitle(entry: HTMLElement, source: ParentNode = entry): string {
     return comment || `UID ${getEntryUid(entry) ?? ''}`.trim();
 }
 
-function getEntryMeta(source: ParentNode): string {
-    const key = source.querySelector<HTMLTextAreaElement | HTMLSelectElement>('textarea[name="key"], select[name="key"]');
+function isDepthPosition(position: HTMLSelectElement | null): boolean {
+    const selectedOption = position?.selectedOptions[0];
+    const positionValue = position?.value;
+    const positionRole = selectedOption?.dataset.role;
+    const positionText = selectedOption?.textContent?.trim().toLowerCase() ?? '';
+    return positionValue === '4'
+        || positionRole === '0'
+        || positionRole === '1'
+        || positionRole === '2'
+        || positionText.includes('@d')
+        || positionText.includes('depth')
+        || positionText.includes('深度');
+}
+
+function getEntryPosition(source: ParentNode): string {
     const position = source.querySelector<HTMLSelectElement>('select[name="position"]');
-    const keyText = key?.tagName === 'SELECT'
-        ? Array.from((key as HTMLSelectElement).selectedOptions).map(option => option.textContent?.trim()).filter(Boolean).join(', ')
-        : key?.value.trim();
-    const keyCount = keyText ? keyText.split(',').map(item => item.trim()).filter(Boolean).length : 0;
     const positionText = position?.selectedOptions[0]?.textContent?.trim() || '';
-    return `${keyCount ? `${keyCount} keys` : '常量'}${positionText ? ` · ${positionText}` : ''}`;
+    const depth = source.querySelector<HTMLInputElement>('input[name="depth"]')?.value.trim();
+    return isDepthPosition(position) && depth ? `${positionText} ${depth}` : positionText;
 }
 
 function updateEntrySummary(entry: HTMLElement, source: ParentNode = entry): void {
@@ -668,7 +671,6 @@ function updateEntrySummary(entry: HTMLElement, source: ParentNode = entry): voi
     }
 
     const order = source.querySelector<HTMLInputElement>('input[name="order"]')?.value;
-    const probability = source.querySelector<HTMLInputElement>('input[name="probability"]')?.value;
     const state = source.querySelector<HTMLSelectElement>('select[name="entryStateSelector"]')?.value;
     const title = summary.querySelector<HTMLElement>('.th-modern-wi-row-title');
     const meta = summary.querySelector<HTMLElement>('.th-modern-wi-row-meta');
@@ -677,10 +679,10 @@ function updateEntrySummary(entry: HTMLElement, source: ParentNode = entry): voi
         title.textContent = getEntryTitle(entry, source);
     }
     if (meta) {
-        meta.textContent = getEntryMeta(source);
+        meta.textContent = getEntryPosition(source);
     }
     if (stats) {
-        stats.textContent = `${order ? `#${order}` : ''}${probability ? `\n${probability}%` : ''}`;
+        stats.textContent = order ? `#${order}` : '';
     }
     if (state) {
         entry.dataset.thModernEntryState = state;
@@ -688,34 +690,41 @@ function updateEntrySummary(entry: HTMLElement, source: ParentNode = entry): voi
 }
 
 function ensureEntrySummary(document: Document, entry: HTMLElement, scheduleSummaryUpdate: ScheduleSummaryUpdate): void {
-    if (entry.dataset[SUMMARY_READY_FLAG] === 'true') {
-        return;
-    }
-
     const header = entry.querySelector<HTMLElement>(':scope > form.world_entry_form > .inline-drawer > .inline-drawer-header');
-    if (!header || header.querySelector('.th-modern-wi-row-summary')) {
-        entry.dataset[SUMMARY_READY_FLAG] = 'true';
+    if (!header) {
         return;
     }
 
-    entry.dataset[SUMMARY_READY_FLAG] = 'true';
-    const summary = makeElement(document, 'div', 'th-modern-wi-row-summary');
-    summary.tabIndex = 0;
-    summary.setAttribute('role', 'button');
-    summary.setAttribute('aria-label', '打开世界书条目');
-    summary.innerHTML = [
-        '<span class="th-modern-wi-select-dot" aria-hidden="true"></span>',
-        '<span class="th-modern-wi-entry-state-icon" aria-hidden="true"></span>',
-        '<span class="th-modern-wi-row-text">',
-        '<strong class="th-modern-wi-row-title"></strong>',
-        '<small class="th-modern-wi-row-meta"></small>',
-        '</span>',
-        '<span class="th-modern-wi-row-stats"></span>',
-    ].join('');
-    header.append(summary);
+    let summary = header.querySelector<HTMLElement>('.th-modern-wi-row-summary');
+    if (!summary) {
+        summary = makeElement(document, 'div', 'th-modern-wi-row-summary');
+        summary.tabIndex = 0;
+        summary.setAttribute('role', 'button');
+        summary.setAttribute('aria-label', '打开世界书条目');
+        header.append(summary);
+    }
+    if (summary.dataset.layoutVersion !== SUMMARY_LAYOUT_VERSION) {
+        summary.innerHTML = [
+            '<span class="th-modern-wi-row-leading" aria-hidden="true">',
+            '<span class="th-modern-wi-select-dot"></span>',
+            '<span class="th-modern-wi-entry-state-icon"></span>',
+            '</span>',
+            '<span class="th-modern-wi-row-text">',
+            '<span class="th-modern-wi-row-primary">',
+            '<strong class="th-modern-wi-row-title"></strong>',
+            '<span class="th-modern-wi-row-stats"></span>',
+            '</span>',
+            '<small class="th-modern-wi-row-meta"></small>',
+            '</span>',
+        ].join('');
+        summary.dataset.layoutVersion = SUMMARY_LAYOUT_VERSION;
+    }
 
-    entry.addEventListener('input', () => scheduleSummaryUpdate(entry));
-    entry.addEventListener('change', () => scheduleSummaryUpdate(entry));
+    if (entry.dataset[SUMMARY_READY_FLAG] !== 'true') {
+        entry.dataset[SUMMARY_READY_FLAG] = 'true';
+        entry.addEventListener('input', () => scheduleSummaryUpdate(entry));
+        entry.addEventListener('change', () => scheduleSummaryUpdate(entry));
+    }
     updateEntrySummary(entry);
 }
 
