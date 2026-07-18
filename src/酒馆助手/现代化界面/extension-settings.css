@@ -218,57 +218,166 @@ body.th-modern-enabled.th-modern-extension-settings
   body.th-modern-enabled.th-modern-extension-settings
     #rm_extensions_block.th-modern-extension-panel
     > .extensions_block.th-modern-extension-layout {
-    grid-template-rows: auto auto minmax(0, 1fr) auto auto auto;
-    grid-template-columns: minmax(0, 1fr);
+    display: flex !important;
+    flex-flow: column nowrap !important;
+    gap: 8px;
+    grid-template-rows: none !important;
+    grid-template-columns: none !important;
+    padding: 0 clamp(12px, 4cqw, 18px) 12px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: auto;
+    scroll-padding-block: 8px;
+    touch-action: pan-y;
+  }
+
+  body.th-modern-enabled.th-modern-extension-settings .th-modern-extension-layout > :first-child {
+    flex: 0 0 auto;
+    gap: 6px;
+    padding: 2px 0 4px;
+  }
+
+  body.th-modern-enabled.th-modern-extension-settings .th-modern-extension-layout > :first-child > h3 {
+    flex: 1 1 100%;
   }
 
   body.th-modern-enabled.th-modern-extension-settings .th-modern-extension-nav {
-    grid-row: 2;
-    grid-column: 1;
-    padding: 4px;
-    overflow-x: auto;
-    overflow-y: hidden;
-  }
-
-  body.th-modern-enabled.th-modern-extension-settings .th-modern-extension-nav-header {
     display: none;
-  }
-
-  body.th-modern-enabled.th-modern-extension-settings .th-modern-extension-nav-list {
-    flex-direction: row;
-    flex: 0 0 auto;
-    gap: 4px;
-    padding: 0 0 2px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-gutter: auto;
-  }
-
-  body.th-modern-enabled.th-modern-extension-settings .th-modern-extension-nav-item {
-    width: auto;
-    max-width: min(180px, 60cqw);
-    min-height: 32px;
-    padding-block: 6px;
-  }
-
-  body.th-modern-enabled.th-modern-extension-settings .th-modern-extension-layout > .th-modern-extension-column {
-    grid-row: 3;
-    grid-column: 1;
-  }
-
-  body.th-modern-enabled.th-modern-extension-settings .th-modern-extension-layout > hr {
-    grid-row: 4;
-  }
-
-  body.th-modern-enabled.th-modern-extension-settings .th-modern-extension-layout > hr + .alignitemscenter {
-    grid-row: 5;
   }
 
   body.th-modern-enabled.th-modern-extension-settings
     .th-modern-extension-layout
-    > hr
-    + .alignitemscenter
-    + .alignitemsflexstart {
-    grid-row: 6;
+    > .th-modern-extension-column {
+    display: flex !important;
+    flex: 0 0 auto !important;
+    flex-flow: column nowrap !important;
+    gap: 6px;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 100% !important;
+    min-height: 0;
+    padding: 0;
+    overflow: visible;
+    scrollbar-gutter: auto;
+  }
+
+  body.th-modern-enabled.th-modern-extension-settings
+    .th-modern-extension-layout
+    > .th-modern-extension-column
+    > * {
+    flex: 0 0 auto;
+    min-width: 0;
+    margin: 0;
+  }
+
+  body.th-modern-enabled.th-modern-extension-settings
+    .th-modern-extension-layout
+    > .th-modern-extension-column
+    > .th-modern-extension-host-hidden {
+    display: revert !important;
+  }
+
+  body.th-modern-enabled.th-modern-extension-settings .th-modern-extension-drawer {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    overflow: clip;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 82%, transparent);
+    border-radius: var(--th-modern-radius-sm);
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 76%, transparent);
+    box-shadow: 0 1px 0 color-mix(in srgb, var(--SmartThemeBodyColor) 5%, transparent);
+    transition:
+      border-color var(--th-modern-motion-duration),
+      background-color var(--th-modern-motion-duration);
+  }
+
+  body.th-modern-enabled.th-modern-extension-settings
+    .th-modern-extension-drawer
+    > .inline-drawer-toggle {
+    position: relative;
+    display: flex;
+    align-items: center;
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 40px;
+    margin: 0;
+    padding: 7px 9px 7px 11px;
+    overflow: hidden;
+    border: 0;
+    border-radius: 0;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 86%, var(--black30a));
+    color: var(--SmartThemeBodyColor);
+    cursor: pointer;
+    transition:
+      background-color var(--th-modern-motion-duration),
+      color var(--th-modern-motion-duration);
+  }
+
+  body.th-modern-enabled.th-modern-extension-settings
+    .th-modern-extension-drawer
+    > .inline-drawer-toggle:hover {
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 12%, var(--SmartThemeBlurTintColor));
+    color: var(--SmartThemeEmColor);
+  }
+
+  body.th-modern-enabled.th-modern-extension-settings
+    .th-modern-extension-drawer:has(> .inline-drawer-toggle .inline-drawer-icon.up) {
+    border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 42%, var(--SmartThemeBorderColor));
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 7%, var(--SmartThemeBlurTintColor));
+  }
+
+  body.th-modern-enabled.th-modern-extension-settings
+    .th-modern-extension-drawer
+    > .inline-drawer-toggle
+    > :first-child {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  body.th-modern-enabled.th-modern-extension-settings
+    .th-modern-extension-drawer
+    > .inline-drawer-toggle
+    .inline-drawer-icon {
+    display: inline-flex;
+    flex: 0 0 26px;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 26px;
+    height: 26px;
+    margin-left: auto;
+    border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 78%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--SmartThemeBodyColor) 7%, transparent);
+    color: var(--SmartThemeBodyColor);
+    font-size: calc(var(--mainFontSize) * 0.72);
+  }
+
+  body.th-modern-enabled.th-modern-extension-settings
+    .th-modern-extension-drawer
+    > .inline-drawer-content {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    margin: 0;
+    padding: 12px;
+    overflow-x: hidden;
+    border: 0;
+    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 66%, transparent);
+    border-radius: 0;
+    background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 62%, transparent);
+  }
+
+  body.th-modern-enabled.th-modern-extension-settings .th-modern-extension-layout > hr {
+    flex: 0 0 auto;
+    width: 100%;
+    margin-block: 2px;
+  }
+
+  body.th-modern-enabled.th-modern-extension-settings .th-modern-extension-layout > hr ~ * {
+    flex: 0 0 auto;
   }
 }

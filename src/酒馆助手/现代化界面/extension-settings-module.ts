@@ -15,7 +15,10 @@ const COLUMN_CLASS = 'th-modern-extension-column';
 const COLUMN_ACTIVE_CLASS = 'is-active';
 const HOST_HIDDEN_CLASS = 'th-modern-extension-host-hidden';
 const HOST_ACTIVE_CLASS = 'th-modern-extension-host-active';
+const DRAWER_CLASS = 'th-modern-extension-drawer';
 const DRAWER_ACTIVE_CLASS = 'th-modern-extension-drawer-active';
+const MOBILE_ACCORDION_CLASS = 'th-modern-extension-mobile-accordion';
+const MOBILE_ACCORDION_MAX_WIDTH = 640;
 const SELECTED_EXTENSION_STORAGE_KEY = 'TavernHelper.modernLayout.selectedExtensionSettings';
 
 type Store = ReturnType<typeof useModernLayoutStore>;
@@ -78,6 +81,8 @@ export function mountExtensionSettings(store: Store): { destroy: () => void } {
   let openFrame = 0;
   let structureObserver: MutationObserver | null = null;
   let panelObserver: MutationObserver | null = null;
+  let panelResizeObserver: ResizeObserver | null = null;
+  let usesMobileAccordion = hostWindow.matchMedia(`(max-width: ${MOBILE_ACCORDION_MAX_WIDTH}px)`).matches;
 
   function readSelectedKey(): string | null {
     try {
@@ -184,6 +189,16 @@ export function mountExtensionSettings(store: Store): { destroy: () => void } {
   }
 
   function applySelection(): void {
+    if (usesMobileAccordion) {
+      entries.forEach(entry => {
+        entry.host.classList.remove(HOST_HIDDEN_CLASS, HOST_ACTIVE_CLASS);
+        entry.drawer?.classList.remove(DRAWER_ACTIVE_CLASS);
+      });
+      columns.forEach(column => column.classList.remove(COLUMN_ACTIVE_CLASS));
+      updateNavigationState();
+      return;
+    }
+
     const selectedEntry = entries.find(entry => entry.key === selectedKey) ?? null;
 
     entries.forEach(entry => {
@@ -201,7 +216,7 @@ export function mountExtensionSettings(store: Store): { destroy: () => void } {
 
   function ensureSelectedEntryOpen(): void {
     openFrame = 0;
-    if (!panel?.classList.contains('openDrawer')) {
+    if (usesMobileAccordion || !panel?.classList.contains('openDrawer')) {
       return;
     }
 
@@ -232,6 +247,24 @@ export function mountExtensionSettings(store: Store): { destroy: () => void } {
     scheduleEnsureSelectedEntryOpen();
   }
 
+  function updateResponsiveMode(width: number): void {
+    if (width <= 0) {
+      return;
+    }
+
+    const nextUsesMobileAccordion = width <= MOBILE_ACCORDION_MAX_WIDTH;
+    panel?.classList.toggle(MOBILE_ACCORDION_CLASS, nextUsesMobileAccordion);
+    if (usesMobileAccordion === nextUsesMobileAccordion) {
+      return;
+    }
+
+    usesMobileAccordion = nextUsesMobileAccordion;
+    applySelection();
+    if (!usesMobileAccordion) {
+      scheduleEnsureSelectedEntryOpen();
+    }
+  }
+
   function syncEntries(): void {
     syncFrame = 0;
     if (!layout?.isConnected) {
@@ -241,9 +274,10 @@ export function mountExtensionSettings(store: Store): { destroy: () => void } {
     const nextEntries = collectEntries();
     entries.forEach(entry => {
       entry.host.classList.remove(HOST_HIDDEN_CLASS, HOST_ACTIVE_CLASS);
-      entry.drawer?.classList.remove(DRAWER_ACTIVE_CLASS);
+      entry.drawer?.classList.remove(DRAWER_CLASS, DRAWER_ACTIVE_CLASS);
     });
     entries = nextEntries;
+    entries.forEach(entry => entry.drawer?.classList.add(DRAWER_CLASS));
 
     if (!entries.some(entry => entry.key === selectedKey)) {
       selectedKey = entries.find(isEntryExpanded)?.key ?? entries[0]?.key ?? null;
@@ -362,6 +396,11 @@ export function mountExtensionSettings(store: Store): { destroy: () => void } {
     panel.classList.add(PANEL_CLASS);
     layout.classList.add(LAYOUT_CLASS);
     columns.forEach(column => column.classList.add(COLUMN_CLASS));
+    const initialPanelWidth = panel.getBoundingClientRect().width;
+    if (initialPanelWidth > 0) {
+      usesMobileAccordion = initialPanelWidth <= MOBILE_ACCORDION_MAX_WIDTH;
+    }
+    panel.classList.toggle(MOBILE_ACCORDION_CLASS, usesMobileAccordion);
     navigation = createNavigation();
     columns[0].before(navigation);
 
@@ -369,6 +408,13 @@ export function mountExtensionSettings(store: Store): { destroy: () => void } {
     observeStructure();
     panelObserver = new hostWindow.MutationObserver(() => scheduleEnsureSelectedEntryOpen());
     panelObserver.observe(panel, { attributes: true, attributeFilter: ['class'] });
+    panelResizeObserver = new hostWindow.ResizeObserver(records => {
+      const panelRecord = records.find(record => record.target === panel);
+      if (panelRecord) {
+        updateResponsiveMode(panelRecord.contentRect.width);
+      }
+    });
+    panelResizeObserver.observe(panel);
     syncEntries();
   }
 
@@ -377,6 +423,8 @@ export function mountExtensionSettings(store: Store): { destroy: () => void } {
     structureObserver = null;
     panelObserver?.disconnect();
     panelObserver = null;
+    panelResizeObserver?.disconnect();
+    panelResizeObserver = null;
     if (syncFrame !== 0) {
       hostWindow.cancelAnimationFrame(syncFrame);
       syncFrame = 0;
@@ -390,7 +438,7 @@ export function mountExtensionSettings(store: Store): { destroy: () => void } {
     navigation?.remove();
     entries.forEach(entry => {
       entry.host.classList.remove(HOST_HIDDEN_CLASS, HOST_ACTIVE_CLASS);
-      entry.drawer?.classList.remove(DRAWER_ACTIVE_CLASS);
+      entry.drawer?.classList.remove(DRAWER_CLASS, DRAWER_ACTIVE_CLASS);
     });
     columns.forEach(column => {
       column.classList.remove(COLUMN_CLASS, COLUMN_ACTIVE_CLASS);
@@ -400,7 +448,7 @@ export function mountExtensionSettings(store: Store): { destroy: () => void } {
       Array.from(column.children).forEach(child => child.classList.remove(HOST_HIDDEN_CLASS, HOST_ACTIVE_CLASS));
     });
     layout?.classList.remove(LAYOUT_CLASS);
-    panel?.classList.remove(PANEL_CLASS);
+    panel?.classList.remove(PANEL_CLASS, MOBILE_ACCORDION_CLASS);
     hostDocument.body.classList.remove(BODY_CLASS);
 
     panel = null;
