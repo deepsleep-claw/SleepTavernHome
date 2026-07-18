@@ -653,16 +653,41 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
     min-height: 32px;
   }
 
-  body.th-modern-enabled #top-settings-holder > .drawer > .drawer-content.openDrawer {
+  body.th-modern-enabled #top-settings-holder > .drawer > .drawer-content {
     position: fixed;
     inset: var(--topBarBlockSize) 0 auto 0;
     z-index: var(--th-modern-overlay-z);
+    display: none !important;
+    flex-direction: column;
     width: 100dvw !important;
     height: calc(100dvh - var(--topBarBlockSize));
     max-width: 100dvw;
     max-height: calc(100dvh - var(--topBarBlockSize));
     margin: 0;
+    clip-path: inset(0 100% 0 0);
+    opacity: 0;
+    overflow-y: auto;
     border-radius: 0;
+    pointer-events: none;
+    transition:
+      opacity var(--th-modern-motion-duration) ease,
+      clip-path var(--th-modern-motion-duration) cubic-bezier(0.2, 0.8, 0.2, 1),
+      display var(--th-modern-motion-duration) allow-discrete !important;
+    transition-behavior: allow-discrete;
+    will-change: clip-path, opacity;
+    animation: none !important;
+  }
+
+  body.th-modern-enabled #top-settings-holder > .drawer > .drawer-content.openDrawer {
+    display: flex !important;
+    clip-path: inset(0);
+    opacity: 1;
+    pointer-events: auto;
+
+    @starting-style {
+      clip-path: inset(0 100% 0 0);
+      opacity: 0;
+    }
   }
 
   body.th-modern-enabled #chat {
@@ -1096,23 +1121,39 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
       var(--th-modern-overlay-soft-max-width)
     ) !important;
     max-width: var(--th-modern-overlay-soft-max-width) !important;
+    height: 100dvh !important;
+    max-height: 100dvh !important;
+    min-height: 100dvh !important;
     margin: 0;
     padding: 5px;
+    clip-path: inset(0 100% 0 0);
+    opacity: 0;
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
+    pointer-events: none;
     transform: none;
-    transition: none !important;
+    transform-origin: left center;
+    transition:
+      opacity var(--th-modern-motion-duration) ease,
+      clip-path var(--th-modern-motion-duration) cubic-bezier(0.2, 0.8, 0.2, 1),
+      display var(--th-modern-motion-duration) allow-discrete !important;
+    transition-behavior: allow-discrete;
+    will-change: clip-path, opacity;
     animation: none !important;
   }
 
   body.th-modern-enabled.th-modern-two-column #top-settings-holder > .drawer > .drawer-content.openDrawer {
     display: flex !important;
-    height: 100dvh !important;
-    max-height: 100dvh !important;
-    min-height: 100dvh !important;
+    clip-path: inset(0);
+    opacity: 1;
     pointer-events: auto;
     transform: none;
+
+    @starting-style {
+      clip-path: inset(0 100% 0 0);
+      opacity: 0;
+    }
   }
 
   body.th-modern-enabled.th-modern-two-column.th-modern-drawer-fullscreen
