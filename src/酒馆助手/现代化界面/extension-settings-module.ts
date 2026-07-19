@@ -37,17 +37,23 @@ function normalizeText(value: string | null | undefined): string {
   return (value ?? '').replace(/\s+/g, ' ').trim();
 }
 
-function findTopLevelDrawer(host: HTMLElement): HTMLElement | null {
+function findTopLevelDrawers(host: HTMLElement): HTMLElement[] {
   if (host.matches('.inline-drawer')) {
-    return host;
+    return [host];
   }
 
-  return (
-    Array.from(host.querySelectorAll<HTMLElement>('.inline-drawer')).find(drawer => {
-      const parentDrawer = drawer.parentElement?.closest('.inline-drawer');
-      return !parentDrawer || !host.contains(parentDrawer);
-    }) ?? null
-  );
+  return Array.from(host.querySelectorAll<HTMLElement>('.inline-drawer')).filter(drawer => {
+    const parentDrawer = drawer.parentElement?.closest('.inline-drawer');
+    return !parentDrawer || !host.contains(parentDrawer);
+  });
+}
+
+function findDirectBranch(host: HTMLElement, descendant: HTMLElement): HTMLElement {
+  let branch = descendant;
+  while (branch.parentElement && branch.parentElement !== host) {
+    branch = branch.parentElement;
+  }
+  return branch;
 }
 
 function getEntryTitle(host: HTMLElement, drawer: HTMLElement | null): string {
@@ -108,35 +114,68 @@ export function mountExtensionSettings(store: Store): { destroy: () => void } {
     const keyCounts = new Map<string, number>();
     const nextEntries: ExtensionEntry[] = [];
 
+    const appendEntry = (
+      column: HTMLElement,
+      sourceHost: HTMLElement,
+      host: HTMLElement,
+      drawer: HTMLElement | null,
+      rawKeyOverride?: string,
+    ) => {
+      const title = getEntryTitle(host, drawer);
+      const scriptId =
+        host.getAttribute('script_id') ?? drawer?.getAttribute('script_id') ?? sourceHost.getAttribute('script_id');
+      const rawKey =
+        rawKeyOverride ??
+        (host.id
+          ? `id:${host.id}`
+          : drawer?.id
+            ? `id:${drawer.id}`
+            : scriptId
+              ? `script:${scriptId}`
+              : `column:${column.id}:title:${title}`);
+      const duplicateIndex = keyCounts.get(rawKey) ?? 0;
+      keyCounts.set(rawKey, duplicateIndex + 1);
+      const key = duplicateIndex === 0 ? rawKey : `${rawKey}:${duplicateIndex}`;
+      const header =
+        drawer?.querySelector<HTMLElement>(
+          ':scope > .inline-drawer-toggle.inline-drawer-header, :scope > .inline-drawer-toggle',
+        ) ?? null;
+      const content = drawer?.querySelector<HTMLElement>(':scope > .inline-drawer-content') ?? null;
+
+      nextEntries.push({ column, content, drawer, header, host, key, title });
+    };
+
     columns.forEach(column => {
       Array.from(column.children).forEach(node => {
         if (!(node instanceof hostWindow.HTMLElement) || node === navigation) {
           return;
         }
 
-        const drawer = findTopLevelDrawer(node);
+        const drawers = findTopLevelDrawers(node);
         const hasFallbackContent = node.childElementCount > 0 && normalizeText(node.textContent).length > 0;
-        if (!drawer && !hasFallbackContent) {
+        if (drawers.length === 0 && !hasFallbackContent) {
           return;
         }
 
-        const title = getEntryTitle(node, drawer);
-        const scriptId = node.getAttribute('script_id');
-        const rawKey = node.id
-          ? `id:${node.id}`
-          : scriptId
-            ? `script:${scriptId}`
-            : `column:${column.id}:title:${title}`;
-        const duplicateIndex = keyCounts.get(rawKey) ?? 0;
-        keyCounts.set(rawKey, duplicateIndex + 1);
-        const key = duplicateIndex === 0 ? rawKey : `${rawKey}:${duplicateIndex}`;
-        const header =
-          drawer?.querySelector<HTMLElement>(
-            ':scope > .inline-drawer-toggle.inline-drawer-header, :scope > .inline-drawer-toggle',
-          ) ?? null;
-        const content = drawer?.querySelector<HTMLElement>(':scope > .inline-drawer-content') ?? null;
+        if (drawers.length <= 1) {
+          appendEntry(column, node, node, drawers[0] ?? null);
+          return;
+        }
 
-        nextEntries.push({ column, content, drawer, header, host: node, key, title });
+        const branches = drawers.map(drawer => findDirectBranch(node, drawer));
+        const branchCounts = new Map<HTMLElement, number>();
+        branches.forEach(branch => branchCounts.set(branch, (branchCounts.get(branch) ?? 0) + 1));
+        const sourceRawKey = node.id
+          ? `id:${node.id}`
+          : node.getAttribute('script_id')
+            ? `script:${node.getAttribute('script_id')}`
+            : undefined;
+
+        drawers.forEach((drawer, index) => {
+          const branch = branches[index];
+          const entryHost = branchCounts.get(branch) === 1 ? branch : drawer;
+          appendEntry(column, node, entryHost, drawer, index === 0 ? sourceRawKey : undefined);
+        });
       });
     });
 
