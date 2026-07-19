@@ -228,7 +228,7 @@ body.th-modern-enabled.th-modern-extension-settings
     gap: 8px;
     grid-template-rows: none !important;
     grid-template-columns: none !important;
-    padding: 0 clamp(12px, 4cqw, 18px) 12px;
+    padding: 0 0 12px;
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior-y: contain;

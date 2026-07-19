@@ -67,8 +67,9 @@ const OVERLAY_PANEL_MIN_WIDTH = 720;
 const OVERLAY_PANEL_RESERVED_WIDTH = 24;
 const LEFT_NAV_HEIGHT_VARIABLE = '--th-modern-left-nav-height';
 const LEFT_NAV_TOP_FALLBACK = 66;
-const LEFT_NAV_RECENT_MIN_HEIGHT_FALLBACK = 152;
-const LEFT_NAV_BOTTOM_GAP = 24;
+const LEFT_NAV_MIN_HEIGHT_FALLBACK = 240;
+const LEFT_NAV_RECENT_MIN_HEIGHT_FALLBACK = 288;
+const LEFT_NAV_BOTTOM_GAP = 12;
 
 export const PLUGIN_ID = 'modern-ui';
 export const PLUGIN_VERSION = releaseVersions.plugins[PLUGIN_ID].version;
@@ -1597,11 +1598,18 @@ function mountSidebarNavSizer(): { destroy: () => void } {
 
     const body_style = host_window.getComputedStyle(body);
     const nav_top = parseCssPixelValue(body_style.getPropertyValue('--th-modern-left-nav-top'), LEFT_NAV_TOP_FALLBACK);
+    const nav_min_height = parseCssPixelValue(
+      body_style.getPropertyValue('--th-modern-left-nav-min-height'),
+      LEFT_NAV_MIN_HEIGHT_FALLBACK,
+    );
     const recent_min_height = parseCssPixelValue(
       body_style.getPropertyValue('--th-modern-recent-min-height'),
       LEFT_NAV_RECENT_MIN_HEIGHT_FALLBACK,
     );
-    const max_height = Math.max(48, host_window.innerHeight - nav_top - recent_min_height - LEFT_NAV_BOTTOM_GAP);
+    const max_height = Math.max(
+      nav_min_height,
+      host_window.innerHeight - nav_top - recent_min_height - LEFT_NAV_BOTTOM_GAP,
+    );
     const holder_style = host_window.getComputedStyle(holder);
     const padding_height = parseCssPixelValue(holder_style.paddingTop, 0) + parseCssPixelValue(holder_style.paddingBottom, 0);
     const content_height = Array.from(holder.querySelectorAll<HTMLElement>(':scope > .drawer > .drawer-toggle')).reduce(
@@ -1614,7 +1622,7 @@ function mountSidebarNavSizer(): { destroy: () => void } {
       },
       padding_height,
     );
-    const next_height = Math.ceil(Math.min(Math.max(content_height, 48), max_height));
+    const next_height = Math.ceil(Math.min(Math.max(content_height, nav_min_height), max_height));
     setHostCssVariable(LEFT_NAV_HEIGHT_VARIABLE, `${next_height}px`);
   };
 

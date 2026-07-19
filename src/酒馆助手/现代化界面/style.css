@@ -21,10 +21,11 @@ body.th-modern-enabled {
   --th-modern-main-max-width-fallback: 960px;
   --th-modern-main-width-limit: var(--th-modern-main-max-width, var(--th-modern-main-max-width-fallback));
   --th-modern-left-nav-top: 66px;
-  --th-modern-recent-min-height: 152px;
+  --th-modern-left-nav-min-height: 240px;
+  --th-modern-recent-min-height: 288px;
   --th-modern-left-nav-max-height: clamp(
-    240px,
-    calc(100dvh - var(--th-modern-left-nav-top) - var(--th-modern-recent-min-height) - 24px),
+    var(--th-modern-left-nav-min-height),
+    calc(100dvh - var(--th-modern-left-nav-top) - var(--th-modern-recent-min-height) - 12px),
     960px
   );
   --th-modern-left-nav-height: min(360px, var(--th-modern-left-nav-max-height));
@@ -1036,7 +1037,7 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
     max-height: var(--th-modern-left-nav-height);
     margin: 0;
     padding: 0 12px;
-    border-right: 0;
+    border: 0;
     background: transparent;
     box-shadow: none;
     scrollbar-gutter: stable;
