@@ -205,11 +205,17 @@ function createHostNavigationBridge(): { get: () => Promise<HostNavigationBridge
   let destroyed = false;
 
   const loadBridge = async (): Promise<HostNavigationBridge> => {
-    const HostFunction = (getHostWindow() as Window & { Function: FunctionConstructor }).Function;
+    const host_window = getHostWindow() as Window & { Function: FunctionConstructor };
+    const host_base_url = getHostDocument().baseURI || host_window.location.href;
+    const main_module_url = new URL('script.js', host_base_url).href;
+    const group_module_url = new URL('scripts/group-chats.js', host_base_url).href;
+    const HostFunction = host_window.Function;
     const importModules = HostFunction(
-      'return Promise.all([import("/script.js"), import("/scripts/group-chats.js")]);',
-    ) as () => Promise<[unknown, unknown]>;
-    const [main_unknown, group_unknown] = await importModules();
+      'mainModuleUrl',
+      'groupModuleUrl',
+      'return Promise.all([import(mainModuleUrl), import(groupModuleUrl)]);',
+    ) as (mainModuleUrl: string, groupModuleUrl: string) => Promise<[unknown, unknown]>;
+    const [main_unknown, group_unknown] = await importModules(main_module_url, group_module_url);
     const main = main_unknown as Partial<HostMainModule>;
     const group = group_unknown as Partial<HostGroupModule>;
 
