@@ -4,6 +4,11 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["@types/**/*.d.ts", "src/酒馆助手/现代化界面/**/*", "*.d.ts"],
+  "include": [
+    "@types/**/*.d.ts",
+    "src/酒馆助手/现代化界面/**/*",
+    "auto-imports.zod.d.ts",
+    "global.d.ts"
+  ],
   "exclude": ["**/dist/**", "**/node_modules/**"]
 }

@@ -1,4 +1,7 @@
 import { registerAsUniqueScript } from '@util/script';
+import { klona } from 'klona';
+import { defineStore } from 'pinia';
+import { computed, ref, watchEffect } from 'vue';
 
 export const SCRIPT_NAME = '现代化界面';
 

@@ -35,6 +35,8 @@
 </template>
 
 <script setup lang="ts">
+import { computed, onMounted, onUnmounted, shallowRef } from 'vue';
+
 import type { PluginUpdaterController, UpdaterSnapshot } from './contracts';
 
 const props = defineProps<{

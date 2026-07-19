@@ -9,7 +9,8 @@
     "src/公共模块/脚本更新器/**/*",
     "src/公共模块/脚本更新器核心/**/*",
     "src/酒馆助手/现代化界面引导器/**/*",
-    "*.d.ts"
+    "auto-imports.zod.d.ts",
+    "global.d.ts"
   ],
   "exclude": ["**/dist/**", "**/node_modules/**"]
 }

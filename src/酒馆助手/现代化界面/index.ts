@@ -1,6 +1,8 @@
 import { checkMinimumVersion } from '@util/common';
 import { createScriptIdDiv, teleportStyle } from '@util/script';
+import { klona } from 'klona';
 import { createPinia, getActivePinia, setActivePinia } from 'pinia';
+import { watch } from 'vue';
 import releaseVersions from '../../../release/versions.json';
 import type { PluginActivationContext, PluginRuntime } from '../../公共模块/脚本更新器/contracts';
 import { mountCharacterManagement } from './character-management-module';
