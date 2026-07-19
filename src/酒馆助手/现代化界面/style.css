@@ -1033,6 +1033,7 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
     justify-content: flex-start;
     width: var(--th-modern-left-visual-width);
     height: var(--th-modern-left-nav-height);
+    max-height: var(--th-modern-left-nav-height);
     margin: 0;
     padding: 0 12px;
     border-right: 0;
@@ -1057,12 +1058,17 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
 
   body.th-modern-enabled.th-modern-two-column #top-settings-holder > .drawer {
     display: block;
+    flex: 0 0 auto;
     width: 100%;
+    height: auto;
+    padding: 0;
   }
 
   body.th-modern-enabled.th-modern-two-column #top-settings-holder > .drawer > .drawer-toggle {
     display: flex;
+    box-sizing: border-box;
     align-items: center;
+    width: 100%;
     min-height: 38px;
     gap: 10px;
     margin: 1px 0;
@@ -1074,6 +1080,11 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
       background-color var(--th-modern-motion-duration),
       color var(--th-modern-motion-duration),
       opacity var(--th-modern-motion-duration);
+  }
+
+  body.th-modern-enabled.th-modern-two-column #top-settings-holder > #rightNavHolder > #unimportantYes {
+    width: 100%;
+    height: auto;
   }
 
   body.th-modern-enabled.th-modern-two-column #top-settings-holder > .drawer > .drawer-toggle:hover {

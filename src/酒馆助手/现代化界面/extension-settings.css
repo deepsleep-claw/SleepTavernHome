@@ -3,6 +3,10 @@ body.th-modern-enabled.th-modern-extension-settings #rm_extensions_block.th-mode
   overflow: hidden;
 }
 
+body.th-modern-enabled.th-modern-extension-settings #rm_extensions_block.th-modern-extension-panel.openDrawer {
+  overflow: hidden;
+}
+
 body.th-modern-enabled.th-modern-extension-settings
   #rm_extensions_block.th-modern-extension-panel
   > .extensions_block.th-modern-extension-layout {
@@ -175,6 +179,7 @@ body.th-modern-enabled.th-modern-extension-settings .th-modern-extension-host-ac
 
 body.th-modern-enabled.th-modern-extension-settings .th-modern-extension-drawer-active {
   box-sizing: border-box;
+  flex: 0 0 auto;
   width: 100%;
   min-width: 0;
   margin: 0;
