@@ -10,13 +10,13 @@
   "plugins": {
     "modern-ui": {
       "name": "现代化界面",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "tagPrefix": "modern-ui-v",
       "entry": "dist/酒馆助手/现代化界面/index.js",
-      "bootstrapEntry": "dist/酒馆助手/现代化界面引导器/index.js",
       "installer": {
         "template": "release/模板/酒馆助手脚本-脚本模板.json",
         "output": "release/现代化界面/酒馆助手脚本-现代化界面.json",
+        "releaseAsset": "tavern-helper-modern-ui.json",
         "id": "2f7d3c75-0778-4f16-b27f-bf65e63d1318",
         "enabled": true,
         "info": "为 SillyTavern 提供现代化布局，并支持在设置面板中手动检查和安装稳定版更新。"

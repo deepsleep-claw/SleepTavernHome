@@ -31,12 +31,19 @@ jobs:
           node util/build_tagged_script.mjs --tag "$RELEASE_TAG" --repository "$EXPECTED_REPOSITORY" --github-output
           "$GITHUB_OUTPUT"
 
+      - name: Prepare release asset
+        if: steps.package.outputs.matched == 'true'
+        env:
+          RELEASE_SOURCE: ${{ steps.package.outputs.output }}
+          RELEASE_ASSET_NAME: ${{ steps.package.outputs.release_asset_name }}
+        run: cp "$RELEASE_SOURCE" "$RUNNER_TEMP/$RELEASE_ASSET_NAME"
+
       - name: Upload workflow artifact
         if: steps.package.outputs.matched == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.package.outputs.plugin_id }}-${{ steps.package.outputs.version }}
-          path: ${{ steps.package.outputs.output }}
+          path: ${{ runner.temp }}/${{ steps.package.outputs.release_asset_name }}
           if-no-files-found: error
 
       - name: Attach script to GitHub Release
@@ -44,7 +51,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.package.outputs.tag }}
-          RELEASE_ASSET: ${{ steps.package.outputs.output }}
+          RELEASE_ASSET: ${{ runner.temp }}/${{ steps.package.outputs.release_asset_name }}
           RELEASE_NAME: ${{ steps.package.outputs.plugin_name }}
           RELEASE_VERSION: ${{ steps.package.outputs.version }}
         run: |

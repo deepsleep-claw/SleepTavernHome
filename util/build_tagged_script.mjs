@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 const defaultRepositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+const releaseAssetPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*\.json$/u;
 
 function fail(message) {
   throw new Error(`[tagged-script] ${message}`);
@@ -18,7 +19,13 @@ function assert(condition, message) {
 
 function resolveRepositoryPath(repositoryRoot, relativePath, label) {
   assert(typeof relativePath === 'string' && relativePath.length > 0, `${label} 不能为空`);
-  assert(!path.isAbsolute(relativePath) && !relativePath.includes('\\'), `${label} 必须是正斜杠仓库相对路径`);
+  assert(
+    !path.isAbsolute(relativePath) &&
+      !relativePath.includes('\\') &&
+      !relativePath.includes('\r') &&
+      !relativePath.includes('\n'),
+    `${label} 必须是正斜杠仓库相对路径`,
+  );
   assert(
     relativePath.split('/').every(segment => Boolean(segment) && segment !== '.' && segment !== '..'),
     `${label} 不能包含空路径、. 或 ..`,
@@ -42,9 +49,46 @@ function encodeEntry(entry) {
   return entry.split('/').map(encodeURIComponent).join('/');
 }
 
-function createBootstrapUrl(repository, tag, entry) {
+function createCdnUrl(repository, tag, entry) {
   assert(/^[\w.-]+\/[\w.-]+$/u.test(repository), 'Manifest repository 无效');
+  assert(/^[\w.-]+$/u.test(tag), `Tag ${tag} 包含不安全字符`);
+  assert(
+    typeof entry === 'string' &&
+      Boolean(entry) &&
+      !entry.startsWith('/') &&
+      !entry.includes('\\') &&
+      entry.split('/').every(segment => Boolean(segment) && segment !== '.' && segment !== '..'),
+    `入口路径 ${entry} 无效`,
+  );
   return `https://cdn.jsdelivr.net/gh/${repository}@${encodeURIComponent(tag)}/${encodeEntry(entry)}`;
+}
+
+function createInstallerContent(config, updater) {
+  const updaterUrl = JSON.stringify(updater.url);
+  const updaterVersion = JSON.stringify(updater.version);
+  const updaterApiMajor = JSON.stringify(config.updaterApiMajor);
+  return `const updaterUrl = ${updaterUrl};
+const config = ${JSON.stringify(config, null, 2)};
+const describeError = error => error instanceof Error && error.message ? error.message : String(error || '未知错误');
+
+try {
+  const updater = await import(updaterUrl);
+  if (updater.UPDATER_API_MAJOR !== ${updaterApiMajor}) {
+    throw new Error(\`更新器 API 不兼容：需要 v${config.updaterApiMajor}，实际为 v\${updater.UPDATER_API_MAJOR ?? '未知'}\`);
+  }
+  if (updater.UPDATER_VERSION !== ${updaterVersion}) {
+    throw new Error(\`更新器版本不匹配：需要 ${updater.version}，实际为 \${updater.UPDATER_VERSION ?? '未知'}\`);
+  }
+  if (typeof updater.bootPlugin !== 'function') {
+    throw new Error('更新器没有导出 bootPlugin()');
+  }
+  await updater.bootPlugin(config);
+} catch (error) {
+  console.error(\`[\${config.pluginName}] 启动失败。\`, error);
+  if (typeof toastr !== 'undefined') {
+    toastr.error(\`启动失败：\${describeError(error)}\`, config.pluginName);
+  }
+}`;
 }
 
 function getMatchingPlugin(tag, versions) {
@@ -77,24 +121,28 @@ export function generateTaggedScript(tag, { repositoryRoot = defaultRepositoryRo
 
   const { pluginId, plugin } = match;
   const version = tag.slice(plugin.tagPrefix.length);
+  assert(/^[\w.-]+$/u.test(pluginId), `插件 ID ${pluginId} 包含不安全字符`);
   assert(stableVersionPattern.test(version), `Tag ${tag} 的版本必须使用稳定的 x.y.z 格式`);
   assert(plugin.version === version, `Tag ${tag} 与 ${pluginId} 当前版本 ${plugin.version} 不一致`);
   assert(tag === `${plugin.tagPrefix}${plugin.version}`, `Tag ${tag} 与 ${pluginId} 的前缀或版本不一致`);
-  assert(typeof plugin.name === 'string' && plugin.name.length > 0, `${pluginId}.name 无效`);
+  assert(
+    typeof plugin.name === 'string' && plugin.name.length > 0 && !/[\r\n]/u.test(plugin.name),
+    `${pluginId}.name 无效`,
+  );
   assert(plugin.installer && typeof plugin.installer === 'object', `${pluginId}.installer 配置缺失`);
+  assert(Number.isInteger(versions.updater.apiMajor) && versions.updater.apiMajor > 0, 'updater.apiMajor 无效');
+  assert(stableVersionPattern.test(versions.updater.version), 'updater.version 必须使用稳定的 x.y.z 格式');
 
-  const bootstrapPath = resolveRepositoryPath(repositoryRoot, plugin.bootstrapEntry, `${pluginId}.bootstrapEntry`);
-  assert(fs.existsSync(bootstrapPath), `${pluginId} 的引导器产物不存在: ${plugin.bootstrapEntry}`);
+  const updaterEntryPath = resolveRepositoryPath(repositoryRoot, versions.updater.entry, 'updater.entry');
+  assert(fs.existsSync(updaterEntryPath), `通用更新器产物不存在: ${versions.updater.entry}`);
   const pluginEntryPath = resolveRepositoryPath(repositoryRoot, plugin.entry, `${pluginId}.entry`);
   assert(fs.existsSync(pluginEntryPath), `${pluginId} 的主脚本产物不存在: ${plugin.entry}`);
 
-  const bootstrapSource = fs.readFileSync(bootstrapPath, 'utf8');
+  const updaterSource = fs.readFileSync(updaterEntryPath, 'utf8');
   const pluginSource = fs.readFileSync(pluginEntryPath, 'utf8');
   assert(
-    bootstrapSource.includes(plugin.version) &&
-      bootstrapSource.includes(plugin.tagPrefix) &&
-      bootstrapSource.includes(plugin.entry),
-    `${pluginId} 的引导器产物没有包含当前 fallback 配置，请先完成构建`,
+    updaterSource.includes(versions.updater.version) && updaterSource.includes(versions.updater.tagPrefix),
+    '通用更新器产物没有包含当前版本配置，请先完成构建',
   );
   assert(
     pluginSource.includes(pluginId) && pluginSource.includes(plugin.version),
@@ -106,15 +154,41 @@ export function generateTaggedScript(tag, { repositoryRoot = defaultRepositoryRo
   assert(typeof plugin.installer.id === 'string' && plugin.installer.id.length > 0, `${pluginId}.installer.id 无效`);
   assert(typeof plugin.installer.enabled === 'boolean', `${pluginId}.installer.enabled 必须是布尔值`);
   assert(typeof plugin.installer.info === 'string', `${pluginId}.installer.info 必须是字符串`);
+  assert(
+    typeof plugin.installer.releaseAsset === 'string' && releaseAssetPattern.test(plugin.installer.releaseAsset),
+    `${pluginId}.installer.releaseAsset 必须是安全的 ASCII JSON 文件名`,
+  );
 
-  const bootstrapUrl = createBootstrapUrl(manifest.repository, tag, plugin.bootstrapEntry);
+  const updaterTag = `${versions.updater.tagPrefix}${versions.updater.version}`;
+  const updaterUrl = createCdnUrl(manifest.repository, updaterTag, versions.updater.entry);
+  const fallbackUrl = createCdnUrl(manifest.repository, tag, plugin.entry);
+  const config = {
+    pluginId,
+    pluginName: plugin.name,
+    repository: manifest.repository,
+    manifestUrl: `https://raw.githubusercontent.com/${manifest.repository}/main/manifest.json`,
+    cdnBaseUrl: 'https://cdn.jsdelivr.net/gh',
+    channel: 'stable',
+    tagPrefix: plugin.tagPrefix,
+    updaterApiMajor: versions.updater.apiMajor,
+    fallback: {
+      version: plugin.version,
+      tag,
+      entry: plugin.entry,
+      url: fallbackUrl,
+      updaterApiMajor: versions.updater.apiMajor,
+    },
+  };
   const script = {
     ...template,
     type: 'script',
     enabled: plugin.installer.enabled,
     name: plugin.name,
     id: plugin.installer.id,
-    content: `import '${bootstrapUrl}';`,
+    content: createInstallerContent(config, {
+      version: versions.updater.version,
+      url: updaterUrl,
+    }),
     info: plugin.installer.info,
     button: {
       enabled: true,
@@ -135,7 +209,9 @@ export function generateTaggedScript(tag, { repositoryRoot = defaultRepositoryRo
     pluginName: plugin.name,
     output: plugin.installer.output,
     outputPath,
-    bootstrapUrl,
+    releaseAssetName: plugin.installer.releaseAsset,
+    updaterUrl,
+    fallbackUrl,
     script,
   };
 }
@@ -157,6 +233,7 @@ function appendGitHubOutputs(file, result) {
         plugin_id: result.pluginId,
         plugin_name: result.pluginName,
         output: result.output,
+        release_asset_name: result.releaseAssetName,
       }
     : {
         matched: 'false',

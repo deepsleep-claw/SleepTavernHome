@@ -10,6 +10,7 @@ const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url))
 const manifest = readJson('manifest.json');
 const versions = readJson('release/versions.json');
 const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+const releaseAssetPattern = /^[A-Za-z0-9][A-Za-z0-9._-]*\.json$/u;
 
 function fail(message) {
   throw new Error(`[update-manifest] ${message}`);
@@ -67,6 +68,11 @@ assert(Number.isInteger(updaterApiMajor) && updaterApiMajor > 0, '更新器 API 
 const updaterStable = manifest.updater?.apiMajors?.[String(updaterApiMajor)]?.stable;
 assertRelease(updaterStable, versions.updater, `updater.apiMajors.${updaterApiMajor}.stable`);
 assertSafeEntry(versions.updater.coreEntry, 'updater.core');
+const updaterTag = `${versions.updater.tagPrefix}${versions.updater.version}`;
+assert(!generateTaggedScript(updaterTag, { repositoryRoot }).matched, `${updaterTag} 不应匹配任何插件发布前缀`);
+
+const installerIds = new Set();
+const installerOutputs = new Set();
 
 for (const [pluginId, pluginConfig] of Object.entries(versions.plugins)) {
   const plugin = manifest.plugins?.[pluginId];
@@ -77,17 +83,31 @@ for (const [pluginId, pluginConfig] of Object.entries(versions.plugins)) {
     `manifest.plugins.${pluginId} 第一版只能包含 stable 通道`,
   );
   assertRelease(plugin.channels.stable, pluginConfig, `plugins.${pluginId}.channels.stable`, updaterApiMajor);
-  assertSafeEntry(pluginConfig.bootstrapEntry, `plugins.${pluginId}.bootstrap`);
 
   assert(pluginConfig.installer && typeof pluginConfig.installer === 'object', `${pluginId}.installer 配置缺失`);
   assertSafeEntry(pluginConfig.installer.template, `plugins.${pluginId}.installer.template`);
   assertSafeEntry(pluginConfig.installer.output, `plugins.${pluginId}.installer.output`);
+  assert(!installerIds.has(pluginConfig.installer.id), `${pluginId}.installer.id 与其他插件重复`);
+  assert(!installerOutputs.has(pluginConfig.installer.output), `${pluginId}.installer.output 与其他插件重复`);
+  installerIds.add(pluginConfig.installer.id);
+  installerOutputs.add(pluginConfig.installer.output);
+  assert(
+    typeof pluginConfig.installer.releaseAsset === 'string' &&
+      releaseAssetPattern.test(pluginConfig.installer.releaseAsset),
+    `${pluginId}.installer.releaseAsset 必须是安全的 ASCII JSON 文件名`,
+  );
 
   const tag = `${pluginConfig.tagPrefix}${pluginConfig.version}`;
   const generated = generateTaggedScript(tag, { repositoryRoot });
   assert(generated.matched && generated.pluginId === pluginId, `${tag} 未能匹配插件 ${pluginId}`);
   const installer = readJson(pluginConfig.installer.output);
   assert(isDeepStrictEqual(installer, generated.script), `${pluginConfig.installer.output} 与模板及当前版本配置不一致`);
+  assert(installer.content.includes(generated.updaterUrl), `${pluginConfig.installer.output} 没有引用锚定通用更新器`);
+  assert(installer.content.includes(generated.fallbackUrl), `${pluginConfig.installer.output} 没有声明正式主脚本 fallback`);
+  assert(
+    !installer.content.includes('现代化界面引导器'),
+    `${pluginConfig.installer.output} 不应再引用插件专用引导器`,
+  );
 }
 
 console.info('[update-manifest] Manifest、版本配置和发布产物校验通过');

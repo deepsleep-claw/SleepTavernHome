@@ -10,7 +10,7 @@
     "lint:modern": "eslint \"src/酒馆助手/现代化界面/**/*.{ts,vue}\" --max-warnings 0",
     "check:modern": "pnpm run typecheck:modern && pnpm run lint:modern",
     "typecheck:updater": "tsc --project tsconfig.script-updater.json --noEmit --pretty false",
-    "lint:updater": "eslint \"src/公共模块/脚本更新器/**/*.{ts,vue}\" \"src/公共模块/脚本更新器核心/**/*.ts\" \"src/酒馆助手/现代化界面引导器/**/*.ts\" \"util/build_tagged_script.mjs\" \"util/validate_update_manifest.mjs\" --max-warnings 0",
+    "lint:updater": "eslint \"src/公共模块/脚本更新器/**/*.{ts,vue}\" \"src/公共模块/脚本更新器核心/**/*.ts\" \"util/build_tagged_script.mjs\" \"util/validate_update_manifest.mjs\" --max-warnings 0",
     "check:updater": "pnpm run typecheck:updater && pnpm run lint:updater",
     "validate:updates": "node util/validate_update_manifest.mjs",
     "format": "prettier --write \"src/**/*.{ts,tsx,js,jsx,css,scss,html,vue}\" --no-error-on-unmatched-pattern",
