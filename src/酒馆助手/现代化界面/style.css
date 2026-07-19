@@ -18,8 +18,11 @@ body.th-modern-enabled {
     calc(100vw - var(--th-modern-left-layout-width) - var(--th-modern-overlay-reserved-width))
   );
   --th-modern-overlay-fullscreen-width: max(0px, calc(100vw - var(--th-modern-left-layout-width)));
-  --th-modern-main-max-width-fallback: 960px;
-  --th-modern-main-width-limit: var(--th-modern-main-max-width, var(--th-modern-main-max-width-fallback));
+  --th-modern-main-min-width-fallback: 960px;
+  --th-modern-main-preferred-width: max(
+    var(--sheldWidth, 50vw),
+    var(--th-modern-main-min-width, var(--th-modern-main-min-width-fallback))
+  );
   --th-modern-left-nav-top: 66px;
   --th-modern-left-nav-min-height: 240px;
   --th-modern-recent-min-height: 288px;
@@ -779,20 +782,59 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
   body.th-modern-enabled.th-modern-two-column #sheld {
     --th-modern-main-available-width: calc(100vw - var(--th-modern-left-layout-width) - var(--th-modern-main-gap) * 2);
     box-sizing: border-box;
-    width: min(var(--th-modern-main-available-width), var(--th-modern-main-width-limit)) !important;
+    width: min(var(--th-modern-main-available-width), var(--th-modern-main-preferred-width)) !important;
     height: 100dvh !important;
     max-width: none !important;
     max-height: none !important;
     min-height: 0 !important;
     top: 0 !important;
     left: calc(
-      var(--th-modern-left-layout-width) + var(--th-modern-main-gap) +
-        max(0px, calc((var(--th-modern-main-available-width) - var(--th-modern-main-width-limit)) * 0.5))
+        var(--th-modern-left-layout-width) + var(--th-modern-main-gap) +
+        max(0px, calc((var(--th-modern-main-available-width) - var(--th-modern-main-preferred-width)) * 0.5))
     ) !important;
     right: auto !important;
     bottom: 0 !important;
     margin: 0 !important;
     transform: none;
+    transition:
+      left var(--th-modern-motion-duration) ease,
+      width var(--th-modern-motion-duration) ease;
+  }
+
+  body.th-modern-enabled.th-modern-two-column.th-modern-main-fill #sheld {
+    width: var(--th-modern-main-available-width) !important;
+    left: calc(var(--th-modern-left-layout-width) + var(--th-modern-main-gap)) !important;
+  }
+
+  body.th-modern-enabled.th-modern-two-column.th-modern-docked-drawer:is(
+      .th-modern-drawer-open,
+      .th-modern-drawer-switching
+    ):not(.th-modern-drawer-fullscreen)
+    #sheld {
+    --th-modern-main-available-width: max(
+      0px,
+      calc(
+        100vw - var(--th-modern-left-layout-width) -
+          min(
+            var(--th-modern-overlay-width, var(--th-modern-overlay-width-fallback)),
+            var(--th-modern-overlay-soft-max-width)
+          ) -
+          var(--th-modern-main-gap) * 2
+      )
+    );
+    width: var(--th-modern-main-available-width) !important;
+    left: calc(
+      var(--th-modern-left-layout-width) +
+        min(
+          var(--th-modern-overlay-width, var(--th-modern-overlay-width-fallback)),
+          var(--th-modern-overlay-soft-max-width)
+        ) +
+        var(--th-modern-main-gap)
+    ) !important;
+  }
+
+  body.th-modern-enabled.th-modern-resizing #sheld {
+    transition: none;
   }
 
   body.th-modern-enabled.th-modern-two-column #form_sheld,
@@ -1638,12 +1680,23 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
     transform: translate(-50%, -50%);
   }
 
-  body.th-modern-enabled.th-modern-two-column:not(.th-modern-sidebar-collapsed):not(.th-modern-auto-collapse):not(.th-modern-drawer-open) #th-modern-sidebar-resize-handle {
+  body.th-modern-enabled.th-modern-two-column:not(.th-modern-sidebar-collapsed):not(.th-modern-auto-collapse):not(.th-modern-drawer-open):not(.th-modern-drawer-switching) #th-modern-sidebar-resize-handle {
     left: calc(var(--th-modern-left-visual-width) - 7px);
     display: block;
   }
 
-  body.th-modern-enabled.th-modern-two-column.th-modern-drawer-open:not(.th-modern-drawer-fullscreen)
+  body.th-modern-enabled.th-modern-two-column.th-modern-docked-drawer:is(
+      .th-modern-drawer-open,
+      .th-modern-drawer-switching
+    ):not(.th-modern-drawer-fullscreen):not(.th-modern-sidebar-collapsed):not(.th-modern-auto-collapse)
+    #th-modern-sidebar-resize-handle {
+    left: calc(var(--th-modern-left-visual-width) - 7px);
+    display: block;
+  }
+
+  body.th-modern-enabled.th-modern-two-column:is(.th-modern-drawer-open, .th-modern-drawer-switching):not(
+      .th-modern-drawer-fullscreen
+    )
     #th-modern-overlay-resize-handle {
     left: calc(
       var(--th-modern-left-layout-width) +

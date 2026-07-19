@@ -11,7 +11,7 @@ import { getHostDocument, getHostWindow } from './host-context';
 import { initPanel } from './panel';
 import {
   DEFAULT_LEFT_SIDEBAR_WIDTH,
-  DEFAULT_MAIN_CHAT_MAX_WIDTH,
+  DEFAULT_MAIN_CHAT_MIN_WIDTH,
   DEFAULT_OVERLAY_PANEL_WIDTH,
   SCRIPT_NAME,
   type ModernLayoutSettings,
@@ -27,6 +27,8 @@ import './extension-settings.css';
 const BODY_CLASS_ENABLED = 'th-modern-enabled';
 const BODY_CLASS_TWO_COLUMN = 'th-modern-two-column';
 const BODY_CLASS_LEGACY_THREE_COLUMN = 'th-modern-three-column';
+const BODY_CLASS_DOCKED_DRAWER = 'th-modern-docked-drawer';
+const BODY_CLASS_MAIN_FILL = 'th-modern-main-fill';
 const BODY_CLASS_REDUCE_MOTION = 'th-modern-reduce-motion';
 const BODY_CLASS_REDUCE_ADVANCED_EFFECTS = 'th-modern-reduce-advanced-effects';
 const BODY_CLASS_SIDEBAR_COLLAPSED = 'th-modern-sidebar-collapsed';
@@ -35,6 +37,7 @@ const BODY_CLASS_TEMP_EXPANDED = 'th-modern-sidebar-temp-expanded';
 const BODY_CLASS_RESIZING = 'th-modern-resizing';
 const BODY_CLASS_DRAWER_FULLSCREEN = 'th-modern-drawer-fullscreen';
 const BODY_CLASS_DRAWER_OPEN = 'th-modern-drawer-open';
+const BODY_CLASS_DRAWER_SWITCHING = 'th-modern-drawer-switching';
 const ICON_STYLESHEET_ID = 'th-modern-bootstrap-icons';
 const ICON_STYLESHEET_HREF = 'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css';
 const SIDEBAR_ID = 'th-modern-sidebar';
@@ -49,6 +52,8 @@ const DRAWER_FULLSCREEN_CLASS = 'th-modern-drawer-fullscreen-toggle';
 const DRAWER_FULLSCREEN_CONTENT_CLASS = 'th-modern-drawer-fullscreen-content';
 const DRAWER_FULLSCREEN_PIN_DATA = 'thModernFullscreenPinned';
 const DRAWER_FULLSCREEN_WAS_PINNED_DATA = 'thModernFullscreenWasPinned';
+const DRAWER_DOCKED_PIN_DATA = 'thModernDockedPinned';
+const DRAWER_DOCKED_WAS_PINNED_DATA = 'thModernDockedWasPinned';
 const API_SOURCE_GROUP_CLASS = 'th-modern-api-source-group';
 const API_FOOTER_CLASS = 'th-modern-api-footer';
 const FAILSAFE_KEY_SEQUENCE = 'th-reset';
@@ -65,6 +70,9 @@ const LEFT_SIDEBAR_MIN_WIDTH = 320;
 const LEFT_SIDEBAR_MAX_WIDTH = 460;
 const OVERLAY_PANEL_MIN_WIDTH = 720;
 const OVERLAY_PANEL_RESERVED_WIDTH = 24;
+const DOCKED_DRAWER_MIN_CHAT_WIDTH = 480;
+const MAIN_LAYOUT_GAP = 14;
+const DRAWER_SWITCH_FALLBACK_MS = 1000;
 const LEFT_NAV_HEIGHT_VARIABLE = '--th-modern-left-nav-height';
 const LEFT_NAV_TOP_FALLBACK = 66;
 const LEFT_NAV_MIN_HEIGHT_FALLBACK = 240;
@@ -872,6 +880,51 @@ function syncDrawerOpenState(open_contents?: HTMLElement[]) {
   host_document.body.classList.toggle(BODY_CLASS_DRAWER_OPEN, has_open_drawer);
 }
 
+function applyDockedDrawerPin(content: HTMLElement) {
+  if (content.dataset[DRAWER_DOCKED_WAS_PINNED_DATA] === undefined) {
+    const was_pinned = content.classList.contains('pinnedOpen');
+    content.dataset[DRAWER_DOCKED_WAS_PINNED_DATA] = String(was_pinned);
+    if (!was_pinned) {
+      content.dataset[DRAWER_DOCKED_PIN_DATA] = 'true';
+    }
+  }
+  content.classList.add('pinnedOpen');
+}
+
+function removeDockedDrawerPin(content: HTMLElement) {
+  if (content.dataset[DRAWER_DOCKED_WAS_PINNED_DATA] === undefined) {
+    return;
+  }
+
+  const was_pinned = content.dataset[DRAWER_DOCKED_WAS_PINNED_DATA] === 'true';
+  const pinned_by_docked_mode = content.dataset[DRAWER_DOCKED_PIN_DATA] === 'true';
+  if (pinned_by_docked_mode) {
+    content.classList.remove('pinnedOpen');
+  } else if (was_pinned) {
+    content.classList.add('pinnedOpen');
+  }
+  delete content.dataset[DRAWER_DOCKED_PIN_DATA];
+  delete content.dataset[DRAWER_DOCKED_WAS_PINNED_DATA];
+}
+
+function syncDockedDrawerPins(open_contents: HTMLElement[]) {
+  const host_document = getHostDocument();
+  const should_pin = host_document.body.classList.contains(BODY_CLASS_DOCKED_DRAWER);
+  const open_content_set = new Set(open_contents);
+  host_document
+    .querySelectorAll<HTMLElement>('#top-settings-holder > .drawer > .drawer-content')
+    .forEach(content => {
+      if (should_pin && open_content_set.has(content)) {
+        applyDockedDrawerPin(content);
+        return;
+      }
+      if (content.classList.contains(DRAWER_FULLSCREEN_CONTENT_CLASS)) {
+        return;
+      }
+      removeDockedDrawerPin(content);
+    });
+}
+
 function removeDrawerFullscreenContent() {
   const content = getFullscreenDrawerContent();
   if (content) {
@@ -962,6 +1015,31 @@ function mountDrawerEnhancements(): { destroy: () => void } {
   const host_window = host_document.defaultView ?? window;
   const original_toggle_attributes = new Map<HTMLElement, { title: string | null; ariaLabel: string | null; written: string }>();
   let scheduled_reconcile = 0;
+  let pending_drawer_switch: HTMLElement | undefined;
+  let drawer_switch_timeout = 0;
+
+  const clearDrawerSwitch = () => {
+    if (drawer_switch_timeout !== 0) {
+      host_window.clearTimeout(drawer_switch_timeout);
+      drawer_switch_timeout = 0;
+    }
+    pending_drawer_switch = undefined;
+    host_document.body.classList.remove(BODY_CLASS_DRAWER_SWITCHING);
+  };
+
+  const beginDrawerSwitch = (target_content: HTMLElement) => {
+    pending_drawer_switch = target_content;
+    host_document.body.classList.add(BODY_CLASS_DRAWER_SWITCHING);
+    if (drawer_switch_timeout !== 0) {
+      host_window.clearTimeout(drawer_switch_timeout);
+    }
+    drawer_switch_timeout = host_window.setTimeout(() => {
+      drawer_switch_timeout = 0;
+      pending_drawer_switch = undefined;
+      host_document.body.classList.remove(BODY_CLASS_DRAWER_SWITCHING);
+      syncDrawerOpenState();
+    }, DRAWER_SWITCH_FALLBACK_MS);
+  };
 
   const scheduleReconcileDrawerFullscreen = () => {
     if (scheduled_reconcile !== 0) {
@@ -978,7 +1056,14 @@ function mountDrawerEnhancements(): { destroy: () => void } {
     const open_contents = Array.from(
       host_document.querySelectorAll<HTMLElement>('#top-settings-holder > .drawer > .drawer-content.openDrawer'),
     );
+    syncDockedDrawerPins(open_contents);
     syncDrawerOpenState(open_contents);
+    if (
+      pending_drawer_switch &&
+      (!pending_drawer_switch.isConnected || pending_drawer_switch.classList.contains('openDrawer'))
+    ) {
+      clearDrawerSwitch();
+    }
     if (!fullscreen_content) {
       host_document.body.classList.remove(BODY_CLASS_DRAWER_FULLSCREEN);
       if (is_drawer_fullscreen_mode && open_contents[0]) {
@@ -1070,10 +1155,28 @@ function mountDrawerEnhancements(): { destroy: () => void } {
 
   const handleDrawerActionClick = (event: MouseEvent) => {
     const target = event.target instanceof host_window.Element ? event.target : null;
+    const drawer_toggle = target?.closest<HTMLElement>('#top-settings-holder > .drawer > .drawer-toggle');
+    const drawer_opener = target?.closest<HTMLElement>('.drawer-opener');
+    if (host_document.body.classList.contains(BODY_CLASS_DOCKED_DRAWER) && (drawer_toggle || drawer_opener)) {
+      const target_drawer = drawer_toggle?.parentElement ??
+        (drawer_opener?.dataset.target ? host_document.getElementById(drawer_opener.dataset.target) : null);
+      const target_content = target_drawer?.querySelector<HTMLElement>(':scope > .drawer-content');
+      const open_contents = Array.from(
+        host_document.querySelectorAll<HTMLElement>('#top-settings-holder > .drawer > .drawer-content.openDrawer'),
+      );
+      if (target_content && !target_content.classList.contains('openDrawer') && open_contents.length > 0) {
+        beginDrawerSwitch(target_content);
+      }
+      open_contents.forEach(content => {
+        if (content !== target_content) {
+          removeDockedDrawerPin(content);
+        }
+      });
+    }
+
     const action = target?.closest(`.${DRAWER_FULLSCREEN_CLASS}, .${DRAWER_CLOSE_CLASS}`);
     if (!action) {
-      const toggle = target?.closest('#top-settings-holder > .drawer > .drawer-toggle');
-      if (toggle) {
+      if (drawer_toggle) {
         scheduleReconcileDrawerFullscreen();
       }
       return;
@@ -1137,6 +1240,10 @@ function mountDrawerEnhancements(): { destroy: () => void } {
         })
       : undefined;
   observer?.observe(holder, { childList: true, subtree: true });
+  const body_class_observer = new host_window.MutationObserver(() => {
+    scheduleReconcileDrawerFullscreen();
+  });
+  body_class_observer.observe(host_document.body, { attributes: true, attributeFilter: ['class'] });
   host_document.addEventListener('click', handleDrawerActionClick, true);
 
   return {
@@ -1144,10 +1251,15 @@ function mountDrawerEnhancements(): { destroy: () => void } {
       if (scheduled_reconcile !== 0) {
         host_window.cancelAnimationFrame(scheduled_reconcile);
       }
+      clearDrawerSwitch();
       observer?.disconnect();
       content_class_observer?.disconnect();
+      body_class_observer.disconnect();
       host_document.removeEventListener('click', handleDrawerActionClick, true);
       clearDrawerFullscreen();
+      host_document
+        .querySelectorAll<HTMLElement>('#top-settings-holder > .drawer > .drawer-content')
+        .forEach(removeDockedDrawerPin);
       $(`.${TOPBAR_LABEL_CLASS}`).remove();
       $(`.${DRAWER_TITLEBAR_CLASS}`).remove();
       original_toggle_attributes.forEach((original, toggle) => {
@@ -1542,8 +1654,18 @@ function mountResponsiveMode(store: ReturnType<typeof useModernLayoutStore>): { 
   const host_window = host_document.defaultView ?? window;
   const compact_query = host_window.matchMedia(COMPACT_TWO_COLUMN_QUERY);
 
+  let sync_frame = 0;
   const sync = () => {
     applyBodyState(store.settings, store.is_active, store.should_use_two_column);
+  };
+  const scheduleSync = () => {
+    if (sync_frame !== 0) {
+      return;
+    }
+    sync_frame = host_window.requestAnimationFrame(() => {
+      sync_frame = 0;
+      sync();
+    });
   };
 
   const handlePointerDown = (event: PointerEvent) => {
@@ -1564,13 +1686,18 @@ function mountResponsiveMode(store: ReturnType<typeof useModernLayoutStore>): { 
     }
   };
 
-  compact_query.addEventListener('change', sync);
+  compact_query.addEventListener('change', scheduleSync);
+  host_window.addEventListener('resize', scheduleSync);
   host_document.addEventListener('pointerdown', handlePointerDown, true);
   sync();
 
   return {
     destroy: () => {
-      compact_query.removeEventListener('change', sync);
+      if (sync_frame !== 0) {
+        host_window.cancelAnimationFrame(sync_frame);
+      }
+      compact_query.removeEventListener('change', scheduleSync);
+      host_window.removeEventListener('resize', scheduleSync);
       host_document.removeEventListener('pointerdown', handlePointerDown, true);
       host_document.body.classList.remove(BODY_CLASS_AUTO_COLLAPSE, BODY_CLASS_TEMP_EXPANDED);
     },
@@ -1710,7 +1837,14 @@ function mountResizeHandles(store: ReturnType<typeof useModernLayoutStore>): { d
     const body = host_document.body;
     const sidebar = host_document.getElementById(SIDEBAR_ID);
     const open_drawer = host_document.querySelector<HTMLElement>('#top-settings-holder > .drawer > .drawer-content.openDrawer');
-    if (kind === 'sidebar' && (!sidebar || open_drawer || body.classList.contains(BODY_CLASS_SIDEBAR_COLLAPSED) || body.classList.contains(BODY_CLASS_AUTO_COLLAPSE))) {
+    const is_docked_drawer = body.classList.contains(BODY_CLASS_DOCKED_DRAWER);
+    if (
+      kind === 'sidebar' &&
+      (!sidebar ||
+        (open_drawer && !is_docked_drawer) ||
+        body.classList.contains(BODY_CLASS_SIDEBAR_COLLAPSED) ||
+        body.classList.contains(BODY_CLASS_AUTO_COLLAPSE))
+    ) {
       return;
     }
     if (kind === 'overlay' && !open_drawer) {
@@ -1746,11 +1880,20 @@ function mountResizeHandles(store: ReturnType<typeof useModernLayoutStore>): { d
     const handlePointerMove = (move_event: PointerEvent) => {
       const delta = move_event.clientX - start_x;
       if (kind === 'sidebar') {
-        scheduleWidthApply(Math.round(clamp(start_width + delta, LEFT_SIDEBAR_MIN_WIDTH, LEFT_SIDEBAR_MAX_WIDTH, DEFAULT_LEFT_SIDEBAR_WIDTH)));
+        const docked_max_width = open_drawer
+          ? host_window.innerWidth - open_drawer.getBoundingClientRect().width - DOCKED_DRAWER_MIN_CHAT_WIDTH - MAIN_LAYOUT_GAP * 2
+          : LEFT_SIDEBAR_MAX_WIDTH;
+        const max_width = is_docked_drawer ? Math.min(LEFT_SIDEBAR_MAX_WIDTH, docked_max_width) : LEFT_SIDEBAR_MAX_WIDTH;
+        scheduleWidthApply(
+          Math.round(clamp(start_width + delta, LEFT_SIDEBAR_MIN_WIDTH, max_width, DEFAULT_LEFT_SIDEBAR_WIDTH)),
+        );
         return;
       }
 
-      const max_width = Math.max(OVERLAY_PANEL_MIN_WIDTH, host_window.innerWidth - drawer_left - OVERLAY_PANEL_RESERVED_WIDTH);
+      const reserved_width = is_docked_drawer
+        ? DOCKED_DRAWER_MIN_CHAT_WIDTH + MAIN_LAYOUT_GAP * 2
+        : OVERLAY_PANEL_RESERVED_WIDTH;
+      const max_width = Math.max(OVERLAY_PANEL_MIN_WIDTH, host_window.innerWidth - drawer_left - reserved_width);
       scheduleWidthApply(Math.round(clamp(start_width + delta, OVERLAY_PANEL_MIN_WIDTH, max_width, DEFAULT_OVERLAY_PANEL_WIDTH)));
     };
 
@@ -2054,14 +2197,48 @@ function mountApiPanelEnhancements(): { destroy: () => void } {
   };
 }
 
+function shouldUseDockedDrawer(
+  settings: ModernLayoutSettings,
+  is_active: boolean,
+  should_use_two_column: boolean,
+): boolean {
+  if (!is_active || !should_use_two_column || !settings.desktopDockedDrawer) {
+    return false;
+  }
+
+  const host_document = getHostDocument();
+  const host_window = getHostWindow();
+  if (!host_window.matchMedia(DESKTOP_TWO_COLUMN_QUERY).matches) {
+    return false;
+  }
+
+  const viewport_width = Math.min(host_window.innerWidth, host_document.documentElement.clientWidth || host_window.innerWidth);
+  const left_width = clamp(
+    settings.leftSidebarWidth,
+    LEFT_SIDEBAR_MIN_WIDTH,
+    LEFT_SIDEBAR_MAX_WIDTH,
+    DEFAULT_LEFT_SIDEBAR_WIDTH,
+  );
+  const panel_width = clamp(
+    settings.overlayPanelWidth,
+    OVERLAY_PANEL_MIN_WIDTH,
+    Number.MAX_SAFE_INTEGER,
+    DEFAULT_OVERLAY_PANEL_WIDTH,
+  );
+  return viewport_width >= left_width + panel_width + DOCKED_DRAWER_MIN_CHAT_WIDTH + MAIN_LAYOUT_GAP * 2;
+}
+
 function applyBodyState(settings: ModernLayoutSettings, is_active: boolean, should_use_two_column: boolean) {
   const host_document = getHostDocument();
   const host_window = getHostWindow();
   const $body = $(host_document.body);
   const should_auto_collapse = is_active && should_use_two_column && host_window.matchMedia(COMPACT_TWO_COLUMN_QUERY).matches;
+  const should_use_docked_drawer = shouldUseDockedDrawer(settings, is_active, should_use_two_column);
   $body
     .toggleClass(BODY_CLASS_ENABLED, is_active)
     .toggleClass(BODY_CLASS_TWO_COLUMN, should_use_two_column)
+    .toggleClass(BODY_CLASS_DOCKED_DRAWER, should_use_docked_drawer)
+    .toggleClass(BODY_CLASS_MAIN_FILL, is_active && should_use_two_column && settings.mainChatMaxWidth === 0)
     .toggleClass(BODY_CLASS_REDUCE_MOTION, is_active && settings.reduceMotion)
     .toggleClass(BODY_CLASS_REDUCE_ADVANCED_EFFECTS, is_active && settings.reduceAdvancedEffects)
     .toggleClass(BODY_CLASS_AUTO_COLLAPSE, should_auto_collapse)
@@ -2081,18 +2258,18 @@ function applyBodyState(settings: ModernLayoutSettings, is_active: boolean, shou
     `${clamp(settings.overlayPanelWidth, OVERLAY_PANEL_MIN_WIDTH, Number.MAX_SAFE_INTEGER, DEFAULT_OVERLAY_PANEL_WIDTH)}px`,
   );
   setHostCssVariable(
-    '--th-modern-main-max-width',
-    settings.mainChatMaxWidth > 0 ? `${settings.mainChatMaxWidth}px` : `${DEFAULT_MAIN_CHAT_MAX_WIDTH * 125}px`,
+    '--th-modern-main-min-width',
+    `${clamp(settings.mainChatMaxWidth, 0, Number.MAX_SAFE_INTEGER, DEFAULT_MAIN_CHAT_MIN_WIDTH)}px`,
   );
 }
 
 function clearBodyState() {
   $(getHostDocument().body).removeClass(
-    `${BODY_CLASS_ENABLED} ${BODY_CLASS_TWO_COLUMN} ${BODY_CLASS_LEGACY_THREE_COLUMN} ${BODY_CLASS_REDUCE_MOTION} ${BODY_CLASS_REDUCE_ADVANCED_EFFECTS} ${BODY_CLASS_SIDEBAR_COLLAPSED} ${BODY_CLASS_AUTO_COLLAPSE} ${BODY_CLASS_TEMP_EXPANDED} ${BODY_CLASS_RESIZING} ${BODY_CLASS_DRAWER_FULLSCREEN} ${BODY_CLASS_DRAWER_OPEN}`,
+    `${BODY_CLASS_ENABLED} ${BODY_CLASS_TWO_COLUMN} ${BODY_CLASS_LEGACY_THREE_COLUMN} ${BODY_CLASS_DOCKED_DRAWER} ${BODY_CLASS_MAIN_FILL} ${BODY_CLASS_REDUCE_MOTION} ${BODY_CLASS_REDUCE_ADVANCED_EFFECTS} ${BODY_CLASS_SIDEBAR_COLLAPSED} ${BODY_CLASS_AUTO_COLLAPSE} ${BODY_CLASS_TEMP_EXPANDED} ${BODY_CLASS_RESIZING} ${BODY_CLASS_DRAWER_FULLSCREEN} ${BODY_CLASS_DRAWER_OPEN} ${BODY_CLASS_DRAWER_SWITCHING}`,
   );
   removeHostCssVariable('--th-modern-left-width');
   removeHostCssVariable('--th-modern-overlay-width');
-  removeHostCssVariable('--th-modern-main-max-width');
+  removeHostCssVariable('--th-modern-main-min-width');
   removeHostCssVariable(LEFT_NAV_HEIGHT_VARIABLE);
 }
 

@@ -8,13 +8,14 @@ export const SCRIPT_NAME = '现代化界面';
 const LEGACY_DEFAULT_LEFT_SIDEBAR_WIDTH = 340;
 export const DEFAULT_LEFT_SIDEBAR_WIDTH = 360;
 export const DEFAULT_OVERLAY_PANEL_WIDTH = 960;
-export const DEFAULT_MAIN_CHAT_MAX_WIDTH = 960;
+export const DEFAULT_MAIN_CHAT_MIN_WIDTH = 960;
 
 export type ModernLayoutSettings = z.infer<typeof ModernLayoutSettings>;
 export const ModernLayoutSettings = z
   .object({
     enabled: z.boolean().default(true).catch(true),
     desktopTwoColumn: z.boolean().default(true).catch(true),
+    desktopDockedDrawer: z.boolean().default(false).catch(false),
     leftSidebarWidth: z
       .number()
       .min(320)
@@ -29,8 +30,8 @@ export const ModernLayoutSettings = z
     mainChatMaxWidth: z
       .number()
       .min(0)
-      .default(DEFAULT_MAIN_CHAT_MAX_WIDTH)
-      .catch(DEFAULT_MAIN_CHAT_MAX_WIDTH),
+      .default(DEFAULT_MAIN_CHAT_MIN_WIDTH)
+      .catch(DEFAULT_MAIN_CHAT_MIN_WIDTH),
     reduceMotion: z.boolean().default(false).catch(false),
     reduceAdvancedEffects: z.boolean().default(false).catch(false),
     modernWorldInfoEditor: z.boolean().default(true).catch(true),

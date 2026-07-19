@@ -17,6 +17,17 @@
           <span>宽屏启用两栏与滑出面板</span>
         </label>
 
+        <label class="checkbox_label modern-layout-checkbox">
+          <input
+            v-model="store.settings.desktopDockedDrawer"
+            type="checkbox"
+            class="checkbox"
+            :disabled="!store.settings.desktopTwoColumn"
+          />
+          <span>空间足够时使用固定三栏</span>
+        </label>
+        <small class="modern-layout-hint">空间不足、窄屏或手机端会自动恢复滑出面板。</small>
+
         <label class="modern-layout-field">
           <span>左侧栏宽度</span>
           <input
@@ -45,7 +56,7 @@
         </label>
 
         <label class="modern-layout-field">
-          <span>主聊天最大宽度</span>
+          <span>主聊天最小宽度</span>
           <input
             :value="store.settings.mainChatMaxWidth"
             class="text_pole"
@@ -56,7 +67,7 @@
             @blur="commitNumericSetting($event, 'mainChatMaxWidth', 0)"
           />
         </label>
-        <small class="modern-layout-hint">0 表示不限制宽度。</small>
+        <small class="modern-layout-hint">跟随酒馆的界面宽度百分比；0 表示始终铺满可用空间。</small>
 
         <label class="checkbox_label modern-layout-checkbox">
           <input v-model="store.settings.reduceMotion" type="checkbox" class="checkbox" />
@@ -145,6 +156,11 @@ async function resetSettings() {
 .modern-layout-checkbox {
   justify-content: flex-start;
   margin: 0.35rem 0;
+}
+
+.modern-layout-checkbox:has(input:disabled) {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .modern-layout-field {
