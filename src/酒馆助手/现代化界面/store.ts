@@ -71,7 +71,13 @@ export const useModernLayoutStore = defineStore(SCRIPT_NAME, () => {
 
   watchEffect(() => {
     const validSettings = ModernLayoutSettings.parse(klona(settings.value));
-    replaceVariables(validSettings, { type: 'script', script_id: getScriptId() });
+    updateVariablesWith(
+      variables => ({
+        ...variables,
+        ...validSettings,
+      }),
+      { type: 'script', script_id: getScriptId() },
+    );
   });
 
   function resetSettings() {

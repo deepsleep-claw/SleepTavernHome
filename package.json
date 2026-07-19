@@ -1,7 +1,7 @@
 {
   "scripts": {
     "build:dev": "webpack --mode development",
-    "build": "pnpm run check:modern && pnpm run build:regex && webpack --mode production",
+    "build": "pnpm run check:modern && pnpm run check:updater && pnpm run build:regex && webpack --mode production && pnpm run validate:updates",
     "build:regex": "node util/build_tavern_regexes.mjs",
     "build:regex:dream-big-discuss": "node util/build_tavern_regexes.mjs src/酒馆助手/梦境讨论正则UI",
     "build:regex:dream-discuss": "pnpm build:regex:dream-big-discuss",
@@ -9,6 +9,10 @@
     "typecheck:modern": "tsc --project tsconfig.modern-layout.json --noEmit --pretty false",
     "lint:modern": "eslint \"src/酒馆助手/现代化界面/**/*.{ts,vue}\" --max-warnings 0",
     "check:modern": "pnpm run typecheck:modern && pnpm run lint:modern",
+    "typecheck:updater": "tsc --project tsconfig.script-updater.json --noEmit --pretty false",
+    "lint:updater": "eslint \"src/公共模块/脚本更新器/**/*.{ts,vue}\" \"src/公共模块/脚本更新器核心/**/*.ts\" \"src/酒馆助手/现代化界面引导器/**/*.ts\" \"util/build_tagged_script.mjs\" \"util/validate_update_manifest.mjs\" --max-warnings 0",
+    "check:updater": "pnpm run typecheck:updater && pnpm run lint:updater",
+    "validate:updates": "node util/validate_update_manifest.mjs",
     "format": "prettier --write \"src/**/*.{ts,tsx,js,jsx,css,scss,html,vue}\" --no-error-on-unmatched-pattern",
     "lint": "eslint",
     "lint:fix": "eslint --fix",

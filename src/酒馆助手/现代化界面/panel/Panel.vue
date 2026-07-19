@@ -83,6 +83,8 @@
           <span>启用现代扩展程序界面</span>
         </label>
 
+        <component :is="updaterUi" v-if="updaterUi" :updater="updater" />
+
         <div class="modern-layout-actions">
           <button type="button" class="menu_button" title="重置现代化界面设置" @click="resetSettings">
             <i class="bi bi-arrow-counterclockwise" aria-hidden="true"></i>
@@ -94,7 +96,14 @@
 </template>
 
 <script setup lang="ts">
+import type { PluginUpdaterController } from '../../../公共模块/脚本更新器/contracts';
+import type { Component } from 'vue';
 import { SCRIPT_NAME, useModernLayoutStore } from '../store';
+
+defineProps<{
+  updater: PluginUpdaterController;
+  updaterUi?: Component;
+}>();
 
 const store = useModernLayoutStore();
 

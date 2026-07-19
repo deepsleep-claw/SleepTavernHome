@@ -1,0 +1,17 @@
+{
+  "type": "script",
+  "enabled": true,
+  "name": "现代化界面",
+  "id": "2f7d3c75-0778-4f16-b27f-bf65e63d1318",
+  "content": "import 'https://cdn.jsdelivr.net/gh/deepsleep-claw/SleepTavernHome@modern-ui-v0.1.0/dist/%E9%85%92%E9%A6%86%E5%8A%A9%E6%89%8B/%E7%8E%B0%E4%BB%A3%E5%8C%96%E7%95%8C%E9%9D%A2%E5%BC%95%E5%AF%BC%E5%99%A8/index.js';",
+  "info": "为 SillyTavern 提供现代化布局，并支持在设置面板中手动检查和安装稳定版更新。",
+  "button": {
+    "enabled": true,
+    "buttons": []
+  },
+  "data": {},
+  "export_with": {
+    "data": true,
+    "button": true
+  }
+}

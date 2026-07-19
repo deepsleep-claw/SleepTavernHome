@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": [
+    "@types/**/*.d.ts",
+    "src/公共模块/脚本更新器/**/*",
+    "src/公共模块/脚本更新器核心/**/*",
+    "src/酒馆助手/现代化界面引导器/**/*",
+    "*.d.ts"
+  ],
+  "exclude": ["**/dist/**", "**/node_modules/**"]
+}

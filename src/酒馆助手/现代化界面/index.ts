@@ -1,6 +1,8 @@
 import { checkMinimumVersion } from '@util/common';
 import { createScriptIdDiv, teleportStyle } from '@util/script';
 import { createPinia, getActivePinia, setActivePinia } from 'pinia';
+import releaseVersions from '../../../release/versions.json';
+import type { PluginActivationContext, PluginRuntime } from '../../公共模块/脚本更新器/contracts';
 import { mountCharacterManagement } from './character-management-module';
 import { mountExtensionSettings } from './extension-settings-module';
 import { getHostDocument, getHostWindow } from './host-context';
@@ -65,6 +67,9 @@ const LEFT_NAV_HEIGHT_VARIABLE = '--th-modern-left-nav-height';
 const LEFT_NAV_TOP_FALLBACK = 66;
 const LEFT_NAV_RECENT_MIN_HEIGHT_FALLBACK = 152;
 const LEFT_NAV_BOTTOM_GAP = 24;
+
+export const PLUGIN_ID = 'modern-ui';
+export const PLUGIN_VERSION = releaseVersions.plugins[PLUGIN_ID].version;
 
 let is_drawer_fullscreen_mode = false;
 
@@ -2170,7 +2175,7 @@ function getRuntimeRegistry(): Map<string, RuntimeDisposer> {
   return registry;
 }
 
-function initializeModernLayout() {
+function initializeModernLayout(context: PluginActivationContext): PluginRuntime {
   const host_window = getHostWindow();
   const script_window = window;
   const previous_dispose = _.get(host_window, LEGACY_RUNTIME_DISPOSE_PATH) as unknown;
@@ -2194,7 +2199,7 @@ function initializeModernLayout() {
   let destroy_all: RuntimeDisposer | undefined;
 
   try {
-    destroy_panel = initPanel(pinia).destroy;
+    destroy_panel = initPanel(pinia, context).destroy;
     const syncRuntime = () => {
       if (!store.should_enable) {
         active_runtime?.destroy();
@@ -2236,6 +2241,7 @@ function initializeModernLayout() {
 
     runtime_registry.set(script_id, destroy_all);
     script_window.addEventListener('pagehide', handlePageHide);
+    return { dispose: () => destroy_all?.() };
   } catch (error) {
     runCleanup(stop_runtime_watch);
     runCleanup(active_runtime?.destroy);
@@ -2246,4 +2252,7 @@ function initializeModernLayout() {
   }
 }
 
-$(() => errorCatched(initializeModernLayout)());
+export async function activate(context: PluginActivationContext): Promise<PluginRuntime> {
+  await new Promise<void>(resolve => $(resolve));
+  return initializeModernLayout(context);
+}

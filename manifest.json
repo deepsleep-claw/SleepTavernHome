@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "repository": "deepsleep-claw/SleepTavernHome",
+  "updater": {
+    "apiMajors": {
+      "1": {
+        "stable": {
+          "version": "1.0.0",
+          "tag": "script-updater-v1.0.0",
+          "entry": "dist/公共模块/脚本更新器/index.js"
+        }
+      }
+    }
+  },
+  "plugins": {
+    "modern-ui": {
+      "name": "现代化界面",
+      "channels": {
+        "stable": {
+          "version": "0.1.0",
+          "tag": "modern-ui-v0.1.0",
+          "entry": "dist/酒馆助手/现代化界面/index.js",
+          "updaterApiMajor": 1,
+          "minimum": {
+            "tavernHelper": "4.0.0"
+          }
+        }
+      }
+    }
+  }
+}

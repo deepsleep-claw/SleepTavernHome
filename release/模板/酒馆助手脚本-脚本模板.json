@@ -1,0 +1,24 @@
+{
+  "type": "script",
+  "enabled": false,
+  "name": "脚本模板",
+  "id": "5b5ecb51-547d-4002-8646-8facce19e17d",
+  "content": "// 脚本代码",
+  "info": "Markdown 备注",
+  "button": {
+    "enabled": true,
+    "buttons": [
+      {
+        "name": "测试按钮",
+        "visible": true
+      }
+    ]
+  },
+  "data": {
+    "Key": "Value"
+  },
+  "export_with": {
+    "data": true,
+    "button": true
+  }
+}

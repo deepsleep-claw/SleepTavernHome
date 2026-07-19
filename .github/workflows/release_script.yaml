@@ -1,0 +1,58 @@
+name: release tagged tavern helper script
+
+on:
+  push:
+    tags:
+      - '*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  package-script:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Generate tagged Tavern Helper script
+        id: package
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          EXPECTED_REPOSITORY: ${{ github.repository }}
+        run: >-
+          node util/build_tagged_script.mjs --tag "$RELEASE_TAG" --repository "$EXPECTED_REPOSITORY" --github-output
+          "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        if: steps.package.outputs.matched == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.package.outputs.plugin_id }}-${{ steps.package.outputs.version }}
+          path: ${{ steps.package.outputs.output }}
+          if-no-files-found: error
+
+      - name: Attach script to GitHub Release
+        if: steps.package.outputs.matched == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.package.outputs.tag }}
+          RELEASE_ASSET: ${{ steps.package.outputs.output }}
+          RELEASE_NAME: ${{ steps.package.outputs.plugin_name }}
+          RELEASE_VERSION: ${{ steps.package.outputs.version }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$RELEASE_ASSET" --clobber
+          else
+            gh release create "$RELEASE_TAG" "$RELEASE_ASSET" \
+              --verify-tag \
+              --title "$RELEASE_NAME v$RELEASE_VERSION" \
+              --generate-notes
+          fi
