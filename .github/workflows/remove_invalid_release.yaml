@@ -1,0 +1,25 @@
+name: remove invalid modern ui release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/remove_invalid_release.yaml
+
+permissions:
+  contents: write
+
+jobs:
+  remove-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove modern-ui-v0.1.0 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view modern-ui-v0.1.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete modern-ui-v0.1.0 --repo "$GITHUB_REPOSITORY" --yes
+          else
+            echo "modern-ui-v0.1.0 Release is already absent"
+          fi
