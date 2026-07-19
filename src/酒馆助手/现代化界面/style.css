@@ -604,6 +604,11 @@ body.th-modern-enabled #top-settings-holder > .drawer > .drawer-content.openDraw
   overflow-y: auto;
 }
 
+/* Pinned drawers can remain open together; keep the most recently opened one above the others. */
+body.th-modern-enabled #top-settings-holder > .drawer > .drawer-content.openDrawer.th-modern-drawer-active {
+  z-index: calc(var(--th-modern-overlay-z) + 1);
+}
+
 body.th-modern-enabled .th-modern-drawer-titlebar {
   position: sticky;
   top: 0;

@@ -128,6 +128,37 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock .inline-drawe
   border-radius: 7px;
 }
 
+/*
+ * Some forks use a full lorebook manager inside the global-world selector.
+ * Keep that feature-rich drawer compact without changing the upstream selector layout.
+ */
+@media (min-width: 900px) {
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock:has(#world_info_manager) {
+    align-items: start;
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock:has(#world_info_manager) > .range-block {
+    align-self: start;
+  }
+
+  body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #WIMultiSelector:has(#world_info_manager) {
+    grid-template-columns: minmax(0, 1fr) !important;
+    align-content: start;
+    align-items: start;
+  }
+
+  body.th-modern-enabled
+    #WorldInfo.th-modern-wi-enabled
+    #WIMultiSelector:has(#world_info_manager)
+    > .inline-drawer
+    > .inline-drawer-content {
+    max-height: clamp(14rem, 38dvh, 24rem);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+}
+
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-native-shell {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -571,6 +602,25 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-stats {
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #world_popup_entries_list .world_entry > form.world_entry_form > .inline-drawer > .inline-drawer-content.inline-drawer-outlet {
   display: none !important;
+}
+
+/* Lazy editors used by some forks must briefly become measurable before their controls are created. */
+body.th-modern-enabled
+  #WorldInfo.th-modern-wi-enabled
+  #world_popup_entries_list
+  .world_entry.th-modern-wi-native-editor-loading
+  > form.world_entry_form
+  > .inline-drawer
+  > .inline-drawer-content.inline-drawer-outlet {
+  position: absolute !important;
+  display: block !important;
+  visibility: hidden;
+  width: 1px !important;
+  height: 1px !important;
+  min-width: 1px !important;
+  min-height: 1px !important;
+  overflow: hidden !important;
+  pointer-events: none;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-native-editor .th-modern-wi-editor-entry-host,

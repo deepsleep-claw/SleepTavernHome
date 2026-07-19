@@ -12,6 +12,7 @@ const MULTI_SELECT_CLASS = 'th-modern-wi-multiselect';
 const NARROW_CLASS = 'th-modern-wi-narrow';
 const DETAIL_OPEN_CLASS = 'th-modern-wi-detail-open';
 const ROOT_DETAIL_OPEN_CLASS = 'th-modern-wi-mobile-detail-open';
+const NATIVE_EDITOR_LOADING_CLASS = 'th-modern-wi-native-editor-loading';
 const TABS_READY_FLAG = 'thModernTabsReady';
 const SUMMARY_READY_FLAG = 'thModernSummaryReady';
 const SUMMARY_LAYOUT_VERSION = '2026-07-18-compact-v2';
@@ -998,6 +999,7 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
     private pendingEnhance = 0;
     private pendingEditorRetry = 0;
     private editorRetryRevision = 0;
+    private nativeEditorToggleEntry?: HTMLElement;
     private mobileWorldSelects?: ReturnType<typeof mountMobileWorldSelects>;
 
     constructor() {
@@ -1092,7 +1094,7 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
         this.mobileWorldSelects = undefined;
 
         for (const entry of this.document.querySelectorAll<HTMLElement>('.world_entry')) {
-            entry.classList.remove(SELECTED_ENTRY_CLASS, SELECTED_ROW_CLASS);
+            entry.classList.remove(SELECTED_ENTRY_CLASS, SELECTED_ROW_CLASS, NATIVE_EDITOR_LOADING_CLASS);
         }
         this.observedList = undefined;
 
@@ -1386,6 +1388,14 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
             return;
         }
 
+        const target = targetToElement(event.target);
+        if (
+            this.nativeEditorToggleEntry === entry
+            && target?.closest('.inline-drawer-toggle')
+        ) {
+            return;
+        }
+
         if (this.multiSelect) {
             event.preventDefault();
             event.stopImmediatePropagation();
@@ -1414,6 +1424,7 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
     private clearSelection(): void {
         this.cancelPendingEditorRetry();
         this.cancelPendingSummaryUpdates(this.selectedEntry);
+        this.selectedEntry?.classList.remove(NATIVE_EDITOR_LOADING_CLASS);
         this.detachEntryEditor();
         this.selectedEntry?.classList.remove(SELECTED_ENTRY_CLASS);
         this.selectedEntry = undefined;
@@ -1436,6 +1447,10 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
     }
 
     private ensureEntryEditor(entry: HTMLElement): void {
+        if (entry.classList.contains(NATIVE_EDITOR_LOADING_CLASS)) {
+            return;
+        }
+
         this.cancelPendingEditorRetry();
         ensureEntrySummary(this.document, entry, this.scheduleSummaryUpdate);
         if (setupEntryTabs(this.document, entry, this.scheduleSummaryUpdate)) {
@@ -1446,7 +1461,13 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
         const toggle = entry.querySelector<HTMLElement>(':scope > form.world_entry_form > .inline-drawer > .inline-drawer-header .inline-drawer-toggle');
         const content = entry.querySelector<HTMLElement>(':scope > form.world_entry_form > .inline-drawer > .inline-drawer-content.inline-drawer-outlet');
         if (toggle && !content?.querySelector('.world_entry_edit')) {
-            toggle.click();
+            this.nativeEditorToggleEntry = entry;
+            try {
+                toggle.click();
+            } finally {
+                this.nativeEditorToggleEntry = undefined;
+            }
+            entry.classList.add(NATIVE_EDITOR_LOADING_CLASS);
         }
 
         let attempts = 0;
@@ -1457,10 +1478,12 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
             }
             attempts += 1;
             if (setupEntryTabs(this.document, entry, this.scheduleSummaryUpdate)) {
+                entry.classList.remove(NATIVE_EDITOR_LOADING_CLASS);
                 this.attachEntryEditor(entry);
                 return;
             }
             if (attempts > 20) {
+                entry.classList.remove(NATIVE_EDITOR_LOADING_CLASS);
                 return;
             }
             this.pendingEditorRetry = this.window.setTimeout(() => {

@@ -50,6 +50,7 @@ const DRAWER_ACTIONS_CLASS = 'th-modern-drawer-actions';
 const DRAWER_CLOSE_CLASS = 'th-modern-drawer-close';
 const DRAWER_FULLSCREEN_CLASS = 'th-modern-drawer-fullscreen-toggle';
 const DRAWER_FULLSCREEN_CONTENT_CLASS = 'th-modern-drawer-fullscreen-content';
+const DRAWER_ACTIVE_CLASS = 'th-modern-drawer-active';
 const DRAWER_FULLSCREEN_PIN_DATA = 'thModernFullscreenPinned';
 const DRAWER_FULLSCREEN_WAS_PINNED_DATA = 'thModernFullscreenWasPinned';
 const DRAWER_DOCKED_PIN_DATA = 'thModernDockedPinned';
@@ -1017,6 +1018,23 @@ function mountDrawerEnhancements(): { destroy: () => void } {
   let scheduled_reconcile = 0;
   let pending_drawer_switch: HTMLElement | undefined;
   let drawer_switch_timeout = 0;
+  let active_drawer_content: HTMLElement | undefined;
+
+  const syncActiveDrawer = (open_contents: HTMLElement[], newly_opened?: HTMLElement) => {
+    if (newly_opened?.classList.contains('openDrawer')) {
+      active_drawer_content = newly_opened;
+    } else if (!active_drawer_content?.isConnected || !active_drawer_content.classList.contains('openDrawer')) {
+      active_drawer_content = open_contents[open_contents.length - 1];
+    }
+
+    const should_raise_active = open_contents.length > 1;
+    host_document
+      .querySelectorAll<HTMLElement>('#top-settings-holder > .drawer > .drawer-content')
+      .forEach(content => content.classList.toggle(
+        DRAWER_ACTIVE_CLASS,
+        should_raise_active && content === active_drawer_content,
+      ));
+  };
 
   const clearDrawerSwitch = () => {
     if (drawer_switch_timeout !== 0) {
@@ -1056,6 +1074,7 @@ function mountDrawerEnhancements(): { destroy: () => void } {
     const open_contents = Array.from(
       host_document.querySelectorAll<HTMLElement>('#top-settings-holder > .drawer > .drawer-content.openDrawer'),
     );
+    syncActiveDrawer(open_contents);
     syncDockedDrawerPins(open_contents);
     syncDrawerOpenState(open_contents);
     if (
@@ -1207,7 +1226,20 @@ function mountDrawerEnhancements(): { destroy: () => void } {
   const holder = $('#top-settings-holder')[0];
   const content_class_observer =
     holder instanceof host_window.HTMLElement
-      ? new host_window.MutationObserver(() => {
+      ? new host_window.MutationObserver(mutations => {
+          const newly_opened = mutations.find(mutation => {
+            if (!(mutation.target instanceof host_window.HTMLElement)) {
+              return false;
+            }
+            const was_open = mutation.oldValue?.split(/\s+/).includes('openDrawer') ?? false;
+            return !was_open && mutation.target.classList.contains('openDrawer');
+          })?.target;
+          if (newly_opened instanceof host_window.HTMLElement) {
+            const open_contents = Array.from(
+              host_document.querySelectorAll<HTMLElement>('#top-settings-holder > .drawer > .drawer-content.openDrawer'),
+            );
+            syncActiveDrawer(open_contents, newly_opened);
+          }
           scheduleReconcileDrawerFullscreen();
         })
       : undefined;
@@ -1215,7 +1247,11 @@ function mountDrawerEnhancements(): { destroy: () => void } {
     content_class_observer?.disconnect();
     holder
       ?.querySelectorAll<HTMLElement>(':scope > .drawer > .drawer-content')
-      .forEach(content => content_class_observer?.observe(content, { attributes: true, attributeFilter: ['class'] }));
+      .forEach(content => content_class_observer?.observe(content, {
+        attributes: true,
+        attributeFilter: ['class'],
+        attributeOldValue: true,
+      }));
   };
   const enhanceAndObserveDrawers = () => {
     enhanceDrawers();
@@ -1259,7 +1295,11 @@ function mountDrawerEnhancements(): { destroy: () => void } {
       clearDrawerFullscreen();
       host_document
         .querySelectorAll<HTMLElement>('#top-settings-holder > .drawer > .drawer-content')
-        .forEach(removeDockedDrawerPin);
+        .forEach(content => {
+          removeDockedDrawerPin(content);
+          content.classList.remove(DRAWER_ACTIVE_CLASS);
+        });
+      active_drawer_content = undefined;
       $(`.${TOPBAR_LABEL_CLASS}`).remove();
       $(`.${DRAWER_TITLEBAR_CLASS}`).remove();
       original_toggle_attributes.forEach((original, toggle) => {
