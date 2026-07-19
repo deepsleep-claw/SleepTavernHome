@@ -10,7 +10,7 @@
   "plugins": {
     "modern-ui": {
       "name": "现代化界面",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "tagPrefix": "modern-ui-v",
       "entry": "dist/酒馆助手/现代化界面/index.js",
       "installer": {

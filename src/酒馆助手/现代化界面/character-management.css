@@ -108,6 +108,39 @@ body.th-modern-enabled.th-modern-character-management
   padding: 2px 4px 8px;
 }
 
+/*
+ * Moonlit Echoes collapses the native character action area to zero width.
+ * Keep the original editor usable when the optional modern character editor is disabled.
+ */
+html:has(> head > #MoonlitEchosTheme-style)
+  body.th-modern-enabled:not(.th-modern-character-management)
+  #right-nav-panel:is([data-menu-type='create'], [data-menu-type='character_edit'])
+  #avatar_controls {
+  box-sizing: border-box;
+  width: 100% !important;
+  min-width: 0;
+}
+
+html:has(> head > #MoonlitEchosTheme-style)
+  body.th-modern-enabled:not(.th-modern-character-management)
+  #right-nav-panel:is([data-menu-type='create'], [data-menu-type='character_edit'])
+  #avatar_controls
+  > .form_create_bottom_buttons_block {
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  width: 100%;
+}
+
+html:has(> head > #MoonlitEchosTheme-style)
+  body.th-modern-enabled:not(.th-modern-character-management)
+  #right-nav-panel:is([data-menu-type='create'], [data-menu-type='character_edit'])
+  #avatar_controls
+  > label {
+  flex: 0 0 auto;
+  width: 100%;
+  height: auto;
+}
+
 body.th-modern-enabled.th-modern-character-management #avatar-and-name-block.th-modern-character-summary {
   display: block;
   min-width: 0;
