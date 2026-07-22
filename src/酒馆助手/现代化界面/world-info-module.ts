@@ -1000,7 +1000,6 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
     private pendingEditorRetry = 0;
     private editorRetryRevision = 0;
     private nativeEditorToggleEntry?: HTMLElement;
-    private mobileWorldSelects?: ReturnType<typeof mountMobileWorldSelects>;
 
     constructor() {
         this.document = getHostDocument();
@@ -1037,7 +1036,6 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
         this.selectedWorldName = getSelectedWorldName(this.document);
         worldInfo.classList.add(WORLD_INFO_NATIVE_CLASS);
         this.buildLayout(popup, list);
-        this.mobileWorldSelects = mountMobileWorldSelects();
         this.bindResponsiveMode();
         this.bindEvents();
         this.enhanceEntries();
@@ -1090,8 +1088,6 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
         this.narrowQueryHandler = undefined;
         this.mobileDetailOpen = false;
         this.mobileListScrollTop = 0;
-        this.mobileWorldSelects?.destroy();
-        this.mobileWorldSelects = undefined;
 
         for (const entry of this.document.querySelectorAll<HTMLElement>('.world_entry')) {
             entry.classList.remove(SELECTED_ENTRY_CLASS, SELECTED_ROW_CLASS, NATIVE_EDITOR_LOADING_CLASS);
@@ -1743,6 +1739,7 @@ export function mountWorldInfoEditor(store: Store): { destroy: () => void } {
     const hostDocument = getHostDocument();
     const hostWindow = getHostWindow() as HostWindow;
     let controller: NativeWorldInfoEnhancer | undefined;
+    let worldSelects: ReturnType<typeof mountMobileWorldSelects> | undefined;
     let observedWorldInfo: HTMLElement | null = null;
     let scheduledSync = 0;
 
@@ -1754,9 +1751,28 @@ export function mountWorldInfoEditor(store: Store): { destroy: () => void } {
         return didMount;
     };
 
+    const syncWorldSelects = (enabled: boolean, selectorEnabled: boolean) => {
+        if (!enabled) {
+            worldSelects?.destroy();
+            worldSelects = undefined;
+            return;
+        }
+        if (!worldSelects) {
+            worldSelects = mountMobileWorldSelects({
+                enabled: selectorEnabled,
+                onEnabledChange: nextEnabled => {
+                    store.settings.modernWorldSelect = nextEnabled;
+                },
+            });
+            return;
+        }
+        worldSelects.setEnabled(selectorEnabled);
+    };
+
     const sync = () => {
         scheduledSync = 0;
         const shouldEnable = store.is_active && store.settings.modernWorldInfoEditor;
+        syncWorldSelects(shouldEnable, store.settings.modernWorldSelect);
         const worldInfo = findWorldInfo();
         observeWorldInfo(worldInfo);
         const isOpen = worldInfo?.classList.contains('openDrawer') ?? false;
@@ -1791,7 +1807,7 @@ export function mountWorldInfoEditor(store: Store): { destroy: () => void } {
     }
 
     const stopWatch = watch(
-        () => [store.is_active, store.settings.modernWorldInfoEditor] as const,
+        () => [store.is_active, store.settings.modernWorldInfoEditor, store.settings.modernWorldSelect] as const,
         scheduleSync,
         { immediate: true },
     );
@@ -1805,6 +1821,8 @@ export function mountWorldInfoEditor(store: Store): { destroy: () => void } {
                 scheduledSync = 0;
             }
             findWorldInfo()?.classList.remove(WORLD_INFO_ENABLED_CLASS);
+            worldSelects?.destroy();
+            worldSelects = undefined;
             if (unmount()) {
                 refreshOriginalEditor(hostDocument);
             }

@@ -609,6 +609,120 @@ body.th-modern-enabled #top-settings-holder > .drawer > .drawer-content.openDraw
   z-index: calc(var(--th-modern-overlay-z) + 1);
 }
 
+/* st-memory-enhancement：固定页签栏，并让各页签内容独立滚动。 */
+body.th-modern-enabled #top-settings-holder > #table_database_settings_drawer > #table_drawer_content.openDrawer {
+  overflow: hidden !important;
+}
+
+body.th-modern-enabled
+  #top-settings-holder
+  > #table_database_settings_drawer
+  > #table_drawer_content
+  > .th-modern-drawer-titlebar {
+  flex: 0 0 auto;
+}
+
+body.th-modern-enabled
+  #top-settings-holder
+  > #table_database_settings_drawer
+  > #table_drawer_content
+  > #table_button_container {
+  box-sizing: border-box;
+  align-items: center;
+  flex: 0 0 36px !important;
+  flex-wrap: nowrap;
+  gap: 6px;
+  height: 36px;
+  min-width: 0;
+  min-height: 36px;
+  max-height: 36px;
+}
+
+body.th-modern-enabled
+  #top-settings-holder
+  > #table_database_settings_drawer
+  > #table_drawer_content
+  > #table_button_container
+  > div {
+  align-items: center;
+  height: 36px;
+  min-width: 0;
+}
+
+body.th-modern-enabled
+  #top-settings-holder
+  > #table_database_settings_drawer
+  > #table_drawer_content
+  > #table_button_container
+  :is(#database_button, #editor_button, #setting_button) {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+  height: 36px !important;
+  min-height: 36px !important;
+  max-height: 36px !important;
+  margin: 0;
+  line-height: 1;
+}
+
+body.th-modern-enabled
+  #top-settings-holder
+  > #table_database_settings_drawer
+  > #table_drawer_content
+  > #app_header_table_container {
+  box-sizing: border-box;
+  flex: 1 1 0 !important;
+  height: 0;
+  min-width: 0;
+  min-height: 0;
+  max-height: none !important;
+  overflow: hidden !important;
+  overscroll-behavior: contain;
+}
+
+body.th-modern-enabled
+  #top-settings-holder
+  > #table_database_settings_drawer
+  > #table_drawer_content
+  > #app_header_table_container
+  > :is(#database-content, #editor-content, #setting-content) {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto !important;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  touch-action: pan-x pan-y;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* The plugin's draggable template canvas has an inline 500px minimum height. */
+body.th-modern-enabled
+  #top-settings-holder
+  > #table_database_settings_drawer
+  > #table_drawer_content
+  > #app_header_table_container
+  > #editor-content
+  #table_editor_container
+  > #contentContainer {
+  box-sizing: border-box;
+  min-height: 500px;
+}
+
+@media (max-width: 480px) {
+  body.th-modern-enabled
+    #top-settings-holder
+    > #table_database_settings_drawer
+    > #table_drawer_content
+    > #table_button_container
+    :is(#database_button, #editor_button, #setting_button) {
+    min-width: 0;
+    padding-inline: 8px;
+  }
+}
+
 body.th-modern-enabled .th-modern-drawer-titlebar {
   position: sticky;
   top: 0;

@@ -1,13 +1,15 @@
 import { getHostDocument, getHostWindow } from './host-context';
 
-const MOBILE_QUERY = '(max-width: 899.98px)';
+const WIDE_QUERY = '(min-width: 1200px)';
+const PHONE_QUERY = '(max-width: 560px)';
 const SOURCE_CLASS = 'th-modern-mobile-world-source';
 const NATIVE_SOURCE_CLASS = 'th-modern-mobile-world-source-native';
 const SELECT2_SOURCE_CLASS = 'th-modern-mobile-world-select2-source';
 const CONTROL_CLASS = 'th-modern-mobile-world-control';
 const PICKER_CLASS = 'th-modern-mobile-world-picker';
-const ROW_HEIGHT = 48;
-const ROW_OVERSCAN = 6;
+const CUSTOM_MODE_CLASS = 'th-modern-world-select-custom';
+const GLOBAL_FAVORITES_KEY = 'th_modern_world_book_favorites';
+const RENAME_INTENT_TIMEOUT_MS = 30_000;
 const SEARCH_DELAY_MS = 90;
 
 type HostWindow = Window &
@@ -15,8 +17,12 @@ type HostWindow = Window &
     readonly $?: JQueryStatic;
   };
 
+type PickerTab = 'all' | 'enabled' | 'favorites';
+type PickerLayout = 'wide' | 'narrow' | 'phone';
+
 type PickerOption = {
   disabled: boolean;
+  favoriteKey: string;
   label: string;
   searchText: string;
   selected: boolean;
@@ -24,27 +30,72 @@ type PickerOption = {
   value: string;
 };
 
+type PickerRowView = {
+  favoriteButton: HTMLButtonElement;
+  favoriteOffIcon: HTMLElement;
+  favoriteOnIcon: HTMLElement;
+  labelText: Text;
+  root: HTMLElement;
+  selectButton: HTMLButtonElement;
+  selectedIcon: HTMLElement;
+};
+
 type ControllerConfig = {
+  key: string;
   multiple: boolean;
   placeholder: string;
   selector: string;
   title: string;
 };
 
+type MountWorldSelectOptions = {
+  enabled: boolean;
+  onEnabledChange: (enabled: boolean) => void;
+};
+
 const CONTROLLER_CONFIGS: ControllerConfig[] = [
   {
+    key: 'global',
     selector: '#world_info',
     title: '启用全局世界书',
     placeholder: '尚未启用世界书',
     multiple: true,
   },
   {
+    key: 'editor',
     selector: '#world_editor_select',
     title: '选择要编辑的世界书',
     placeholder: '选择一个世界书',
     multiple: false,
   },
+  {
+    key: 'character-primary',
+    selector: '.character_world_info_selector',
+    title: '绑定主要世界书',
+    placeholder: '未绑定主要世界书',
+    multiple: false,
+  },
+  {
+    key: 'character-additional',
+    selector: '.character_extra_world_info_selector',
+    title: '绑定附加世界书',
+    placeholder: '尚未绑定附加世界书',
+    multiple: true,
+  },
+  {
+    key: 'persona',
+    selector: '.persona_world_info_selector',
+    title: '绑定人设世界书',
+    placeholder: '未绑定人设世界书',
+    multiple: false,
+  },
 ];
+
+const TAB_LABELS: Record<PickerTab, string> = {
+  all: '全部',
+  enabled: '已启用',
+  favorites: '收藏',
+};
 
 function makeElement<K extends keyof HTMLElementTagNameMap>(
   document: Document,
@@ -68,44 +119,107 @@ function normalizeSearchText(value: string): string {
   return value.normalize('NFKC').toLocaleLowerCase().trim();
 }
 
+function normalizeFavorites(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      value
+        .filter((candidate): candidate is string => typeof candidate === 'string')
+        .map(candidate => candidate.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function targetToElement(target: EventTarget | null): Element | null {
+  const candidate = target as (EventTarget & { closest?: Element['closest']; nodeType?: number; parentElement?: Element | null }) | null;
+  if (!candidate) {
+    return null;
+  }
+  if (typeof candidate.closest === 'function') {
+    return candidate as Element;
+  }
+  return candidate.nodeType === 3 ? candidate.parentElement ?? null : null;
+}
+
 class MobileWorldSelectManager {
   private readonly document: Document;
   private readonly window: HostWindow;
-  private readonly mobileQuery: MediaQueryList;
+  private readonly options: MountWorldSelectOptions;
   private readonly panelObserver: MutationObserver;
+  private readonly documentObserver: MutationObserver;
   private readonly controllers: MobileWorldSelectController[] = [];
+  private readonly lastTabs = new Map<string, PickerTab>();
+  private favorites = new Set<string>();
+  private enabled: boolean;
   private picker?: MobileWorldPicker;
+  private pendingRename?: { oldName: string; timeout: number };
+  private controllerRefreshFrame = 0;
+  private variableWriteErrorNotified = false;
 
-  constructor() {
+  constructor(options: MountWorldSelectOptions) {
+    this.options = options;
+    this.enabled = options.enabled;
     this.document = getHostDocument();
     this.window = getHostWindow() as HostWindow;
-    this.mobileQuery = this.window.matchMedia(MOBILE_QUERY);
     this.panelObserver = new this.window.MutationObserver(() => {
       if (!this.document.querySelector('#WorldInfo.openDrawer')) {
         this.closePicker();
       }
     });
+    this.documentObserver = new this.window.MutationObserver(this.scheduleControllerRefresh);
   }
 
   mount(): void {
-    this.mobileQuery.addEventListener('change', this.syncResponsiveMode);
     const worldInfo = this.document.querySelector('#WorldInfo');
     if (worldInfo) {
       this.panelObserver.observe(worldInfo, { attributes: true, attributeFilter: ['class'] });
     }
-    this.syncResponsiveMode();
+    this.documentObserver.observe(this.document.body, { childList: true, subtree: true });
+    this.document.addEventListener('click', this.captureRenameIntent, true);
+    this.favorites = this.readFavorites();
+    this.mountControllers();
+    this.applyEnabledState();
   }
 
   destroy(): void {
-    this.mobileQuery.removeEventListener('change', this.syncResponsiveMode);
     this.panelObserver.disconnect();
+    this.documentObserver.disconnect();
+    if (this.controllerRefreshFrame) {
+      this.window.cancelAnimationFrame(this.controllerRefreshFrame);
+      this.controllerRefreshFrame = 0;
+    }
+    this.document.removeEventListener('click', this.captureRenameIntent, true);
+    this.clearRenameIntent();
     this.closePicker();
     this.unmountControllers();
+    this.document.querySelector('#WorldInfo')?.classList.remove(CUSTOM_MODE_CLASS);
+  }
+
+  setEnabled(enabled: boolean): void {
+    if (this.enabled === enabled) {
+      this.applyEnabledState();
+      return;
+    }
+    this.enabled = enabled;
+    this.closePicker();
+    this.applyEnabledState();
+  }
+
+  requestEnabledChange(enabled: boolean): void {
+    this.setEnabled(enabled);
+    this.options.onEnabledChange(enabled);
   }
 
   openPicker(controller: MobileWorldSelectController): void {
+    if (!this.enabled) {
+      return;
+    }
     this.closePicker();
-    this.picker = new MobileWorldPicker(controller, () => {
+    this.refreshFavoritesAndCleanInvalid();
+    this.picker = new MobileWorldPicker(this, controller, () => {
       this.picker = undefined;
     });
     this.picker.mount();
@@ -116,35 +230,83 @@ class MobileWorldSelectManager {
     this.picker = undefined;
   }
 
+  isPickerFor(controller: MobileWorldSelectController): boolean {
+    return this.picker?.belongsTo(controller) ?? false;
+  }
+
   notifySourceChanged(controller: MobileWorldSelectController): void {
+    this.tryMigrateRenamedFavorite();
     controller.syncTrigger();
     if (this.picker?.belongsTo(controller)) {
       this.picker.refreshFromSource();
     }
   }
 
-  private readonly syncResponsiveMode = () => {
-    if (this.mobileQuery.matches) {
-      this.mountControllers();
-      return;
+  getInitialTab(controller: MobileWorldSelectController): PickerTab {
+    const remembered = this.lastTabs.get(controller.config.key);
+    if (remembered && (controller.config.multiple || remembered !== 'enabled')) {
+      return remembered;
     }
-    this.closePicker();
-    this.unmountControllers();
-  };
+    return 'all';
+  }
+
+  rememberTab(controller: MobileWorldSelectController, tab: PickerTab): void {
+    this.lastTabs.set(controller.config.key, tab);
+  }
+
+  getFavorites(): Set<string> {
+    return new Set(this.favorites);
+  }
+
+  isFavorite(value: string): boolean {
+    return this.favorites.has(value);
+  }
+
+  toggleFavorite(value: string): boolean {
+    if (!value) {
+      return false;
+    }
+    const shouldFavorite = !this.favorites.has(value);
+    if (shouldFavorite) {
+      this.favorites.add(value);
+    } else {
+      this.favorites.delete(value);
+    }
+    this.writeFavorites();
+    return shouldFavorite;
+  }
+
+  private applyEnabledState(): void {
+    this.document.querySelector('#WorldInfo')?.classList.toggle(CUSTOM_MODE_CLASS, this.enabled);
+    for (const controller of this.controllers) {
+      controller.setNativeMode(!this.enabled);
+    }
+  }
 
   private mountControllers(): void {
-    if (this.controllers.length > 0) {
-      return;
+    for (let index = this.controllers.length - 1; index >= 0; index -= 1) {
+      const controller = this.controllers[index];
+      if (controller.source.isConnected) {
+        controller.syncSelect2Container();
+        continue;
+      }
+      if (this.isPickerFor(controller)) {
+        this.closePicker();
+      }
+      controller.destroy();
+      this.controllers.splice(index, 1);
     }
 
     for (const config of CONTROLLER_CONFIGS) {
-      const source = this.document.querySelector<HTMLSelectElement>(config.selector);
-      if (!source) {
-        continue;
+      for (const source of this.document.querySelectorAll<HTMLSelectElement>(config.selector)) {
+        if (source.closest('.template_element') || this.controllers.some(controller => controller.source === source)) {
+          continue;
+        }
+        const controller = new MobileWorldSelectController(this, source, config);
+        controller.mount();
+        controller.setNativeMode(!this.enabled);
+        this.controllers.push(controller);
       }
-      const controller = new MobileWorldSelectController(this, source, config);
-      controller.mount();
-      this.controllers.push(controller);
     }
   }
 
@@ -153,6 +315,110 @@ class MobileWorldSelectManager {
       this.controllers.pop()?.destroy();
     }
   }
+
+  private getAvailableWorldNames(): Set<string> {
+    return new Set(
+      this.controllers.flatMap(controller => controller.getOptions().map(option => option.favoriteKey).filter(Boolean)),
+    );
+  }
+
+  private readFavorites(): Set<string> {
+    try {
+      const variables = getVariables({ type: 'global' });
+      return new Set(normalizeFavorites(variables?.[GLOBAL_FAVORITES_KEY]));
+    } catch (error) {
+      console.warn('[现代化界面] 读取世界书收藏失败。', error);
+      return new Set();
+    }
+  }
+
+  private writeFavorites(): void {
+    try {
+      const favorites = [...this.favorites];
+      updateVariablesWith(
+        variables => ({
+          ...variables,
+          [GLOBAL_FAVORITES_KEY]: favorites,
+        }),
+        { type: 'global' },
+      );
+      this.variableWriteErrorNotified = false;
+    } catch (error) {
+      console.error('[现代化界面] 写入世界书收藏失败。', error);
+      if (!this.variableWriteErrorNotified) {
+        toastr.error('世界书收藏保存失败，请稍后重试', '现代化界面');
+        this.variableWriteErrorNotified = true;
+      }
+    }
+  }
+
+  private refreshFavoritesAndCleanInvalid(): void {
+    this.favorites = this.readFavorites();
+    const available = this.getAvailableWorldNames();
+    if (available.size === 0) {
+      return;
+    }
+    const cleaned = new Set([...this.favorites].filter(name => available.has(name)));
+    if (cleaned.size !== this.favorites.size) {
+      this.favorites = cleaned;
+      this.writeFavorites();
+    }
+  }
+
+  private migrateFavorite(oldName: string, newName: string): void {
+    if (!this.favorites.has(oldName) || !newName || oldName === newName) {
+      return;
+    }
+    this.favorites.delete(oldName);
+    this.favorites.add(newName);
+    this.writeFavorites();
+  }
+
+  private tryMigrateRenamedFavorite(): void {
+    if (!this.pendingRename) {
+      return;
+    }
+    const available = this.getAvailableWorldNames();
+    const selectedName =
+      this.document.querySelector<HTMLSelectElement>('#world_editor_select')?.selectedOptions[0]?.label.trim() ?? '';
+    if (!available.has(this.pendingRename.oldName) && selectedName && available.has(selectedName)) {
+      this.migrateFavorite(this.pendingRename.oldName, selectedName);
+      this.clearRenameIntent();
+    }
+  }
+
+  private clearRenameIntent(): void {
+    if (!this.pendingRename) {
+      return;
+    }
+    this.window.clearTimeout(this.pendingRename.timeout);
+    this.pendingRename = undefined;
+  }
+
+  private readonly captureRenameIntent = (event: Event) => {
+    const target = targetToElement(event.target);
+    if (!target?.closest('#world_popup_name_button')) {
+      return;
+    }
+    const oldName =
+      this.document.querySelector<HTMLSelectElement>('#world_editor_select')?.selectedOptions[0]?.label.trim() ?? '';
+    if (!oldName) {
+      return;
+    }
+    this.clearRenameIntent();
+    const timeout = this.window.setTimeout(() => this.clearRenameIntent(), RENAME_INTENT_TIMEOUT_MS);
+    this.pendingRename = { oldName, timeout };
+  };
+
+  private readonly scheduleControllerRefresh = () => {
+    if (this.controllerRefreshFrame) {
+      return;
+    }
+    this.controllerRefreshFrame = this.window.requestAnimationFrame(() => {
+      this.controllerRefreshFrame = 0;
+      this.mountControllers();
+    });
+  };
 }
 
 class MobileWorldSelectController {
@@ -164,6 +430,7 @@ class MobileWorldSelectController {
   private readonly manager: MobileWorldSelectManager;
   private readonly namespace: string;
   private observer?: MutationObserver;
+  private surface?: HTMLElement;
   private wrapper?: HTMLElement;
   private trigger?: HTMLButtonElement;
   private primaryText?: HTMLElement;
@@ -182,7 +449,7 @@ class MobileWorldSelectController {
     this.config = config;
     this.document = source.ownerDocument;
     this.window = (this.document.defaultView ?? getHostWindow()) as HostWindow;
-    this.namespace = `.thModernMobileWorldSelect_${source.id || (config.multiple ? 'multi' : 'single')}`;
+    this.namespace = `.thModernWorldSelect_${source.id || config.key}`;
   }
 
   mount(): void {
@@ -191,11 +458,15 @@ class MobileWorldSelectController {
     }
 
     this.source.classList.add(SOURCE_CLASS);
+    this.surface =
+      this.source.closest<HTMLElement>('#WorldInfo, .character_world, .persona_world') ??
+      this.source.parentElement ??
+      undefined;
     this.select2Container = this.findSelect2Container();
     this.select2Container?.classList.add(SELECT2_SOURCE_CLASS);
 
     const wrapper = makeElement(this.document, 'div', CONTROL_CLASS);
-    wrapper.dataset.source = this.source.id;
+    wrapper.dataset.source = this.source.id || this.config.key;
     const trigger = makeElement(this.document, 'button', 'menu_button th-modern-mobile-world-trigger');
     trigger.type = 'button';
     trigger.setAttribute('aria-haspopup', 'dialog');
@@ -215,9 +486,9 @@ class MobileWorldSelectController {
       'menu_button menu_button_icon th-modern-mobile-world-native-return',
     );
     nativeReturn.type = 'button';
-    nativeReturn.title = '返回自绘世界书列表';
+    nativeReturn.title = '使用现代世界书选择器';
     nativeReturn.append(makeIcon(this.document, 'fa-solid fa-list-check'), makeElement(this.document, 'span'));
-    nativeReturn.lastElementChild!.textContent = '自绘列表';
+    nativeReturn.lastElementChild!.textContent = '现代选择';
 
     trigger.addEventListener('click', this.openPicker);
     nativeReturn.addEventListener('click', this.returnToCustomMode);
@@ -274,6 +545,7 @@ class MobileWorldSelectController {
     this.source.classList.remove(SOURCE_CLASS, NATIVE_SOURCE_CLASS);
     this.select2Container?.classList.remove(SELECT2_SOURCE_CLASS);
     this.select2Container = undefined;
+    this.surface = undefined;
     this.nativeMode = false;
   }
 
@@ -282,6 +554,7 @@ class MobileWorldSelectController {
       const label = String(option.label || option.textContent || option.value).trim();
       return {
         disabled: option.disabled,
+        favoriteKey: option.value ? label : '',
         label,
         searchText: normalizeSearchText(label),
         selected: option.selected,
@@ -302,6 +575,10 @@ class MobileWorldSelectController {
         .map(option => option.value)
         .filter(value => !this.config.multiple || value !== ''),
     );
+  }
+
+  getTriggerRect(): DOMRect | undefined {
+    return this.trigger?.getBoundingClientRect();
   }
 
   commit(values: ReadonlySet<string>): void {
@@ -329,11 +606,22 @@ class MobileWorldSelectController {
 
   setNativeMode(nativeMode: boolean): void {
     this.nativeMode = nativeMode;
+    this.surface?.classList.toggle(CUSTOM_MODE_CLASS, !nativeMode);
     this.source.classList.toggle(NATIVE_SOURCE_CLASS, nativeMode);
     this.wrapper?.classList.toggle('is-native', nativeMode);
     this.syncTrigger();
-    if (nativeMode) {
-      this.window.requestAnimationFrame(() => this.source.focus({ preventScroll: true }));
+  }
+
+  syncSelect2Container(): void {
+    const select2Container = this.findSelect2Container();
+    if (select2Container === this.select2Container) {
+      return;
+    }
+    this.select2Container?.classList.remove(SELECT2_SOURCE_CLASS);
+    this.select2Container = select2Container;
+    this.select2Container?.classList.add(SELECT2_SOURCE_CLASS);
+    if (this.wrapper) {
+      (this.select2Container ?? this.source).insertAdjacentElement('afterend', this.wrapper);
     }
   }
 
@@ -347,7 +635,7 @@ class MobileWorldSelectController {
     const selected = options.filter(option => selectedValues.has(option.value));
     const enabledOptions = options.filter(option => !option.disabled);
     this.trigger.disabled = this.source.disabled || enabledOptions.length === 0;
-    this.trigger.setAttribute('aria-expanded', String(Boolean(this.document.querySelector(`.${PICKER_CLASS}`))));
+    this.trigger.setAttribute('aria-expanded', String(this.manager.isPickerFor(this)));
 
     if (this.config.multiple) {
       this.primaryText.textContent = selected.length > 0 ? `${selected.length} 本已启用` : this.config.placeholder;
@@ -393,8 +681,7 @@ class MobileWorldSelectController {
   };
 
   private readonly returnToCustomMode = () => {
-    this.setNativeMode(false);
-    this.trigger?.focus({ preventScroll: true });
+    this.manager.requestEnabledChange(true);
   };
 
   private readonly onSourceChange = () => {
@@ -413,33 +700,41 @@ class MobileWorldSelectController {
 }
 
 class MobileWorldPicker {
+  private readonly manager: MobileWorldSelectManager;
   private readonly controller: MobileWorldSelectController;
   private readonly document: Document;
   private readonly window: HostWindow;
   private readonly onDestroy: () => void;
   private options: PickerOption[] = [];
   private filteredOptions: PickerOption[] = [];
-  private draftValues = new Set<string>();
-  private overlay?: HTMLElement;
+  private selectedValues = new Set<string>();
+  private enabledSnapshot = new Set<string>();
+  private favoriteSnapshot = new Set<string>();
+  private activeTab: PickerTab;
+  private layout: PickerLayout = 'phone';
+  private overlay?: HTMLDialogElement;
+  private sheet?: HTMLElement;
+  private tabs?: HTMLElement;
   private searchInput?: HTMLInputElement;
   private clearSearchButton?: HTMLButtonElement;
   private resultStatus?: HTMLElement;
   private viewport?: HTMLElement;
-  private spacer?: HTMLElement;
   private rows?: HTMLElement;
   private emptyState?: HTMLElement;
-  private applyButton?: HTMLButtonElement;
+  private emptyStateText?: Text;
+  private rowPool: PickerRowView[] = [];
   private previousFocus?: HTMLElement;
   private searchTimer = 0;
-  private renderFrame = 0;
   private query = '';
   private destroyed = false;
 
-  constructor(controller: MobileWorldSelectController, onDestroy: () => void) {
+  constructor(manager: MobileWorldSelectManager, controller: MobileWorldSelectController, onDestroy: () => void) {
+    this.manager = manager;
     this.controller = controller;
     this.document = controller.document;
     this.window = controller.window;
     this.onDestroy = onDestroy;
+    this.activeTab = manager.getInitialTab(controller);
   }
 
   belongsTo(controller: MobileWorldSelectController): boolean {
@@ -449,12 +744,13 @@ class MobileWorldPicker {
   mount(): void {
     this.previousFocus = this.document.activeElement as HTMLElement | undefined;
     this.options = this.controller.getOptions();
-    this.draftValues = this.controller.getSelectedValues();
+    this.selectedValues = this.controller.getSelectedValues();
+    this.enabledSnapshot = new Set(this.selectedValues);
+    this.favoriteSnapshot = this.manager.getFavorites();
 
-    const overlay = makeElement(this.document, 'div', PICKER_CLASS);
+    const overlay = makeElement(this.document, 'dialog', PICKER_CLASS);
     const titleId = `th-modern-mobile-world-picker-title-${this.controller.source.id}`;
     overlay.setAttribute('role', 'dialog');
-    overlay.setAttribute('aria-modal', 'true');
     overlay.setAttribute('aria-labelledby', titleId);
     overlay.tabIndex = -1;
 
@@ -471,16 +767,21 @@ class MobileWorldPicker {
     const headerActions = makeElement(this.document, 'div', 'th-modern-mobile-world-picker-header-actions');
     const nativeButton = makeElement(this.document, 'button', 'menu_button th-modern-mobile-world-picker-native');
     nativeButton.type = 'button';
-    nativeButton.append(makeIcon(this.document, 'fa-solid fa-mobile-screen-button'), this.document.createTextNode('系统选择'));
+    nativeButton.append(makeIcon(this.document, 'fa-solid fa-arrow-rotate-left'), this.document.createTextNode('原生界面'));
     nativeButton.addEventListener('click', this.useNativeMode);
     const closeButton = makeElement(this.document, 'button', 'menu_button th-modern-mobile-world-picker-close');
     closeButton.type = 'button';
     closeButton.title = '关闭世界书选择';
     closeButton.setAttribute('aria-label', '关闭世界书选择');
     closeButton.append(makeIcon(this.document, 'fa-solid fa-xmark'));
-    closeButton.addEventListener('click', this.cancel);
+    closeButton.addEventListener('click', this.close);
     headerActions.append(nativeButton, closeButton);
     header.append(heading, headerActions);
+
+    const tabs = makeElement(this.document, 'nav', 'th-modern-mobile-world-picker-tabs');
+    tabs.setAttribute('role', 'tablist');
+    tabs.setAttribute('aria-label', '世界书筛选');
+    tabs.addEventListener('click', this.onTabClick);
 
     const search = makeElement(this.document, 'label', 'th-modern-mobile-world-picker-search');
     search.append(makeIcon(this.document, 'fa-solid fa-magnifying-glass'));
@@ -491,6 +792,7 @@ class MobileWorldPicker {
     searchInput.spellcheck = false;
     searchInput.setAttribute('enterkeyhint', 'search');
     searchInput.addEventListener('input', this.onSearchInput);
+    searchInput.addEventListener('keydown', this.onSearchKeyDown);
     const clearSearchButton = makeElement(this.document, 'button', 'th-modern-mobile-world-picker-search-clear');
     clearSearchButton.type = 'button';
     clearSearchButton.title = '清空搜索';
@@ -507,48 +809,43 @@ class MobileWorldPicker {
     if (this.controller.config.multiple) {
       viewport.setAttribute('aria-multiselectable', 'true');
     }
-    const spacer = makeElement(this.document, 'div', 'th-modern-mobile-world-picker-spacer');
-    spacer.setAttribute('aria-hidden', 'true');
     const rows = makeElement(this.document, 'div', 'th-modern-mobile-world-picker-rows');
-    rows.addEventListener('click', this.onRowClick);
     const emptyState = makeElement(this.document, 'div', 'th-modern-mobile-world-picker-empty');
-    emptyState.append(makeIcon(this.document, 'fa-regular fa-folder-open'), this.document.createTextNode('没有找到匹配的世界书'));
-    viewport.addEventListener('scroll', this.scheduleRender, { passive: true });
-    viewport.append(spacer, rows, emptyState);
+    const emptyText = this.document.createTextNode('没有找到匹配的世界书');
+    emptyState.append(makeIcon(this.document, 'fa-regular fa-folder-open'), emptyText);
+    viewport.append(rows, emptyState);
 
-    const footer = makeElement(this.document, 'footer', 'th-modern-mobile-world-picker-footer');
-    const cancelButton = makeElement(this.document, 'button', 'menu_button');
-    cancelButton.type = 'button';
-    cancelButton.textContent = '取消';
-    cancelButton.addEventListener('click', this.cancel);
-    footer.append(cancelButton);
-    if (this.controller.config.multiple) {
-      const applyButton = makeElement(this.document, 'button', 'menu_button th-modern-mobile-world-picker-apply');
-      applyButton.type = 'button';
-      applyButton.addEventListener('click', this.apply);
-      footer.append(applyButton);
-      this.applyButton = applyButton;
-    }
-
-    sheet.append(handle, header, search, resultStatus, viewport, footer);
+    sheet.append(handle, header, tabs, search, resultStatus, viewport);
     overlay.append(sheet);
     overlay.addEventListener('touchstart', this.stopDrawerAutoClose, { passive: true });
     overlay.addEventListener('mousedown', this.stopDrawerAutoClose);
     overlay.addEventListener('click', this.onOverlayClick);
     overlay.addEventListener('keydown', this.onKeyDown);
-    this.document.body.append(overlay);
+    this.window.addEventListener('resize', this.syncLayout, { passive: true });
 
     this.overlay = overlay;
+    this.sheet = sheet;
+    this.tabs = tabs;
     this.searchInput = searchInput;
     this.clearSearchButton = clearSearchButton;
     this.resultStatus = resultStatus;
     this.viewport = viewport;
-    this.spacer = spacer;
     this.rows = rows;
     this.emptyState = emptyState;
+    this.emptyStateText = emptyText;
+    this.renderTabs();
     this.filterOptions();
+    this.document.body.append(overlay);
+    overlay.showModal();
+    this.syncLayout();
     this.controller.syncTrigger();
-    this.window.requestAnimationFrame(() => overlay.focus({ preventScroll: true }));
+    this.window.requestAnimationFrame(() => {
+      if (this.layout === 'wide') {
+        this.searchInput?.focus({ preventScroll: true });
+      } else {
+        overlay.focus({ preventScroll: true });
+      }
+    });
   }
 
   destroy(restoreFocus = true): void {
@@ -560,18 +857,15 @@ class MobileWorldPicker {
       this.window.clearTimeout(this.searchTimer);
       this.searchTimer = 0;
     }
-    if (this.renderFrame) {
-      this.window.cancelAnimationFrame(this.renderFrame);
-      this.renderFrame = 0;
-    }
     this.searchInput?.removeEventListener('input', this.onSearchInput);
+    this.searchInput?.removeEventListener('keydown', this.onSearchKeyDown);
     this.clearSearchButton?.removeEventListener('click', this.clearSearch);
-    this.viewport?.removeEventListener('scroll', this.scheduleRender);
-    this.rows?.removeEventListener('click', this.onRowClick);
+    this.tabs?.removeEventListener('click', this.onTabClick);
     this.overlay?.removeEventListener('touchstart', this.stopDrawerAutoClose);
     this.overlay?.removeEventListener('mousedown', this.stopDrawerAutoClose);
     this.overlay?.removeEventListener('click', this.onOverlayClick);
     this.overlay?.removeEventListener('keydown', this.onKeyDown);
+    this.window.removeEventListener('resize', this.syncLayout);
     this.overlay?.remove();
     this.overlay = undefined;
     if (restoreFocus && this.previousFocus?.isConnected) {
@@ -583,50 +877,100 @@ class MobileWorldPicker {
 
   refreshFromSource(): void {
     this.options = this.controller.getOptions();
-    this.draftValues = this.controller.getSelectedValues();
+    this.selectedValues = this.controller.getSelectedValues();
+    for (const value of this.selectedValues) {
+      this.enabledSnapshot.add(value);
+    }
+    this.renderTabs();
     this.filterOptions();
+  }
+
+  private getAvailableTabs(): PickerTab[] {
+    return this.controller.config.multiple ? ['all', 'enabled', 'favorites'] : ['all', 'favorites'];
+  }
+
+  private renderTabs(): void {
+    if (!this.tabs) {
+      return;
+    }
+    const fragment = this.document.createDocumentFragment();
+    for (const tab of this.getAvailableTabs()) {
+      const button = makeElement(this.document, 'button', 'th-modern-mobile-world-picker-tab');
+      button.type = 'button';
+      button.dataset.tab = tab;
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', String(this.activeTab === tab));
+      button.classList.toggle('is-active', this.activeTab === tab);
+      const count =
+        tab === 'all'
+          ? this.options.length
+          : tab === 'enabled'
+            ? this.selectedValues.size
+            : this.manager.getFavorites().size;
+      button.append(this.document.createTextNode(TAB_LABELS[tab]), makeElement(this.document, 'span'));
+      button.lastElementChild!.textContent = String(count);
+      fragment.append(button);
+    }
+    this.tabs.replaceChildren(fragment);
   }
 
   private filterOptions(): void {
     const normalizedQuery = normalizeSearchText(this.query);
+    let candidates = this.options;
+    if (this.activeTab === 'enabled') {
+      candidates = candidates.filter(option => this.enabledSnapshot.has(option.value));
+    } else if (this.activeTab === 'favorites') {
+      candidates = candidates.filter(option => this.favoriteSnapshot.has(option.favoriteKey));
+    }
     this.filteredOptions = normalizedQuery
-      ? this.options.filter(option => option.searchText.includes(normalizedQuery))
-      : [...this.options];
+      ? candidates.filter(option => option.searchText.includes(normalizedQuery))
+      : [...candidates];
     if (this.viewport) {
       this.viewport.scrollTop = 0;
     }
-    this.updateStatus();
+    this.updateStatus(candidates.length);
     this.renderRows();
   }
 
   private renderRows(): void {
-    if (!this.viewport || !this.spacer || !this.rows || !this.emptyState) {
+    if (!this.viewport || !this.rows || !this.emptyState) {
       return;
     }
 
     const total = this.filteredOptions.length;
-    this.spacer.style.height = `${total * ROW_HEIGHT}px`;
     this.emptyState.hidden = total > 0;
     if (total === 0) {
-      this.rows.replaceChildren();
+      for (const row of this.rowPool) {
+        row.root.hidden = true;
+      }
       return;
     }
 
-    const viewportHeight = this.viewport.clientHeight || 360;
-    const start = Math.max(0, Math.floor(this.viewport.scrollTop / ROW_HEIGHT) - ROW_OVERSCAN);
-    const end = Math.min(total, Math.ceil((this.viewport.scrollTop + viewportHeight) / ROW_HEIGHT) + ROW_OVERSCAN);
-    const fragment = this.document.createDocumentFragment();
+    this.ensureRowPool(total);
+    for (let poolIndex = 0; poolIndex < this.rowPool.length; poolIndex += 1) {
+      const row = this.rowPool[poolIndex];
+      const option = this.filteredOptions[poolIndex];
+      if (!option) {
+        row.root.hidden = true;
+        continue;
+      }
+      row.root.hidden = false;
+      this.updatePooledRow(row, option);
+    }
+  }
 
-    for (let filteredIndex = start; filteredIndex < end; filteredIndex += 1) {
-      const option = this.filteredOptions[filteredIndex];
-      const selected = this.draftValues.has(option.value);
-      const row = makeElement(this.document, 'button', 'th-modern-mobile-world-picker-row');
-      row.type = 'button';
-      row.dataset.sourceIndex = String(option.sourceIndex);
-      row.disabled = option.disabled;
-      row.setAttribute('role', 'option');
-      row.setAttribute('aria-selected', String(selected));
-      row.classList.toggle('is-selected', selected);
+  private ensureRowPool(requiredSize: number): void {
+    if (!this.rows || this.rowPool.length >= requiredSize) {
+      return;
+    }
+    const fragment = this.document.createDocumentFragment();
+    while (this.rowPool.length < requiredSize) {
+      const root = makeElement(this.document, 'div', 'th-modern-mobile-world-picker-row');
+      root.setAttribute('role', 'option');
+
+      const selectButton = makeElement(this.document, 'button', 'th-modern-mobile-world-picker-row-select');
+      selectButton.type = 'button';
+      selectButton.addEventListener('click', this.onRowClick);
       const marker = makeElement(
         this.document,
         'span',
@@ -636,32 +980,156 @@ class MobileWorldPicker {
       );
       marker.append(makeIcon(this.document, this.controller.config.multiple ? 'fa-solid fa-check' : 'fa-solid fa-circle'));
       const label = makeElement(this.document, 'span', 'th-modern-mobile-world-picker-row-label');
-      label.textContent = option.label || (option.value === '' ? '不选择世界书' : option.value);
-      row.append(marker, label);
-      if (selected) {
-        row.append(makeIcon(this.document, 'fa-solid fa-check th-modern-mobile-world-picker-row-check'));
-      }
-      fragment.append(row);
-    }
+      const labelText = this.document.createTextNode('');
+      label.append(labelText);
+      const selectedIcon = makeIcon(
+        this.document,
+        'fa-solid fa-check th-modern-mobile-world-picker-row-check',
+      );
+      selectedIcon.hidden = true;
+      selectButton.append(marker, label, selectedIcon);
 
-    this.rows.style.transform = `translateY(${start * ROW_HEIGHT}px)`;
-    this.rows.replaceChildren(fragment);
+      const favoriteButton = makeElement(this.document, 'button', 'th-modern-mobile-world-picker-favorite');
+      favoriteButton.type = 'button';
+      favoriteButton.addEventListener('click', this.onRowClick);
+      const favoriteOnIcon = makeIcon(this.document, 'fa-solid fa-star');
+      const favoriteOffIcon = makeIcon(this.document, 'fa-regular fa-star');
+      favoriteOnIcon.hidden = true;
+      favoriteButton.append(favoriteOnIcon, favoriteOffIcon);
+      root.append(selectButton, favoriteButton);
+      fragment.append(root);
+      this.rowPool.push({
+        favoriteButton,
+        favoriteOffIcon,
+        favoriteOnIcon,
+        labelText,
+        root,
+        selectButton,
+        selectedIcon,
+      });
+    }
+    this.rows.append(fragment);
   }
 
-  private updateStatus(): void {
+  private updatePooledRow(row: PickerRowView, option: PickerOption): void {
+    const selected = this.selectedValues.has(option.value);
+    const favorite = this.manager.isFavorite(option.favoriteKey);
+    const label = option.label || (option.value === '' ? '不选择世界书' : option.value);
+    row.root.dataset.sourceIndex = String(option.sourceIndex);
+    row.root.setAttribute('aria-selected', String(selected));
+    row.root.dataset.favorite = String(favorite);
+    row.selectButton.disabled = option.disabled;
+    row.selectButton.title = this.controller.config.multiple
+      ? `${selected ? '停用' : '启用'}世界书：${option.label}`
+      : `选择世界书：${option.label}`;
+    row.labelText.data = label;
+    row.selectedIcon.hidden = !selected;
+    row.favoriteButton.hidden = !option.value;
+    row.favoriteButton.setAttribute('aria-pressed', String(favorite));
+    row.favoriteButton.setAttribute('aria-label', `${favorite ? '取消收藏' : '收藏'}世界书：${option.label}`);
+    row.favoriteButton.title = favorite ? '取消收藏' : '收藏';
+    row.favoriteOnIcon.hidden = !favorite;
+    row.favoriteOffIcon.hidden = favorite;
+  }
+
+  private updateStatus(tabTotal: number): void {
     if (this.resultStatus) {
-      const resultText = this.query ? `找到 ${this.filteredOptions.length} / ${this.options.length} 本` : `共 ${this.options.length} 本`;
+      const resultText = this.query ? `找到 ${this.filteredOptions.length} / ${tabTotal} 本` : `当前页签 ${tabTotal} 本`;
       this.resultStatus.textContent = this.controller.config.multiple
-        ? `${resultText} · 已选择 ${this.draftValues.size} 本`
-        : resultText;
+        ? `${resultText} · 已启用 ${this.selectedValues.size} 本 · 点击即生效`
+        : `${resultText} · 点击即选择`;
     }
     if (this.clearSearchButton) {
       this.clearSearchButton.hidden = this.query.length === 0;
     }
-    if (this.applyButton) {
-      this.applyButton.textContent = `应用（${this.draftValues.size}）`;
+    if (this.emptyStateText) {
+      this.emptyStateText.data = this.query
+        ? '没有找到匹配的世界书'
+        : this.activeTab === 'favorites'
+          ? '还没有收藏世界书'
+          : this.activeTab === 'enabled'
+            ? '当前没有已启用的世界书'
+            : '没有可选择的世界书';
     }
   }
+
+  private getLayout(): PickerLayout {
+    if (this.window.matchMedia(WIDE_QUERY).matches) {
+      return 'wide';
+    }
+    return this.window.matchMedia(PHONE_QUERY).matches ? 'phone' : 'narrow';
+  }
+
+  private positionWideSheet(): void {
+    if (!this.sheet) {
+      return;
+    }
+    const viewportWidth = Math.min(this.window.innerWidth, this.document.documentElement.clientWidth || this.window.innerWidth);
+    const viewportHeight = Math.min(this.window.innerHeight, this.document.documentElement.clientHeight || this.window.innerHeight);
+    const triggerRect = this.controller.getTriggerRect();
+    if (!triggerRect) {
+      return;
+    }
+    const margin = 12;
+    const gap = 8;
+    const width = Math.min(560, viewportWidth - margin * 2);
+    const preferredHeight = Math.min(640, viewportHeight - margin * 2);
+    const below = Math.max(0, viewportHeight - triggerRect.bottom - gap - margin);
+    const above = Math.max(0, triggerRect.top - gap - margin);
+    const placeBelow = below >= Math.min(420, preferredHeight) || below >= above;
+    const availableHeight = placeBelow ? below : above;
+    const height = Math.max(220, Math.min(preferredHeight, availableHeight));
+    const left = Math.max(margin, Math.min(triggerRect.left, viewportWidth - width - margin));
+    const top = placeBelow
+      ? Math.min(viewportHeight - height - margin, triggerRect.bottom + gap)
+      : Math.max(margin, triggerRect.top - gap - height);
+    this.sheet.style.left = `${left}px`;
+    this.sheet.style.top = `${top}px`;
+    this.sheet.style.width = `${width}px`;
+    this.sheet.style.height = `${height}px`;
+  }
+
+  private focusFilteredIndex(index: number): void {
+    if (!this.viewport || this.filteredOptions.length === 0) {
+      return;
+    }
+    const targetIndex = Math.max(0, Math.min(index, this.filteredOptions.length - 1));
+    const option = this.filteredOptions[targetIndex];
+    this.window.requestAnimationFrame(() => {
+      const button = this.rows
+        ?.querySelector<HTMLButtonElement>(
+          `.th-modern-mobile-world-picker-row[data-source-index="${option.sourceIndex}"] .th-modern-mobile-world-picker-row-select`,
+        );
+      button?.focus({ preventScroll: true });
+      button?.scrollIntoView({ block: 'nearest' });
+    });
+  }
+
+  private readonly syncLayout = () => {
+    this.layout = this.getLayout();
+    if (!this.overlay || !this.sheet) {
+      return;
+    }
+    this.overlay.dataset.layout = this.layout;
+    this.overlay.setAttribute('aria-modal', String(this.layout !== 'wide'));
+    this.sheet.removeAttribute('style');
+    if (this.layout === 'wide') {
+      this.positionWideSheet();
+    }
+  };
+
+  private readonly onTabClick = (event: MouseEvent) => {
+    const target = targetToElement(event.target);
+    const button = target?.closest<HTMLButtonElement>('.th-modern-mobile-world-picker-tab');
+    const tab = button?.dataset.tab as PickerTab | undefined;
+    if (!tab || tab === this.activeTab || !this.getAvailableTabs().includes(tab)) {
+      return;
+    }
+    this.activeTab = tab;
+    this.manager.rememberTab(this.controller, tab);
+    this.renderTabs();
+    this.filterOptions();
+  };
 
   private readonly onSearchInput = () => {
     if (this.searchTimer) {
@@ -674,6 +1142,13 @@ class MobileWorldPicker {
     }, SEARCH_DELAY_MS);
   };
 
+  private readonly onSearchKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      this.focusFilteredIndex(0);
+    }
+  };
+
   private readonly clearSearch = () => {
     if (!this.searchInput) {
       return;
@@ -684,20 +1159,10 @@ class MobileWorldPicker {
     this.searchInput.focus({ preventScroll: true });
   };
 
-  private readonly scheduleRender = () => {
-    if (this.renderFrame) {
-      return;
-    }
-    this.renderFrame = this.window.requestAnimationFrame(() => {
-      this.renderFrame = 0;
-      this.renderRows();
-    });
-  };
-
   private readonly onRowClick = (event: MouseEvent) => {
-    const target = event.target instanceof this.window.Element ? event.target : null;
-    const row = target?.closest<HTMLButtonElement>('.th-modern-mobile-world-picker-row');
-    if (!row || row.disabled) {
+    const target = targetToElement(event.target);
+    const row = target?.closest<HTMLElement>('.th-modern-mobile-world-picker-row');
+    if (!row) {
       return;
     }
     const sourceIndex = Number(row.dataset.sourceIndex);
@@ -706,13 +1171,37 @@ class MobileWorldPicker {
       return;
     }
 
-    if (this.controller.config.multiple) {
-      if (this.draftValues.has(option.value)) {
-        this.draftValues.delete(option.value);
-      } else {
-        this.draftValues.add(option.value);
+    if (target?.closest('.th-modern-mobile-world-picker-favorite')) {
+      const favorite = this.manager.toggleFavorite(option.favoriteKey);
+      if (favorite) {
+        this.favoriteSnapshot.add(option.favoriteKey);
       }
-      this.updateStatus();
+      this.renderTabs();
+      this.updateStatus(
+        this.activeTab === 'all'
+          ? this.options.length
+          : this.activeTab === 'enabled'
+            ? this.options.filter(candidate => this.enabledSnapshot.has(candidate.value)).length
+            : this.options.filter(candidate => this.favoriteSnapshot.has(candidate.favoriteKey)).length,
+      );
+      this.renderRows();
+      return;
+    }
+
+    const selectButton = target?.closest<HTMLButtonElement>('.th-modern-mobile-world-picker-row-select');
+    if (!selectButton || selectButton.disabled) {
+      return;
+    }
+
+    if (this.controller.config.multiple) {
+      if (this.selectedValues.has(option.value)) {
+        this.selectedValues.delete(option.value);
+      } else {
+        this.selectedValues.add(option.value);
+        this.enabledSnapshot.add(option.value);
+      }
+      this.controller.commit(this.selectedValues);
+      this.renderTabs();
       this.renderRows();
       return;
     }
@@ -722,25 +1211,17 @@ class MobileWorldPicker {
   };
 
   private readonly useNativeMode = () => {
-    if (this.controller.config.multiple) {
-      this.controller.commit(this.draftValues);
-    }
-    this.controller.setNativeMode(true);
+    this.manager.requestEnabledChange(false);
     this.destroy(false);
   };
 
-  private readonly apply = () => {
-    this.controller.commit(this.draftValues);
-    this.destroy();
-  };
-
-  private readonly cancel = () => {
+  private readonly close = () => {
     this.destroy();
   };
 
   private readonly onOverlayClick = (event: MouseEvent) => {
     if (event.target === this.overlay) {
-      this.cancel();
+      this.close();
     }
   };
 
@@ -751,13 +1232,32 @@ class MobileWorldPicker {
   private readonly onKeyDown = (event: KeyboardEvent) => {
     if (event.key === 'Escape') {
       event.preventDefault();
-      this.cancel();
+      this.close();
+      return;
     }
+    const target = targetToElement(event.target);
+    const row = target?.closest<HTMLElement>('.th-modern-mobile-world-picker-row');
+    if (!row || (event.key !== 'ArrowDown' && event.key !== 'ArrowUp')) {
+      return;
+    }
+    const sourceIndex = Number(row.dataset.sourceIndex);
+    const currentIndex = this.filteredOptions.findIndex(option => option.sourceIndex === sourceIndex);
+    if (currentIndex < 0) {
+      return;
+    }
+    event.preventDefault();
+    this.focusFilteredIndex(currentIndex + (event.key === 'ArrowDown' ? 1 : -1));
   };
 }
 
-export function mountMobileWorldSelects(): { destroy: () => void } {
-  const manager = new MobileWorldSelectManager();
+export function mountMobileWorldSelects(options: MountWorldSelectOptions): {
+  destroy: () => void;
+  setEnabled: (enabled: boolean) => void;
+} {
+  const manager = new MobileWorldSelectManager(options);
   manager.mount();
-  return { destroy: () => manager.destroy() };
+  return {
+    destroy: () => manager.destroy(),
+    setEnabled: enabled => manager.setEnabled(enabled),
+  };
 }

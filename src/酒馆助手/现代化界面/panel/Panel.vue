@@ -81,8 +81,19 @@
 
         <label class="checkbox_label modern-layout-checkbox">
           <input v-model="store.settings.modernWorldInfoEditor" type="checkbox" class="checkbox" />
-          <span>启用现代世界书编辑器</span>
+          <span>启用现代世界书管理界面</span>
         </label>
+
+        <label class="checkbox_label modern-layout-checkbox">
+          <input
+            v-model="store.settings.modernWorldSelect"
+            type="checkbox"
+            class="checkbox"
+            :disabled="!store.settings.modernWorldInfoEditor"
+          />
+          <span>使用现代世界书选择器</span>
+        </label>
+        <small class="modern-layout-hint">统一应用于宽屏、窄屏和手机；也可在世界书界面直接切换。</small>
 
         <label class="checkbox_label modern-layout-checkbox">
           <input v-model="store.settings.modernCharacterManagement" type="checkbox" class="checkbox" />

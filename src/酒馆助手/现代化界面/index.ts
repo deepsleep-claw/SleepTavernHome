@@ -878,7 +878,9 @@ function syncDrawerOpenState(open_contents?: HTMLElement[]) {
     open_contents !== undefined
       ? open_contents.length > 0
       : Boolean(host_document.querySelector('#top-settings-holder > .drawer > .drawer-content.openDrawer'));
-  host_document.body.classList.toggle(BODY_CLASS_DRAWER_OPEN, has_open_drawer);
+  if (host_document.body.classList.contains(BODY_CLASS_DRAWER_OPEN) !== has_open_drawer) {
+    host_document.body.classList.toggle(BODY_CLASS_DRAWER_OPEN, has_open_drawer);
+  }
 }
 
 function applyDockedDrawerPin(content: HTMLElement) {
@@ -1084,7 +1086,9 @@ function mountDrawerEnhancements(): { destroy: () => void } {
       clearDrawerSwitch();
     }
     if (!fullscreen_content) {
-      host_document.body.classList.remove(BODY_CLASS_DRAWER_FULLSCREEN);
+      if (host_document.body.classList.contains(BODY_CLASS_DRAWER_FULLSCREEN)) {
+        host_document.body.classList.remove(BODY_CLASS_DRAWER_FULLSCREEN);
+      }
       if (is_drawer_fullscreen_mode && open_contents[0]) {
         applyDrawerFullscreenContent(open_contents[0]);
         return;
