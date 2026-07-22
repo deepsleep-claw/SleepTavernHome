@@ -19,7 +19,10 @@ import webpack from 'webpack';
 import WebpackObfuscator from 'webpack-obfuscator';
 const require = createRequire(import.meta.url);
 const HTMLInlineCSSWebpackPlugin = require('html-inline-css-webpack-plugin').default;
+<<<<<<< HEAD
 const pinia_version = (require('pinia/package.json') as { version: string }).version;
+=======
+>>>>>>> f24091c9a91d583dafdb4867d858268ebc487545
 
 interface Config {
   port: number;
@@ -560,12 +563,28 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
         return callback(null, 'var ' + global[request as keyof typeof global]);
       }
       const cdn = {
+<<<<<<< HEAD
         pinia: `https://testingcf.jsdelivr.net/npm/pinia@${pinia_version}/+esm`,
         sass: 'https://jspm.dev/sass',
       };
       return callback(
         null,
         'module-import ' + (cdn[request as keyof typeof cdn] ?? `https://testingcf.jsdelivr.net/npm/${request}/+esm`),
+=======
+        sass: 'https://jspm.dev/sass',
+      };
+      const package_json = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, 'package.json'), 'utf-8')) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      const package_versions = { ...package_json.devDependencies, ...package_json.dependencies };
+      const version = package_versions[request]?.replace(/^[~^]/, '');
+      const versioned_request = /^[.\d]+$/.test(version) ? `${request}@${version}` : request;
+      return callback(
+        null,
+        'module-import ' +
+          (cdn[request as keyof typeof cdn] ?? `https://testingcf.jsdelivr.net/npm/${versioned_request}/+esm`),
+>>>>>>> f24091c9a91d583dafdb4867d858268ebc487545
       );
     },
   });

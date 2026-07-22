@@ -6,6 +6,7 @@
 @.cursor/rules/酒馆助手接口.mdc
 @.cursor/rules/前端界面.mdc
 @.cursor/rules/脚本.mdc
+<<<<<<< HEAD
 @.cursor/rules/正则界面.mdc
 @.cursor/rules/mvu变量框架.mdc
 @.cursor/rules/mvu角色卡.mdc
@@ -30,3 +31,7 @@
    `gh`/GitHub App 代替该 SSH 远端写入。
 9. 确认 Tag 已到达远端，并确认 `.github/workflows/release_script.yaml` 成功生成 GitHub Release 与附件。精确 Tag 的
    jsDelivr 入口和 Release 附件可访问后，再单独更新 `manifest.json`，将 `stable` 推进到新版本并另行提交、推送。
+=======
+@.cursor/rules/mvu变量框架.mdc
+@.cursor/rules/mvu角色卡.mdc
+>>>>>>> f24091c9a91d583dafdb4867d858268ebc487545
