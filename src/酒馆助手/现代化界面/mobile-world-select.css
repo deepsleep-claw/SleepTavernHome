@@ -60,7 +60,7 @@ body.th-modern-enabled .th-modern-mobile-world-trigger:disabled {
 
 body.th-modern-enabled .th-modern-mobile-world-trigger > i:first-child {
   color: var(--th-modern-select-accent);
-  font-size: 1rem;
+  font-size: calc(var(--mainFontSize) * 1.067);
 }
 
 body.th-modern-enabled .th-modern-mobile-world-trigger-text {
@@ -83,14 +83,14 @@ body.th-modern-enabled .th-modern-mobile-world-trigger-secondary {
 
 body.th-modern-enabled .th-modern-mobile-world-trigger-primary {
   color: var(--SmartThemeEmColor);
-  font-size: 0.87rem;
+  font-size: calc(var(--mainFontSize) * 0.928);
   font-weight: 700;
   line-height: 1.15;
 }
 
 body.th-modern-enabled .th-modern-mobile-world-trigger-secondary {
   color: var(--th-modern-select-muted);
-  font-size: 0.68rem;
+  font-size: calc(var(--mainFontSize) * 0.725);
   line-height: 1.15;
 }
 
@@ -109,13 +109,13 @@ body.th-modern-enabled .th-modern-mobile-world-trigger-count {
   border-radius: 999px;
   background: color-mix(in srgb, var(--th-modern-select-accent) 18%, transparent);
   color: var(--SmartThemeEmColor);
-  font-size: 0.72rem;
+  font-size: calc(var(--mainFontSize) * 0.768);
   font-weight: 750;
 }
 
 body.th-modern-enabled .th-modern-mobile-world-trigger-chevron {
   color: var(--th-modern-select-muted);
-  font-size: 0.72rem;
+  font-size: calc(var(--mainFontSize) * 0.768);
 }
 
 body.th-modern-enabled .th-modern-mobile-world-native-return {
@@ -297,7 +297,7 @@ body.th-modern-enabled .th-modern-mobile-world-picker-heading {
 body.th-modern-enabled .th-modern-mobile-world-picker-heading strong {
   overflow: hidden;
   color: var(--SmartThemeEmColor);
-  font-size: 1rem;
+  font-size: calc(var(--mainFontSize) * 1.067);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -322,7 +322,7 @@ body.th-modern-enabled .th-modern-mobile-world-picker-close {
 body.th-modern-enabled .th-modern-mobile-world-picker-native {
   gap: 0.35rem;
   padding-inline: 0.58rem;
-  font-size: 0.76rem;
+  font-size: calc(var(--mainFontSize) * 0.811);
   white-space: nowrap;
 }
 
@@ -362,7 +362,7 @@ body.th-modern-enabled .th-modern-mobile-world-picker-tab {
   border-radius: 999px;
   background: color-mix(in srgb, var(--SmartThemeChatTintColor) 52%, transparent);
   color: color-mix(in srgb, var(--SmartThemeBodyColor) 72%, transparent);
-  font-size: 0.78rem;
+  font-size: calc(var(--mainFontSize) * 0.832);
   white-space: nowrap;
 }
 
@@ -371,7 +371,7 @@ body.th-modern-enabled .th-modern-mobile-world-picker-tab > span {
   padding: 0.08rem 0.3rem;
   border-radius: 999px;
   background: color-mix(in srgb, var(--SmartThemeBodyColor) 9%, transparent);
-  font-size: 0.68rem;
+  font-size: calc(var(--mainFontSize) * 0.725);
 }
 
 body.th-modern-enabled .th-modern-mobile-world-picker-tab.is-active {
@@ -415,7 +415,7 @@ body.th-modern-enabled .th-modern-mobile-world-picker-search input {
   outline: 0;
   background: transparent;
   color: var(--SmartThemeBodyColor);
-  font-size: 0.92rem;
+  font-size: calc(var(--mainFontSize) * 0.981);
 }
 
 body.th-modern-enabled .th-modern-mobile-world-picker-search-clear {
@@ -439,7 +439,7 @@ body.th-modern-enabled .th-modern-mobile-world-picker-status {
   min-height: 1.3rem;
   padding: 0 0.82rem 0.28rem;
   color: color-mix(in srgb, var(--SmartThemeBodyColor) 62%, transparent);
-  font-size: 0.7rem;
+  font-size: calc(var(--mainFontSize) * 0.747);
 }
 
 body.th-modern-enabled .th-modern-mobile-world-picker-viewport {
@@ -554,16 +554,16 @@ body.th-modern-enabled
 }
 
 body.th-modern-enabled .th-modern-mobile-world-picker-checkbox i {
-  font-size: 0.72rem;
+  font-size: calc(var(--mainFontSize) * 0.768);
 }
 
 body.th-modern-enabled .th-modern-mobile-world-picker-radio i {
-  font-size: 0.5rem;
+  font-size: calc(var(--mainFontSize) * 0.533);
 }
 
 body.th-modern-enabled .th-modern-mobile-world-picker-row-label {
   overflow: hidden;
-  font-size: 0.86rem;
+  font-size: calc(var(--mainFontSize) * 0.917);
   font-weight: 580;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -571,7 +571,7 @@ body.th-modern-enabled .th-modern-mobile-world-picker-row-label {
 
 body.th-modern-enabled .th-modern-mobile-world-picker-row-check {
   color: var(--SmartThemeQuoteColor);
-  font-size: 0.82rem;
+  font-size: calc(var(--mainFontSize) * 0.875);
 }
 
 body.th-modern-enabled .th-modern-mobile-world-picker-favorite {
@@ -587,7 +587,7 @@ body.th-modern-enabled .th-modern-mobile-world-picker-favorite {
   border-radius: 0;
   background: transparent;
   color: color-mix(in srgb, var(--SmartThemeBodyColor) 48%, transparent);
-  font-size: 0.9rem;
+  font-size: calc(var(--mainFontSize) * 0.96);
   touch-action: manipulation;
 }
 
@@ -612,7 +612,7 @@ body.th-modern-enabled .th-modern-mobile-world-picker-empty[hidden] {
 }
 
 body.th-modern-enabled .th-modern-mobile-world-picker-empty i {
-  font-size: 1.4rem;
+  font-size: calc(var(--mainFontSize) * 1.493);
 }
 
 body.th-modern-enabled .th-modern-mobile-world-picker[data-layout='wide'] {
@@ -667,7 +667,7 @@ body.th-modern-enabled .th-modern-mobile-world-picker[data-layout='phone'] .th-m
 }
 
 body.th-modern-enabled .th-modern-mobile-world-picker[data-layout='phone'] .th-modern-mobile-world-picker-native i {
-  font-size: 0.82rem;
+  font-size: calc(var(--mainFontSize) * 0.875);
 }
 
 body.th-modern-reduce-motion .th-modern-mobile-world-picker-sheet {

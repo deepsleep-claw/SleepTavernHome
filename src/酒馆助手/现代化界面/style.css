@@ -36,6 +36,11 @@ body.th-modern-enabled {
   --th-modern-layout-nav-z: 21;
   --th-modern-overlay-z: 3000;
   --th-modern-input-bottom-gap: 15px;
+  --th-modern-effective-input-bottom-gap: var(--th-modern-input-bottom-gap);
+  --th-modern-input-height: 96px;
+  --th-modern-input-stack-offset: 100%;
+  --th-modern-quick-reply-max-height: 40dvh;
+  --th-modern-quick-reply-reserve-height: 0px;
   --th-modern-input-inline-inset: clamp(16px, 3vw, 28px);
   --th-modern-radius-xs: 5px;
   --th-modern-radius-sm: 7px;
@@ -115,14 +120,6 @@ body.th-modern-enabled.th-modern-reduce-advanced-effects {
 }
 
 body.th-modern-enabled,
-body.th-modern-enabled input,
-body.th-modern-enabled textarea,
-body.th-modern-enabled select,
-body.th-modern-enabled button {
-  font-family: var(--mainFontFamily);
-}
-
-body.th-modern-enabled,
 body.th-modern-enabled #chat,
 body.th-modern-enabled .inline-drawer-content,
 body.th-modern-enabled #top-settings-holder,
@@ -194,6 +191,10 @@ body.th-modern-enabled .inline-drawer {
   overflow: hidden;
 }
 
+body.th-modern-enabled .inline-drawer:has(toolcool-color-picker) {
+  overflow: visible;
+}
+
 body.th-modern-enabled .inline-drawer-toggle.inline-drawer-header {
   padding: 8px 10px;
   background: color-mix(in srgb, var(--SmartThemeQuoteColor) 12%, transparent);
@@ -242,7 +243,13 @@ body.th-modern-enabled #send_form {
 }
 
 body.th-modern-enabled #chat {
-  padding-bottom: 142px;
+  padding-bottom: calc(
+    var(--th-modern-input-height) +
+      var(--th-modern-effective-input-bottom-gap) +
+      var(--th-modern-quick-reply-reserve-height) +
+      12px
+  );
+  transition: padding-bottom var(--th-modern-motion-duration) ease;
 }
 
 body.th-modern-enabled #form_sheld {
@@ -257,6 +264,7 @@ body.th-modern-enabled #form_sheld #send_form {
 
 body.th-modern-enabled #send_form {
   position: relative;
+  isolation: isolate;
   display: block;
   width: 100%;
   margin: 0;
@@ -275,6 +283,8 @@ body.th-modern-enabled #send_form:has(#send_textarea:focus-visible) {
 }
 
 body.th-modern-enabled #send_form #file_form:not(.displayNone) {
+  position: relative;
+  z-index: 2;
   margin-bottom: 8px;
   border: 1px solid var(--th-modern-line);
   border-radius: var(--th-modern-radius-sm);
@@ -284,6 +294,7 @@ body.th-modern-enabled #send_form #file_form:not(.displayNone) {
 
 body.th-modern-enabled #nonQRFormItems {
   position: relative;
+  z-index: 2;
   display: block;
   align-items: stretch;
   gap: 6px;
@@ -403,21 +414,83 @@ body.th-modern-enabled #rightSendForm > #send_but:hover {
 body.th-modern-enabled #qr--bar {
   position: absolute;
   right: 0;
-  bottom: calc(100% + 10px);
+  bottom: calc(var(--th-modern-input-stack-offset) + 10px);
   left: 0;
-  z-index: 3;
+  z-index: 1;
   display: flex;
   justify-content: center;
   width: auto;
   max-width: 100%;
-  overflow: visible;
-  padding: 0;
+  max-height: var(--th-modern-quick-reply-max-height);
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0 38px 0 0;
   opacity: 1;
   pointer-events: none;
+  transform: translateY(0) scale(1);
+  transform-origin: center bottom;
+  transition:
+    height calc(var(--th-modern-motion-duration) * 2) ease-in-out,
+    max-height var(--th-modern-motion-duration) ease,
+    opacity var(--th-modern-motion-duration) ease,
+    transform var(--th-modern-motion-duration) ease;
 }
 
 body.th-modern-enabled #qr--bar.popoutVisible {
   padding-right: 44px;
+}
+
+body.th-modern-enabled.th-modern-quick-replies-collapsed #qr--bar {
+  max-height: 0;
+  overflow: hidden !important;
+  opacity: 0;
+  transform: translateY(6px) scale(0.98);
+}
+
+body.th-modern-enabled.th-modern-quick-replies-collapsed #qr--bar > * {
+  pointer-events: none !important;
+}
+
+body.th-modern-enabled #th-modern-quick-reply-toggle {
+  position: absolute;
+  right: 10px;
+  bottom: calc(var(--th-modern-input-stack-offset) + 5px);
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 26px;
+  width: 26px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--th-modern-line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, black 10%);
+  box-shadow: var(--th-modern-soft-shadow);
+  color: var(--SmartThemeBodyColor);
+  font-size: calc(var(--mainFontSize) * 0.78);
+  line-height: 1;
+  opacity: 0.82;
+  pointer-events: auto;
+  transition:
+    bottom var(--th-modern-motion-duration) ease,
+    opacity var(--th-modern-motion-duration) ease,
+    transform var(--th-modern-motion-duration) ease,
+    background-color var(--th-modern-motion-duration) ease;
+}
+
+body.th-modern-enabled #th-modern-quick-reply-toggle:hover,
+body.th-modern-enabled #th-modern-quick-reply-toggle:focus-visible {
+  background: color-mix(in srgb, var(--SmartThemeQuoteColor) 22%, var(--SmartThemeBlurTintColor));
+  color: var(--SmartThemeEmColor);
+  opacity: 1;
+  transform: translateY(-1px);
+}
+
+body.th-modern-enabled #th-modern-quick-reply-toggle[hidden] {
+  display: none !important;
 }
 
 body.th-modern-enabled #qr--bar > #qr--popoutTrigger {
@@ -784,6 +857,13 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
 }
 
 @media (max-width: 899.98px) {
+  body.th-modern-enabled {
+    --th-modern-effective-input-bottom-gap: max(
+      var(--th-modern-input-bottom-gap),
+      env(safe-area-inset-bottom, 0px)
+    );
+  }
+
   body.th-modern-enabled #top-settings-holder {
     border-bottom: 1px solid var(--th-modern-line);
     background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 90%, black 10%);
@@ -839,14 +919,10 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
     }
   }
 
-  body.th-modern-enabled #chat {
-    padding-bottom: clamp(126px, 24dvh, 172px);
-  }
-
   body.th-modern-enabled #form_sheld {
     position: absolute;
     right: max(8px, env(safe-area-inset-right));
-    bottom: max(8px, env(safe-area-inset-bottom));
+    bottom: var(--th-modern-effective-input-bottom-gap);
     left: max(8px, env(safe-area-inset-left));
     width: auto !important;
     margin: 0;
@@ -865,11 +941,11 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
 
   body.th-modern-enabled #qr--bar {
     justify-content: flex-start;
-    padding: 0 4px;
+    padding: 0 38px 0 4px;
   }
 
   body.th-modern-enabled #qr--bar.popoutVisible {
-    padding-right: 4px;
+    padding-right: 38px;
   }
 
   body.th-modern-enabled #qr--bar > .qr--buttons {
@@ -968,7 +1044,6 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
     min-height: 0;
     height: 100% !important;
     max-height: none !important;
-    padding-bottom: 142px;
   }
 
   body.th-modern-enabled.th-modern-two-column #form_sheld {
@@ -1111,14 +1186,15 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
   body.th-modern-enabled.th-modern-two-column #qr--bar {
     position: absolute;
     right: 0;
-    bottom: calc(100% + 10px);
+    bottom: calc(var(--th-modern-input-stack-offset) + 10px);
     left: 0;
-    z-index: 3;
+    z-index: 1;
     display: flex;
     justify-content: center;
     width: auto;
     max-width: 100%;
-    overflow: visible;
+    overflow-x: auto;
+    overflow-y: hidden;
     padding: 0 44px;
     opacity: 1;
     pointer-events: none;
@@ -1126,6 +1202,13 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
 
   body.th-modern-enabled.th-modern-two-column #qr--bar.popoutVisible {
     padding-right: 44px;
+  }
+
+  body.th-modern-enabled.th-modern-two-column.th-modern-quick-replies-collapsed #qr--bar {
+    max-height: 0;
+    overflow: hidden !important;
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
   }
 
   body.th-modern-enabled.th-modern-two-column #qr--bar > #qr--popoutTrigger {
@@ -1432,7 +1515,7 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
     border-top: 1px solid var(--th-modern-line);
     background: transparent;
     color: color-mix(in srgb, var(--SmartThemeBodyColor) 78%, transparent);
-    font-family: var(--mainFontFamily);
+    font-family: inherit;
     font-size: calc(var(--mainFontSize) * 0.9);
     text-align: left;
     cursor: default;

@@ -9,6 +9,9 @@ const LEGACY_DEFAULT_LEFT_SIDEBAR_WIDTH = 340;
 export const DEFAULT_LEFT_SIDEBAR_WIDTH = 360;
 export const DEFAULT_OVERLAY_PANEL_WIDTH = 960;
 export const DEFAULT_MAIN_CHAT_MIN_WIDTH = 960;
+export const DEFAULT_INPUT_BOTTOM_GAP = 15;
+export const INPUT_BOTTOM_GAP_MIN = 0;
+export const INPUT_BOTTOM_GAP_MAX = 120;
 
 export type ModernLayoutSettings = z.infer<typeof ModernLayoutSettings>;
 export const ModernLayoutSettings = z
@@ -32,6 +35,13 @@ export const ModernLayoutSettings = z
       .min(0)
       .default(DEFAULT_MAIN_CHAT_MIN_WIDTH)
       .catch(DEFAULT_MAIN_CHAT_MIN_WIDTH),
+    inputBottomGap: z
+      .number()
+      .min(INPUT_BOTTOM_GAP_MIN)
+      .max(INPUT_BOTTOM_GAP_MAX)
+      .default(DEFAULT_INPUT_BOTTOM_GAP)
+      .catch(DEFAULT_INPUT_BOTTOM_GAP),
+    quickReplyCollapsed: z.boolean().default(false).catch(false),
     reduceMotion: z.boolean().default(false).catch(false),
     reduceAdvancedEffects: z.boolean().default(false).catch(false),
     modernWorldInfoEditor: z.boolean().default(true).catch(true),

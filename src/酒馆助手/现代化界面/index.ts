@@ -10,9 +10,12 @@ import { mountExtensionSettings } from './extension-settings-module';
 import { getHostDocument, getHostWindow } from './host-context';
 import { initPanel } from './panel';
 import {
+  DEFAULT_INPUT_BOTTOM_GAP,
   DEFAULT_LEFT_SIDEBAR_WIDTH,
   DEFAULT_MAIN_CHAT_MIN_WIDTH,
   DEFAULT_OVERLAY_PANEL_WIDTH,
+  INPUT_BOTTOM_GAP_MAX,
+  INPUT_BOTTOM_GAP_MIN,
   SCRIPT_NAME,
   type ModernLayoutSettings,
   useModernLayoutStore,
@@ -38,11 +41,13 @@ const BODY_CLASS_RESIZING = 'th-modern-resizing';
 const BODY_CLASS_DRAWER_FULLSCREEN = 'th-modern-drawer-fullscreen';
 const BODY_CLASS_DRAWER_OPEN = 'th-modern-drawer-open';
 const BODY_CLASS_DRAWER_SWITCHING = 'th-modern-drawer-switching';
+const BODY_CLASS_QUICK_REPLIES_COLLAPSED = 'th-modern-quick-replies-collapsed';
 const ICON_STYLESHEET_ID = 'th-modern-bootstrap-icons';
 const ICON_STYLESHEET_HREF = 'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css';
 const SIDEBAR_ID = 'th-modern-sidebar';
 const SIDEBAR_RESIZE_HANDLE_ID = 'th-modern-sidebar-resize-handle';
 const OVERLAY_RESIZE_HANDLE_ID = 'th-modern-overlay-resize-handle';
+const QUICK_REPLY_TOGGLE_ID = 'th-modern-quick-reply-toggle';
 const TOPBAR_LABEL_CLASS = 'th-modern-topbar-label';
 const DRAWER_TITLEBAR_CLASS = 'th-modern-drawer-titlebar';
 const DRAWER_TITLE_CLASS = 'th-modern-drawer-title';
@@ -75,6 +80,10 @@ const DOCKED_DRAWER_MIN_CHAT_WIDTH = 480;
 const MAIN_LAYOUT_GAP = 14;
 const DRAWER_SWITCH_FALLBACK_MS = 1000;
 const LEFT_NAV_HEIGHT_VARIABLE = '--th-modern-left-nav-height';
+const INPUT_HEIGHT_VARIABLE = '--th-modern-input-height';
+const INPUT_STACK_OFFSET_VARIABLE = '--th-modern-input-stack-offset';
+const QUICK_REPLY_MAX_HEIGHT_VARIABLE = '--th-modern-quick-reply-max-height';
+const QUICK_REPLY_RESERVE_HEIGHT_VARIABLE = '--th-modern-quick-reply-reserve-height';
 const LEFT_NAV_TOP_FALLBACK = 66;
 const LEFT_NAV_MIN_HEIGHT_FALLBACK = 240;
 const LEFT_NAV_RECENT_MIN_HEIGHT_FALLBACK = 288;
@@ -1693,6 +1702,227 @@ function mountFloatingMenuPositioner(): { destroy: () => void } {
   };
 }
 
+function mountQuickReplyController(store: ReturnType<typeof useModernLayoutStore>): { destroy: () => void } {
+  const host_document = getHostDocument();
+  const host_window = host_document.defaultView ?? window;
+  const toggle = host_document.createElement('button');
+  toggle.id = QUICK_REPLY_TOGGLE_ID;
+  toggle.type = 'button';
+  toggle.className = 'menu_button bi';
+  toggle.setAttribute('aria-controls', 'qr--bar');
+  toggle.hidden = true;
+
+  let frame = 0;
+  let managed_bar:
+    | {
+        element: HTMLElement;
+        inert: boolean;
+        ariaHidden: string | null;
+      }
+    | undefined;
+
+  const resize_observer = new host_window.ResizeObserver(() => schedule());
+  const local_observer = new host_window.MutationObserver(schedule);
+
+  const restoreManagedBar = () => {
+    if (!managed_bar) {
+      return;
+    }
+    managed_bar.element.toggleAttribute('inert', managed_bar.inert);
+    if (managed_bar.ariaHidden === null) {
+      managed_bar.element.removeAttribute('aria-hidden');
+    } else {
+      managed_bar.element.setAttribute('aria-hidden', managed_bar.ariaHidden);
+    }
+    managed_bar = undefined;
+  };
+
+  const manageBar = (bar: HTMLElement | null) => {
+    if (managed_bar?.element === bar) {
+      return;
+    }
+    restoreManagedBar();
+    if (bar) {
+      managed_bar = {
+        element: bar,
+        inert: bar.hasAttribute('inert'),
+        ariaHidden: bar.getAttribute('aria-hidden'),
+      };
+    }
+  };
+
+  const getVisibleInputStackTop = (send_form: HTMLElement): number => {
+    const candidates = [
+      send_form.querySelector<HTMLElement>('#file_form:not(.displayNone)'),
+      send_form.querySelector<HTMLElement>('#nonQRFormItems'),
+    ].filter((element): element is HTMLElement => {
+      if (!element) {
+        return false;
+      }
+      const style = host_window.getComputedStyle(element);
+      const rect = element.getBoundingClientRect();
+      return !element.hidden && style.display !== 'none' && style.visibility !== 'hidden' && rect.height > 0;
+    });
+
+    if (candidates.length === 0) {
+      return send_form.getBoundingClientRect().top;
+    }
+    return Math.min(...candidates.map(element => element.getBoundingClientRect().top));
+  };
+
+  const hasVisibleQuickReplyContent = (bar: HTMLElement): boolean => {
+    return Array.from(bar.children).some(child => {
+      if (!(child instanceof host_window.HTMLElement) || child.id === 'qr--popoutTrigger' || child.hidden) {
+        return false;
+      }
+      const style = host_window.getComputedStyle(child);
+      return style.display !== 'none' && style.visibility !== 'hidden';
+    });
+  };
+
+  const sync = () => {
+    frame = 0;
+    const send_form = host_document.getElementById('send_form');
+    const form_sheld = host_document.getElementById('form_sheld');
+    const bar = host_document.getElementById('qr--bar');
+    const valid_send_form = send_form instanceof host_window.HTMLElement ? send_form : null;
+    const valid_form_sheld = form_sheld instanceof host_window.HTMLElement ? form_sheld : null;
+    const valid_bar = bar instanceof host_window.HTMLElement ? bar : null;
+
+    resize_observer.disconnect();
+    local_observer.disconnect();
+    [valid_form_sheld, valid_send_form, valid_bar, ...(valid_bar ? Array.from(valid_bar.children) : [])].forEach(
+      element => {
+        if (element instanceof host_window.HTMLElement) {
+          resize_observer.observe(element);
+        }
+      },
+    );
+    if (valid_send_form) {
+      local_observer.observe(valid_send_form, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class', 'hidden', 'style'],
+      });
+    }
+
+    manageBar(valid_bar);
+    if (!valid_send_form || !valid_bar) {
+      toggle.remove();
+      toggle.hidden = true;
+      removeHostCssVariable(INPUT_HEIGHT_VARIABLE);
+      removeHostCssVariable(INPUT_STACK_OFFSET_VARIABLE);
+      removeHostCssVariable(QUICK_REPLY_MAX_HEIGHT_VARIABLE);
+      removeHostCssVariable(QUICK_REPLY_RESERVE_HEIGHT_VARIABLE);
+      return;
+    }
+
+    if (toggle.parentElement !== valid_send_form) {
+      valid_send_form.append(toggle);
+    }
+
+    const collapsed = host_document.body.classList.contains(BODY_CLASS_QUICK_REPLIES_COLLAPSED);
+    const has_content = hasVisibleQuickReplyContent(valid_bar);
+    toggle.hidden = !has_content;
+    toggle.classList.toggle('bi-chevron-down', has_content && !collapsed);
+    toggle.classList.toggle('bi-chevron-up', has_content && collapsed);
+    toggle.setAttribute('aria-expanded', String(has_content && !collapsed));
+    toggle.setAttribute('aria-label', collapsed ? '展开快速回复栏' : '收起快速回复栏');
+    toggle.title = collapsed ? '展开快速回复栏' : '收起快速回复栏';
+
+    valid_bar.toggleAttribute('inert', collapsed || managed_bar?.inert === true);
+    if (collapsed) {
+      valid_bar.setAttribute('aria-hidden', 'true');
+    } else if (managed_bar?.ariaHidden === null) {
+      valid_bar.removeAttribute('aria-hidden');
+    } else if (managed_bar) {
+      valid_bar.setAttribute('aria-hidden', managed_bar.ariaHidden);
+    }
+
+    const form_height = Math.ceil(
+      valid_form_sheld?.getBoundingClientRect().height ?? valid_send_form.getBoundingClientRect().height,
+    );
+    setHostCssVariable(INPUT_HEIGHT_VARIABLE, `${Math.max(0, form_height)}px`);
+
+    const send_form_rect = valid_send_form.getBoundingClientRect();
+    const input_stack_offset = Math.max(0, Math.ceil(send_form_rect.bottom - getVisibleInputStackTop(valid_send_form)));
+    setHostCssVariable(INPUT_STACK_OFFSET_VARIABLE, `${input_stack_offset}px`);
+
+    const natural_bar_height = has_content ? Math.max(0, Math.ceil(valid_bar.scrollHeight)) : 0;
+    setHostCssVariable(QUICK_REPLY_MAX_HEIGHT_VARIABLE, `${natural_bar_height}px`);
+
+    const toggle_height = toggle.hidden ? 0 : Math.ceil(toggle.getBoundingClientRect().height || 26);
+    const rendered_bar_height = Math.ceil(valid_bar.getBoundingClientRect().height);
+    const externally_collapsed = !collapsed && natural_bar_height > 1 && rendered_bar_height <= 1;
+    const quick_reply_height = collapsed || externally_collapsed ? 0 : natural_bar_height;
+    const reserve_height = has_content ? Math.max(toggle_height + 6, quick_reply_height + 10) : 0;
+    setHostCssVariable(QUICK_REPLY_RESERVE_HEIGHT_VARIABLE, `${reserve_height}px`);
+  };
+
+  function schedule() {
+    if (frame !== 0) {
+      return;
+    }
+    frame = host_window.requestAnimationFrame(sync);
+  }
+
+  const containsQuickReplyStructure = (node: Node): boolean => {
+    if (!(node instanceof host_window.HTMLElement)) {
+      return false;
+    }
+    return (
+      node.matches('#form_sheld, #send_form, #qr--bar') ||
+      node.querySelector('#form_sheld, #send_form, #qr--bar') !== null
+    );
+  };
+  const structure_observer = new host_window.MutationObserver(records => {
+    const structure_changed = records.some(record =>
+      [...record.addedNodes, ...record.removedNodes].some(containsQuickReplyStructure),
+    );
+    if (structure_changed) {
+      schedule();
+    }
+  });
+  structure_observer.observe(host_document.body, {
+    childList: true,
+    subtree: true,
+  });
+  const body_state_observer = new host_window.MutationObserver(schedule);
+  body_state_observer.observe(host_document.body, {
+    attributes: true,
+    attributeFilter: ['class', 'hidden'],
+  });
+  const handleToggle = (event: MouseEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    store.settings.quickReplyCollapsed = !store.settings.quickReplyCollapsed;
+  };
+  toggle.addEventListener('click', handleToggle);
+  host_window.addEventListener('resize', schedule);
+  schedule();
+
+  return {
+    destroy: () => {
+      if (frame !== 0) {
+        host_window.cancelAnimationFrame(frame);
+      }
+      structure_observer.disconnect();
+      body_state_observer.disconnect();
+      local_observer.disconnect();
+      resize_observer.disconnect();
+      toggle.removeEventListener('click', handleToggle);
+      toggle.remove();
+      restoreManagedBar();
+      host_window.removeEventListener('resize', schedule);
+      removeHostCssVariable(INPUT_HEIGHT_VARIABLE);
+      removeHostCssVariable(INPUT_STACK_OFFSET_VARIABLE);
+      removeHostCssVariable(QUICK_REPLY_MAX_HEIGHT_VARIABLE);
+      removeHostCssVariable(QUICK_REPLY_RESERVE_HEIGHT_VARIABLE);
+    },
+  };
+}
+
 function mountResponsiveMode(store: ReturnType<typeof useModernLayoutStore>): { destroy: () => void } {
   const host_document = getHostDocument();
   const host_window = host_document.defaultView ?? window;
@@ -2285,6 +2515,7 @@ function applyBodyState(settings: ModernLayoutSettings, is_active: boolean, shou
     .toggleClass(BODY_CLASS_MAIN_FILL, is_active && should_use_two_column && settings.mainChatMaxWidth === 0)
     .toggleClass(BODY_CLASS_REDUCE_MOTION, is_active && settings.reduceMotion)
     .toggleClass(BODY_CLASS_REDUCE_ADVANCED_EFFECTS, is_active && settings.reduceAdvancedEffects)
+    .toggleClass(BODY_CLASS_QUICK_REPLIES_COLLAPSED, is_active && settings.quickReplyCollapsed)
     .toggleClass(BODY_CLASS_AUTO_COLLAPSE, should_auto_collapse)
     .removeClass(BODY_CLASS_LEGACY_THREE_COLUMN);
   if (!should_auto_collapse || $body.hasClass(BODY_CLASS_SIDEBAR_COLLAPSED)) {
@@ -2305,15 +2536,29 @@ function applyBodyState(settings: ModernLayoutSettings, is_active: boolean, shou
     '--th-modern-main-min-width',
     `${clamp(settings.mainChatMaxWidth, 0, Number.MAX_SAFE_INTEGER, DEFAULT_MAIN_CHAT_MIN_WIDTH)}px`,
   );
+  setHostCssVariable(
+    '--th-modern-input-bottom-gap',
+    `${clamp(
+      settings.inputBottomGap,
+      INPUT_BOTTOM_GAP_MIN,
+      INPUT_BOTTOM_GAP_MAX,
+      DEFAULT_INPUT_BOTTOM_GAP,
+    )}px`,
+  );
 }
 
 function clearBodyState() {
   $(getHostDocument().body).removeClass(
-    `${BODY_CLASS_ENABLED} ${BODY_CLASS_TWO_COLUMN} ${BODY_CLASS_LEGACY_THREE_COLUMN} ${BODY_CLASS_DOCKED_DRAWER} ${BODY_CLASS_MAIN_FILL} ${BODY_CLASS_REDUCE_MOTION} ${BODY_CLASS_REDUCE_ADVANCED_EFFECTS} ${BODY_CLASS_SIDEBAR_COLLAPSED} ${BODY_CLASS_AUTO_COLLAPSE} ${BODY_CLASS_TEMP_EXPANDED} ${BODY_CLASS_RESIZING} ${BODY_CLASS_DRAWER_FULLSCREEN} ${BODY_CLASS_DRAWER_OPEN} ${BODY_CLASS_DRAWER_SWITCHING}`,
+    `${BODY_CLASS_ENABLED} ${BODY_CLASS_TWO_COLUMN} ${BODY_CLASS_LEGACY_THREE_COLUMN} ${BODY_CLASS_DOCKED_DRAWER} ${BODY_CLASS_MAIN_FILL} ${BODY_CLASS_REDUCE_MOTION} ${BODY_CLASS_REDUCE_ADVANCED_EFFECTS} ${BODY_CLASS_QUICK_REPLIES_COLLAPSED} ${BODY_CLASS_SIDEBAR_COLLAPSED} ${BODY_CLASS_AUTO_COLLAPSE} ${BODY_CLASS_TEMP_EXPANDED} ${BODY_CLASS_RESIZING} ${BODY_CLASS_DRAWER_FULLSCREEN} ${BODY_CLASS_DRAWER_OPEN} ${BODY_CLASS_DRAWER_SWITCHING}`,
   );
   removeHostCssVariable('--th-modern-left-width');
   removeHostCssVariable('--th-modern-overlay-width');
   removeHostCssVariable('--th-modern-main-min-width');
+  removeHostCssVariable('--th-modern-input-bottom-gap');
+  removeHostCssVariable(INPUT_HEIGHT_VARIABLE);
+  removeHostCssVariable(INPUT_STACK_OFFSET_VARIABLE);
+  removeHostCssVariable(QUICK_REPLY_MAX_HEIGHT_VARIABLE);
+  removeHostCssVariable(QUICK_REPLY_RESERVE_HEIGHT_VARIABLE);
   removeHostCssVariable(LEFT_NAV_HEIGHT_VARIABLE);
 }
 
@@ -2360,6 +2605,7 @@ function mountActiveRuntime(store: ReturnType<typeof useModernLayoutStore>): { d
     cleanups.push(mountSidebarNavSizer().destroy);
     cleanups.push(mountFailsafeRestore(store).destroy);
     cleanups.push(mountFloatingMenuPositioner().destroy);
+    cleanups.push(mountQuickReplyController(store).destroy);
     cleanups.push(mountResponsiveMode(store).destroy);
     cleanups.push(mountResizeHandles(store).destroy);
     cleanups.push(mountApiPanelEnhancements().destroy);

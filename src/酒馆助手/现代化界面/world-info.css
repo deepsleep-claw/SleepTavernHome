@@ -104,7 +104,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #wiTopBlock .range-block-
   display: block;
   overflow: hidden;
   color: var(--th-modern-wi-muted);
-  font-size: 0.76rem;
+  font-size: calc(var(--mainFontSize) * 0.811);
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -310,7 +310,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #wo
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar #world_info_pagination .paginationjs-nav {
   color: var(--th-modern-wi-muted);
-  font-size: 0.76rem;
+  font-size: calc(var(--mainFontSize) * 0.811);
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-toolbar .menu_button {
@@ -390,8 +390,8 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-more-popove
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-more-popover .menu_button::after {
   content: attr(title);
   overflow: hidden;
-  font-family: var(--mainFontFamily);
-  font-size: 0.82rem;
+  font-family: inherit;
+  font-size: calc(var(--mainFontSize) * 0.875);
   font-weight: 550;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -570,12 +570,12 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-primary
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-title {
-  font-size: 0.9rem;
+  font-size: calc(var(--mainFontSize) * 0.96);
   line-height: 1.2;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-meta {
-  font-size: 0.72rem;
+  font-size: calc(var(--mainFontSize) * 0.768);
   line-height: 1.2;
 }
 
@@ -594,7 +594,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-field-label
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-stats {
   justify-self: end;
-  font-size: 0.7rem;
+  font-size: calc(var(--mainFontSize) * 0.747);
   line-height: 1;
   text-align: right;
   white-space: nowrap;
@@ -1030,7 +1030,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel .keys
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-field-label {
   min-width: 0;
   overflow: hidden;
-  font-size: 0.78rem;
+  font-size: calc(var(--mainFontSize) * 0.832);
   font-weight: 650;
   line-height: 1.15;
   text-align: left;
@@ -1051,7 +1051,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-shared-cont
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-section-title {
   min-width: 0;
   color: var(--th-modern-wi-muted);
-  font-size: 0.82rem;
+  font-size: calc(var(--mainFontSize) * 0.875);
   font-weight: 700;
   line-height: 1.2;
   padding: 0.1rem 0.15rem 0;
@@ -1101,7 +1101,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel .rang
   min-width: 0;
   overflow: hidden;
   color: var(--th-modern-wi-muted);
-  font-size: 0.78rem;
+  font-size: calc(var(--mainFontSize) * 0.832);
   font-weight: 650;
   line-height: 1.15;
   text-align: left !important;
@@ -1113,7 +1113,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel .text
   display: block;
   width: 100%;
   color: var(--th-modern-wi-muted) !important;
-  font-size: 0.78rem !important;
+  font-size: calc(var(--mainFontSize) * 0.832) !important;
   font-weight: 650 !important;
   line-height: 1.15 !important;
   text-align: left !important;
@@ -1133,7 +1133,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-content-pan
   border-radius: 7px;
   background-color: color-mix(in srgb, var(--SmartThemeBlurTintColor) 72%, transparent);
   color: var(--SmartThemeBodyColor);
-  font-size: 0.92rem;
+  font-size: calc(var(--mainFontSize) * 0.981);
   line-height: 1.35;
 }
 
@@ -1150,7 +1150,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel input
   background-color: color-mix(in srgb, var(--SmartThemeBlurTintColor) 72%, transparent);
   color: var(--SmartThemeBodyColor);
   color-scheme: dark;
-  font-size: 0.92rem;
+  font-size: calc(var(--mainFontSize) * 0.981);
   line-height: 1.35;
 }
 
@@ -1180,7 +1180,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-jump-shortc
   border-radius: 7px;
   background-color: color-mix(in srgb, var(--SmartThemeBlurTintColor) 72%, transparent);
   color: var(--SmartThemeBodyColor);
-  font-size: 0.9rem;
+  font-size: calc(var(--mainFontSize) * 0.96);
   text-align: left;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1209,7 +1209,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel label
   gap: 0.35rem;
   min-width: 0;
   margin: 0;
-  font-size: 0.9rem;
+  font-size: calc(var(--mainFontSize) * 0.96);
   line-height: 1.2;
   white-space: nowrap;
 }
@@ -1342,7 +1342,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel .sele
   width: 100% !important;
   min-width: 0;
   max-width: 100%;
-  font-size: 0.9rem;
+  font-size: calc(var(--mainFontSize) * 0.96);
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel .select2-container--default .select2-selection--single,
@@ -1454,8 +1454,8 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-panel .sele
   background: transparent !important;
   box-shadow: none !important;
   color: var(--SmartThemeBodyColor);
-  font-family: var(--mainFontFamily);
-  font-size: 0.92rem;
+  font-family: inherit;
+  font-size: calc(var(--mainFontSize) * 0.981);
   line-height: 1.35rem !important;
   overflow: hidden !important;
   resize: none !important;
@@ -1719,7 +1719,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-active-edit
     border-radius: 8px;
     background-color: var(--th-modern-wi-button-bg);
     color: var(--SmartThemeBodyColor);
-    font-family: var(--mainFontFamily);
+    font-family: inherit;
   }
 
   body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-editor-entry-host,

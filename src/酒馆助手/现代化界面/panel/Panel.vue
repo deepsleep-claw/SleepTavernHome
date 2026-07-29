@@ -69,6 +69,30 @@
         </label>
         <small class="modern-layout-hint">跟随酒馆的界面宽度百分比；0 表示始终铺满可用空间。</small>
 
+        <label class="modern-layout-field modern-layout-range-field">
+          <span>输入框底部留白</span>
+          <span class="modern-layout-range-control">
+            <input
+              v-model.number="store.settings.inputBottomGap"
+              type="range"
+              :min="INPUT_BOTTOM_GAP_MIN"
+              :max="INPUT_BOTTOM_GAP_MAX"
+              step="1"
+            />
+            <input
+              :value="store.settings.inputBottomGap"
+              class="text_pole"
+              type="number"
+              :min="INPUT_BOTTOM_GAP_MIN"
+              :max="INPUT_BOTTOM_GAP_MAX"
+              step="1"
+              @change="commitNumericSetting($event, 'inputBottomGap', INPUT_BOTTOM_GAP_MIN, INPUT_BOTTOM_GAP_MAX)"
+              @blur="commitNumericSetting($event, 'inputBottomGap', INPUT_BOTTOM_GAP_MIN, INPUT_BOTTOM_GAP_MAX)"
+            />
+          </span>
+        </label>
+        <small class="modern-layout-hint">调整悬浮输入框与窗口底边的距离，单位为像素。</small>
+
         <label class="checkbox_label modern-layout-checkbox">
           <input v-model="store.settings.reduceMotion" type="checkbox" class="checkbox" />
           <span>减弱动态效果</span>
@@ -120,7 +144,7 @@
 <script setup lang="ts">
 import type { PluginUpdaterController } from '../../../公共模块/脚本更新器/contracts';
 import type { Component } from 'vue';
-import { SCRIPT_NAME, useModernLayoutStore } from '../store';
+import { INPUT_BOTTOM_GAP_MAX, INPUT_BOTTOM_GAP_MIN, SCRIPT_NAME, useModernLayoutStore } from '../store';
 
 defineProps<{
   updater: PluginUpdaterController;
@@ -129,7 +153,7 @@ defineProps<{
 
 const store = useModernLayoutStore();
 
-type NumericSettingKey = 'leftSidebarWidth' | 'overlayPanelWidth' | 'mainChatMaxWidth';
+type NumericSettingKey = 'leftSidebarWidth' | 'overlayPanelWidth' | 'mainChatMaxWidth' | 'inputBottomGap';
 
 function commitNumericSetting(event: Event, key: NumericSettingKey, min: number, max = Number.POSITIVE_INFINITY) {
   const input = event.currentTarget as HTMLInputElement;
@@ -184,6 +208,22 @@ async function resetSettings() {
 
 .modern-layout-field .text_pole {
   width: 100%;
+}
+
+.modern-layout-range-field {
+  grid-template-columns: minmax(7em, 1fr) minmax(12em, 2fr);
+}
+
+.modern-layout-range-control {
+  display: grid;
+  grid-template-columns: minmax(7em, 1fr) 5.5em;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.modern-layout-range-control input[type='range'] {
+  width: 100%;
+  min-width: 0;
 }
 
 .modern-layout-hint {
