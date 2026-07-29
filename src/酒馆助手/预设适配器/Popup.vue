@@ -142,12 +142,33 @@
           </button>
         </div>
 
-        <div v-if="group.variable_inputs.length > 0" class="preset-adapter-variable-inputs">
-          <label
-            v-for="input in group.variable_inputs"
-            :key="input.id"
-            class="preset-adapter-variable-input"
+        <div v-if="group.reasoner_format_checks.length > 0" class="preset-adapter-reasoner-format-checks">
+          <div
+            v-for="check in group.reasoner_format_checks"
+            :key="check.id"
+            class="preset-adapter-reasoner-format-check"
           >
+            <div class="preset-adapter-reasoner-format-check-main">
+              <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+              <span class="preset-adapter-reasoner-format-check-text">
+                <strong>{{ check.label }}</strong>
+                <span>{{ check.message }}</span>
+                <small v-if="check.description">{{ check.description }}</small>
+              </span>
+            </div>
+            <button
+              type="button"
+              class="menu_button preset-adapter-reasoner-format-check-action"
+              :disabled="store.is_applying || check.disabled"
+              @click="store.applyReasonerFormatCheck(group.id, check.id)"
+            >
+              确认设置
+            </button>
+          </div>
+        </div>
+
+        <div v-if="group.variable_inputs.length > 0" class="preset-adapter-variable-inputs">
+          <label v-for="input in group.variable_inputs" :key="input.id" class="preset-adapter-variable-input">
             <span class="preset-adapter-variable-input-label">
               <strong>{{ input.label }}</strong>
               <small v-if="input.description">{{ input.description }}</small>
@@ -251,7 +272,9 @@
               </summary>
               <div v-if="!message.exists" class="preset-adapter-empty">该楼层已不存在。</div>
               <div v-else class="preset-adapter-summary-content">
-                <div v-if="message.content_segments.length === 0" class="preset-adapter-empty">过滤后无可显示内容。</div>
+                <div v-if="message.content_segments.length === 0" class="preset-adapter-empty">
+                  过滤后无可显示内容。
+                </div>
                 <div
                   v-for="(segment, segment_index) in message.content_segments"
                   :key="segment_index"
@@ -301,7 +324,10 @@
           </table>
         </details>
 
-        <details class="preset-adapter-summary-section preset-adapter-summary-panel preset-adapter-summary-settings" open>
+        <details
+          class="preset-adapter-summary-section preset-adapter-summary-panel preset-adapter-summary-settings"
+          open
+        >
           <summary>总结功能设置</summary>
 
           <div class="preset-adapter-summary-setting-block">
@@ -347,9 +373,7 @@
           <section class="preset-adapter-summary-subsettings">
             <h4>总结后隐藏楼层设置</h4>
             <div class="preset-adapter-summary-subsettings-body">
-              <p class="preset-adapter-description">
-                若总结内容处理为放置于世界书或放置于首层，推荐开启隐藏总结楼层。
-              </p>
+              <p class="preset-adapter-description">若总结内容处理为放置于世界书或放置于首层，推荐开启隐藏总结楼层。</p>
               <div class="preset-adapter-summary-checkbox-grid">
                 <label>
                   <input
@@ -682,11 +706,7 @@
 </template>
 
 <script setup lang="ts">
-import {
-  type SummaryContentHandling,
-  type SummaryHideRules,
-  usePresetAdapterStore,
-} from './store';
+import { type SummaryContentHandling, type SummaryHideRules, usePresetAdapterStore } from './store';
 
 const store = usePresetAdapterStore();
 const option_count = computed(() => store.groups.reduce((total, group) => total + group.options.length, 0));
@@ -708,11 +728,13 @@ type DebugRow = Record<string, unknown>;
 
 onMounted(() => {
   store.startDebugWatch();
+  store.startEffectWatch();
   store.startSummaryWatch();
 });
 
 onBeforeUnmount(() => {
   store.stopDebugWatch();
+  store.stopEffectWatch();
   store.stopSummaryWatch();
 });
 
@@ -1599,6 +1621,58 @@ function closeDebugTextModal() {
   min-width: 0;
 }
 
+.preset-adapter-reasoner-format-checks {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.preset-adapter-reasoner-format-check {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.65rem;
+  border: 1px solid #c99a2e;
+  border-radius: 8px;
+  padding: 0.65rem;
+  background-color: color-mix(in srgb, #c99a2e 12%, var(--black30a) 88%);
+}
+
+.preset-adapter-reasoner-format-check-main {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  gap: 0.55rem;
+}
+
+.preset-adapter-reasoner-format-check-main > i {
+  flex: 0 0 auto;
+  margin-top: 0.15rem;
+  color: #e7bd52;
+}
+
+.preset-adapter-reasoner-format-check-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0.12rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.preset-adapter-reasoner-format-check-text small {
+  color: var(--SmartThemeEmColor);
+  font-size: 0.8rem;
+  white-space: pre-line;
+}
+
+.preset-adapter-reasoner-format-check-action {
+  width: auto;
+  min-width: 5.5rem;
+  min-height: 2rem;
+  padding-inline: 0.75rem;
+  white-space: nowrap;
+}
+
 .preset-adapter-variable-inputs {
   display: grid;
   gap: 0.5rem;
@@ -2182,6 +2256,14 @@ function closeDebugTextModal() {
 
   .preset-adapter-option {
     min-height: 3.4rem;
+  }
+
+  .preset-adapter-reasoner-format-check {
+    grid-template-columns: 1fr;
+  }
+
+  .preset-adapter-reasoner-format-check-action {
+    justify-self: start;
   }
 
   .preset-adapter-review-backdrop {

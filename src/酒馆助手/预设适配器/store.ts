@@ -1,3 +1,8 @@
+import {
+  getKimiPartialModeApi,
+  KIMI_PARTIAL_EFFECT_ID,
+  type KimiPartialModeApi,
+} from '../../公共模块/kimi_partial_mode';
 import default_config_raw from './default_config.json?raw';
 
 export const SCRIPT_NAME = '梦鲸思客设置';
@@ -6,6 +11,12 @@ export const DEFAULT_SCRIPT_BUTTON_NAME = '梦鲸思客设置';
 const LEGACY_SCRIPT_NAME = '预设适配器';
 const LEGACY_SCRIPT_BUTTON_NAME = '打开预设适配器';
 const SQUASH_DEBUG_GLOBAL_KEY = '__dream_whale_squash_debug_api__';
+const SUPPORTED_EFFECT_IDS = new Set([KIMI_PARTIAL_EFFECT_ID]);
+const REASONER_FORMAT_PRESET_NAME = '梦鲸思客思考';
+const REASONER_FORMAT_PREFIX = '<think>\n';
+const REASONER_FORMAT_SUFFIX = '\n</think>';
+const REASONER_FORMAT_WARNING = '当前未设置模型思考格式化，是否一键设置？';
+const REASONER_FORMAT_UNSUPPORTED = '当前酒馆版本不支持一键设置。';
 
 const PromptMatcherSchema = z.union([
   z.string().min(1),
@@ -27,6 +38,10 @@ const PresetAdapterOptionSchema = z
       .optional(),
     enable: z.array(PromptMatcherSchema).default([]),
     disable: z.array(PromptMatcherSchema).default([]),
+    effect: z
+      .array(z.string().trim().min(1))
+      .default([])
+      .transform(effects => [...new Set(effects)]),
   })
   .superRefine((option, context) => {
     if (option.type === 'between' && !option.match) {
@@ -51,15 +66,43 @@ const VariableInputOptionSchema = z
     id: option.id ?? `${option.type}:${option.variable_id}`,
   }));
 
-const AdapterOptionSchema = z.union([VariableInputOptionSchema, PresetAdapterOptionSchema]);
+const ReasonerFormatCheckOptionSchema = z
+  .object({
+    id: z.string().min(1).optional(),
+    label: z.string().min(1).default('模型思考格式化'),
+    description: z.string().default(''),
+    type: z.literal('check_reasoner_format'),
+  })
+  .transform(option => ({
+    ...option,
+    id: option.id ?? option.type,
+  }));
 
-const AdapterGroupSchema = z.object({
-  id: z.string().min(1),
-  label: z.string().min(1),
-  description: z.string().default(''),
-  mode: z.enum(['single', 'multiple']).default('single'),
-  options: z.array(AdapterOptionSchema).default([]),
-});
+const AdapterOptionSchema = z.union([
+  VariableInputOptionSchema,
+  ReasonerFormatCheckOptionSchema,
+  PresetAdapterOptionSchema,
+]);
+
+const AdapterGroupSchema = z
+  .object({
+    id: z.string().min(1),
+    label: z.string().min(1),
+    description: z.string().default(''),
+    mode: z.enum(['single', 'multiple']).default('single'),
+    disable_group: z.array(PromptMatcherSchema).default([]),
+    enable_group: z.array(PromptMatcherSchema).default([]),
+    options: z.array(AdapterOptionSchema).default([]),
+  })
+  .superRefine((group, context) => {
+    if (group.mode === 'multiple' && (group.disable_group.length > 0 || group.enable_group.length > 0)) {
+      context.addIssue({
+        code: 'custom',
+        path: ['mode'],
+        message: 'multiple 组不能配置 disable_group 或 enable_group',
+      });
+    }
+  });
 
 const SummaryHideRulesSchema = z
   .object({
@@ -155,6 +198,7 @@ type AdapterGroup = AdapterConfig['groups'][number];
 type AdapterOption = AdapterGroup['options'][number];
 type PresetAdapterOption = z.infer<typeof PresetAdapterOptionSchema>;
 type VariableInputOption = z.infer<typeof VariableInputOptionSchema>;
+type ReasonerFormatCheckOption = z.infer<typeof ReasonerFormatCheckOptionSchema>;
 type ExportFile = z.infer<typeof ExportFileSchema>;
 export type SummaryConfig = z.infer<typeof SummaryConfigSchema>;
 export type SummarySettings = z.infer<typeof SummarySettingsSchema>;
@@ -165,8 +209,10 @@ type ExportSource = {
   match_id: string;
   prompt_index: number;
 };
-type ResolvedOption = Pick<PresetAdapterOption, 'id' | 'label' | 'description' | 'enable' | 'disable'> & {
+type ResolvedOption = Pick<PresetAdapterOption, 'id' | 'label' | 'description' | 'enable' | 'disable' | 'effect'> & {
   export_source?: ExportSource;
+  has_configured_prompt_matchers: boolean;
+  source_option_id: string;
 };
 
 export type OptionStatus = 'active' | 'inactive' | 'unmatched';
@@ -182,6 +228,8 @@ export type OptionView = {
   matched_summary: string;
   enable_indexes: number[];
   disable_indexes: number[];
+  effects: string[];
+  configuration_errors: string[];
 };
 
 export type VariableInputView = {
@@ -194,6 +242,14 @@ export type VariableInputView = {
   disabled: boolean;
 };
 
+export type ReasonerFormatCheckView = {
+  id: string;
+  label: string;
+  description: string;
+  disabled: boolean;
+  message: string;
+};
+
 export type GroupView = {
   id: string;
   label: string;
@@ -202,7 +258,10 @@ export type GroupView = {
   mode_label: string;
   layout: 'row' | 'grid';
   options: OptionView[];
+  reasoner_format_checks: ReasonerFormatCheckView[];
   variable_inputs: VariableInputView[];
+  disable_group_indexes: number[];
+  enable_group_indexes: number[];
 };
 
 type ReadConfigResult = {
@@ -213,6 +272,7 @@ type ReadConfigResult = {
 type BuildGroupsResult = {
   groups: GroupView[];
   errors: string[];
+  option_errors: string[];
 };
 
 type ResolveOptionsResult = {
@@ -431,12 +491,93 @@ function cloneJson<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+type ReasoningSettings = {
+  auto_parse?: boolean;
+  prefix?: string;
+  suffix?: string;
+};
+
+type ReasoningTemplate = {
+  name: string;
+  prefix: string;
+  suffix: string;
+  separator: string;
+};
+
+type ReasoningPresetManager = {
+  savePreset: (name: string, settings: ReasoningTemplate) => Promise<void>;
+};
+
+type ReasonerHostContext = typeof SillyTavern & {
+  getPresetManager?: (api_id: string) => ReasoningPresetManager | null;
+};
+
+type ReasonerFormatStatus = {
+  satisfied: boolean;
+  supported: boolean;
+};
+
 function isVariableInputOption(option: AdapterOption): option is VariableInputOption {
   return option.type === 'var_input' || option.type === 'global_var_input';
 }
 
+function isReasonerFormatCheckOption(option: AdapterOption): option is ReasonerFormatCheckOption {
+  return option.type === 'check_reasoner_format';
+}
+
 function isPresetAdapterOption(option: AdapterOption): option is PresetAdapterOption {
-  return !isVariableInputOption(option);
+  return !isVariableInputOption(option) && !isReasonerFormatCheckOption(option);
+}
+
+function getReasonerHostContext(): ReasonerHostContext {
+  const direct_context = SillyTavern as ReasonerHostContext;
+  if (typeof direct_context.getPresetManager === 'function') {
+    return direct_context;
+  }
+
+  try {
+    const host_silly_tavern = (
+      window.parent as Window & {
+        SillyTavern?: {
+          getContext?: () => ReasonerHostContext;
+        };
+      }
+    ).SillyTavern;
+    const host_context = host_silly_tavern?.getContext?.();
+    if (host_context) {
+      return host_context;
+    }
+  } catch {
+    // 跨上下文访问不可用时继续使用酒馆助手已导出的上下文。
+  }
+
+  return direct_context;
+}
+
+function getReasoningPresetManager(context = getReasonerHostContext()): ReasoningPresetManager | undefined {
+  try {
+    const manager = context.getPresetManager?.('reasoning');
+    return manager && typeof manager.savePreset === 'function' ? manager : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeReasonerFormatTag(value: unknown): string {
+  return typeof value === 'string' ? value.replace(/^[\r\n]+|[\r\n]+$/g, '') : '';
+}
+
+function readReasonerFormatStatus(): ReasonerFormatStatus {
+  const context = getReasonerHostContext();
+  const reasoning = context.powerUserSettings?.reasoning as ReasoningSettings | undefined;
+  const supported = !!reasoning && !!getReasoningPresetManager(context);
+  return {
+    satisfied:
+      reasoning?.auto_parse === true &&
+      normalizeReasonerFormatTag(reasoning.prefix) === '<think>' &&
+      normalizeReasonerFormatTag(reasoning.suffix) === '</think>',
+    supported,
+  };
 }
 
 function getCurrentChatIdSafe(): string {
@@ -708,7 +849,10 @@ function buildFloorSummaryRows(messages: ChatMessage[], summary_ids: Set<number>
   ];
 }
 
-function buildSummaryViewState(messages: ChatMessage[] | undefined, filter_html_code_blocks: boolean): SummaryViewState {
+function buildSummaryViewState(
+  messages: ChatMessage[] | undefined,
+  filter_html_code_blocks: boolean,
+): SummaryViewState {
   const chat_id = getCurrentChatIdSafe();
   if (!chat_id) {
     return { ...EMPTY_SUMMARY_STATE };
@@ -868,10 +1012,52 @@ function getDuplicateIdErrors(config: AdapterConfig): string[] {
     errors.push(`选项组 id 重复：${id}`);
   }
   for (const group of config.groups) {
-    for (const id of getDuplicateValues(group.options.map(option => option.id))) {
+    const switchable_options = group.options.filter(option => !isReasonerFormatCheckOption(option));
+    for (const id of getDuplicateValues(switchable_options.map(option => option.id))) {
       errors.push(`选项组“${group.label}”内的选项 id 重复：${id}`);
     }
   }
+  return errors;
+}
+
+function getEffectOptionKey(group_id: string, option_id: string): string {
+  return `${group_id}\u0000${option_id}`;
+}
+
+function addEffectOptionError(errors: Map<string, string[]>, key: string, message: string) {
+  const option_errors = errors.get(key) ?? [];
+  option_errors.push(message);
+  errors.set(key, option_errors);
+}
+
+function getEffectOptionErrors(config: AdapterConfig): Map<string, string[]> {
+  const errors = new Map<string, string[]>();
+  const owners = new Map<string, Array<{ key: string; label: string }>>();
+
+  config.groups.forEach(group => {
+    group.options.filter(isPresetAdapterOption).forEach(option => {
+      const key = getEffectOptionKey(group.id, option.id);
+      option.effect.forEach(effect => {
+        if (!SUPPORTED_EFFECT_IDS.has(effect)) {
+          addEffectOptionError(errors, key, `选项组“${group.label}”的“${option.label}”使用了未知 effect：${effect}`);
+          return;
+        }
+        const effect_owners = owners.get(effect) ?? [];
+        effect_owners.push({ key, label: `${group.label}/${option.label}` });
+        owners.set(effect, effect_owners);
+      });
+    });
+  });
+
+  owners.forEach((effect_owners, effect) => {
+    if (effect_owners.length <= 1) {
+      return;
+    }
+    const owner_labels = effect_owners.map(owner => owner.label).join('、');
+    effect_owners.forEach(owner => {
+      addEffectOptionError(errors, owner.key, `effect“${effect}”被多个选项重复配置：${owner_labels}`);
+    });
+  });
   return errors;
 }
 
@@ -971,30 +1157,99 @@ function collectMatcherIndexes(matchers: PromptMatcher[], preset: Preset): { ind
   return { indexes: [...indexes], errors };
 }
 
-function getDesiredStates(enable_indexes: number[], disable_indexes: number[]): Map<number, boolean> {
-  const desired_states = new Map<number, boolean>();
-  disable_indexes.forEach(index => desired_states.set(index, false));
-  enable_indexes.forEach(index => desired_states.set(index, true));
-  return desired_states;
+function collectGroupMatcherIndexes(
+  group: AdapterGroup,
+  field: 'disable_group' | 'enable_group',
+  preset: Preset,
+): { indexes: number[]; errors: string[] } {
+  const indexes = new Set<number>();
+  const errors: string[] = [];
+  group[field].forEach(matcher => {
+    const result = getMatcherIndexes(matcher, preset);
+    if (result.indexes.length === 0) {
+      console.warn(`[${SCRIPT_NAME}] 选项组“${group.label}”的 ${field} 未命中：${describeMatcher(matcher)}`);
+    }
+    result.indexes.forEach(index => indexes.add(index));
+    if (result.error) {
+      errors.push(result.error);
+    }
+  });
+  return { indexes: [...indexes], errors };
 }
 
-function resolveStatus(preset: Preset, enable_indexes: number[], disable_indexes: number[]): OptionStatus {
-  const desired_states = getDesiredStates(enable_indexes, disable_indexes);
-  if (desired_states.size === 0) {
+function setPromptTargetStates(target_states: Map<number, boolean>, indexes: number[], enabled: boolean) {
+  indexes.forEach(index => target_states.set(index, enabled));
+}
+
+type EffectState = {
+  available: boolean;
+  enabled: boolean;
+  label: string;
+};
+
+function readEffectState(effect: string): EffectState {
+  if (effect !== KIMI_PARTIAL_EFFECT_ID) {
+    return {
+      available: false,
+      enabled: false,
+      label: `未知 effect：${effect}`,
+    };
+  }
+
+  const api = getKimiPartialModeApi();
+  if (!api) {
+    return {
+      available: false,
+      enabled: false,
+      label: 'Kimi Partial Mode：脚本未启用',
+    };
+  }
+
+  try {
+    const enabled = api.getEnabled();
+    return {
+      available: true,
+      enabled,
+      label: `Kimi Partial Mode：${enabled ? '已开启' : '未开启'}`,
+    };
+  } catch (error) {
+    console.warn(`[${SCRIPT_NAME}] 读取 Kimi Partial Mode 设置失败。`, error);
+    return {
+      available: false,
+      enabled: false,
+      label: 'Kimi Partial Mode：设置读取失败',
+    };
+  }
+}
+
+function resolveStatus(
+  preset: Preset,
+  desired_states: Map<number, boolean>,
+  effect_target_states: Map<string, boolean>,
+  has_unmatched_prompt_configuration: boolean,
+  configuration_errors: string[],
+): OptionStatus {
+  if (configuration_errors.length > 0 || has_unmatched_prompt_configuration) {
+    return 'unmatched';
+  }
+  if (desired_states.size === 0 && effect_target_states.size === 0) {
     return 'unmatched';
   }
 
-  let satisfied_count = 0;
-  desired_states.forEach((enabled, index) => {
-    if (preset.prompts[index]?.enabled === enabled) {
-      satisfied_count += 1;
+  for (const [index, enabled] of desired_states) {
+    if (preset.prompts[index]?.enabled !== enabled) {
+      return 'inactive';
     }
-  });
-
-  if (satisfied_count === desired_states.size) {
-    return 'active';
   }
-  return 'inactive';
+  if (
+    [...effect_target_states].some(([effect, expected_enabled]) => {
+      const state = readEffectState(effect);
+      return state.available ? state.enabled !== expected_enabled : expected_enabled;
+    })
+  ) {
+    return 'inactive';
+  }
+  return 'active';
 }
 
 function summarizePromptNames(preset: Preset, indexes: number[]): string {
@@ -1034,6 +1289,9 @@ function buildUnmatchedBetweenOption(option: PresetAdapterOption, message: strin
     description: option.description ? `${option.description} ${message}` : message,
     enable: [],
     disable: [],
+    effect: option.effect,
+    has_configured_prompt_matchers: option.enable.length > 0 || option.disable.length > 0,
+    source_option_id: option.id,
   };
 }
 
@@ -1095,7 +1353,16 @@ function getPromptIndexByBoundary(
 
 function resolveBetweenOptions(option: PresetAdapterOption, preset: Preset): ResolveOptionsResult {
   if (option.type !== 'between') {
-    return { options: [option], errors: [] };
+    return {
+      options: [
+        {
+          ...option,
+          has_configured_prompt_matchers: option.enable.length > 0 || option.disable.length > 0,
+          source_option_id: option.id,
+        },
+      ],
+      errors: [],
+    };
   }
 
   const match = option.match;
@@ -1149,6 +1416,9 @@ function resolveBetweenOptions(option: PresetAdapterOption, preset: Preset): Res
       description: fillMatchPlaceholder(option.description, prompt.name),
       enable: option.enable.map(matcher => fillMatcherPlaceholder(matcher, prompt.name)),
       disable: option.disable.map(matcher => fillMatcherPlaceholder(matcher, prompt.name)),
+      effect: option.effect,
+      has_configured_prompt_matchers: option.enable.length > 0 || option.disable.length > 0,
+      source_option_id: option.id,
       export_source: {
         group_id: '',
         match_id: option.id,
@@ -1184,11 +1454,54 @@ function getExportOptionKey(group_id: string, option_id: string): string {
   return `${group_id}\u0000${option_id}`;
 }
 
-function buildOptionView(option: ResolvedOption, preset: Preset): { view: OptionView; errors: string[] } {
+function buildOptionView(
+  option: ResolvedOption,
+  group: AdapterGroup,
+  preset: Preset,
+  disable_group_indexes: number[],
+  enable_group_indexes: number[],
+  group_options: ResolvedOption[],
+  configuration_errors: string[],
+): { view: OptionView; errors: string[] } {
   const enable_result = collectMatcherIndexes(option.enable, preset);
   const disable_result = collectMatcherIndexes(option.disable, preset);
   const matched_indexes = [...new Set([...enable_result.indexes, ...disable_result.indexes])];
-  const status = resolveStatus(preset, enable_result.indexes, disable_result.indexes);
+  const desired_states = new Map<number, boolean>();
+  if (group.disable_group.length > 0 || group.enable_group.length > 0) {
+    setPromptTargetStates(desired_states, disable_group_indexes, false);
+    setPromptTargetStates(desired_states, enable_group_indexes, true);
+  }
+  setPromptTargetStates(desired_states, disable_result.indexes, false);
+  setPromptTargetStates(desired_states, enable_result.indexes, true);
+  const effect_target_states = new Map<string, boolean>();
+  if (group.mode === 'single') {
+    group_options.forEach(group_option => {
+      group_option.effect.forEach(effect => effect_target_states.set(effect, false));
+    });
+  }
+  option.effect.forEach(effect => effect_target_states.set(effect, true));
+
+  const has_unmatched_prompt_configuration = option.has_configured_prompt_matchers && matched_indexes.length === 0;
+  const status = resolveStatus(
+    preset,
+    desired_states,
+    effect_target_states,
+    has_unmatched_prompt_configuration,
+    configuration_errors,
+  );
+  const summaries: string[] = [];
+  if (matched_indexes.length > 0) {
+    summaries.push(summarizePromptNames(preset, matched_indexes));
+  } else if (option.has_configured_prompt_matchers) {
+    summaries.push('提示词：无命中');
+  }
+  summaries.push(
+    ...[...effect_target_states].map(([effect, enabled]) => {
+      const state = readEffectState(effect);
+      return `${state.label}（目标${enabled ? '开启' : '关闭'}）`;
+    }),
+  );
+  summaries.push(...configuration_errors);
 
   return {
     view: {
@@ -1199,9 +1512,11 @@ function buildOptionView(option: ResolvedOption, preset: Preset): { view: Option
       exportable: option.export_source !== undefined,
       status,
       status_icon_class: STATUS_ICON_CLASSES[status],
-      matched_summary: summarizePromptNames(preset, matched_indexes),
+      matched_summary: summaries.join('；') || '无命中',
       enable_indexes: enable_result.indexes,
       disable_indexes: disable_result.indexes,
+      effects: option.effect,
+      configuration_errors,
     },
     errors: [...enable_result.errors, ...disable_result.errors],
   };
@@ -1209,13 +1524,33 @@ function buildOptionView(option: ResolvedOption, preset: Preset): { view: Option
 
 function buildGroupViews(config: AdapterConfig, preset: Preset): BuildGroupsResult {
   const errors: string[] = [];
+  const option_errors: string[] = [];
+  const effect_option_errors = getEffectOptionErrors(config);
   const chat_variable_context = readCurrentChatVariableContext();
   const global_variables = readGlobalVariables();
+  const has_reasoner_format_checks = config.groups.some(group =>
+    group.options.some(isReasonerFormatCheckOption),
+  );
+  const reasoner_format_status = has_reasoner_format_checks ? readReasonerFormatStatus() : undefined;
   const groups = config.groups.map(group => {
+    const disable_group_result = collectGroupMatcherIndexes(group, 'disable_group', preset);
+    const enable_group_result = collectGroupMatcherIndexes(group, 'enable_group', preset);
+    errors.push(...disable_group_result.errors, ...enable_group_result.errors);
     const resolved_options = resolveGroupOptions(group, preset);
     errors.push(...resolved_options.errors);
     const options = resolved_options.options.map(option => {
-      const result = buildOptionView(option, preset);
+      const configuration_errors =
+        effect_option_errors.get(getEffectOptionKey(group.id, option.source_option_id)) ?? [];
+      option_errors.push(...configuration_errors);
+      const result = buildOptionView(
+        option,
+        group,
+        preset,
+        disable_group_result.indexes,
+        enable_group_result.indexes,
+        resolved_options.options,
+        configuration_errors,
+      );
       errors.push(...result.errors);
       return result.view;
     });
@@ -1233,6 +1568,25 @@ function buildGroupViews(config: AdapterConfig, preset: Preset): BuildGroupsResu
         disabled: !available,
       };
     });
+    const reasoner_format_checks =
+      reasoner_format_status && (!reasoner_format_status.satisfied || !reasoner_format_status.supported)
+        ? group.options.flatMap((option, option_index) => {
+            if (!isReasonerFormatCheckOption(option)) {
+              return [];
+            }
+            return [
+              {
+                id: `${option.id}:${option_index}`,
+                label: option.label,
+                description: option.description,
+                disabled: !reasoner_format_status.supported,
+                message: reasoner_format_status.supported
+                  ? REASONER_FORMAT_WARNING
+                  : REASONER_FORMAT_UNSUPPORTED,
+              },
+            ];
+          })
+        : [];
     return {
       id: group.id,
       label: group.label,
@@ -1242,10 +1596,13 @@ function buildGroupViews(config: AdapterConfig, preset: Preset): BuildGroupsResu
         options.length === 0 && variable_inputs.length > 0 ? '变量输入' : group.mode === 'single' ? '单选' : '多选',
       layout: (options.length <= 3 ? 'row' : 'grid') as GroupView['layout'],
       options,
+      reasoner_format_checks,
       variable_inputs,
+      disable_group_indexes: disable_group_result.indexes,
+      enable_group_indexes: enable_group_result.indexes,
     };
   });
-  return { groups, errors };
+  return { groups, errors, option_errors: [...new Set(option_errors)] };
 }
 
 function buildOptionTargetStates(
@@ -1256,22 +1613,89 @@ function buildOptionTargetStates(
 ): Map<number, boolean> {
   const target_states = new Map<number, boolean>();
   if (group_config.mode === 'single') {
-    group_view.options
-      .filter(option => option.id !== option_view.id)
-      .forEach(option => option.enable_indexes.forEach(index => target_states.set(index, false)));
-    option_view.disable_indexes.forEach(index => target_states.set(index, false));
-    option_view.enable_indexes.forEach(index => target_states.set(index, true));
+    if (group_config.disable_group.length > 0 || group_config.enable_group.length > 0) {
+      setPromptTargetStates(target_states, group_view.disable_group_indexes, false);
+      setPromptTargetStates(target_states, group_view.enable_group_indexes, true);
+    } else {
+      group_view.options
+        .filter(option => option.id !== option_view.id)
+        .forEach(option => setPromptTargetStates(target_states, option.enable_indexes, false));
+    }
+    setPromptTargetStates(target_states, option_view.disable_indexes, false);
+    setPromptTargetStates(target_states, option_view.enable_indexes, true);
     return target_states;
   }
 
   if (!force_enable && option_view.status === 'active') {
-    option_view.enable_indexes.forEach(index => target_states.set(index, false));
+    setPromptTargetStates(target_states, option_view.enable_indexes, false);
     return target_states;
   }
 
-  option_view.disable_indexes.forEach(index => target_states.set(index, false));
-  option_view.enable_indexes.forEach(index => target_states.set(index, true));
+  setPromptTargetStates(target_states, option_view.disable_indexes, false);
+  setPromptTargetStates(target_states, option_view.enable_indexes, true);
   return target_states;
+}
+
+function buildOptionEffectTargetStates(
+  group_config: AdapterGroup,
+  group_view: GroupView,
+  option_view: OptionView,
+  force_enable: boolean,
+): Map<string, boolean> {
+  const target_states = new Map<string, boolean>();
+  if (group_config.mode === 'single') {
+    group_view.options
+      .filter(option => option.id !== option_view.id)
+      .forEach(option => option.effects.forEach(effect => target_states.set(effect, false)));
+    option_view.effects.forEach(effect => target_states.set(effect, true));
+    return target_states;
+  }
+
+  const enabled = force_enable || option_view.status !== 'active';
+  option_view.effects.forEach(effect => target_states.set(effect, enabled));
+  return target_states;
+}
+
+function getEffectApi(effect: string): KimiPartialModeApi | undefined {
+  return effect === KIMI_PARTIAL_EFFECT_ID ? getKimiPartialModeApi() : undefined;
+}
+
+function applyEffectTargetStates(target_states: Map<string, boolean>): { changed: boolean; errors: string[] } {
+  let changed = false;
+  const errors: string[] = [];
+  target_states.forEach((enabled, effect) => {
+    const api = getEffectApi(effect);
+    if (!api) {
+      if (effect === KIMI_PARTIAL_EFFECT_ID && !enabled) {
+        return;
+      }
+      errors.push(
+        effect === KIMI_PARTIAL_EFFECT_ID
+          ? '未检测到“Kimi 前缀填充”脚本，无法切换 Partial Mode 设置。请确认对应脚本已启用。'
+          : `无法应用未知 effect：${effect}`,
+      );
+      return;
+    }
+
+    try {
+      if (api.getEnabled() !== enabled) {
+        api.setEnabled(enabled);
+        changed = true;
+      }
+    } catch (error) {
+      errors.push(`切换 effect“${effect}”失败：${normalizeError(error)}`);
+      console.error(`[${SCRIPT_NAME}] 切换 effect“${effect}”失败。`, error);
+    }
+  });
+  return { changed, errors };
+}
+
+function notifyEffectErrors(errors: string[]) {
+  if (errors.length === 0) {
+    return;
+  }
+  toastr.error(errors.join('\n'), SCRIPT_NAME);
+  console.warn(`[${SCRIPT_NAME}] 部分 effect 未能应用。`, errors);
 }
 
 function applyPromptTargetStates(preset: Preset, target_states: Map<number, boolean>): boolean {
@@ -1288,11 +1712,31 @@ function applyPromptTargetStates(preset: Preset, target_states: Map<number, bool
 
 function getGroupPromptStateSnapshot(preset: Preset, group_view: GroupView): Map<number, boolean> {
   const indexes = new Set<number>();
+  group_view.disable_group_indexes.forEach(index => indexes.add(index));
+  group_view.enable_group_indexes.forEach(index => indexes.add(index));
   group_view.options.forEach(option => {
     option.enable_indexes.forEach(index => indexes.add(index));
     option.disable_indexes.forEach(index => indexes.add(index));
   });
   return new Map([...indexes].map(index => [index, preset.prompts[index]?.enabled ?? false]));
+}
+
+function getGroupEffectStateSnapshot(group_view: GroupView): Map<string, boolean> {
+  const snapshot = new Map<string, boolean>();
+  group_view.options.forEach(option => {
+    option.effects.forEach(effect => {
+      const api = getEffectApi(effect);
+      if (!api || snapshot.has(effect)) {
+        return;
+      }
+      try {
+        snapshot.set(effect, api.getEnabled());
+      } catch (error) {
+        console.warn(`[${SCRIPT_NAME}] 读取 effect“${effect}”快照失败。`, error);
+      }
+    });
+  });
+  return snapshot;
 }
 
 async function restorePromptStateSnapshot(snapshot: Map<number, boolean>) {
@@ -1304,6 +1748,10 @@ async function restorePromptStateSnapshot(snapshot: Map<number, boolean>) {
   if (changed) {
     await replacePreset('in_use', preset, { render: 'immediate' });
   }
+}
+
+function restoreEffectStateSnapshot(snapshot: Map<string, boolean>) {
+  notifyEffectErrors(applyEffectTargetStates(snapshot).errors);
 }
 
 function buildSummaryGenerationStatus(config: AdapterConfig, groups: GroupView[]): SummaryGenerationStatus {
@@ -1748,9 +2196,10 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   const loaded_preset_name = ref('');
   const groups = ref<GroupView[]>([]);
   const errors = ref<string[]>([]);
+  const blocking_errors = ref<string[]>([]);
   const is_applying = ref(false);
   const is_summary_running = manual_summary_running;
-  const has_blocking_errors = computed(() => errors.value.length > 0);
+  const has_blocking_errors = computed(() => blocking_errors.value.length > 0);
   const selected_export_count = computed(() =>
     groups.value.reduce(
       (total, group) =>
@@ -1769,8 +2218,12 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   let debug_subscription: { stop: () => void } | undefined;
   let debug_poll_timer: ReturnType<typeof window.setInterval> | undefined;
   let debug_attach_serial = 0;
+  let effect_api: KimiPartialModeApi | undefined;
+  let effect_subscription: { stop: () => void } | undefined;
+  let effect_poll_timer: ReturnType<typeof window.setInterval> | undefined;
   let summary_event_stops: EventOnReturn[] = [];
   let variable_write_error_notified = false;
+  let reasoner_format_unsupported_notified = false;
 
   function applyDebugRecords(records: SquashDebugRecord[]) {
     debug_records.value = records;
@@ -1837,6 +2290,48 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
       debug_poll_timer = undefined;
     }
     attachDebugApi(undefined);
+  }
+
+  function attachEffectApi(api: KimiPartialModeApi | undefined) {
+    if (api === effect_api) {
+      return;
+    }
+
+    const previous_api = effect_api;
+    effect_subscription?.stop();
+    effect_subscription = undefined;
+    effect_api = api;
+    if (api) {
+      effect_subscription = api.subscribe(() => {
+        if (!is_applying.value) {
+          loadState();
+        }
+      });
+    } else if (previous_api && !is_applying.value) {
+      loadState();
+    }
+  }
+
+  function refreshEffectApi() {
+    attachEffectApi(getKimiPartialModeApi());
+  }
+
+  function startEffectWatch() {
+    refreshEffectApi();
+    if (effect_poll_timer !== undefined) {
+      return;
+    }
+    effect_poll_timer = window.setInterval(refreshEffectApi, 1000);
+  }
+
+  function stopEffectWatch() {
+    if (effect_poll_timer !== undefined) {
+      window.clearInterval(effect_poll_timer);
+      effect_poll_timer = undefined;
+    }
+    effect_subscription?.stop();
+    effect_subscription = undefined;
+    effect_api = undefined;
   }
 
   function setActiveTab(tab: TabId) {
@@ -2170,8 +2665,9 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     }
 
     const target_states = buildOptionTargetStates(group_config, group_view, option_view, true);
-    if (target_states.size === 0) {
-      toastr.error('总结使用选项没有命中任何提示词。', SCRIPT_NAME);
+    const effect_target_states = buildOptionEffectTargetStates(group_config, group_view, option_view, true);
+    if (target_states.size === 0 && effect_target_states.size === 0) {
+      toastr.error('总结使用选项没有命中任何提示词或 effect。', SCRIPT_NAME);
       return;
     }
 
@@ -2183,12 +2679,14 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
       let restore_failed = false;
       let generation_stage = '切换总结预设';
       const snapshot = getGroupPromptStateSnapshot(state.preset, group_view);
+      const effect_snapshot = getGroupEffectStateSnapshot(group_view);
       try {
         const preset = getPreset('in_use');
         const changed = applyPromptTargetStates(preset, target_states);
         if (changed) {
           await replacePreset('in_use', preset, { render: 'immediate' });
         }
+        notifyEffectErrors(applyEffectTargetStates(effect_target_states).errors);
 
         generation_stage = '发送总结需求';
         const before_request_message_id = getLastMessageId();
@@ -2222,6 +2720,8 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
             option_id: status.option_id,
             option: status.option_label,
           });
+        } finally {
+          restoreEffectStateSnapshot(effect_snapshot);
         }
       }
 
@@ -2333,17 +2833,26 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
       const message = `读取当前使用预设失败：${normalizeError(error)}`;
       console.warn(`[${SCRIPT_NAME}] ${message}`, error);
       groups.value = [];
-      errors.value = [...config_result.errors, message];
+      blocking_errors.value = [...config_result.errors, message];
+      errors.value = blocking_errors.value;
       refreshSummaryState();
-      return { config: config_result.config, groups: [], errors: errors.value };
+      return { config: config_result.config, groups: [], errors: blocking_errors.value };
     }
 
     const built = buildGroupViews(config_result.config, preset);
     groups.value = built.groups;
+    const has_unsupported_reasoner_format_check = built.groups.some(group =>
+      group.reasoner_format_checks.some(check => check.disabled),
+    );
+    if (has_unsupported_reasoner_format_check && !reasoner_format_unsupported_notified) {
+      reasoner_format_unsupported_notified = true;
+      toastr.error('当前酒馆版本不支持一键设置模型思考格式化，请升级后重试。', SCRIPT_NAME);
+    }
     pruneSelectedExportKeys();
-    errors.value = [...config_result.errors, ...built.errors];
+    blocking_errors.value = [...config_result.errors, ...built.errors];
+    errors.value = [...blocking_errors.value, ...built.option_errors];
     refreshSummaryState();
-    return { config: config_result.config, preset, groups: built.groups, errors: errors.value };
+    return { config: config_result.config, preset, groups: built.groups, errors: blocking_errors.value };
   }
 
   function refresh() {
@@ -2589,6 +3098,57 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     }
   }
 
+  async function applyReasonerFormatCheck(group_id: string, check_id: string): Promise<void> {
+    if (is_applying.value) {
+      return;
+    }
+
+    const check = groups.value
+      .find(group => group.id === group_id)
+      ?.reasoner_format_checks.find(candidate => candidate.id === check_id);
+    if (!check) {
+      toastr.error('没有找到模型思考格式化检查项。', SCRIPT_NAME);
+      return;
+    }
+    if (check.disabled) {
+      toastr.error(REASONER_FORMAT_UNSUPPORTED, SCRIPT_NAME);
+      return;
+    }
+
+    is_applying.value = true;
+    try {
+      const context = getReasonerHostContext();
+      const manager = getReasoningPresetManager(context);
+      const reasoning = context.powerUserSettings?.reasoning as ReasoningSettings | undefined;
+      if (!manager || !reasoning) {
+        toastr.error(REASONER_FORMAT_UNSUPPORTED, SCRIPT_NAME);
+        return;
+      }
+
+      await manager.savePreset(REASONER_FORMAT_PRESET_NAME, {
+        name: REASONER_FORMAT_PRESET_NAME,
+        prefix: REASONER_FORMAT_PREFIX,
+        suffix: REASONER_FORMAT_SUFFIX,
+        separator: '',
+      });
+      reasoning.auto_parse = true;
+      $('#reasoning_auto_parse').prop('checked', true);
+      await Promise.resolve(context.saveSettingsDebounced());
+
+      if (!readReasonerFormatStatus().satisfied) {
+        throw new Error('酒馆未应用预期的推理格式化设置');
+      }
+
+      loadState();
+      toastr.success(`已设置并启用“${REASONER_FORMAT_PRESET_NAME}”。`, SCRIPT_NAME);
+    } catch (error) {
+      console.error(`[${SCRIPT_NAME}] 设置模型思考格式化失败。`, error);
+      toastr.error(`设置模型思考格式化失败：${normalizeError(error)}`, SCRIPT_NAME);
+    } finally {
+      is_applying.value = false;
+    }
+  }
+
   async function applyOption(group_id: string, option_id: string): Promise<void> {
     if (is_applying.value) {
       return;
@@ -2610,42 +3170,27 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
         return;
       }
 
-      const target_states = new Map<number, boolean>();
-      if (group_config.mode === 'single') {
-        group_view.options
-          .filter(option => option.id !== option_id)
-          .forEach(option => option.enable_indexes.forEach(index => target_states.set(index, false)));
-        option_view.disable_indexes.forEach(index => target_states.set(index, false));
-        option_view.enable_indexes.forEach(index => target_states.set(index, true));
-      } else if (option_view.status === 'active') {
-        option_view.enable_indexes.forEach(index => target_states.set(index, false));
-      } else {
-        option_view.disable_indexes.forEach(index => target_states.set(index, false));
-        option_view.enable_indexes.forEach(index => target_states.set(index, true));
-      }
-
-      if (target_states.size === 0) {
-        toastr.warning('该选项没有命中任何提示词。', SCRIPT_NAME);
+      const target_states = buildOptionTargetStates(group_config, group_view, option_view, false);
+      const effect_target_states = buildOptionEffectTargetStates(group_config, group_view, option_view, false);
+      if (target_states.size === 0 && effect_target_states.size === 0) {
+        toastr.warning('该选项没有命中任何提示词或 effect。', SCRIPT_NAME);
         return;
       }
 
-      let changed = false;
-      target_states.forEach((enabled, index) => {
-        const prompt = state.preset?.prompts[index];
-        if (prompt && prompt.enabled !== enabled) {
-          prompt.enabled = enabled;
-          changed = true;
+      const prompt_changed = applyPromptTargetStates(state.preset, target_states);
+      if (prompt_changed) {
+        await replacePreset('in_use', state.preset, { render: 'immediate' });
+      }
+
+      const effect_result = applyEffectTargetStates(effect_target_states);
+      notifyEffectErrors(effect_result.errors);
+      if (effect_result.errors.length === 0) {
+        if (prompt_changed || effect_result.changed) {
+          toastr.success(`已应用“${option_view.label}”。`, SCRIPT_NAME);
+        } else {
+          toastr.info('当前预设已经符合该选项。', SCRIPT_NAME);
         }
-      });
-
-      if (!changed) {
-        toastr.info('当前预设已经符合该选项。', SCRIPT_NAME);
-        refresh();
-        return;
       }
-
-      await replacePreset('in_use', state.preset, { render: 'immediate' });
-      toastr.success(`已应用“${option_view.label}”。`, SCRIPT_NAME);
       refresh();
     } finally {
       is_applying.value = false;
@@ -2656,6 +3201,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     active_tab,
     addSummaryMessageIdFromInput,
     applyOption,
+    applyReasonerFormatCheck,
     applySummaryHideOnly,
     cancelExportMode,
     clearDebugRecords,
@@ -2694,6 +3240,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     updateVariableInput,
     startExportMode,
     startDebugWatch,
+    startEffectWatch,
     startManualSummary,
     startSummaryWatch,
     stopSummaryWatch,
@@ -2702,6 +3249,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     summary_state,
     syncSummaryHideRules,
     stopDebugWatch,
+    stopEffectWatch,
     title,
     toggleExportOption,
     deleteSummaryMessageId,

@@ -25,21 +25,27 @@
     {
       "id": "single_exact_demo",
       "label": "单选组：精确匹配",
-      "description": "选项数不超过三个时会横排显示；单选组会关闭同组其他选项开启过的提示词。",
+      "description": "选项数不超过三个时会横排显示；切换时先按 disable_group 和 enable_group 重置，再应用当前选项。",
       "mode": "single",
+      "disable_group": [
+        "示例：字符串命中项",
+        {
+          "name": "示例：对象名称命中项"
+        }
+      ],
+      "enable_group": [],
       "options": [
         {
           "id": "string_match",
           "label": "字符串精确匹配",
-          "description": "用字符串按提示词 name 精确命中。",
-          "enable": [
-            "示例：字符串命中项"
-          ],
+          "description": "用字符串按提示词 name 精确命中，并演示 Kimi Partial Mode effect。",
+          "enable": ["示例：字符串命中项"],
           "disable": [
             {
               "name": "示例：对象名称命中项"
             }
-          ]
+          ],
+          "effect": ["kimi_partial_mode"]
         },
         {
           "id": "name_match",
@@ -50,9 +56,12 @@
               "name": "示例：对象名称命中项"
             }
           ],
-          "disable": [
-            "示例：字符串命中项"
-          ]
+          "disable": ["示例：字符串命中项"]
+        },
+        {
+          "type": "check_reasoner_format",
+          "label": "模型思考格式化",
+          "description": "检查推理自动解析与 <think> 标签格式；未设置时可一键创建并启用推荐预设。"
         }
       ]
     },
@@ -112,9 +121,7 @@
           "id": "unmatched_string",
           "label": "不存在的精确名称",
           "description": "用于展示未命中的精确匹配状态。",
-          "enable": [
-            "__梦鲸思客_故意未命中__"
-          ]
+          "enable": ["__梦鲸思客_故意未命中__"]
         },
         {
           "id": "unmatched_regex",
@@ -215,12 +222,8 @@
             "below": "/主要文风/",
             "above": "/次要文风/"
           },
-          "enable": [
-            "{match}"
-          ],
-          "disable": [
-            "{match}"
-          ]
+          "enable": ["{match}"],
+          "disable": ["{match}"]
         }
       ]
     }

@@ -30,15 +30,14 @@
       "mode": "single",
       "options": [
         {
+          "type": "check_reasoner_format",
+          "label": "模型思考格式化"
+        },
+        {
           "id": "Deepseek官方",
           "label": "Deepseek官方",
           "enable": [
             "Deepseek官方"
-          ],
-          "disable": [
-            "☆Gemini预填充",
-            "☆混元3预填充",
-            "硅基流动或其他"
           ]
         },
         {
@@ -46,11 +45,6 @@
           "label": "Deepseek非官方",
           "enable": [
             "硅基流动或其他"
-          ],
-          "disable": [
-            "☆Gemini预填充",
-            "☆混元3预填充",
-            "Deepseek官方"
           ]
         },
         {
@@ -59,10 +53,6 @@
           "enable": [
             "硅基流动或其他",
             "☆Gemini预填充"
-          ],
-          "disable": [
-            "☆混元3预填充",
-            "Deepseek官方"
           ]
         },
         {
@@ -71,10 +61,21 @@
           "enable": [
             "硅基流动或其他",
             "☆混元3预填充"
+          ]
+        },
+        {
+          "id": "KimiK3",
+          "label": "KimiK3",
+          "enable": [
+            "schema初始化-thinking",
+            "KimiK3思考",
+            "☆KimiK3预填充"
           ],
           "disable": [
-            "☆Gemini预填充",
-            "Deepseek官方"
+            "schema初始化"
+          ],
+          "effect": [
+            "kimi_partial_mode"
           ]
         },
         {
@@ -83,13 +84,20 @@
           "description": "例如GLM5.2等",
           "enable": [
             "硅基流动或其他"
-          ],
-          "disable": [
-            "☆混元3预填充",
-            "☆Gemini预填充",
-            "Deepseek官方"
           ]
         }
+      ],
+      "disable_group": [
+        "☆Gemini预填充",
+        "☆混元3预填充",
+        "☆KimiK3预填充",
+        "Deepseek官方",
+        "KimiK3思考",
+        "硅基流动或其他",
+        "schema初始化-thinking"
+      ],
+      "enable_group": [
+        "schema初始化"
       ]
     },
     {
