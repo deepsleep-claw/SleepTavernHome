@@ -7,6 +7,7 @@ import type { AgentSettingsStore, SessionIndexEntry } from './settings';
 import type { TavernFileClient } from './file-client';
 
 export type SessionManifest = {
+  avatarId?: string;
   bindingId: string;
   contextUrl: string;
   createdAt: number;
@@ -30,6 +31,7 @@ export type SessionRevision = {
 };
 
 export type CommitSessionRevision = {
+  avatarId?: string;
   bindingId: string;
   characterName: string;
   context: ModelMessage[];
@@ -92,6 +94,7 @@ export class SessionRevisionStore {
     const timestamp = this.now();
     const manifest: SessionManifest = {
       bindingId: input.bindingId,
+      avatarId: input.avatarId,
       contextUrl,
       createdAt: previous?.createdAt ?? timestamp,
       eventSegmentUrls,
@@ -109,11 +112,13 @@ export class SessionRevisionStore {
     const manifestName = `${prefix}--manifest-${manifestHash.slice(0, 12)}.json`;
     const manifestUrl = await upload(manifestName, manifestBytes);
     const entry: SessionIndexEntry = {
+      avatarId: input.avatarId ?? previous?.avatarId,
       bindingId: input.bindingId,
       characterName: input.characterName,
       createdAt: previous?.createdAt ?? timestamp,
       manifestHash,
       manifestUrl,
+      leaseUrl: previous?.leaseUrl,
       previousManifestHash: previous?.manifestHash,
       previousManifestUrl: previous?.manifestUrl,
       revision,

@@ -82,7 +82,10 @@ export type SessionView = {
   error?: string;
   events: RunnerEvent[];
   mode: SessionMode;
+  preset: StructuredPreset;
+  readOnly: boolean;
   sessionId: string;
+  skills: AgentSkill[];
   status: SessionLifecycleStatus;
   title: string;
   ui: SessionUiItem[];

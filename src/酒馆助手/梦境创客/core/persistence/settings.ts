@@ -9,6 +9,7 @@ export type StoredFileReference = {
 };
 
 export type SessionIndexEntry = {
+  avatarId?: string;
   bindingId: string;
   characterName: string;
   createdAt: number;

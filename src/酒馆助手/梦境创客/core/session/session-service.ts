@@ -41,7 +41,9 @@ type SessionServiceOptions = {
   mode?: SessionMode;
   now?: () => number;
   onPersist?: (runtime: PersistedSessionRuntime, files: WorkspaceFile[]) => Promise<void>;
+  onUpdate?: (view: SessionView) => void;
   preset?: StructuredPreset;
+  readOnly?: boolean;
   requestToolApproval?: (request: ToolConfirmation) => Promise<boolean>;
   sessionId?: string;
   skills?: AgentSkill[];
@@ -114,7 +116,9 @@ export class CardAgentSessionService {
   private readonly lock: GlobalAgentTaskLock;
   private readonly now: () => number;
   private readonly onPersist?: SessionServiceOptions['onPersist'];
+  private readonly onUpdate?: SessionServiceOptions['onUpdate'];
   private readonly requestToolApproval?: SessionServiceOptions['requestToolApproval'];
+  private readonly readOnly: boolean;
   private readonly snapshots: ContentAddressedSnapshotStore;
   private timeline: HistoryTimeline;
   private events: RunnerEvent[] = [];
@@ -151,8 +155,10 @@ export class CardAgentSessionService {
     this.modelMessages = klona(restored?.runtime.modelMessages ?? compiled.messages);
     this.now = options.now ?? Date.now;
     this.onPersist = options.onPersist;
+    this.onUpdate = options.onUpdate;
     this.preset = klona(restored?.runtime.preset ?? options.preset ?? DEFAULT_PRESET);
     this.requestToolApproval = options.requestToolApproval;
+    this.readOnly = options.readOnly ?? false;
     this.sessionId = restored?.runtime.sessionId ?? options.sessionId ?? crypto.randomUUID();
     this.skills = klona(restored?.runtime.skills ?? options.skills ?? []);
     this.snapshots = options.snapshots;
@@ -190,7 +196,7 @@ export class CardAgentSessionService {
       files: workingFiles,
       runtime,
     });
-    if (runtime.status === 'running' || runtime.status === 'waiting-approval' || runtime.status === 'abnormal') {
+    if (!service.readOnly && (runtime.status === 'running' || runtime.status === 'waiting-approval' || runtime.status === 'abnormal')) {
       service.status = 'abnormal';
       service.lastError = '上次页面在任务完成前关闭，已恢复到最后一个成功步骤。';
       service.buildRunner('failed', recoverPendingRunnerStep(service.modelMessages, service.events));
@@ -231,7 +237,10 @@ export class CardAgentSessionService {
       error: this.lastError,
       events: klona(this.events),
       mode: this.mode,
+      preset: klona(this.preset),
+      readOnly: this.readOnly,
       sessionId: this.sessionId,
+      skills: klona(this.skills),
       status: this.status,
       title: this.title,
       ui: klona(this.ui.filter(item => !item.hidden)),
@@ -242,11 +251,28 @@ export class CardAgentSessionService {
   }
 
   setMode(mode: SessionMode): void {
+    this.assertWritable();
     this.mode = mode;
+    this.notify();
     void this.persist();
   }
 
+  async save(): Promise<void> {
+    await this.persist();
+  }
+
+  async applyPreset(preset: StructuredPreset): Promise<void> {
+    this.assertWritable();
+    if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status)) {
+      throw new Error('Agent运行期间不能替换预设头部。');
+    }
+    this.preset = klona(preset);
+    await this.refreshCompiledHeader();
+    await this.persist();
+  }
+
   async send(message: string, userMessageId: string = crypto.randomUUID()): Promise<SessionView> {
+    this.assertWritable();
     const text = message.trim();
     if (!text) throw new Error('请输入要交给Agent的要求。');
     if (this.pending) throw new Error('请先处理当前待批准的修改。');
@@ -292,6 +318,7 @@ export class CardAgentSessionService {
   }
 
   async resume(): Promise<SessionView> {
+    this.assertWritable();
     if (!this.runner) throw new Error('当前会话没有可恢复的Runner。');
     this.lock.acquire(this.sessionId);
     try {
@@ -315,11 +342,13 @@ export class CardAgentSessionService {
   }
 
   enqueueGuidance(message: string): void {
+    this.assertWritable();
     if (!this.runner || this.runner.state.status !== 'running') throw new Error('当前没有正在运行的Agent步骤。');
     this.runner.enqueueGuidance(message);
   }
 
   async approve(decisions: Record<string, ApprovalDecision>): Promise<SessionView> {
+    this.assertWritable();
     if (!this.pending) throw new Error('当前没有待批准的修改。');
     this.lock.acquire(this.sessionId);
     try {
@@ -378,13 +407,16 @@ export class CardAgentSessionService {
   }
 
   editUserMessage(messageId: string, content: string): void {
+    this.assertWritable();
     const item = this.ui.find(message => message.id === messageId && message.kind === 'user');
     if (!item) throw new Error(`用户消息不存在：${messageId}`);
     item.content = content;
+    this.notify();
     void this.persist();
   }
 
   async resend(messageId: string): Promise<SessionView> {
+    this.assertWritable();
     const item = this.ui.find(message => message.id === messageId && message.kind === 'user');
     if (!item) throw new Error(`用户消息不存在：${messageId}`);
     return this.send(item.content, messageId);
@@ -488,6 +520,7 @@ export class CardAgentSessionService {
   }
 
   private async restore(direction: 'redo' | 'undo'): Promise<SessionView> {
+    this.assertWritable();
     if (this.pending || ['running', 'waiting-approval', 'committing'].includes(this.status)) {
       throw new Error('运行或审批期间不能回退历史。');
     }
@@ -531,6 +564,10 @@ export class CardAgentSessionService {
     }
   }
 
+  private assertWritable(): void {
+    if (this.readOnly) throw new Error('当前页面未持有会话租约，只能查看。请先手动接管。');
+  }
+
   private appendStreamingText(delta: string): void {
     const id = `stream:${this.activeCheckpointId}`;
     let item = this.ui.find(message => message.id === id);
@@ -539,6 +576,7 @@ export class CardAgentSessionService {
       this.ui.push(item);
     }
     item.content += delta;
+    this.notify();
   }
 
   private consumeLatestEvent(event: RunnerEvent): void {
@@ -600,5 +638,10 @@ export class CardAgentSessionService {
 
   private async persist(): Promise<void> {
     await this.onPersist?.(this.exportRuntime(), this.repository?.snapshot() ?? []);
+    this.notify();
+  }
+
+  private notify(): void {
+    this.onUpdate?.(this.view());
   }
 }
