@@ -32,7 +32,7 @@ export class MemoryRunnerJournal implements RunnerJournal {
   }
 }
 
-type PendingStep = {
+export type PendingRunnerStep = {
   calls: RunnerToolCall[];
   compacting: boolean;
   nextCall: number;
@@ -42,7 +42,7 @@ export type AgentRunnerState = {
   contextUsage: ContextUsage;
   failure?: string;
   messages: ModelMessage[];
-  pending?: PendingStep;
+  pending?: PendingRunnerStep;
   status: RunnerStatus;
 };
 
@@ -50,6 +50,8 @@ export type AgentRunnerOptions = {
   contextWindow?: number;
   executor: ModelStepExecutor;
   initialMessages?: ModelMessage[];
+  initialPending?: PendingRunnerStep;
+  initialStatus?: RunnerStatus;
   journal: RunnerJournal;
   now?: () => number;
   onTextDelta?: (delta: string) => void;
@@ -100,7 +102,12 @@ export class AgentRunner {
     this.tools = [...options.tools, COMPACT_CONTEXT_TOOL];
     this.toolMap = new Map(this.tools.map(item => [item.name, item]));
     const messages = structuredClone(options.initialMessages ?? []);
-    this.state = { contextUsage: measureContext(messages, this.contextWindow), messages, status: 'idle' };
+    this.state = {
+      contextUsage: measureContext(messages, this.contextWindow),
+      messages,
+      pending: options.initialPending ? structuredClone(options.initialPending) : undefined,
+      status: options.initialStatus ?? 'idle',
+    };
   }
 
   enqueueGuidance(message: string): void {

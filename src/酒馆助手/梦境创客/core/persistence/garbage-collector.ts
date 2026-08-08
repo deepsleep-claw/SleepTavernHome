@@ -50,6 +50,7 @@ export class FileRegistryGarbageCollector {
           const manifest = JSON.parse(new TextDecoder().decode(bytes)) as SessionManifest;
           retained.add(manifest.contextUrl);
           retained.add(manifest.workingCopyUrl);
+          if (manifest.runtimeUrl) retained.add(manifest.runtimeUrl);
           manifest.eventSegmentUrls.forEach(item => retained.add(item));
           for (const hash of manifest.snapshotHashes) {
             const snapshot = settings.files[hash];

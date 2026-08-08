@@ -13,6 +13,8 @@ import {
 } from './types';
 
 type MemoryWorkspaceOptions = {
+  completedToolCallIds?: string[];
+  currentFiles?: WorkspaceFile[];
   files?: WorkspaceFile[];
   readonlyRoots?: string[];
 };
@@ -40,11 +42,19 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
 
   constructor(options: MemoryWorkspaceOptions = {}) {
     this.readonlyRoots = (options.readonlyRoots ?? []).map(normalizeWorkspacePath);
+    options.completedToolCallIds?.forEach(id => this.completedToolCalls.add(id));
     for (const input of options.files ?? []) {
       const path = normalizeWorkspacePath(input.path);
       const file = { ...cloneFile(input), path };
       this.base.set(path, file);
       this.current.set(path, cloneFile(file));
+    }
+    if (options.currentFiles) {
+      this.current.clear();
+      for (const input of options.currentFiles) {
+        const path = normalizeWorkspacePath(input.path);
+        this.current.set(path, { ...cloneFile(input), path });
+      }
     }
   }
 

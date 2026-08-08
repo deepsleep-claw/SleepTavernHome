@@ -1,0 +1,296 @@
+import type { ModelMessage } from 'ai';
+import { describe, expect, it, vi } from 'vitest';
+import { MemoryBinaryBlobStore } from '../history/blob-store';
+import { ContentAddressedSnapshotStore } from '../history/snapshot-store';
+import type { PersistedSessionRuntime } from './types';
+import { MemoryCardStateAdapter } from '../transaction/adapter';
+import type { ApprovalDecision } from '../transaction/merge';
+import { transactionState } from '../transaction/test-fixture';
+import type { WorkspaceFile } from '../workspace/types';
+import type { ModelStepExecutor, ModelStepRequest, ModelStepResult, RunnerToolCall } from '../runner/step-executor';
+import { CardAgentSessionService } from './session-service';
+import { GlobalAgentTaskLock } from './task-lock';
+
+function step(toolCalls: RunnerToolCall[] = [], text = '完成啦'): ModelStepResult {
+  const assistantMessages: ModelMessage[] = [
+    toolCalls.length
+      ? {
+          content: toolCalls.map(call => ({
+            input: call.input,
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+            type: 'tool-call' as const,
+          })),
+          role: 'assistant',
+        }
+      : { content: text, role: 'assistant' },
+  ];
+  return { assistantMessages, finishReason: toolCalls.length ? 'tool-calls' : 'stop', text, toolCalls };
+}
+
+class QueueExecutor implements ModelStepExecutor {
+  readonly requests: ModelStepRequest[] = [];
+  constructor(private readonly queue: Array<ModelStepResult | ((request: ModelStepRequest) => Promise<ModelStepResult>)>) {}
+  async execute(request: ModelStepRequest): Promise<ModelStepResult> {
+    this.requests.push(request);
+    const next = this.queue.shift();
+    if (!next) throw new Error('missing step');
+    return typeof next === 'function' ? next(request) : next;
+  }
+}
+
+function writeDescription(content: string, id = 'write-description'): RunnerToolCall {
+  return { input: { content, path: '/character/description.md' }, toolCallId: id, toolName: 'write_file' };
+}
+
+function snapshots(): ContentAddressedSnapshotStore {
+  return new ContentAddressedSnapshotStore(new MemoryBinaryBlobStore());
+}
+
+describe('card agent session service', () => {
+  it('完成读取到Diff审批再最小写回的普通模式闭环', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const persist = vi.fn(async () => undefined);
+    const service = await CardAgentSessionService.create({
+      adapter,
+      executor: new QueueExecutor([step([writeDescription('新的描述')]), step()]),
+      lock: new GlobalAgentTaskLock(),
+      onPersist: persist,
+      snapshots: snapshots(),
+    });
+    const waiting = await service.send('请修改描述', 'user-1');
+    expect(waiting.status).toBe('awaiting-approval');
+    expect(waiting.approval?.stateChanges).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: '/character/fields/description' })]),
+    );
+    expect((await adapter.read()).character.fields.description).toBe('base description');
+    const decisions: Record<string, ApprovalDecision> = Object.fromEntries(
+      waiting.approval!.stateChanges.map(change => [change.path, 'current' as const]),
+    );
+    decisions['/character/fields/description'] = 'agent';
+    const committed = await service.approve(decisions);
+    expect(committed.status).toBe('completed');
+    expect((await adapter.read()).character.fields.description).toBe('新的描述');
+    expect(adapter.applied.map(item => item.path)).toEqual(['/character/fields/description']);
+    expect(persist).toHaveBeenCalled();
+  });
+
+  it('YOLO自动提交低风险修改，但重要绑定仍等待人工批准', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const lowRisk = await CardAgentSessionService.create({
+      adapter,
+      executor: new QueueExecutor([step([writeDescription('YOLO描述')]), step()]),
+      lock: new GlobalAgentTaskLock(),
+      mode: 'yolo',
+      snapshots: snapshots(),
+    });
+    expect((await lowRisk.send('改描述')).status).toBe('completed');
+    expect((await adapter.read()).character.fields.description).toBe('YOLO描述');
+
+    const highRiskAdapter = new MemoryCardStateAdapter(transactionState());
+    const highRisk = await CardAgentSessionService.create({
+      adapter: highRiskAdapter,
+      executor: new QueueExecutor([
+        step([
+          {
+            input: { content: 'additional: []\nchat: null\nprimary: null\n', path: '/worldbooks/bindings.yaml' },
+            toolCallId: 'binding',
+            toolName: 'write_file',
+          },
+        ]),
+        step(),
+      ]),
+      lock: new GlobalAgentTaskLock(),
+      mode: 'yolo',
+      snapshots: snapshots(),
+    });
+    const waiting = await highRisk.send('解除主世界书绑定');
+    expect(waiting.status).toBe('awaiting-approval');
+    expect(waiting.approval?.stateChanges).toEqual(
+      expect.arrayContaining([expect.objectContaining({ highRisk: true, path: '/bindings/primary' })]),
+    );
+  });
+
+  it('审批期间发生外部冲突时要求重新检查，并仅覆盖Agent改动路径', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const service = await CardAgentSessionService.create({
+      adapter,
+      executor: new QueueExecutor([step([writeDescription('Agent版本')]), step()]),
+      lock: new GlobalAgentTaskLock(),
+      snapshots: snapshots(),
+    });
+    const waiting = await service.send('修改描述');
+    const external = await adapter.read();
+    external.character.fields.description = '用户手改版本';
+    external.character.fields.personality = '用户新性格';
+    adapter.replaceExternal(external);
+    const decisions = { '/character/fields/description': 'agent' as const };
+    const recheck = await service.approve(decisions);
+    expect(recheck.status).toBe('awaiting-approval');
+    expect(recheck.approval?.conflicts[0]).toMatchObject({
+      agent: 'Agent版本',
+      base: 'base description',
+      current: '用户手改版本',
+    });
+    expect((await service.approve(decisions)).status).toBe('completed');
+    const final = await adapter.read();
+    expect(final.character.fields.description).toBe('Agent版本');
+    expect(final.character.fields.personality).toBe('用户新性格');
+    expect(waiting.approval).toBeDefined();
+  });
+
+  it('支持回退、重做、保留用户消息并原地编辑后分支重发', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const executor = new QueueExecutor([
+      step([writeDescription('第一版', 'write-1')]),
+      step([], '第一轮完成'),
+      step([writeDescription('第二版', 'write-2')]),
+      step([], '第二轮完成'),
+    ]);
+    const service = await CardAgentSessionService.create({
+      adapter,
+      executor,
+      lock: new GlobalAgentTaskLock(),
+      mode: 'yolo',
+      snapshots: snapshots(),
+    });
+    await service.send('做第一版', 'editable-user');
+    const undone = await service.undo();
+    expect((await adapter.read()).character.fields.description).toBe('base description');
+    expect(undone.ui.filter(item => item.kind === 'user').map(item => item.content)).toContain('做第一版');
+    expect(undone.ui.some(item => item.kind === 'assistant')).toBe(false);
+    const redone = await service.redo();
+    expect((await adapter.read()).character.fields.description).toBe('第一版');
+    expect(redone.ui.some(item => item.kind === 'assistant')).toBe(true);
+    await service.undo();
+    service.editUserMessage('editable-user', '改做第二版');
+    await service.resend('editable-user');
+    expect((await adapter.read()).character.fields.description).toBe('第二版');
+    expect(service.view().ui.filter(item => item.id === 'editable-user')).toHaveLength(1);
+  });
+
+  it('已有Skill即使在YOLO中也要求工具确认和最终确认，新Skill可自动采用', async () => {
+    const skill = {
+      assets: {},
+      body: '# 原流程',
+      builtin: false,
+      description: '原技能',
+      enabled: true,
+      id: 'writer',
+      loading: 'on-demand' as const,
+      name: '写作',
+      references: {},
+    };
+    const requestToolApproval = vi.fn(async () => true);
+    const existing = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      executor: new QueueExecutor([
+        step([
+          {
+            input: {
+              content: '---\ndescription: 已修改\nenabled: true\nloading: on-demand\nname: 写作\n---\n# 新流程\n',
+              path: '/skills/user/writer/SKILL.md',
+            },
+            toolCallId: 'skill-edit',
+            toolName: 'write_file',
+          },
+        ]),
+        step(),
+      ]),
+      lock: new GlobalAgentTaskLock(),
+      mode: 'yolo',
+      requestToolApproval,
+      skills: [skill],
+      snapshots: snapshots(),
+    });
+    const waiting = await existing.send('调整Skill');
+    expect(requestToolApproval).toHaveBeenCalledOnce();
+    expect(waiting.status).toBe('awaiting-approval');
+    expect(waiting.approval?.skillChanges[0]).toMatchObject({ highRisk: true, kind: 'modify' });
+
+    const created = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      executor: new QueueExecutor([
+        step([
+          {
+            input: {
+              content: '---\ndescription: 新技能\nenabled: true\nloading: on-demand\nname: 灵感\n---\n# 流程\n',
+              path: '/skills/user/idea/SKILL.md',
+            },
+            toolCallId: 'skill-new',
+            toolName: 'write_file',
+          },
+        ]),
+        step(),
+      ]),
+      lock: new GlobalAgentTaskLock(),
+      mode: 'yolo',
+      snapshots: snapshots(),
+    });
+    expect((await created.send('创建Skill')).status).toBe('completed');
+    expect(created.view().workingFiles.some(file => file.path === '/skills/user/idea/SKILL.md')).toBe(true);
+  });
+
+  it('页面意外关闭后从最后成功步骤恢复，不重跑已经完成的写工具', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    let crashRuntime: PersistedSessionRuntime | undefined;
+    let crashFiles: WorkspaceFile[] = [];
+    const firstExecutor = new QueueExecutor([
+      step([writeDescription('恢复后的描述', 'stable-write')]),
+      request =>
+        new Promise<ModelStepResult>((_resolve, reject) => {
+          request.abortSignal.addEventListener('abort', () => reject(new DOMException('closed', 'AbortError')));
+        }),
+    ]);
+    const original = await CardAgentSessionService.create({
+      adapter,
+      executor: firstExecutor,
+      lock: new GlobalAgentTaskLock(),
+      mode: 'yolo',
+      onPersist: async (runtime, files) => {
+        if (runtime.events.some(event => event.type === 'tool-completed')) {
+          crashRuntime ??= structuredClone(runtime);
+          if (crashFiles.length === 0) crashFiles = structuredClone(files);
+        }
+      },
+      snapshots: snapshots(),
+    });
+    const running = original.send('修改后模拟关闭');
+    await vi.waitFor(() => expect(crashRuntime).toBeDefined());
+    await vi.waitFor(() => expect(firstExecutor.requests).toHaveLength(2));
+    original.stop();
+    await running;
+
+    const restored = await CardAgentSessionService.restore(
+      {
+        adapter,
+        executor: new QueueExecutor([step([], '恢复完成')]),
+        lock: new GlobalAgentTaskLock(),
+        snapshots: snapshots(),
+      },
+      crashRuntime!,
+      crashFiles,
+    );
+    expect(restored.view().status).toBe('abnormal');
+    expect((await restored.resume()).status).toBe('completed');
+    expect((await adapter.read()).character.fields.description).toBe('恢复后的描述');
+    expect(restored.view().events.filter(event => event.type === 'tool-completed' && event.call.toolCallId === 'stable-write')).toHaveLength(1);
+  });
+
+  it('提交失败后回滚并保留候选供再次处理', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState(), { failAtApply: 1 });
+    const service = await CardAgentSessionService.create({
+      adapter,
+      executor: new QueueExecutor([step([writeDescription('不会落地')]), step()]),
+      lock: new GlobalAgentTaskLock(),
+      snapshots: snapshots(),
+    });
+    const waiting = await service.send('修改');
+    const result = await service.approve({ '/character/fields/description': 'agent' });
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('Fault adapter');
+    expect(result.approval).toBeDefined();
+    expect((await adapter.read()).character.fields.description).toBe('base description');
+    expect(waiting.status).toBe('awaiting-approval');
+  });
+});

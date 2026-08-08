@@ -1,4 +1,5 @@
 import { streamText, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { withApiModel, type ApiProfile } from '../provider/profiles';
 import type { RunnerTool } from './tools';
 
 export type RunnerToolCall = {
@@ -62,5 +63,13 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
       text,
       toolCalls: toolCalls.map(call => ({ input: call.input, toolCallId: call.toolCallId, toolName: call.toolName })),
     };
+  }
+}
+
+export class ProfileModelStepExecutor implements ModelStepExecutor {
+  constructor(private readonly profile: ApiProfile) {}
+
+  async execute(request: ModelStepRequest): Promise<ModelStepResult> {
+    return withApiModel(this.profile, model => new AiSdkModelStepExecutor(async () => model).execute(request));
   }
 }

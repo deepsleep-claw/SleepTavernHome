@@ -2,6 +2,7 @@ import type { ModelMessage } from 'ai';
 import type { WorkspaceFile } from '../workspace/types';
 import { canonicalParse, canonicalStringify, sha256 } from '../transaction/canonical';
 import type { RunnerEvent } from '../runner/agent-runner';
+import type { PersistedSessionRuntime } from '../session/types';
 import type { AgentSettingsStore, SessionIndexEntry } from './settings';
 import type { TavernFileClient } from './file-client';
 
@@ -11,6 +12,7 @@ export type SessionManifest = {
   createdAt: number;
   eventSegmentUrls: string[];
   revision: number;
+  runtimeUrl?: string;
   schemaVersion: 1;
   sessionId: string;
   snapshotHashes: string[];
@@ -23,6 +25,7 @@ export type SessionRevision = {
   context: ModelMessage[];
   events: RunnerEvent[];
   manifest: SessionManifest;
+  runtime?: PersistedSessionRuntime;
   workingCopy: WorkspaceFile[];
 };
 
@@ -31,6 +34,7 @@ export type CommitSessionRevision = {
   characterName: string;
   context: ModelMessage[];
   events: RunnerEvent[];
+  runtime?: PersistedSessionRuntime;
   sessionId: string;
   snapshotHashes: string[];
   status: SessionManifest['status'];
@@ -73,6 +77,9 @@ export class SessionRevisionStore {
     };
     const workingCopyUrl = await upload(`${prefix}--working.json`, bytes(input.workingCopy));
     const contextUrl = await upload(`${prefix}--context.json`, bytes(input.context));
+    const runtimeUrl = input.runtime
+      ? await upload(`${prefix}--runtime.json`, bytes(input.runtime))
+      : undefined;
     const eventSegmentUrls: string[] = [];
     for (let offset = 0; offset < input.events.length; offset += this.eventSegmentSize) {
       eventSegmentUrls.push(
@@ -89,6 +96,7 @@ export class SessionRevisionStore {
       createdAt: previous?.createdAt ?? timestamp,
       eventSegmentUrls,
       revision,
+      runtimeUrl,
       schemaVersion: 1,
       sessionId: input.sessionId,
       snapshotHashes: [...new Set(input.snapshotHashes)],
@@ -138,15 +146,17 @@ export class SessionRevisionStore {
     if (manifest.schemaVersion !== 1 || manifest.revision !== expectedRevision) {
       throw new Error(`会话Manifest版本不匹配：${url}`);
     }
-    const [workingCopy, context, segments] = await Promise.all([
+    const [workingCopy, context, runtime, segments] = await Promise.all([
       this.client.download(manifest.workingCopyUrl),
       this.client.download(manifest.contextUrl),
+      manifest.runtimeUrl ? this.client.download(manifest.runtimeUrl) : undefined,
       Promise.all(manifest.eventSegmentUrls.map(segment => this.client.download(segment))),
     ]);
     return {
       context: canonicalParse<ModelMessage[]>(new TextDecoder().decode(context)),
       events: segments.flatMap(segment => canonicalParse<RunnerEvent[]>(new TextDecoder().decode(segment))),
       manifest,
+      runtime: runtime ? canonicalParse<PersistedSessionRuntime>(new TextDecoder().decode(runtime)) : undefined,
       workingCopy: canonicalParse<WorkspaceFile[]>(new TextDecoder().decode(workingCopy)),
     };
   }
