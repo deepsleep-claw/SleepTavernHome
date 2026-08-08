@@ -92,6 +92,7 @@ const OldSettings = z
             enabled: true,
             placeholder: '{{压缩相邻消息::lora_key}}',
           },
+          custom_routes: [],
           position_order: [...WorldbookExtractionPositionOrder],
         },
       },
@@ -171,6 +172,17 @@ export const Settings = z
                 placeholder: z.string().default('{{压缩相邻消息::lora_key}}'),
               })
               .prefault({}),
+            custom_routes: z
+              .array(
+                z
+                  .object({
+                    title_regex: z.string().default('').catch(''),
+                    tag: z.string().default('').catch(''),
+                  })
+                  .prefault({}),
+              )
+              .default([])
+              .catch([]),
             position_order: WorldbookExtractionPositionOrderSetting,
           })
           .prefault({}),

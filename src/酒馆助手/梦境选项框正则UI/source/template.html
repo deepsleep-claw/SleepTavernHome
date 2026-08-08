@@ -1,0 +1,30 @@
+<div class="dream-option-ui" data-dream-option-ui>
+  <template class="dream-option-ui__source">$1</template>
+  <section class="dream-option-ui__panel" aria-label="梦境选项">
+    <div class="dream-option-ui__toolbar">
+      <span class="dream-option-ui__title">梦境选项</span>
+      <span class="dream-option-ui__count"></span>
+      <button
+        class="dream-option-ui__settings-toggle"
+        type="button"
+        title="选项框设置"
+        aria-label="选项框设置"
+        aria-expanded="false"
+      >
+        <span aria-hidden="true">⚙</span>
+      </button>
+    </div>
+    <div class="dream-option-ui__settings" hidden>
+      <div class="dream-option-ui__settings-row">
+        <span class="dream-option-ui__settings-label">面板皮肤</span>
+        <div class="dream-option-ui__theme-list" role="group" aria-label="面板皮肤"></div>
+      </div>
+      <div class="dream-option-ui__settings-row">
+        <span class="dream-option-ui__settings-label">点击选项</span>
+        <div class="dream-option-ui__mode-list" role="group" aria-label="点击选项行为"></div>
+      </div>
+    </div>
+    <div class="dream-option-ui__list" role="list"></div>
+    <p class="dream-option-ui__empty" hidden>没有可显示的梦境选项</p>
+  </section>
+</div>

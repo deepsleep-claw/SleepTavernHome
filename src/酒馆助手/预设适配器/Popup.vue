@@ -1735,6 +1735,10 @@ function closeDebugTextModal() {
   color: var(--SmartThemeBodyColor);
   text-align: left;
   cursor: pointer;
+  transition:
+    border-color 160ms ease,
+    background-color 160ms ease,
+    box-shadow 160ms ease;
 }
 
 .preset-adapter-option:disabled {
@@ -1791,7 +1795,21 @@ function closeDebugTextModal() {
   white-space: pre-line;
 }
 
-.preset-adapter-option-active .preset-adapter-option-main i {
+.preset-adapter-option-active:not(.preset-adapter-option-export-mode) {
+  border-color: var(--SmartThemeUnderlineColor);
+  background-color: color-mix(in srgb, var(--SmartThemeUnderlineColor) 18%, var(--black30a) 82%);
+  box-shadow:
+    inset 3px 0 0 var(--SmartThemeUnderlineColor),
+    inset 0 0 0 1px color-mix(in srgb, var(--SmartThemeUnderlineColor) 42%, transparent);
+}
+
+.preset-adapter-option-active:not(.preset-adapter-option-export-mode):not(:disabled):hover {
+  border-color: var(--SmartThemeUnderlineColor);
+  background-color: color-mix(in srgb, var(--SmartThemeUnderlineColor) 24%, var(--black30a) 76%);
+}
+
+.preset-adapter-option-active .preset-adapter-option-main i,
+.preset-adapter-option-active .preset-adapter-option-title > span {
   color: var(--SmartThemeUnderlineColor);
 }
 

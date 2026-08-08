@@ -267,6 +267,7 @@ function squashAdjacentMessage(
 
 function squashChatHistory(prompts: SillyTavern.SendingMessage[], settings: Settings): SillyTavern.SendingMessage[] {
   // TODO: zod encode
+  const substituteFloor = (content: string, floor: number) => content.replaceAll('${floor}', floor.toString());
   const prefix = {
     system: substitudeMacros(settings.chat_history.system_prefix),
     assistant: substitudeMacros(settings.chat_history.assistant_prefix),
@@ -278,20 +279,23 @@ function squashChatHistory(prompts: SillyTavern.SendingMessage[], settings: Sett
     user: substitudeMacros(settings.chat_history.user_suffix),
   };
 
-  const tagContent = (prompt: SillyTavern.SendingMessage) =>
+  const tagContent = (prompt: SillyTavern.SendingMessage, floor: number) =>
     updatePromptContentWith(
       prompt,
       ({ role, content }) => {
-        content = content.includes(prefix[role]) ? content : prefix[role] + content;
-        content = content.includes(suffix[role]) ? content : content + suffix[role];
+        const prompt_prefix = substituteFloor(prefix[role], floor);
+        const prompt_suffix = substituteFloor(suffix[role], floor);
+        content = content.includes(prompt_prefix) ? content : prompt_prefix + content;
+        content = content.includes(prompt_suffix) ? content : content + prompt_suffix;
         return content;
       },
       settings,
     );
 
+  let floor = 0;
   return chunkBy(prompts, (lhs, rhs) => typeof lhs.content === 'string' && typeof rhs.content === 'string').map(
     chunk => {
-      chunk.forEach(tagContent);
+      chunk.forEach(prompt => tagContent(prompt, ++floor));
 
       return {
         role: settings.chat_history.squash_role,
@@ -331,6 +335,20 @@ type ActivatedWorldbookEntry = {
   content_hash: string;
   has_source_macro: boolean;
   is_selective: boolean;
+};
+
+type WorldbookCustomRoute = {
+  tag: string;
+  placeholder: string;
+};
+
+type WorldbookCustomRouteRule = WorldbookCustomRoute & {
+  title_regex: RegExp;
+};
+
+type WorldbookCustomRouting = {
+  rules: WorldbookCustomRouteRule[];
+  entry_routes: Map<string, WorldbookCustomRoute>;
 };
 
 const FLATTENED_WORLDBOOK_POSITION: Record<number, WorldbookExtractionPosition> = {
@@ -1292,6 +1310,7 @@ type SortableWorldbookExtractionItem = Pick<
   'position' | 'depth' | 'order' | 'index'
 > & {
   part_index?: number;
+  stable_key?: string;
 };
 
 function sortWorldbookExtractionItems<T extends SortableWorldbookExtractionItem>(entries: T[], settings: Settings): T[] {
@@ -1313,6 +1332,11 @@ function sortWorldbookExtractionItems<T extends SortableWorldbookExtractionItem>
 
     if (lhs.order !== rhs.order) {
       return lhs.order - rhs.order;
+    }
+
+    const stable_key_difference = (lhs.stable_key ?? '').localeCompare(rhs.stable_key ?? '');
+    if (stable_key_difference !== 0) {
+      return stable_key_difference;
     }
 
     if (lhs.index !== rhs.index) {
@@ -1347,6 +1371,65 @@ function replacePlaceholderInPrompts(
   prompts.forEach(prompt => {
     updatePromptContentWith(prompt, ({ content }) => content.replaceAll(placeholder, replacement), settings);
   });
+}
+
+function getWorldbookCustomPlaceholder(tag: string): string {
+  return `{{压缩相邻消息::lora_custom::${tag}}}`;
+}
+
+function findWorldbookCustomRoute(
+  rules: WorldbookCustomRouteRule[],
+  name: string,
+): WorldbookCustomRoute | undefined {
+  for (const rule of rules) {
+    // parseTavernRegex 会移除 g；仍重置 lastIndex，避免用户填入 y 时影响后续条目。
+    rule.title_regex.lastIndex = 0;
+    if (rule.title_regex.test(name)) {
+      return rule;
+    }
+  }
+  return undefined;
+}
+
+function buildWorldbookCustomRouting(
+  activated_entries: ActivatedWorldbookEntry[],
+  prompts: SillyTavern.SendingMessage[],
+  settings: Settings,
+): WorldbookCustomRouting {
+  const rules: WorldbookCustomRouteRule[] = [];
+  const warned_invalid_patterns = new Set<string>();
+
+  settings.entry_processing.worldbook.custom_routes.forEach(({ title_regex, tag }) => {
+    const normalized_pattern = title_regex.trim();
+    const normalized_tag = tag.trim();
+    if (!normalized_pattern || !normalized_tag) {
+      return;
+    }
+
+    const parsed_regex = parseTavernRegex(normalized_pattern);
+    if (!parsed_regex) {
+      if (!warned_invalid_patterns.has(normalized_pattern)) {
+        warned_invalid_patterns.add(normalized_pattern);
+        console.warn('[压缩相邻消息] 已忽略无效的世界书标题正则', normalized_pattern);
+      }
+      return;
+    }
+
+    const placeholder = getWorldbookCustomPlaceholder(normalized_tag);
+    if (getPromptsWithPlaceholder(prompts, placeholder, settings).length === 0) {
+      return;
+    }
+    rules.push({ title_regex: parsed_regex, tag: normalized_tag, placeholder });
+  });
+
+  const entry_routes = new Map<string, WorldbookCustomRoute>();
+  activated_entries.forEach(entry => {
+    const route = findWorldbookCustomRoute(rules, entry.name);
+    if (route) {
+      entry_routes.set(entry.key, route);
+    }
+  });
+  return { rules, entry_routes };
 }
 
 function restoreUnconsumedRegexedWorldbookMarkers(
@@ -2500,6 +2583,7 @@ function processAggressiveGreenCache(
   settings: Settings,
   worldbook_entry_metadata: Map<string, WorldbookEntryMetadata>,
   loaded_worldbook_names: Set<string>,
+  custom_routing: WorldbookCustomRouting,
   debug_state?: WorldbookExtractionDebugState,
 ): Set<string> {
   const handled_entry_keys = new Set<string>();
@@ -2513,16 +2597,21 @@ function processAggressiveGreenCache(
   const valid_cache_entries = chooseFirstGreenCacheEntries(valid_cache.entries);
   const valid_cache_changed = valid_cache.changed || valid_cache.entries.length !== valid_cache_entries.length;
   const insertion_locations = buildGreenCacheInsertionLocationMap(chunks, settings, green_cache_debug);
+  const suppressed_cache_identities = new Set(
+    valid_cache_entries
+      .filter(entry => findWorldbookCustomRoute(custom_routing.rules, entry.name))
+      .map(getGreenCacheIdentity),
+  );
   const injectable_cache_entries = valid_cache_entries.filter(entry =>
+    !suppressed_cache_identities.has(getGreenCacheIdentity(entry)) &&
     canInsertGreenCacheAnchor(entry.fixed_at, insertion_locations),
   );
   const fixed_cache_identities = new Map(valid_cache_entries.map(entry => [getGreenCacheIdentity(entry), entry] as const));
   const new_anchor = getLatestUnhiddenChatAnchor();
   const can_insert_new_anchor = canInsertGreenCacheAnchor(new_anchor, insertion_locations);
   const new_cache_entries: GreenCacheEntry[] = [];
-  const suppressed_cache_identities = new Set<string>();
   const aggressive_entries = sortActivatedWorldbookEntries(
-    activated_entries.filter(entry => isAggressiveGreenEntry(entry)),
+    activated_entries.filter(entry => isAggressiveGreenEntry(entry) && !custom_routing.entry_routes.has(entry.key)),
     settings,
   );
   const wrapper_prompt_index = aggressive_entries.some(entry => entry.wrapper_id)
@@ -2793,6 +2882,7 @@ function getWorldbookExtractionItems(entry: ActivatedWorldbookEntry): WorldbookE
       order: entry.order,
       index: entry.index,
       part_index,
+      stable_key: `${entry.key}.getwi.${part_index}`,
       content_candidates: getContentCandidates(part.content_candidates),
       wrapper_id: part.wrapper_id,
       target_key: part.target_key,
@@ -2811,6 +2901,7 @@ function getWorldbookExtractionItems(entry: ActivatedWorldbookEntry): WorldbookE
       depth: entry.depth,
       order: entry.order,
       index: entry.index,
+      stable_key: entry.key,
       content_candidates: getWorldbookEntryContentCandidates(entry),
       wrapper_id: entry.wrapper_id,
       preconsumed_content: entry.preconsumed_content,
@@ -2899,30 +2990,18 @@ function extractWorldbookEntriesToPlaceholders(
   flattened_chunks: SillyTavern.SendingMessage[],
   activated_entries: ActivatedWorldbookEntry[],
   settings: Settings,
+  custom_routing: WorldbookCustomRouting,
   debug_state?: WorldbookExtractionDebugState,
 ) {
   const { constant, keyed } = settings.entry_processing.worldbook;
 
-  const applyExtraction = (
-    enabled: boolean,
-    placeholder: string,
-    trigger_type: ActivatedWorldbookEntry['trigger_type'],
-  ) => {
-    if (!enabled) {
-      return;
-    }
-
+  const applyExtraction = (placeholder: string, extraction_entries: WorldbookExtractionItem[], trigger_type: string) => {
     const placeholder_prompts = getPromptsWithPlaceholder(flattened_chunks, placeholder, settings);
     if (placeholder_prompts.length === 0) {
       return;
     }
 
-    const entries = sortWorldbookExtractionItems(
-      sortActivatedWorldbookEntries(activated_entries, settings)
-        .flatMap(getWorldbookExtractionItems)
-        .filter(entry => entry.trigger_type === trigger_type),
-      settings,
-    );
+    const entries = sortWorldbookExtractionItems(extraction_entries, settings);
     const wrapper_prompt_index = entries.some(entry => entry.wrapper_id)
       ? buildWorldbookWrapperPromptIndex(flattened_chunks, settings)
       : undefined;
@@ -2993,8 +3072,42 @@ function extractWorldbookEntriesToPlaceholders(
     replacePlaceholderInPrompts(replacement_prompts, placeholder, placeholder_content, settings);
   };
 
-  applyExtraction(constant.enabled, constant.placeholder, 'constant');
-  applyExtraction(keyed.enabled, keyed.placeholder, 'keyed');
+  const getExtractionItems = (entries: ActivatedWorldbookEntry[]) =>
+    sortActivatedWorldbookEntries(entries, settings).flatMap(getWorldbookExtractionItems);
+  const entries_by_placeholder = new Map<string, ActivatedWorldbookEntry[]>();
+  custom_routing.rules.forEach(route => {
+    if (!entries_by_placeholder.has(route.placeholder)) {
+      entries_by_placeholder.set(route.placeholder, []);
+    }
+  });
+  activated_entries.forEach(entry => {
+    const route = custom_routing.entry_routes.get(entry.key);
+    if (route) {
+      entries_by_placeholder.get(route.placeholder)!.push(entry);
+    }
+  });
+  entries_by_placeholder.forEach((entries, placeholder) => {
+    applyExtraction(placeholder, getExtractionItems(entries), 'custom');
+  });
+
+  const default_entries = activated_entries.filter(entry => !custom_routing.entry_routes.has(entry.key));
+  applyExtraction(
+    constant.placeholder,
+    constant.enabled
+      ? getExtractionItems(default_entries).filter(entry => entry.trigger_type === 'constant')
+      : [],
+    'constant',
+  );
+  applyExtraction(
+    keyed.placeholder,
+    keyed.enabled ? getExtractionItems(default_entries).filter(entry => entry.trigger_type === 'keyed') : [],
+    'keyed',
+  );
+
+  // 提取内容本身也可能再次带入默认占位符；无论对应条目是否成功提取，都不能将宏原样发送给模型。
+  [constant.placeholder, keyed.placeholder].filter(Boolean).forEach(placeholder => {
+    replacePlaceholderInPrompts(flattened_chunks, placeholder, '', settings);
+  });
 }
 
 function listenEvent(settings: Settings, separators: Separators, shouldEnable: () => boolean) {
@@ -3229,6 +3342,11 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
     if (settings.entry_processing.mode === 'worldbook') {
       const activated_entries = [...activated_worldbook_entries.values()];
       const flattened_chunks_before_worldbook = _.flatten(chunks);
+      const custom_routing = buildWorldbookCustomRouting(
+        activated_entries,
+        flattened_chunks_before_worldbook,
+        settings,
+      );
       const handled_entry_keys = processAggressiveGreenCache(
         chunks,
         flattened_chunks_before_worldbook,
@@ -3236,12 +3354,14 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
         settings,
         worldbook_entry_metadata,
         loaded_worldbook_names,
+        custom_routing,
         worldbook_extraction_debug,
       );
       extractWorldbookEntriesToPlaceholders(
         flattened_chunks_before_worldbook,
         activated_entries.filter(entry => !handled_entry_keys.has(entry.key)),
         settings,
+        custom_routing,
         worldbook_extraction_debug,
       );
       restoreUnconsumedRegexedWorldbookMarkers(flattened_chunks_before_worldbook, regexed_worldbook_intercepts, settings);

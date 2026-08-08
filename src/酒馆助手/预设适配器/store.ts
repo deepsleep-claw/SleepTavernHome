@@ -1032,7 +1032,6 @@ function addEffectOptionError(errors: Map<string, string[]>, key: string, messag
 
 function getEffectOptionErrors(config: AdapterConfig): Map<string, string[]> {
   const errors = new Map<string, string[]>();
-  const owners = new Map<string, Array<{ key: string; label: string }>>();
 
   config.groups.forEach(group => {
     group.options.filter(isPresetAdapterOption).forEach(option => {
@@ -1040,24 +1039,11 @@ function getEffectOptionErrors(config: AdapterConfig): Map<string, string[]> {
       option.effect.forEach(effect => {
         if (!SUPPORTED_EFFECT_IDS.has(effect)) {
           addEffectOptionError(errors, key, `选项组“${group.label}”的“${option.label}”使用了未知 effect：${effect}`);
-          return;
         }
-        const effect_owners = owners.get(effect) ?? [];
-        effect_owners.push({ key, label: `${group.label}/${option.label}` });
-        owners.set(effect, effect_owners);
       });
     });
   });
 
-  owners.forEach((effect_owners, effect) => {
-    if (effect_owners.length <= 1) {
-      return;
-    }
-    const owner_labels = effect_owners.map(owner => owner.label).join('、');
-    effect_owners.forEach(owner => {
-      addEffectOptionError(errors, owner.key, `effect“${effect}”被多个选项重复配置：${owner_labels}`);
-    });
-  });
   return errors;
 }
 

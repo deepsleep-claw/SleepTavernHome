@@ -1,0 +1,215 @@
+.dream-paraller-event-ui {
+  --dream-paraller-accent: var(--SmartThemeQuoteColor, #ba7c4c);
+  --dream-paraller-text: var(--SmartThemeBodyColor, #ded9d2);
+  --dream-paraller-border: var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.36));
+  --dream-paraller-bg: var(--SmartThemeBlurTintColor, rgba(20, 18, 24, 0.72));
+  --dream-paraller-shadow: var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.22));
+
+  display: block !important;
+  max-width: 100%;
+  margin: 0.5rem 0 !important;
+  color: var(--dream-paraller-text);
+  line-height: 1.55 !important;
+  overflow-wrap: anywhere;
+}
+
+.dream-paraller-event-ui * {
+  box-sizing: border-box;
+}
+
+.dream-paraller-event-ui__panel {
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--dream-paraller-border) 78%, transparent);
+  border-radius: 0.7rem;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--dream-paraller-accent) 10%, transparent), transparent 48%),
+    color-mix(in srgb, var(--dream-paraller-bg) 78%, transparent);
+  box-shadow:
+    0 0.45rem 1.2rem color-mix(in srgb, var(--dream-paraller-shadow) 70%, transparent),
+    inset 0 1px 0 color-mix(in srgb, var(--dream-paraller-accent) 14%, transparent);
+}
+
+.dream-paraller-event-ui__summary {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0.68rem 0.82rem !important;
+  color: var(--dream-paraller-text);
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+.dream-paraller-event-ui__summary::-webkit-details-marker {
+  display: none;
+}
+
+.dream-paraller-event-ui__summary:hover {
+  background: color-mix(in srgb, var(--dream-paraller-accent) 8%, transparent);
+}
+
+.dream-paraller-event-ui__summary:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--dream-paraller-accent) 78%, transparent);
+  outline-offset: -2px;
+}
+
+.dream-paraller-event-ui__mark {
+  position: relative;
+  width: 1.1rem;
+  height: 1.1rem;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--dream-paraller-accent) 78%, transparent);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--dream-paraller-accent) 13%, transparent);
+}
+
+.dream-paraller-event-ui__mark::before,
+.dream-paraller-event-ui__mark::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 0.38rem;
+  border-top: 1px solid var(--dream-paraller-accent);
+}
+
+.dream-paraller-event-ui__mark::before {
+  left: -0.28rem;
+  transform: rotate(-34deg);
+}
+
+.dream-paraller-event-ui__mark::after {
+  right: -0.28rem;
+  transform: rotate(34deg);
+}
+
+.dream-paraller-event-ui__title {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dream-paraller-event-ui__meta {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0.08rem 0.45rem !important;
+  border: 1px solid color-mix(in srgb, var(--dream-paraller-accent) 42%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--dream-paraller-accent) 11%, transparent);
+  color: color-mix(in srgb, var(--dream-paraller-text) 86%, var(--dream-paraller-accent));
+  font-size: 0.78em;
+  font-weight: 650;
+  line-height: 1.45 !important;
+}
+
+.dream-paraller-event-ui__chevron {
+  width: 0.5rem;
+  height: 0.5rem;
+  flex: 0 0 auto;
+  border-right: 2px solid var(--dream-paraller-accent);
+  border-bottom: 2px solid var(--dream-paraller-accent);
+  transform: rotate(45deg) translate(-0.08rem, -0.08rem);
+  transition: transform 0.18s ease;
+}
+
+.dream-paraller-event-ui__panel[open] .dream-paraller-event-ui__chevron {
+  transform: rotate(225deg) translate(-0.08rem, -0.08rem);
+}
+
+.dream-paraller-event-ui__content {
+  padding: 0 0.82rem 0.78rem !important;
+}
+
+.dream-paraller-event-ui__events {
+  border-top: 1px solid color-mix(in srgb, var(--dream-paraller-border) 54%, transparent);
+}
+
+.dream-paraller-event-ui__event {
+  min-width: 0;
+  padding: 0.78rem 0.12rem !important;
+}
+
+.dream-paraller-event-ui__event + .dream-paraller-event-ui__event {
+  border-top: 1px dashed color-mix(in srgb, var(--dream-paraller-accent) 38%, var(--dream-paraller-border));
+}
+
+.dream-paraller-event-ui__event-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+  margin-bottom: 0.42rem !important;
+}
+
+.dream-paraller-event-ui__event-index {
+  flex: 0 0 auto;
+  color: color-mix(in srgb, var(--dream-paraller-accent) 86%, var(--dream-paraller-text));
+  font-size: 0.72em;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.dream-paraller-event-ui__location {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  padding: 0.15rem 0.52rem !important;
+  border-left: 2px solid var(--dream-paraller-accent);
+  background: color-mix(in srgb, var(--dream-paraller-accent) 10%, transparent);
+  color: color-mix(in srgb, var(--dream-paraller-text) 90%, var(--dream-paraller-accent));
+  font-size: 0.86em;
+  font-weight: 700;
+  line-height: 1.4 !important;
+  overflow-wrap: anywhere;
+}
+
+.dream-paraller-event-ui__description {
+  margin: 0 !important;
+  color: color-mix(in srgb, var(--dream-paraller-text) 91%, transparent);
+  font-size: 0.94em;
+  line-height: 1.64 !important;
+}
+
+.dream-paraller-event-ui__description-part {
+  display: block;
+  white-space: pre-line !important;
+}
+
+.dream-paraller-event-ui__description-part + .dream-paraller-event-ui__description-part {
+  margin-top: 0.32rem;
+}
+
+.dream-paraller-event-ui__empty {
+  margin: 0 !important;
+  padding: 0.78rem 0.12rem 0 !important;
+  border-top: 1px solid color-mix(in srgb, var(--dream-paraller-border) 54%, transparent);
+  color: color-mix(in srgb, var(--dream-paraller-text) 62%, transparent);
+  font-size: 0.88em;
+  text-align: center;
+}
+
+@media (max-width: 700px) {
+  .dream-paraller-event-ui__summary {
+    padding: 0.62rem 0.68rem !important;
+  }
+
+  .dream-paraller-event-ui__content {
+    padding: 0 0.68rem 0.66rem !important;
+  }
+
+  .dream-paraller-event-ui__event {
+    padding: 0.68rem 0.06rem !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dream-paraller-event-ui__chevron {
+    transition: none;
+  }
+}

@@ -1,0 +1,35 @@
+# 梦境平行事件正则UI
+
+用于将 `<dream_parallel_event>` 块渲染为默认折叠、可展开的平行事件面板。
+
+## 捕获格式
+
+```xml
+<dream_parallel_event>
+<simple_thinking>
+这里是不会显示在界面中的思考过程
+</simple_thinking>
+事件地点1|当前发生的平行事件1
+事件地点2|当前发生的平行事件2<br>同一事件内的换行
+</dream_parallel_event>
+```
+
+- `<simple_thinking>` 会被解析器完整移除，不参与渲染和事件计数。
+- 每个平行事件占一行，并在第一个半角竖线 `|` 处分为地点和描述。
+- 描述中的 `<br>` 会渲染为事件内部换行。
+- AI 错误地使用普通换行续写描述时，该行会并入前一个事件。
+- 展开后，每个事件之间显示分隔线，地点使用独立样式渲染。
+
+## 构建
+
+只构建本正则：
+
+```bash
+pnpm build:regex:dream-paraller-event
+```
+
+输出文件：
+
+```text
+dist/酒馆助手/梦境平行事件正则UI/梦境平行事件正则UI.json
+```

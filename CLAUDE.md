@@ -30,3 +30,6 @@
    `gh`/GitHub App 代替该 SSH 远端写入。
 9. 确认 Tag 已到达远端，并确认 `.github/workflows/release_script.yaml` 成功生成 GitHub Release 与附件。精确 Tag 的
    jsDelivr 入口和 Release 附件可访问后，再单独更新 `manifest.json`，将 `stable` 推进到新版本并另行提交、推送。
+
+## Codex额外设定
+若当前的Agent为Codex时，忽略chrome-mcp的要求，尽量使用内置浏览器进行Debug。除非用户主动要求使用mcp。

@@ -74,6 +74,22 @@
         >
       </Checkbox>
 
+      <Field label="按标题自定义提取">
+        <p class="TR-custom-route-hint">
+          左侧填写标题正则，右侧填写标签名。对应的自定义占位符在提示词中存在时规则才会生效；同一标签会合并，规则按从上到下优先。
+        </p>
+        <div
+          v-for="(route, index) in store.settings.entry_processing.worldbook.custom_routes"
+          :key="index"
+          class="TR-custom-route-row"
+        >
+          <input v-model="route.title_regex" class="text_pole" placeholder="标题正则，例如 /^剧情摘要-/i" />
+          <input v-model="route.tag" class="text_pole" placeholder="标签名，例如 story_archive" />
+          <button type="button" class="menu_button" @click="removeCustomRoute(index)">删除</button>
+        </div>
+        <button type="button" class="menu_button TR-custom-route-add" @click="addCustomRoute">添加映射</button>
+      </Field>
+
       <Field label="提取条目排序">
         <div
           v-for="(position, index) in store.settings.entry_processing.worldbook.position_order"
@@ -131,6 +147,14 @@ function movePosition(index: number, offset: -1 | 1) {
   [order[index], order[target_index]] = [order[target_index], order[index]];
 }
 
+function addCustomRoute() {
+  store.settings.entry_processing.worldbook.custom_routes.push({ title_regex: '', tag: '' });
+}
+
+function removeCustomRoute(index: number) {
+  store.settings.entry_processing.worldbook.custom_routes.splice(index, 1);
+}
+
 async function clearGreenCache() {
   const confirmed = await SillyTavern.callGenericPopup(
     '确定清空当前聊天的绿灯缓存吗？',
@@ -161,5 +185,32 @@ async function clearGreenCache() {
   min-width: max-content;
   white-space: nowrap;
   writing-mode: horizontal-tb;
+}
+
+.TR-custom-route-hint {
+  margin: 0 0 0.35rem;
+  color: var(--SmartThemeQuoteColor);
+  font-size: 0.9em;
+}
+
+.TR-custom-route-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.65fr) auto;
+  gap: 0.35rem;
+  margin-bottom: 0.35rem;
+}
+
+.TR-custom-route-add {
+  width: auto;
+}
+
+@media (max-width: 600px) {
+  .TR-custom-route-row {
+    grid-template-columns: 1fr auto;
+  }
+
+  .TR-custom-route-row input:first-child {
+    grid-column: 1 / -1;
+  }
 }
 </style>

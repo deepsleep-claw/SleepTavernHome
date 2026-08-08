@@ -1,0 +1,395 @@
+.dream-option-ui {
+  --dream-option-bg: var(--SmartThemeBlurTintColor, rgba(24, 22, 28, 0.82));
+  --dream-option-card: color-mix(in srgb, var(--dream-option-bg) 88%, white 5%);
+  --dream-option-card-hover: color-mix(in srgb, var(--dream-option-bg) 78%, var(--dream-option-accent) 12%);
+  --dream-option-border: var(--SmartThemeBorderColor, rgba(138, 132, 148, 0.42));
+  --dream-option-text: var(--SmartThemeBodyColor, #e4e0e8);
+  --dream-option-muted: color-mix(in srgb, var(--dream-option-text) 66%, transparent);
+  --dream-option-accent: var(--SmartThemeEmColor, #a58bdb);
+  --dream-option-shadow: var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.2));
+
+  display: block !important;
+  max-width: 100%;
+  margin: 0.5rem 0 !important;
+  color: var(--dream-option-text);
+  font-family: inherit;
+  overflow-wrap: anywhere;
+}
+
+.dream-option-ui[data-theme='white'] {
+  --dream-option-bg: #ffffff;
+  --dream-option-card: #fafaf8;
+  --dream-option-card-hover: #f1f2ef;
+  --dream-option-border: #d8d8d2;
+  --dream-option-text: #222222;
+  --dream-option-muted: #666862;
+  --dream-option-accent: #5f6f65;
+  --dream-option-shadow: rgba(24, 24, 24, 0.08);
+}
+
+.dream-option-ui[data-theme='light-yellow'] {
+  --dream-option-bg: #fffaf0;
+  --dream-option-card: #fff4d9;
+  --dream-option-card-hover: #ffeab8;
+  --dream-option-border: #ecd598;
+  --dream-option-text: #332817;
+  --dream-option-muted: #7a6642;
+  --dream-option-accent: #9a741a;
+  --dream-option-shadow: rgba(114, 80, 18, 0.11);
+}
+
+.dream-option-ui[data-theme='light-blue'] {
+  --dream-option-bg: #f4f9ff;
+  --dream-option-card: #eaf3ff;
+  --dream-option-card-hover: #dcecff;
+  --dream-option-border: #bdd4ee;
+  --dream-option-text: #172635;
+  --dream-option-muted: #526a81;
+  --dream-option-accent: #3778a9;
+  --dream-option-shadow: rgba(28, 72, 112, 0.1);
+}
+
+.dream-option-ui[data-theme='light-pink'] {
+  --dream-option-bg: #fff6f8;
+  --dream-option-card: #ffeef3;
+  --dream-option-card-hover: #ffe3eb;
+  --dream-option-border: #efc6d1;
+  --dream-option-text: #351d25;
+  --dream-option-muted: #76535d;
+  --dream-option-accent: #b45e78;
+  --dream-option-shadow: rgba(116, 45, 68, 0.1);
+}
+
+.dream-option-ui[data-theme='dark-blue'] {
+  --dream-option-bg: #111927;
+  --dream-option-card: #172335;
+  --dream-option-card-hover: #20314a;
+  --dream-option-border: #2c4260;
+  --dream-option-text: #e9f1fb;
+  --dream-option-muted: #aec0d2;
+  --dream-option-accent: #7fb1e3;
+  --dream-option-shadow: rgba(0, 0, 0, 0.24);
+}
+
+.dream-option-ui[data-theme='dark-purple'] {
+  --dream-option-bg: #1b1424;
+  --dream-option-card: #261b32;
+  --dream-option-card-hover: #332443;
+  --dream-option-border: #4b385f;
+  --dream-option-text: #f3edf8;
+  --dream-option-muted: #c9b9d5;
+  --dream-option-accent: #c7a2ed;
+  --dream-option-shadow: rgba(0, 0, 0, 0.25);
+}
+
+.dream-option-ui * {
+  box-sizing: border-box;
+}
+
+.dream-option-ui__panel {
+  display: flex;
+  max-width: 100%;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.58rem !important;
+  border: 1px solid color-mix(in srgb, var(--dream-option-border) 82%, transparent);
+  border-radius: 0.62rem;
+  background:
+    linear-gradient(150deg, color-mix(in srgb, var(--dream-option-accent) 7%, transparent), transparent 46%),
+    var(--dream-option-bg);
+  box-shadow:
+    0 0.65rem 1.5rem color-mix(in srgb, var(--dream-option-shadow) 82%, transparent),
+    inset 0 1px 0 color-mix(in srgb, white 12%, transparent);
+}
+
+.dream-option-ui__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0 0.08rem !important;
+}
+
+.dream-option-ui__title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dream-option-text);
+  font-size: 0.92em;
+  font-weight: 750;
+  letter-spacing: 0.06em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dream-option-ui__count {
+  flex: 0 0 auto;
+  color: var(--dream-option-muted);
+  font-size: 0.78em;
+}
+
+.dream-option-ui__settings-toggle,
+.dream-option-ui__theme,
+.dream-option-ui__mode,
+.dream-option-ui__option {
+  margin: 0;
+  color: var(--dream-option-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.dream-option-ui__settings-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 0 !important;
+  border: 1px solid color-mix(in srgb, var(--dream-option-border) 74%, transparent);
+  border-radius: 0.45rem;
+  background: var(--dream-option-card);
+  color: var(--dream-option-muted);
+  line-height: 1;
+  transition:
+    color 0.16s ease,
+    border-color 0.16s ease,
+    transform 0.16s ease;
+}
+
+.dream-option-ui__settings-toggle:hover,
+.dream-option-ui__settings-toggle[aria-expanded='true'] {
+  border-color: var(--dream-option-accent);
+  color: var(--dream-option-accent);
+  transform: rotate(12deg);
+}
+
+.dream-option-ui__settings-toggle:focus-visible,
+.dream-option-ui__theme:focus-visible,
+.dream-option-ui__mode:focus-visible,
+.dream-option-ui__option:focus-visible {
+  outline: 2px solid var(--dream-option-accent);
+  outline-offset: 2px;
+}
+
+.dream-option-ui__settings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 0.62rem !important;
+  border: 1px solid color-mix(in srgb, var(--dream-option-border) 64%, transparent);
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--dream-option-card) 82%, transparent);
+}
+
+.dream-option-ui__settings[hidden] {
+  display: none !important;
+}
+
+.dream-option-ui__settings-row {
+  display: grid;
+  grid-template-columns: 5rem minmax(0, 1fr);
+  gap: 0.55rem;
+  align-items: start;
+}
+
+.dream-option-ui__settings-label {
+  color: var(--dream-option-muted);
+  font-size: 0.82em;
+  line-height: 1.75rem !important;
+  white-space: nowrap;
+}
+
+.dream-option-ui__theme-list,
+.dream-option-ui__mode-list {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 0.36rem;
+}
+
+.dream-option-ui__theme,
+.dream-option-ui__mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  min-height: 1.75rem;
+  padding: 0.25rem 0.48rem !important;
+  border: 1px solid color-mix(in srgb, var(--dream-option-border) 70%, transparent);
+  border-radius: 0.42rem;
+  background: var(--dream-option-card);
+  font-size: 0.78em;
+  line-height: 1.2 !important;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.15s ease;
+}
+
+.dream-option-ui__theme:hover,
+.dream-option-ui__mode:hover {
+  border-color: var(--dream-option-accent);
+  background: var(--dream-option-card-hover);
+  transform: translateY(-1px);
+}
+
+.dream-option-ui__theme.is-active,
+.dream-option-ui__mode.is-active {
+  border-color: var(--dream-option-accent);
+  background: color-mix(in srgb, var(--dream-option-accent) 14%, var(--dream-option-card));
+  color: var(--dream-option-accent);
+}
+
+.dream-option-ui__swatch {
+  width: 0.72rem;
+  height: 0.72rem;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--dream-option-border) 80%, transparent);
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.dream-option-ui__swatch--tavern {
+  background: linear-gradient(135deg, var(--dream-option-accent) 0 48%, var(--dream-option-bg) 48% 100%);
+}
+
+.dream-option-ui__swatch--white {
+  background: #fff;
+}
+
+.dream-option-ui__swatch--light-yellow {
+  background: #ffe6a5;
+}
+
+.dream-option-ui__swatch--light-blue {
+  background: #cfe6ff;
+}
+
+.dream-option-ui__swatch--light-pink {
+  background: #ffd5e1;
+}
+
+.dream-option-ui__swatch--dark-blue {
+  background: #172335;
+}
+
+.dream-option-ui__swatch--dark-purple {
+  background: #261b32;
+}
+
+.dream-option-ui__list {
+  display: flex;
+  max-width: 100%;
+  flex-direction: column;
+  gap: 0.46rem;
+}
+
+.dream-option-ui__option {
+  display: grid;
+  grid-template-columns: 1.75rem minmax(0, 1fr);
+  align-items: start;
+  gap: 0.62rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.62rem 0.7rem !important;
+  border: 1px solid color-mix(in srgb, var(--dream-option-border) 72%, transparent);
+  border-radius: 0.5rem;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--dream-option-accent) 5%, transparent), transparent 46%),
+    var(--dream-option-card);
+  box-shadow: inset 2px 0 0 color-mix(in srgb, var(--dream-option-accent) 34%, transparent);
+  text-align: left;
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
+}
+
+.dream-option-ui__option:hover {
+  border-color: var(--dream-option-accent);
+  background: var(--dream-option-card-hover);
+  box-shadow:
+    inset 2px 0 0 var(--dream-option-accent),
+    0 0.4rem 1rem color-mix(in srgb, var(--dream-option-shadow) 70%, transparent);
+  transform: translateY(-1px);
+}
+
+.dream-option-ui__option:active,
+.dream-option-ui__option.is-pending {
+  transform: translateY(0);
+}
+
+.dream-option-ui__option.is-pending {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+.dream-option-ui__option-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 1px solid color-mix(in srgb, var(--dream-option-accent) 45%, transparent);
+  border-radius: 0.38rem;
+  background: color-mix(in srgb, var(--dream-option-accent) 12%, transparent);
+  color: var(--dream-option-accent);
+  font-size: 0.78em;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.dream-option-ui__option-text {
+  min-width: 0;
+  padding-top: 0.08rem;
+  color: var(--dream-option-text);
+  font-size: 0.94em;
+  line-height: 1.55 !important;
+  white-space: pre-line !important;
+  overflow-wrap: anywhere;
+}
+
+.dream-option-ui__empty {
+  margin: 0 !important;
+  padding: 0.65rem !important;
+  color: var(--dream-option-muted);
+  font-size: 0.88em;
+  text-align: center;
+}
+
+@media (max-width: 700px) {
+  .dream-option-ui__panel {
+    padding: 0.5rem !important;
+  }
+
+  .dream-option-ui__settings-row {
+    grid-template-columns: 1fr;
+    gap: 0.3rem;
+  }
+
+  .dream-option-ui__settings-label {
+    line-height: 1.35 !important;
+  }
+
+  .dream-option-ui__option {
+    grid-template-columns: 1.55rem minmax(0, 1fr);
+    gap: 0.52rem;
+    padding: 0.56rem 0.6rem !important;
+  }
+
+  .dream-option-ui__option-index {
+    width: 1.55rem;
+    height: 1.55rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dream-option-ui__settings-toggle,
+  .dream-option-ui__theme,
+  .dream-option-ui__mode,
+  .dream-option-ui__option {
+    transition: none;
+  }
+}
