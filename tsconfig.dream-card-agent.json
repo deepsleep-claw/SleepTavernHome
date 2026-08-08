@@ -1,0 +1,26 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": [
+      "jquery",
+      "jqueryui",
+      "lodash",
+      "toastr",
+      "type-fest",
+      "yaml",
+      "zod",
+      "vitest/globals"
+    ]
+  },
+  "include": [
+    "@types/**/*.d.ts",
+    "src/酒馆助手/梦境创客/**/*.ts",
+    "src/酒馆助手/梦境创客/**/*.vue",
+    "auto-imports.d.ts",
+    "auto-imports.zod.d.ts",
+    "components.d.ts",
+    "global.d.ts"
+  ]
+}
