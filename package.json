@@ -1,7 +1,7 @@
 {
   "scripts": {
     "build:dev": "webpack --mode development",
-    "build": "pnpm run check:modern && pnpm run check:updater && pnpm run build:regex && webpack --mode production && pnpm run validate:updates",
+    "build": "pnpm run check:agent && pnpm run check:modern && pnpm run check:updater && pnpm run build:regex && webpack --mode production && pnpm run validate:updates",
     "build:regex": "node util/build_tavern_regexes.mjs",
     "build:regex:dream-big-discuss": "node util/build_tavern_regexes.mjs src/酒馆助手/梦境讨论正则UI",
     "build:regex:dream-discuss": "pnpm build:regex:dream-big-discuss",
