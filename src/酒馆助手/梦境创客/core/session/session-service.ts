@@ -112,7 +112,7 @@ export class CardAgentSessionService {
   private readonly adapter: CardStateAdapter;
   private compiledPreset: CompiledPreset;
   private readonly contextWindow: number;
-  private readonly executor: ModelStepExecutor;
+  private executor: ModelStepExecutor;
   private readonly lock: GlobalAgentTaskLock;
   private readonly now: () => number;
   private readonly onPersist?: SessionServiceOptions['onPersist'];
@@ -271,6 +271,18 @@ export class CardAgentSessionService {
     await this.persist();
   }
 
+  async setExecutor(executor: ModelStepExecutor): Promise<void> {
+    this.assertWritable();
+    if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status)) {
+      throw new Error('Agent运行期间不能切换API Profile。');
+    }
+    this.executor = executor;
+    if (this.runner && ['failed', 'stopped', 'context-exhausted'].includes(this.runner.state.status)) {
+      this.buildRunner(this.runner.state.status, this.runner.state.pending);
+    }
+    await this.persist();
+  }
+
   async send(message: string, userMessageId: string = crypto.randomUUID()): Promise<SessionView> {
     this.assertWritable();
     const text = message.trim();
@@ -302,6 +314,7 @@ export class CardAgentSessionService {
       } else {
         this.ui.push({ at: this.now(), checkpointId: checkpoint.id, content: text, id: userMessageId, kind: 'user' });
       }
+      this.syncUiVisibility();
       this.repository = this.createRepository(base);
       await this.refreshCompiledHeader();
       this.buildRunner();
@@ -385,6 +398,7 @@ export class CardAgentSessionService {
         afterSnapshot,
         stopped: this.pending.stopped,
       });
+      this.syncUiVisibility();
       this.pending = undefined;
       this.activeCheckpointId = undefined;
       this.activeBase = undefined;
@@ -406,7 +420,7 @@ export class CardAgentSessionService {
     this.assertWritable();
     const restore = this.timeline.undoToUserMessage(messageId);
     if (!restore) throw new Error('该消息当前不能回退。');
-    return this.restoreSnapshot(restore, 'undo');
+    return this.restoreSnapshot(restore);
   }
 
   async redo(): Promise<SessionView> {
@@ -566,13 +580,10 @@ export class CardAgentSessionService {
     }
     const restore = direction === 'undo' ? this.timeline.undo() : this.timeline.redo();
     if (!restore) throw new Error(direction === 'undo' ? '没有可回退的修改。' : '没有可重做的修改。');
-    return this.restoreSnapshot(restore, direction);
+    return this.restoreSnapshot(restore);
   }
 
-  private async restoreSnapshot(
-    restore: { checkpointId: string; snapshot: string },
-    direction: 'redo' | 'undo',
-  ): Promise<SessionView> {
+  private async restoreSnapshot(restore: { checkpointId: string; snapshot: string }): Promise<SessionView> {
     this.lock.acquire(this.sessionId);
     try {
       const payload = await this.snapshots.get<SessionSnapshotPayload>(restore.snapshot);
@@ -590,12 +601,7 @@ export class CardAgentSessionService {
       this.modelMessages = payload.modelMessages;
       this.events = payload.events;
       this.repository = this.createRepository(result.state);
-      const checkpoint = this.timeline.export().checkpoints.find(item => item.id === restore.checkpointId);
-      if (checkpoint) {
-        this.ui.forEach(item => {
-          if (item.checkpointId === checkpoint.id && item.kind !== 'user') item.hidden = direction === 'undo';
-        });
-      }
+      this.syncUiVisibility();
       this.status = 'completed';
       this.lastError = undefined;
       await this.persist();
@@ -684,11 +690,31 @@ export class CardAgentSessionService {
   }
 
   private async persist(): Promise<void> {
+    this.timeline.cleanupAbandoned();
     await this.onPersist?.(this.exportRuntime(), this.repository?.snapshot() ?? []);
     this.notify();
   }
 
   private notify(): void {
     this.onUpdate?.(this.view());
+  }
+
+  private syncUiVisibility(): void {
+    const history = this.timeline.export();
+    const active = history.checkpoints.filter(checkpoint => checkpoint.active);
+    const positionById = new Map(active.map((checkpoint, index) => [checkpoint.id, index]));
+    for (const item of this.ui) {
+      if (!item.checkpointId) continue;
+      const index = positionById.get(item.checkpointId);
+      if (index === undefined) {
+        item.hidden = true;
+      } else if (index <= history.position) {
+        item.hidden = false;
+      } else if (index === history.position + 1) {
+        item.hidden = item.kind !== 'user';
+      } else {
+        item.hidden = true;
+      }
+    }
   }
 }

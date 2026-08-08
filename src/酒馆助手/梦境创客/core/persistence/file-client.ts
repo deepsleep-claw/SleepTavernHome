@@ -94,7 +94,10 @@ export class FileBackedBlobStore implements BinaryBlobStore {
   }
 
   async keys(): Promise<string[]> {
-    return Object.keys(this.settingsStore.load().files).sort();
+    return Object.entries(this.settingsStore.load().files)
+      .filter(([key, item]) => item.bindingId === this.bindingId && !key.startsWith('session:') && !key.startsWith('lease:'))
+      .map(([key]) => key)
+      .sort();
   }
 
   async put(key: string, value: Uint8Array): Promise<void> {

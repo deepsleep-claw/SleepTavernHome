@@ -46,4 +46,18 @@ describe('Tavern file clients', () => {
     expect(await store.get('hash-a')).toBeUndefined();
     await expect(store.delete('missing')).resolves.toBeUndefined();
   });
+
+  it('快照Blob枚举不会误包含会话文件、租约或其他角色文件', async () => {
+    const client = new MemoryTavernFileClient();
+    const settings = new MemoryAgentSettingsStore();
+    const current = new FileBackedBlobStore('role-a', client, settings);
+    const other = new FileBackedBlobStore('role-b', client, settings);
+    await current.put('snapshot-a', Uint8Array.of(1));
+    await other.put('snapshot-b', Uint8Array.of(2));
+    const value = settings.load();
+    value.files['session:x'] = { bindingId: 'role-a', createdAt: 1, name: 'x', size: 1, url: '/x' };
+    value.files['lease:x'] = { bindingId: 'role-a', createdAt: 1, name: 'l', size: 1, url: '/l' };
+    await settings.save(value);
+    expect(await current.keys()).toEqual(['snapshot-a']);
+  });
 });

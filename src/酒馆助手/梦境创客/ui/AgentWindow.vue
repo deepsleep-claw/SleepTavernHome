@@ -70,6 +70,11 @@
               />
               <span>YOLO</span>
             </label>
+            <select v-model="selectedSessionId" :disabled="isRunning || state.busy" title="切换当前角色的会话" @change="switchActiveSession">
+              <option :value="state.active.sessionId">当前会话</option>
+              <option v-for="session in currentSessions.filter(item => item.sessionId !== state.active?.sessionId)" :key="session.sessionId" :value="session.sessionId">{{ session.title }}</option>
+            </select>
+            <button type="button" :disabled="isRunning || Boolean(state.active.approval) || state.busy" @click="createSession">新会话</button>
           </div>
 
           <div ref="timelineElement" class="dca-timeline">
@@ -270,7 +275,9 @@
           <details open><summary>最近事件</summary><pre>{{ pretty(state.active?.events.slice(-100) ?? []) }}</pre></details>
           <details><summary>当前页面内存日志</summary><pre>{{ pretty(state.debugLogs.slice(-100)) }}</pre></details>
           <details><summary>会话索引（已脱离创作正文）</summary><pre>{{ pretty(activeSessionIndex) }}</pre></details>
+          <button type="button" @click="copyDiagnostics">复制脱敏诊断包</button>
         </template>
+        <details v-if="orphanSessions.length"><summary>其他角色或孤立会话（{{ orphanSessions.length }}）</summary><ul><li v-for="session in orphanSessions" :key="session.sessionId">{{ session.characterName }} · {{ session.title }} · r{{ session.revision }}</li></ul></details>
       </section>
     </main>
 
@@ -353,6 +360,7 @@ const approvalChanges = computed(() => [...(state.value.active?.approval?.stateC
 const statusLabel = computed(() => ({ abnormal: '异常中断', 'awaiting-approval': '等待批准', committing: '提交中', completed: '已完成', 'context-exhausted': '上下文已满', failed: '失败', idle: '空闲', running: '运行中', stopped: '已停止', 'waiting-approval': '工具确认' }[state.value.active?.status ?? 'idle']));
 const sortedPresetNodes = computed(() => [...(presetDraft.value?.nodes ?? [])].sort((a, b) => a.order - b.order));
 const activeSessionIndex = computed(() => state.value.sessions.find(item => item.sessionId === state.value.active?.sessionId));
+const orphanSessions = computed(() => state.value.sessions.filter(item => item.bindingId !== state.value.currentCharacter?.bindingId));
 
 watch(() => state.value.active?.approval?.candidateSnapshot, () => {
   Object.keys(decisions).forEach(key => delete decisions[key]);
@@ -376,6 +384,7 @@ async function action(work: () => Promise<unknown>) { try { await work(); } catc
 async function refresh() { await action(() => runtime.refreshCharacter()); }
 async function createSession() { await action(async () => { await runtime.createSession(); activeTab.value = 'chat'; }); }
 async function openSelectedSession() { await action(async () => { await runtime.openSession(selectedSessionId.value); activeTab.value = 'chat'; }); }
+async function switchActiveSession() { if (selectedSessionId.value && selectedSessionId.value !== state.value.active?.sessionId) await openSelectedSession(); }
 async function takeOver() { await action(() => runtime.takeOverSession()); }
 async function send() { const text = message.value; message.value = ''; await action(() => runtime.send(text)); }
 async function resume() { await action(() => runtime.resume()); }
@@ -411,6 +420,7 @@ function formatTime(at: number) { return new Date(at).toLocaleTimeString([], { h
 function itemKindLabel(kind: SessionUiItem['kind']) { return ({ assistant: '梦境创客', guidance: '中途引导', status: '运行状态', tool: '工具调用', user: '你' })[kind]; }
 function cleanGuidance(value: string) { return value.replace(/<\/?mid_turn_guidance>/gu, '').replace('这是对当前未完成目标的中途补充，不是替换旧目标的新任务。', '').trim(); }
 function pretty(value: unknown) { return JSON.stringify(value, null, 2); }
+async function copyDiagnostics() { await navigator.clipboard.writeText(JSON.stringify(runtime.diagnosticBundle(), null, 2)); toastr.success('已复制脱敏诊断包', '梦境创客'); }
 </script>
 
 <style lang="scss">
@@ -443,6 +453,7 @@ function pretty(value: unknown) { return JSON.stringify(value, null, 2); }
 .dca-start-card h3,.dca-section-header h3 { margin:0; }
 .dca-start-card label,.dca-field { display:flex; flex-direction:column; gap:.3rem; margin:.7rem 0; }
 .dca-session-bar,.dca-section-header,.dca-editor header,.dca-skill-card header,.dca-preset-node header,.dca-diff-item>header { display:flex; align-items:center; justify-content:space-between; gap:.7rem; }
+.dca-session-bar select { width:auto; max-width:14rem; }
 .dca-switch { display:flex; align-items:center; gap:.4rem; }
 .dca-switch input { width:auto; }
 .dca-timeline { display:flex; flex:1 1 auto; min-height:12rem; flex-direction:column; gap:.6rem; overflow:auto; padding:.2rem; }

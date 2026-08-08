@@ -309,4 +309,27 @@ describe('card agent session service', () => {
     expect((await adapter.read()).character.fields.description).toBe('用户在文件编辑器写入');
     expect(service.view().ui.some(item => item.kind === 'user' && item.content.includes('手动编辑'))).toBe(true);
   });
+
+  it('从较早消息回退时隐藏其Agent结果和全部后续消息，重做按检查点逐步恢复', async () => {
+    const service = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      executor: new QueueExecutor([
+        step([writeDescription('第一轮', 'early-1')]),
+        step([], '第一轮回复'),
+        step([writeDescription('第二轮', 'early-2')]),
+        step([], '第二轮回复'),
+      ]),
+      lock: new GlobalAgentTaskLock(),
+      mode: 'yolo',
+      snapshots: snapshots(),
+    });
+    await service.send('第一条', 'early-user-1');
+    await service.send('第二条', 'early-user-2');
+    const undone = await service.undoToUserMessage('early-user-1');
+    expect(undone.ui.map(item => item.id)).toEqual(['early-user-1']);
+    const redone = await service.redo();
+    expect(redone.ui.some(item => item.content === '第一轮回复')).toBe(true);
+    expect(redone.ui.some(item => item.id === 'early-user-2')).toBe(true);
+    expect(redone.ui.some(item => item.content === '第二轮回复')).toBe(false);
+  });
 });

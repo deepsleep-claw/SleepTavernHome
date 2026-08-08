@@ -5,6 +5,7 @@ import type { CardWorkspaceState } from '../core/mapping/types';
 import { FileBackedBlobStore, GlobalTavernFileClient, type TavernFileClient } from '../core/persistence/file-client';
 import { PageDebugLog, type DebugLogEntry } from '../core/persistence/debug-log';
 import { LeaseCoordinator, TavernLeaseRecordStore } from '../core/persistence/lease';
+import { FileRegistryGarbageCollector } from '../core/persistence/garbage-collector';
 import { SessionPersistenceCoordinator } from '../core/persistence/session-persistence';
 import { SessionRevisionStore } from '../core/persistence/session-store';
 import {
@@ -66,7 +67,7 @@ export class DreamCardAgentRuntime {
   private readonly adapterFactory: () => CardStateAdapter;
   private readonly executorFactory: (profile: ApiProfile) => ModelStepExecutor;
   private readonly fileClient: TavernFileClient;
-  private readonly holderId?: string;
+  private readonly holderId: string;
   private readonly lock = new GlobalAgentTaskLock();
   private readonly log: PageDebugLog;
   private readonly now: () => number;
@@ -80,7 +81,7 @@ export class DreamCardAgentRuntime {
     this.adapterFactory = options.adapterFactory ?? (() => new ProductionCardStateAdapter(bridge));
     this.executorFactory = options.executorFactory ?? (profile => new ProfileModelStepExecutor(profile));
     this.fileClient = options.fileClient ?? new GlobalTavernFileClient();
-    this.holderId = options.holderId;
+    this.holderId = options.holderId ?? crypto.randomUUID();
     this.now = options.now ?? Date.now;
     this.log = new PageDebugLog(this.now);
     this.settingsStore = options.settingsStore ?? new TavernAgentSettingsStore();
@@ -122,6 +123,7 @@ export class DreamCardAgentRuntime {
   }
 
   async createSession(input: { mode?: SessionMode; profileId?: string; title?: string } = {}): Promise<SessionView> {
+    this.assertSessionSwitchAllowed();
     await this.run(async () => {
       const profile = this.requireProfile(input.profileId);
       const adapter = this.adapterFactory();
@@ -164,11 +166,13 @@ export class DreamCardAgentRuntime {
         name: current.character.name,
       };
       this.reloadSettingsState();
+      await this.collectStorageGarbage();
     });
     return this.requireService().view();
   }
 
   async openSession(sessionId: string, forceTakeover = false): Promise<SessionView> {
+    this.assertSessionSwitchAllowed();
     await this.run(async () => {
       const profile = this.requireProfile();
       const adapter = this.adapterFactory();
@@ -214,6 +218,7 @@ export class DreamCardAgentRuntime {
         name: current.character.name,
       };
       this.updateActive(service.view());
+      await this.collectStorageGarbage();
     });
     return this.requireService().view();
   }
@@ -289,27 +294,34 @@ export class DreamCardAgentRuntime {
     const existing = input.id ? registry.get(input.id) : undefined;
     const profile = existing ? await updateApiProfile(existing, input) : await createApiProfile(input);
     registry.save(profile);
+    this.assertProfileSwitchAllowed();
     const settings = this.settingsStore.load();
     settings.profiles = registry.list();
     settings.activeProfileId = profile.id;
     await this.settingsStore.save(settings);
+    await this.updateActiveExecutor(profile);
     this.reloadSettingsState();
     return profile;
   }
 
   async removeProfile(id: string): Promise<void> {
+    this.assertProfileSwitchAllowed();
     const settings = this.settingsStore.load();
     settings.profiles = settings.profiles.filter(profile => profile.id !== id);
     if (settings.activeProfileId === id) settings.activeProfileId = settings.profiles[0]?.id;
     await this.settingsStore.save(settings);
+    const next = settings.profiles.find(profile => profile.id === settings.activeProfileId);
+    if (next) await this.updateActiveExecutor(next);
     this.reloadSettingsState();
   }
 
   async selectProfile(id: string): Promise<void> {
     const settings = this.settingsStore.load();
     if (!settings.profiles.some(profile => profile.id === id)) throw new Error(`API Profile不存在：${id}`);
+    this.assertProfileSwitchAllowed();
     settings.activeProfileId = id;
     await this.settingsStore.save(settings);
+    await this.updateActiveExecutor(settings.profiles.find(profile => profile.id === id)!);
     this.reloadSettingsState();
   }
 
@@ -385,6 +397,27 @@ export class DreamCardAgentRuntime {
     return profile;
   }
 
+  private assertProfileSwitchAllowed(): void {
+    if (this.state.active && ['running', 'waiting-approval'].includes(this.state.active.status)) {
+      throw new Error('Agent运行期间不能切换API Profile。');
+    }
+  }
+
+  private assertSessionSwitchAllowed(): void {
+    if (
+      this.state.active &&
+      ['running', 'waiting-approval', 'committing', 'awaiting-approval'].includes(this.state.active.status)
+    ) {
+      throw new Error('请先完成或停止当前任务，并处理待批准修改后再切换会话。');
+    }
+  }
+
+  private async updateActiveExecutor(profile: ApiProfile): Promise<void> {
+    if (this.activeService && !this.state.active?.readOnly) {
+      await this.activeService.setExecutor(this.executorFactory(profile));
+    }
+  }
+
   private requireService(): CardAgentSessionService {
     if (!this.activeService) throw new Error('请先创建或打开一个Agent会话。');
     return this.activeService;
@@ -419,6 +452,14 @@ export class DreamCardAgentRuntime {
     this.activeLease?.close();
     this.activeLease = undefined;
     this.state.leaseOwned = false;
+  }
+
+  private async collectStorageGarbage(): Promise<void> {
+    try {
+      await new FileRegistryGarbageCollector(this.fileClient, this.settingsStore, this.now).collect();
+    } catch (error) {
+      this.addDebug('warn', '清理过期文件失败', { error: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   private async run(action: () => Promise<void>): Promise<DreamCardAgentRuntimeState> {

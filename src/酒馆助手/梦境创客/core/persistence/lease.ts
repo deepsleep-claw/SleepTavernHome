@@ -152,7 +152,12 @@ export class LeaseCoordinator {
 
   private startRefresh(): void {
     this.stopRefresh();
-    this.timer = setInterval(() => void this.refresh(), 10_000);
+    this.timer = setInterval(() => {
+      void this.refresh().catch(() => {
+        this.owner = false;
+        this.stopRefresh();
+      });
+    }, 10_000);
   }
 
   private stopRefresh(): void {
