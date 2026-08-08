@@ -3,7 +3,7 @@ import type { CardWorkspaceState } from '../mapping/types';
 import { applyStateOperation, type StateOperation } from './state-diff';
 
 export interface CardStateAdapter {
-  apply(operation: StateOperation): Promise<void>;
+  apply(operation: StateOperation): Promise<StateOperation | void>;
   read(): Promise<CardWorkspaceState>;
 }
 

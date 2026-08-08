@@ -459,13 +459,13 @@ export function materializeCardWorkspace(
   }
   state.character.greetings = materializeGreetings(base, files, warnings);
   state.character.extensions = klona(base.character.extensions);
+  const books = materializeBooks(base, files);
   state.character.extensions.card_agent = {
     ...asRecord(state.character.extensions.card_agent ?? {}, 'extensions.card_agent', '/character'),
     binding_id: state.character.bindingId,
     greetings: state.character.greetings.map(({ id, name }) => ({ id, name })),
+    worldbooks: books.map(({ name, resourceId }) => ({ id: resourceId, name })),
   };
-
-  const books = materializeBooks(base, files);
   const bindingsFile = files.get('/worldbooks/bindings.yaml');
   if (!bindingsFile) {
     throw new WorkspaceError('NOT_FOUND', 'worldbooks/bindings.yaml不能删除。', '/worldbooks/bindings.yaml');

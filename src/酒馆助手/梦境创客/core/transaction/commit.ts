@@ -2,7 +2,7 @@ import type { CardWorkspaceState } from '../mapping/types';
 import type { CardStateAdapter } from './adapter';
 import { canonicalEqual } from './canonical';
 import { prepareThreeWayMerge, resolveMerge, type ApprovalDecision, type MergePreparation } from './merge';
-import { readStatePath, type StateOperation } from './state-diff';
+import { applyStateOperation, readStatePath, type StateOperation } from './state-diff';
 
 export type CommitResult =
   | { preparation: MergePreparation; state: CardWorkspaceState; status: 'committed' }
@@ -46,8 +46,13 @@ export async function commitWorkingCopy(options: {
   const applied: StateOperation[] = [];
   try {
     for (const operation of operations) {
-      await options.adapter.apply(operation);
-      applied.push(operation);
+      const normalized = (await options.adapter.apply(operation)) || operation;
+      if (normalized !== operation) {
+        const index = resolved.operations.indexOf(operation);
+        if (index >= 0) resolved.operations[index] = normalized;
+        applyStateOperation(resolved.state, normalized);
+      }
+      applied.push(normalized);
     }
     const actual = await options.adapter.read();
     verifyOperations(resolved.state, actual, operations);
