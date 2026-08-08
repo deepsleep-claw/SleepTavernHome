@@ -3,6 +3,7 @@ import { ContentAddressedSnapshotStore } from '../core/history/snapshot-store';
 import { materializeCardWorkspace, projectCardWorkspace } from '../core/mapping/card-workspace-mapper';
 import type { CardWorkspaceState } from '../core/mapping/types';
 import { FileBackedBlobStore, GlobalTavernFileClient, type TavernFileClient } from '../core/persistence/file-client';
+import { PageDebugLog, type DebugLogEntry } from '../core/persistence/debug-log';
 import { LeaseCoordinator, TavernLeaseRecordStore } from '../core/persistence/lease';
 import { SessionPersistenceCoordinator } from '../core/persistence/session-persistence';
 import { SessionRevisionStore } from '../core/persistence/session-store';
@@ -23,6 +24,7 @@ import type { ToolConfirmation } from '../core/runner/tools';
 import { CardAgentSessionService } from '../core/session/session-service';
 import { GlobalAgentTaskLock } from '../core/session/task-lock';
 import type { SessionMode, SessionView } from '../core/session/types';
+import type { StructuredPreset } from '../core/preset/compiler';
 import { createGlobalTavernBridge, type TavernBridge } from '../core/tavern/bridge';
 import { ProductionCardStateAdapter } from '../core/tavern/production-adapter';
 import type { CardStateAdapter } from '../core/transaction/adapter';
@@ -34,10 +36,12 @@ export type DreamCardAgentRuntimeState = {
   activeProfileId?: string;
   busy: boolean;
   currentCharacter?: { avatarId: string; bindingId: string; name: string };
+  debugLogs: DebugLogEntry[];
   developerMode: boolean;
   error?: string;
   floatingButton: boolean;
   leaseOwned: boolean;
+  onboardingDone: boolean;
   profiles: ApiProfile[];
   sessions: SessionIndexEntry[];
   toolConfirmation?: ToolConfirmation;
@@ -64,6 +68,7 @@ export class DreamCardAgentRuntime {
   private readonly fileClient: TavernFileClient;
   private readonly holderId?: string;
   private readonly lock = new GlobalAgentTaskLock();
+  private readonly log: PageDebugLog;
   private readonly now: () => number;
   private readonly settingsStore: AgentSettingsStore;
   private readonly subscribers = new Set<Subscriber>();
@@ -77,14 +82,17 @@ export class DreamCardAgentRuntime {
     this.fileClient = options.fileClient ?? new GlobalTavernFileClient();
     this.holderId = options.holderId;
     this.now = options.now ?? Date.now;
+    this.log = new PageDebugLog(this.now);
     this.settingsStore = options.settingsStore ?? new TavernAgentSettingsStore();
     const settings = this.settingsStore.load();
     this.state = {
       activeProfileId: settings.activeProfileId,
       busy: false,
+      debugLogs: [],
       developerMode: settings.developerMode,
       floatingButton: settings.floatingButton,
       leaseOwned: false,
+      onboardingDone: settings.onboardingDone,
       profiles: settings.profiles,
       sessions: Object.values(settings.sessions).sort((left, right) => right.updatedAt - left.updatedAt),
       warnings: [],
@@ -231,12 +239,28 @@ export class DreamCardAgentRuntime {
     return this.runView(() => this.requireService().undo());
   }
 
+  async undoToUserMessage(messageId: string): Promise<SessionView> {
+    return this.runView(() => this.requireService().undoToUserMessage(messageId));
+  }
+
   async redo(): Promise<SessionView> {
     return this.runView(() => this.requireService().redo());
   }
 
   async resend(messageId: string): Promise<SessionView> {
     return this.runView(() => this.requireService().resend(messageId));
+  }
+
+  async writeWorkingFile(path: string, content: string): Promise<SessionView> {
+    return this.runView(() => this.requireService().writeWorkingFile(path, content));
+  }
+
+  async setMode(mode: SessionMode): Promise<void> {
+    this.requireService().setMode(mode);
+  }
+
+  async applyPreset(preset: StructuredPreset): Promise<void> {
+    await this.requireService().applyPreset(preset);
   }
 
   editUserMessage(messageId: string, content: string): void {
@@ -289,10 +313,11 @@ export class DreamCardAgentRuntime {
     this.reloadSettingsState();
   }
 
-  async updateSettings(input: { developerMode?: boolean; floatingButton?: boolean }): Promise<void> {
+  async updateSettings(input: { developerMode?: boolean; floatingButton?: boolean; onboardingDone?: boolean }): Promise<void> {
     const settings = this.settingsStore.load();
     if (input.developerMode !== undefined) settings.developerMode = input.developerMode;
     if (input.floatingButton !== undefined) settings.floatingButton = input.floatingButton;
+    if (input.onboardingDone !== undefined) settings.onboardingDone = input.onboardingDone;
     await this.settingsStore.save(settings);
     this.reloadSettingsState();
   }
@@ -301,6 +326,10 @@ export class DreamCardAgentRuntime {
     this.resolveToolConfirmation(false);
     this.closeLease();
     this.subscribers.clear();
+  }
+
+  diagnosticBundle(): DebugLogEntry[] {
+    return this.log.diagnosticBundle();
   }
 
   private createLease(sessionId: string, bindingId: string): LeaseCoordinator {
@@ -380,6 +409,7 @@ export class DreamCardAgentRuntime {
     this.state.activeProfileId = settings.activeProfileId;
     this.state.developerMode = settings.developerMode;
     this.state.floatingButton = settings.floatingButton;
+    this.state.onboardingDone = settings.onboardingDone;
     this.state.profiles = settings.profiles;
     this.state.sessions = Object.values(settings.sessions).sort((left, right) => right.updatedAt - left.updatedAt);
     this.emit();
@@ -395,10 +425,16 @@ export class DreamCardAgentRuntime {
     this.state.busy = true;
     this.state.error = undefined;
     this.emit();
+    this.addDebug('debug', '开始运行时操作');
     try {
       await action();
+      this.addDebug('debug', '运行时操作完成');
     } catch (error) {
       this.state.error = error instanceof Error ? error.message : String(error);
+      this.addDebug('error', this.state.error, {
+        name: error instanceof Error ? error.name : typeof error,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
       throw error;
     } finally {
       this.state.busy = false;
@@ -420,6 +456,12 @@ export class DreamCardAgentRuntime {
   private emit(): void {
     const snapshot = this.snapshot();
     this.subscribers.forEach(subscriber => subscriber(snapshot));
+  }
+
+  private addDebug(level: DebugLogEntry['level'], message: string, data?: unknown): void {
+    if (!this.state.developerMode) return;
+    this.log.add(level, message, data);
+    this.state.debugLogs = this.log.list();
   }
 }
 

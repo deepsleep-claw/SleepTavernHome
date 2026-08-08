@@ -50,6 +50,7 @@ describe('session lease', () => {
       developerMode: false,
       files: {},
       floatingButton: true,
+      onboardingDone: false,
       profiles: [],
       sessions: {
         s: {

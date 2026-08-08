@@ -19,6 +19,17 @@ describe('history timeline', () => {
     expect(timeline.redo()).toBeUndefined();
   });
 
+  it('可以从任意仍可见的用户消息直接回退', () => {
+    const timeline = new HistoryTimeline({ now: () => 1 });
+    const first = timeline.beginTurn({ beforeAgentCursor: 0, beforeSnapshot: 'before-1', userMessageId: 'u1' });
+    timeline.completeTurn(first.id, { afterAgentCursor: 1, afterSnapshot: 'after-1' });
+    const second = timeline.beginTurn({ beforeAgentCursor: 1, beforeSnapshot: 'before-2', userMessageId: 'u2' });
+    timeline.completeTurn(second.id, { afterAgentCursor: 2, afterSnapshot: 'after-2' });
+    expect(timeline.undoToUserMessage('u1')).toMatchObject({ snapshot: 'before-1', userMessageId: 'u1' });
+    expect(timeline.redo()).toMatchObject({ snapshot: 'after-1' });
+    expect(timeline.undoToUserMessage('missing')).toBeUndefined();
+  });
+
   it('从旧点重发会废弃未来分支但保留7天', () => {
     let now = 10_000;
     const timeline = new HistoryTimeline({ now: () => now });

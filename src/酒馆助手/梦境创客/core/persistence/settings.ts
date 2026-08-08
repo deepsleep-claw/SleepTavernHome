@@ -29,6 +29,7 @@ export type DreamCardAgentSettings = {
   developerMode: boolean;
   files: Record<string, StoredFileReference>;
   floatingButton: boolean;
+  onboardingDone: boolean;
   profiles: ApiProfile[];
   sessions: Record<string, SessionIndexEntry>;
   version: 1;
@@ -38,6 +39,7 @@ export const DEFAULT_DREAM_CARD_AGENT_SETTINGS: DreamCardAgentSettings = {
   developerMode: false,
   files: {},
   floatingButton: true,
+  onboardingDone: false,
   profiles: [],
   sessions: {},
   version: 1,

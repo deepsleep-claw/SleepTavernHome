@@ -38,6 +38,7 @@
     "@types/toastr": "^2.1.43",
     "@types/webpack": "^5.28.5",
     "@typescript-eslint/parser": "^8.67.0",
+    "@vitejs/plugin-vue": "^6.0.8",
     "@vitest/coverage-v8": "4.1.10",
     "autoprefixer": "^10.5.4",
     "chokidar": "^4.0.3",

@@ -402,8 +402,48 @@ export class CardAgentSessionService {
     return this.restore('undo');
   }
 
+  async undoToUserMessage(messageId: string): Promise<SessionView> {
+    this.assertWritable();
+    const restore = this.timeline.undoToUserMessage(messageId);
+    if (!restore) throw new Error('该消息当前不能回退。');
+    return this.restoreSnapshot(restore, 'undo');
+  }
+
   async redo(): Promise<SessionView> {
     return this.restore('redo');
+  }
+
+  async writeWorkingFile(path: string, content: string): Promise<SessionView> {
+    this.assertWritable();
+    if (['running', 'waiting-approval', 'committing'].includes(this.status)) {
+      throw new Error('Agent运行或工具确认期间不能手动编辑Working Copy。');
+    }
+    let base = this.pending?.base;
+    if (!base) {
+      base = await this.adapter.read();
+      this.assertBinding(base);
+      const beforeSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
+        card: base,
+        events: this.events,
+        modelMessages: this.modelMessages,
+        skills: this.skills,
+      });
+      const messageId = `manual:${crypto.randomUUID()}`;
+      const checkpoint = this.timeline.beginTurn({
+        beforeAgentCursor: this.modelMessages.length,
+        beforeSnapshot,
+        userMessageId: messageId,
+      });
+      this.activeBase = klona(base);
+      this.activeCheckpointId = checkpoint.id;
+      this.repository = this.createRepository(base);
+      this.ui.push({ at: this.now(), checkpointId: checkpoint.id, content: `手动编辑 ${path}`, id: messageId, kind: 'user' });
+    }
+    if (!this.repository) throw new Error('Working Copy不存在。');
+    await this.repository.write(path, content, `manual:${crypto.randomUUID()}`);
+    await this.freezeCandidate(base, false);
+    await this.persist();
+    return this.view();
   }
 
   editUserMessage(messageId: string, content: string): void {
@@ -526,6 +566,13 @@ export class CardAgentSessionService {
     }
     const restore = direction === 'undo' ? this.timeline.undo() : this.timeline.redo();
     if (!restore) throw new Error(direction === 'undo' ? '没有可回退的修改。' : '没有可重做的修改。');
+    return this.restoreSnapshot(restore, direction);
+  }
+
+  private async restoreSnapshot(
+    restore: { checkpointId: string; snapshot: string },
+    direction: 'redo' | 'undo',
+  ): Promise<SessionView> {
     this.lock.acquire(this.sessionId);
     try {
       const payload = await this.snapshots.get<SessionSnapshotPayload>(restore.snapshot);

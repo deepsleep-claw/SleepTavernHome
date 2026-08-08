@@ -101,6 +101,20 @@ export class HistoryTimeline {
     };
   }
 
+  undoToUserMessage(userMessageId: string): HistoryRestore | undefined {
+    const active = this.active();
+    const index = active.findIndex(item => item.userMessageId === userMessageId);
+    if (index < 0 || index > this.position) return undefined;
+    const checkpoint = active[index];
+    this.position = index - 1;
+    return {
+      agentCursor: checkpoint.beforeAgentCursor,
+      checkpointId: checkpoint.id,
+      snapshot: checkpoint.beforeSnapshot,
+      userMessageId: checkpoint.userMessageId,
+    };
+  }
+
   redo(): HistoryRestore | undefined {
     const active = this.active();
     const checkpoint = active[this.position + 1];

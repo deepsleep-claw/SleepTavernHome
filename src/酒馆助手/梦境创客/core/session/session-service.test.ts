@@ -293,4 +293,20 @@ describe('card agent session service', () => {
     expect((await adapter.read()).character.fields.description).toBe('base description');
     expect(waiting.status).toBe('awaiting-approval');
   });
+
+  it('完成状态可手动编辑Working Copy，并沿用同一审批与快照保护', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const service = await CardAgentSessionService.create({
+      adapter,
+      executor: new QueueExecutor([]),
+      lock: new GlobalAgentTaskLock(),
+      snapshots: snapshots(),
+    });
+    const waiting = await service.writeWorkingFile('/character/description.md', '用户在文件编辑器写入');
+    expect(waiting.status).toBe('awaiting-approval');
+    expect((await adapter.read()).character.fields.description).toBe('base description');
+    expect((await service.approve({ '/character/fields/description': 'agent' })).status).toBe('completed');
+    expect((await adapter.read()).character.fields.description).toBe('用户在文件编辑器写入');
+    expect(service.view().ui.some(item => item.kind === 'user' && item.content.includes('手动编辑'))).toBe(true);
+  });
 });
