@@ -1,7 +1,7 @@
 // Runtime 订阅与跨组件上下文。
 // 根组件调用 provideDreamCardAgent() 建立唯一订阅；
 // 叶子组件用 useDreamCardAgent() 读取状态并调用动作，不各自订阅 Runtime。
-import { inject, onBeforeUnmount, onMounted, provide, ref, type InjectionKey, type Ref } from 'vue';
+import { inject, onBeforeUnmount, onMounted, provide, ref, shallowRef, type InjectionKey, type Ref } from 'vue';
 import type { AgentSkill } from '../../core/skills/types';
 import {
   getDreamCardAgentRuntime,
@@ -37,7 +37,8 @@ const key: InjectionKey<DreamCardAgentContext> = Symbol('dca-runtime');
 
 export function provideDreamCardAgent(): DreamCardAgentContext {
   const runtime = getDreamCardAgentRuntime();
-  const state = ref<DreamCardAgentRuntimeState>(runtime.snapshot());
+  // Runtime每次发布的都是完整新快照；浅响应避免Vue反复代理庞大的文件树、事件和历史正文。
+  const state = shallowRef<DreamCardAgentRuntimeState>(runtime.snapshot());
   const workspaceView = ref<WorkspaceView>('home');
   const settingsSection = ref<SettingsSection>('general');
   const openedSessionIds = ref<string[]>([]);

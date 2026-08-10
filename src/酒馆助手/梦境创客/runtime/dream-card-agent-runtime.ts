@@ -878,8 +878,7 @@ export class DreamCardAgentRuntime {
   }
 
   private canWriteNonCharacterResources(): boolean {
-    const settings = this.settingsStore.load();
-    return settings.developerMode && settings.dangerousNonCharacterResourceWrites;
+    return this.state.developerMode && this.state.dangerousNonCharacterResourceWrites;
   }
 
   private async run(action: () => Promise<void>): Promise<DreamCardAgentRuntimeState> {

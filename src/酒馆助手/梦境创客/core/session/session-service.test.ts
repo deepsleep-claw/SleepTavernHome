@@ -285,6 +285,61 @@ describe('card agent session service', () => {
     });
   });
 
+  it('把大量流式delta合并为单次定时界面发布，完成边界仍立即刷新', async () => {
+    let finish!: () => void;
+    let publishStreaming!: () => void;
+    const cancelStreaming = vi.fn();
+    const onUpdate = vi.fn();
+    const executor = new QueueExecutor([
+      async request => {
+        for (let index = 0; index < 200; index += 1) request.onTextDelta?.('字');
+        await new Promise<void>(resolve => {
+          finish = resolve;
+        });
+        return step([], '完成');
+      },
+    ]);
+    const service = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      executor,
+      lock: new GlobalAgentTaskLock(),
+      onUpdate,
+      scheduleStreamingUpdate: callback => {
+        publishStreaming = callback;
+        return cancelStreaming;
+      },
+      snapshots: snapshots(),
+    });
+
+    const running = service.send('测试流式节流');
+    await vi.waitFor(() => expect(executor.requests).toHaveLength(1));
+    const updatesBeforeStreamingPublish = onUpdate.mock.calls.length;
+    expect(publishStreaming).toBeTypeOf('function');
+    publishStreaming();
+    expect(onUpdate).toHaveBeenCalledTimes(updatesBeforeStreamingPublish + 1);
+    expect(
+      (onUpdate.mock.calls.at(-1)?.[0] as { ui: Array<{ content: string; status?: string }> }).ui.at(-1),
+    ).toMatchObject({ content: '字'.repeat(200), status: 'running' });
+
+    finish();
+    expect((await running).status).toBe('awaiting-approval');
+    expect(onUpdate.mock.calls.length).toBeGreaterThan(updatesBeforeStreamingPublish + 1);
+  });
+
+  it('构建一次视图只读取一次非角色资源写入权限', async () => {
+    const canWriteNonCharacterResources = vi.fn(() => false);
+    const service = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      canWriteNonCharacterResources,
+      executor: new QueueExecutor([step()]),
+      lock: new GlobalAgentTaskLock(),
+      snapshots: snapshots(),
+    });
+    canWriteNonCharacterResources.mockClear();
+    service.view();
+    expect(canWriteNonCharacterResources).toHaveBeenCalledOnce();
+  });
+
   it('工具调用前后的流式正文保持原有时间线顺序', async () => {
     const service = await CardAgentSessionService.create({
       adapter: new MemoryCardStateAdapter(transactionState()),

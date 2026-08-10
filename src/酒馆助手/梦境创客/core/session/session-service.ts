@@ -51,6 +51,7 @@ type SessionServiceOptions = {
   onUpdate?: (view: SessionView) => void;
   preset?: StructuredPreset;
   requestToolApproval?: (request: ToolConfirmation) => Promise<boolean>;
+  scheduleStreamingUpdate?: (callback: () => void) => () => void;
   sessionId?: string;
   skills?: AgentSkill[];
   snapshots: ContentAddressedSnapshotStore;
@@ -58,6 +59,7 @@ type SessionServiceOptions = {
 };
 
 const DEFAULT_SESSION_TITLE = '新的创作会话';
+const STREAMING_UPDATE_INTERVAL_MS = 80;
 
 function isNonCharacterResourcePath(path: string): boolean {
   return /^\/(?:regexes|tavern-helper-scripts)\/(?:global|preset-current)(?:\/|$)/u.test(path);
@@ -194,6 +196,7 @@ export class CardAgentSessionService {
   private readonly onSkillsCommit?: SessionServiceOptions['onSkillsCommit'];
   private readonly onUpdate?: SessionServiceOptions['onUpdate'];
   private readonly requestToolApproval?: SessionServiceOptions['requestToolApproval'];
+  private readonly scheduleStreamingUpdate: (callback: () => void) => () => void;
   private readonly snapshots: ContentAddressedSnapshotStore;
   private timeline: HistoryTimeline;
   private events: RunnerEvent[] = [];
@@ -211,6 +214,7 @@ export class CardAgentSessionService {
   private title: string;
   private ui: SessionUiItem[] = [];
   private warnings: string[] = [];
+  private cancelStreamingUpdate?: () => void;
 
   private constructor(
     options: SessionServiceOptions,
@@ -246,6 +250,12 @@ export class CardAgentSessionService {
     this.onUpdate = options.onUpdate;
     this.preset = klona(restored?.runtime.preset ?? options.preset ?? DEFAULT_PRESET);
     this.requestToolApproval = options.requestToolApproval;
+    this.scheduleStreamingUpdate =
+      options.scheduleStreamingUpdate ??
+      (callback => {
+        const timer = setTimeout(callback, STREAMING_UPDATE_INTERVAL_MS);
+        return () => clearTimeout(timer);
+      });
     this.sessionId = restored?.runtime.sessionId ?? options.sessionId ?? crypto.randomUUID();
     this.skills = klona(restored?.runtime.skills ?? options.skills ?? []);
     this.snapshots = options.snapshots;
@@ -308,6 +318,7 @@ export class CardAgentSessionService {
   }
 
   view(): SessionView {
+    const canWriteNonCharacterResources = this.canWriteNonCharacterResources();
     const approval = this.pending
       ? {
           candidateSnapshot: this.pending.candidateSnapshot,
@@ -340,7 +351,7 @@ export class CardAgentSessionService {
       workingChanges: this.repository?.changes() ?? [],
       workingFiles: (this.repository?.snapshot() ?? []).map(file => ({
         ...file,
-        readonly: file.readonly || (!this.canWriteNonCharacterResources() && isNonCharacterResourcePath(file.path)),
+        readonly: file.readonly || (!canWriteNonCharacterResources && isNonCharacterResourcePath(file.path)),
       })),
     };
   }
@@ -1034,7 +1045,7 @@ export class CardAgentSessionService {
       this.ui.push(item);
     }
     item.content += delta;
-    this.notify();
+    this.notifyStreaming();
   }
 
   private completeStreamingText(at: number, fallback = ''): void {
@@ -1075,7 +1086,7 @@ export class CardAgentSessionService {
       this.ui.push(item);
     }
     item.content += delta;
-    this.notify();
+    this.notifyStreaming();
   }
 
   private completeStreamingReasoning(at: number, fallback = ''): void {
@@ -1188,7 +1199,21 @@ export class CardAgentSessionService {
   }
 
   private notify(): void {
+    this.cancelStreamingUpdate?.();
+    this.cancelStreamingUpdate = undefined;
     this.onUpdate?.(this.view());
+  }
+
+  /**
+   * 模型常把正文拆成大量极小delta。这里只合并界面发布；内存正文仍逐片追加，
+   * 工具边界、结束、失败与持久化继续通过notify()立即刷新，不改变事件顺序。
+   */
+  private notifyStreaming(): void {
+    if (this.cancelStreamingUpdate || !this.onUpdate) return;
+    this.cancelStreamingUpdate = this.scheduleStreamingUpdate(() => {
+      this.cancelStreamingUpdate = undefined;
+      this.onUpdate?.(this.view());
+    });
   }
 
   private syncUiVisibility(): void {
