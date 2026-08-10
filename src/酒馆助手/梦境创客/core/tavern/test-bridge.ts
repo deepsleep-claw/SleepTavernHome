@@ -1,6 +1,13 @@
 import { klona } from 'klona';
 import { transactionEntry, transactionState } from '../transaction/test-fixture';
-import type { RawCharacterData, TavernBridge, TavernWorldbookEntry } from './bridge';
+import type { TavernResourceScope } from '../mapping/types';
+import type {
+  RawCharacterData,
+  RawTavernRegex,
+  RawTavernScriptTree,
+  TavernBridge,
+  TavernWorldbookEntry,
+} from './bridge';
 
 function tavernEntry(id: string, uid: number): TavernWorldbookEntry {
   const entry = transactionEntry(id, uid);
@@ -30,6 +37,9 @@ export class FakeTavernBridge implements TavernBridge {
   raw: RawCharacterData | null;
   readonly books = new Map<string, TavernWorldbookEntry[]>();
   readonly calls: string[] = [];
+  readonly regexes = new Map<TavernResourceScope, RawTavernRegex[]>();
+  readonly scripts = new Map<TavernResourceScope, RawTavernScriptTree[]>();
+  loadedPresetName = '默认预设';
   nextUid = 100;
 
   constructor() {
@@ -72,6 +82,12 @@ export class FakeTavernBridge implements TavernBridge {
       unknown_server_field: { keep: true },
     };
     this.books.set('主世界书', [tavernEntry('entry-1', 1), tavernEntry('entry-2', 2)]);
+    this.regexes.set('character', []);
+    this.regexes.set('global', []);
+    this.regexes.set('preset-current', []);
+    this.scripts.set('character', []);
+    this.scripts.set('global', []);
+    this.scripts.set('preset-current', []);
   }
 
   async createWorldbook(name: string): Promise<void> {
@@ -126,8 +142,20 @@ export class FakeTavernBridge implements TavernBridge {
     return this.groupId;
   }
 
+  getLoadedPresetName(): string {
+    return this.loadedPresetName;
+  }
+
   getRawCharacter(): RawCharacterData | null {
     return this.raw ? klona(this.raw) : null;
+  }
+
+  getRawRegexes(scope: TavernResourceScope): RawTavernRegex[] {
+    return klona(this.regexes.get(scope) ?? []);
+  }
+
+  getRawScriptTrees(scope: TavernResourceScope): RawTavernScriptTree[] {
+    return klona(this.scripts.get(scope) ?? []);
   }
 
   async getWorldbook(name: string): Promise<TavernWorldbookEntry[]> {
@@ -139,6 +167,16 @@ export class FakeTavernBridge implements TavernBridge {
   async saveRawCharacter(character: RawCharacterData): Promise<void> {
     this.calls.push('save-character');
     this.raw = klona(character);
+  }
+
+  async replaceRawRegexes(scope: TavernResourceScope, regexes: RawTavernRegex[]): Promise<void> {
+    this.calls.push(`replace-regexes:${scope}`);
+    this.regexes.set(scope, klona(regexes));
+  }
+
+  async replaceRawScriptTrees(scope: TavernResourceScope, trees: RawTavernScriptTree[]): Promise<void> {
+    this.calls.push(`replace-scripts:${scope}`);
+    this.scripts.set(scope, klona(trees));
   }
 
   async setCharacterBindings(bindings: CharWorldbooks): Promise<void> {

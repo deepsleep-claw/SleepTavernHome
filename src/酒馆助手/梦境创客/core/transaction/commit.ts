@@ -12,8 +12,9 @@ function operationRank(operation: StateOperation): number {
   if (operation.path.startsWith('/character/fields') || operation.path.startsWith('/character/extensions')) return 0;
   if (operation.path.startsWith('/character/greetings') || operation.path === '/character/creator' || operation.path === '/character/version' || operation.path === '/character/tags') return 1;
   if (operation.path.startsWith('/worldbooks')) return 2;
-  if (operation.path.startsWith('/bindings')) return 3;
-  return 4;
+  if (operation.path.startsWith('/resources')) return 3;
+  if (operation.path.startsWith('/bindings')) return 4;
+  return 5;
 }
 
 function inverse(operation: StateOperation): StateOperation {

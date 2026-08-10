@@ -93,11 +93,102 @@ export type ReadonlyChatMessage = {
   text: string;
 };
 
+export type TavernResourceScope = 'character' | 'global' | 'preset-current';
+
+export type ResourceCapability = {
+  available: boolean;
+  reason?: string;
+  /** 用于阻止把 preset-current 的 Working Copy 写入后来切换到的另一个预设。 */
+  targetId: string;
+};
+
+export type RegexMacroSubstitution = 'escaped' | 'none' | 'raw';
+
+export type TavernRegexData = {
+  destination: {
+    display: boolean;
+    prompt: boolean;
+  };
+  enabled: boolean;
+  findRegex: string;
+  id: string;
+  maxDepth: number | null;
+  minDepth: number | null;
+  name: string;
+  order: number;
+  replaceString: string;
+  resourceId: string;
+  runOnEdit: boolean;
+  source: {
+    aiOutput: boolean;
+    reasoning: boolean;
+    slashCommand: boolean;
+    userInput: boolean;
+    worldInfo: boolean;
+  };
+  substituteRegex: RegexMacroSubstitution;
+  trimStrings: string[];
+  unknownFields: Record<string, unknown>;
+  unknownPlacements: number[];
+};
+
+export type ScopedRegexData = ResourceCapability & {
+  regexes: TavernRegexData[];
+};
+
+export type TavernScriptButton = {
+  name: string;
+  visible: boolean;
+};
+
+export type TavernScriptData = {
+  button: {
+    buttons: TavernScriptButton[];
+    enabled: boolean;
+  };
+  content: string;
+  data: Record<string, unknown>;
+  enabled: boolean;
+  exportWith: {
+    button: boolean;
+    data: boolean;
+  };
+  id: string;
+  info: string;
+  name: string;
+  resourceId: string;
+  unknownFields: Record<string, unknown>;
+};
+
+export type TavernScriptTreeReference =
+  | { scriptId: string; type: 'script' }
+  | {
+      color: string;
+      enabled: boolean;
+      icon: string;
+      id: string;
+      name: string;
+      scriptIds: string[];
+      type: 'folder';
+      unknownFields: Record<string, unknown>;
+    };
+
+export type ScopedScriptData = ResourceCapability & {
+  scripts: TavernScriptData[];
+  trees: TavernScriptTreeReference[];
+};
+
+export type TavernResourceState = {
+  regexes: Record<TavernResourceScope, ScopedRegexData>;
+  scripts: Record<TavernResourceScope, ScopedScriptData>;
+};
+
 export type CardWorkspaceState = {
   bindings: WorldbookBindings;
   character: CharacterWorkspaceData;
   chat: ReadonlyChatMessage[];
   globalWorldbookNames: string[];
+  resources: TavernResourceState;
   worldbooks: WorldbookData[];
 };
 

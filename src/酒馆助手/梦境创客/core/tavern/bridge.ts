@@ -1,4 +1,5 @@
 import { klona } from 'klona';
+import type { TavernResourceScope } from '../mapping/types';
 
 export type RawCharacterData = {
   avatar: string;
@@ -37,6 +38,25 @@ export type RawCharacterData = {
 
 export type TavernWorldbookEntry = WorldbookEntry & Record<string, unknown>;
 
+export type RawTavernRegex = {
+  disabled?: boolean;
+  findRegex?: string;
+  id?: string;
+  markdownOnly?: boolean;
+  maxDepth?: number | null;
+  minDepth?: number | null;
+  placement?: number[] | null;
+  promptOnly?: boolean;
+  replaceString?: string;
+  runOnEdit?: boolean;
+  scriptName?: string;
+  substituteRegex?: number;
+  trimStrings?: string[];
+  [key: string]: unknown;
+};
+
+export type RawTavernScriptTree = ScriptTree & Record<string, unknown>;
+
 export interface TavernBridge {
   createWorldbook(name: string): Promise<void>;
   createWorldbookEntries(name: string, entries: Partial<TavernWorldbookEntry>[]): Promise<TavernWorldbookEntry[]>;
@@ -49,15 +69,30 @@ export interface TavernBridge {
   getCurrentCharacterName(): string | null;
   getGlobalWorldbooks(): string[];
   getGroupId(): string;
+  getLoadedPresetName(): string;
   getRawCharacter(): RawCharacterData | null;
+  getRawRegexes(scope: TavernResourceScope): RawTavernRegex[];
+  getRawScriptTrees(scope: TavernResourceScope): RawTavernScriptTree[];
   getWorldbook(name: string): Promise<TavernWorldbookEntry[]>;
   saveRawCharacter(character: RawCharacterData): Promise<void>;
+  replaceRawRegexes(scope: TavernResourceScope, regexes: RawTavernRegex[]): Promise<void>;
+  replaceRawScriptTrees(scope: TavernResourceScope, trees: RawTavernScriptTree[]): Promise<void>;
   setCharacterBindings(bindings: CharWorldbooks): Promise<void>;
   setChatWorldbook(name: string | null): Promise<void>;
   updateWorldbook(
     name: string,
     updater: (entries: TavernWorldbookEntry[]) => TavernWorldbookEntry[],
   ): Promise<TavernWorldbookEntry[]>;
+}
+
+function scriptScope(scope: TavernResourceScope): ScriptTreesOptions['type'] {
+  return scope === 'preset-current' ? 'preset' : scope;
+}
+
+async function refreshRegexDisplay(): Promise<void> {
+  const context = SillyTavern;
+  await context.saveSettingsDebounced();
+  await context.eventSource.emit(context.eventTypes.CHAT_CHANGED, context.chatId);
 }
 
 function append(form: FormData, key: string, value: unknown): void {
@@ -123,9 +158,49 @@ export function createGlobalTavernBridge(): TavernBridge {
     getCurrentCharacterName: () => getCurrentCharacterName(),
     getGlobalWorldbooks: () => getGlobalWorldbookNames(),
     getGroupId: () => SillyTavern.groupId,
+    getLoadedPresetName: () => getLoadedPresetName(),
     getRawCharacter: () => getCharData('current') as RawCharacterData | null,
+    getRawRegexes: scope => {
+      const context = SillyTavern;
+      if (scope === 'character') {
+        const raw = getCharData('current') as RawCharacterData | null;
+        const value = raw?.data.extensions?.regex_scripts;
+        return klona(Array.isArray(value) ? value : []) as RawTavernRegex[];
+      }
+      const value =
+        scope === 'global'
+          ? context.extensionSettings.regex
+          : context.chatCompletionSettings?.extensions?.regex_scripts;
+      return klona(Array.isArray(value) ? value : []) as RawTavernRegex[];
+    },
+    getRawScriptTrees: scope => {
+      if (typeof getScriptTrees !== 'function') throw new Error('当前酒馆助手不提供脚本树接口。');
+      return klona(getScriptTrees({ type: scriptScope(scope) })) as RawTavernScriptTree[];
+    },
     getWorldbook: async name => (await getWorldbook(name)) as TavernWorldbookEntry[],
     saveRawCharacter,
+    replaceRawRegexes: async (scope, regexes) => {
+      const context = SillyTavern;
+      const value = klona(regexes);
+      if (scope === 'character') {
+        const raw = getCharData('current') as RawCharacterData | null;
+        if (!raw) throw new Error('写入角色正则前无法重新读取角色卡。');
+        raw.data.extensions ??= {};
+        raw.data.extensions.regex_scripts = value;
+        await saveRawCharacter(raw);
+      } else if (scope === 'global') {
+        context.extensionSettings.regex = value;
+      } else {
+        context.chatCompletionSettings.extensions ??= {};
+        context.chatCompletionSettings.extensions.regex_scripts = value;
+      }
+      await refreshRegexDisplay();
+    },
+    replaceRawScriptTrees: async (scope, trees) => {
+      if (typeof replaceScriptTrees !== 'function') throw new Error('当前酒馆助手不提供脚本树接口。');
+      replaceScriptTrees(klona(trees), { type: scriptScope(scope) });
+      await SillyTavern.saveSettingsDebounced();
+    },
     setCharacterBindings: async bindings => rebindCharWorldbooks('current', bindings),
     setChatWorldbook: async name => setChatLorebook(name),
     updateWorldbook: async (name, updater) =>

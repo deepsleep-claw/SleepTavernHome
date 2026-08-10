@@ -8,6 +8,7 @@ import type {
 } from '../mapping/types';
 import { sha256 } from '../transaction/canonical';
 import type { RawCharacterData, TavernBridge, TavernWorldbookEntry } from './bridge';
+import { readRegexScope, readScriptScope } from './resource-reader';
 
 type CardAgentExtension = {
   binding_id?: unknown;
@@ -172,6 +173,56 @@ export async function readTavernState(bridge: TavernBridge): Promise<TavernState
   const warnings = worldbooks
     .filter(book => !book.roundTripSafe)
     .map(book => `世界书“${book.name}”无法无损读取，已降级为只读。`);
+  const presetName = bridge.getLoadedPresetName();
+  const resourceTargets = {
+    character: bindingId,
+    global: 'global',
+    'preset-current': `preset:${presetName}`,
+  } as const;
+  const readResource = <T>(reader: () => T, fallback: T, label: string): T => {
+    try {
+      return reader();
+    } catch (error) {
+      warnings.push(`${label}读取失败，已降级为不可用：${error instanceof Error ? error.message : String(error)}`);
+      return fallback;
+    }
+  };
+  const resources: CardWorkspaceState['resources'] = {
+    regexes: {
+      character: readResource(
+        () => readRegexScope(bridge.getRawRegexes('character'), resourceTargets.character),
+        { available: false, reason: '角色正则读取失败。', regexes: [], targetId: resourceTargets.character },
+        '角色正则',
+      ),
+      global: readResource(
+        () => readRegexScope(bridge.getRawRegexes('global'), resourceTargets.global),
+        { available: false, reason: '全局正则读取失败。', regexes: [], targetId: resourceTargets.global },
+        '全局正则',
+      ),
+      'preset-current': readResource(
+        () => readRegexScope(bridge.getRawRegexes('preset-current'), resourceTargets['preset-current']),
+        { available: false, reason: '当前预设正则读取失败。', regexes: [], targetId: resourceTargets['preset-current'] },
+        '当前预设正则',
+      ),
+    },
+    scripts: {
+      character: readResource(
+        () => readScriptScope(bridge.getRawScriptTrees('character'), resourceTargets.character),
+        { available: false, reason: '角色脚本读取失败。', scripts: [], targetId: resourceTargets.character, trees: [] },
+        '角色脚本',
+      ),
+      global: readResource(
+        () => readScriptScope(bridge.getRawScriptTrees('global'), resourceTargets.global),
+        { available: false, reason: '全局脚本读取失败。', scripts: [], targetId: resourceTargets.global, trees: [] },
+        '全局脚本',
+      ),
+      'preset-current': readResource(
+        () => readScriptScope(bridge.getRawScriptTrees('preset-current'), resourceTargets['preset-current']),
+        { available: false, reason: '当前预设脚本读取失败。', scripts: [], targetId: resourceTargets['preset-current'], trees: [] },
+        '当前预设脚本',
+      ),
+    },
+  };
   return {
     state: {
       bindings: { additional: bindings.additional, chat, primary: bindings.primary },
@@ -202,6 +253,7 @@ export async function readTavernState(bridge: TavernBridge): Promise<TavernState
         text: message.message,
       })),
       globalWorldbookNames: globalNames,
+      resources,
       worldbooks,
     },
     warnings,

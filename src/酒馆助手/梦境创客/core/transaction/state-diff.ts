@@ -179,6 +179,22 @@ export function diffCardStates(before: CardWorkspaceState, after: CardWorkspaceS
     );
   }
 
+  for (const kind of ['regexes', 'scripts'] as const) {
+    for (const scope of ['character', 'global', 'preset-current'] as const) {
+      pushOperation(
+        result,
+        operation(
+          `/resources/${kind}/${scope}`,
+          `修改${scope}作用域的${kind === 'regexes' ? '正则' : '酒馆助手脚本'}`,
+          before.resources[kind][scope],
+          after.resources[kind][scope],
+          'modify',
+          scope !== 'character',
+        ),
+      );
+    }
+  }
+
   const deletedEntries = result.filter(item => item.kind === 'delete' && item.path.includes('/entries/'));
   const originalEntryCount = before.worldbooks.reduce((total, book) => total + book.entries.length, 0);
   if (deletedEntries.length >= 10 || (originalEntryCount > 0 && deletedEntries.length / originalEntryCount >= 0.5)) {
@@ -219,6 +235,11 @@ export function readStatePath(state: CardWorkspaceState, path: string): unknown 
     if (segments[2] === 'entries') return findEntry(book, segments[3]);
   }
   if (segments[0] === 'bindings') return state.bindings[segments[1] as keyof typeof state.bindings];
+  if (segments[0] === 'resources') {
+    const kind = segments[1] as keyof CardWorkspaceState['resources'];
+    const scope = segments[2] as keyof CardWorkspaceState['resources'][typeof kind];
+    return state.resources[kind]?.[scope];
+  }
   return undefined;
 }
 
@@ -270,6 +291,12 @@ export function applyStateOperation(state: CardWorkspaceState, input: StateOpera
   }
   if (segments[0] === 'bindings') {
     Object.assign(state.bindings, { [segments[1]]: value });
+    return;
+  }
+  if (segments[0] === 'resources') {
+    const kind = segments[1] as keyof CardWorkspaceState['resources'];
+    const scope = segments[2] as keyof CardWorkspaceState['resources'][typeof kind];
+    Object.assign(state.resources[kind], { [scope]: value });
   }
 }
 

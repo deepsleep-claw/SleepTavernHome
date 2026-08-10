@@ -145,4 +145,37 @@ describe('ProductionCardStateAdapter', () => {
     bridge.raw = null;
     await expect(adapter.apply(operation('/character/creator', '作者', 'x'))).rejects.toThrow('无法重新读取');
   });
+
+  it('按作用域整批写入正则和脚本，并阻止向已切换的预设提交', async () => {
+    const bridge = new FakeTavernBridge();
+    const adapter = new ProductionCardStateAdapter(bridge);
+    const base = await adapter.read();
+    const regexes = klona(base.resources.regexes.character);
+    regexes.regexes.push({
+      destination: { display: true, prompt: true },
+      enabled: true,
+      findRegex: '/foo/u',
+      id: 'new-regex',
+      maxDepth: null,
+      minDepth: null,
+      name: '新正则',
+      order: 100,
+      replaceString: 'bar',
+      resourceId: 'regex:new-regex',
+      runOnEdit: false,
+      source: { aiOutput: true, reasoning: false, slashCommand: false, userInput: false, worldInfo: false },
+      substituteRegex: 'none',
+      trimStrings: [],
+      unknownFields: {},
+      unknownPlacements: [],
+    });
+    await adapter.apply(operation('/resources/regexes/character', base.resources.regexes.character, regexes));
+    expect(bridge.regexes.get('character')?.[0]).toMatchObject({ id: 'new-regex', scriptName: '新正则' });
+
+    const changedPreset = klona(base.resources.scripts['preset-current']);
+    changedPreset.targetId = 'preset:另一个预设';
+    await expect(
+      adapter.apply(operation('/resources/scripts/preset-current', base.resources.scripts['preset-current'], changedPreset)),
+    ).rejects.toThrow('TARGET_SCOPE_CHANGED');
+  });
 });

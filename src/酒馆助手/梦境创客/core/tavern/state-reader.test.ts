@@ -24,6 +24,34 @@ describe('readTavernState', () => {
     expect(result.state.chat).toEqual([
       { hidden: false, id: 0, name: '角色', role: 'assistant', text: 'hello' },
     ]);
+    expect(result.state.resources.regexes['preset-current'].targetId).toBe('preset:默认预设');
+  });
+
+  it('读取三个作用域的正则和脚本，单项失败时只降级对应资源', async () => {
+    const bridge = new FakeTavernBridge();
+    bridge.regexes.set('character', [{ id: 'r1', placement: [1], scriptName: '角色正则' }]);
+    bridge.scripts.set('global', [
+      {
+        button: { buttons: [], enabled: false },
+        content: '',
+        data: {},
+        enabled: false,
+        export_with: { button: true, data: true },
+        id: 's1',
+        info: '',
+        name: '全局脚本',
+        type: 'script',
+      },
+    ]);
+    bridge.getRawScriptTrees = scope => {
+      if (scope === 'preset-current') throw new Error('missing api');
+      return structuredClone(bridge.scripts.get(scope) ?? []);
+    };
+    const result = await readTavernState(bridge);
+    expect(result.state.resources.regexes.character.regexes[0].name).toBe('角色正则');
+    expect(result.state.resources.scripts.global.scripts[0].name).toBe('全局脚本');
+    expect(result.state.resources.scripts['preset-current']).toMatchObject({ available: false, scripts: [] });
+    expect(result.warnings).toContain('当前预设脚本读取失败，已降级为不可用：missing api');
   });
 
   it('为旧角色卡生成确定性绑定、开场白与世界书ID', async () => {

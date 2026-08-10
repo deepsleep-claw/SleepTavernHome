@@ -64,6 +64,18 @@ function state(): CardWorkspaceState {
       { hidden: true, id: 2, name: '旁白', role: 'system', text: '下雨了。' },
     ],
     globalWorldbookNames: ['全局规则'],
+    resources: {
+      regexes: {
+        character: { available: true, regexes: [], targetId: 'binding-alice' },
+        global: { available: true, regexes: [], targetId: 'global' },
+        'preset-current': { available: true, regexes: [], targetId: 'preset:default' },
+      },
+      scripts: {
+        character: { available: true, scripts: [], targetId: 'binding-alice', trees: [] },
+        global: { available: true, scripts: [], targetId: 'global', trees: [] },
+        'preset-current': { available: true, scripts: [], targetId: 'preset:default', trees: [] },
+      },
+    },
     worldbooks: [
       {
         entries: [entry()],

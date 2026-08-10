@@ -23,6 +23,7 @@ export function transactionEntry(id = 'entry-1', uid = 1): WorldbookEntryData {
 }
 
 export function transactionState(entryCount = 2): CardWorkspaceState {
+  const emptyResourceScope = (targetId: string) => ({ available: true, targetId });
   return {
     bindings: { additional: [], chat: null, primary: '主世界书' },
     character: {
@@ -49,6 +50,18 @@ export function transactionState(entryCount = 2): CardWorkspaceState {
     },
     chat: [{ hidden: false, id: 0, name: '角色', role: 'assistant', text: 'hello' }],
     globalWorldbookNames: [],
+    resources: {
+      regexes: {
+        character: { ...emptyResourceScope('binding-1'), regexes: [] },
+        global: { ...emptyResourceScope('global'), regexes: [] },
+        'preset-current': { ...emptyResourceScope('preset:default'), regexes: [] },
+      },
+      scripts: {
+        character: { ...emptyResourceScope('binding-1'), scripts: [], trees: [] },
+        global: { ...emptyResourceScope('global'), scripts: [], trees: [] },
+        'preset-current': { ...emptyResourceScope('preset:default'), scripts: [], trees: [] },
+      },
+    },
     worldbooks: [
       {
         entries: Array.from({ length: entryCount }, (_, index) => transactionEntry(`entry-${index + 1}`, index + 1)),

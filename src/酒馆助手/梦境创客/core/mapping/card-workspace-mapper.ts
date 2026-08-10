@@ -2,6 +2,11 @@ import { klona } from 'klona';
 import { normalizeWorkspacePath, parentWorkspacePath, workspaceBasename } from '../workspace/path';
 import { WorkspaceError, type WorkspaceFile } from '../workspace/types';
 import {
+  materializeTavernResources,
+  projectTavernResources,
+  type TavernResourceProjectionOptions,
+} from './resource-workspace-mapper';
+import {
   decodeWorkspaceSegment,
   encodeWorkspaceSegment,
   parseFrontmatter,
@@ -130,7 +135,11 @@ function projectChat(messages: ReadonlyChatMessage[], pageSize: number): Workspa
   return files;
 }
 
-export function projectCardWorkspace(state: CardWorkspaceState, chatPageSize = 100): WorkspaceFile[] {
+export function projectCardWorkspace(
+  state: CardWorkspaceState,
+  chatPageSize = 100,
+  resourceOptions: TavernResourceProjectionOptions = {},
+): WorkspaceFile[] {
   const files: WorkspaceFile[] = [];
   files.push(
     file(
@@ -184,6 +193,7 @@ export function projectCardWorkspace(state: CardWorkspaceState, chatPageSize = 1
     const readonly = !book.writable || !book.roundTripSafe || globalNames.has(book.name);
     files.push(...projectWorldbook(book, readonly));
   }
+  files.push(...projectTavernResources(state.resources, resourceOptions));
   files.push(...projectChat(state.chat, chatPageSize));
   return files.sort((left, right) => left.path.localeCompare(right.path));
 }
@@ -481,6 +491,7 @@ export function materializeCardWorkspace(
     primary: rawBindings.primary === null ? null : requiredString(rawBindings.primary, 'primary', bindingsFile.path),
   };
   state.bindings = removeDanglingBindings(rewriteBindingNames(parsedBindings, base, books), books, warnings);
+  state.resources = materializeTavernResources(base, files.values());
   state.worldbooks = books;
   return { state, warnings };
 }

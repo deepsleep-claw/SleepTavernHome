@@ -4,6 +4,7 @@ import type { CardStateAdapter } from '../transaction/adapter';
 import { applyStateOperation, type StateOperation } from '../transaction/state-diff';
 import type { RawCharacterData, TavernBridge, TavernWorldbookEntry } from './bridge';
 import { readTavernState } from './state-reader';
+import { writeRegexScope, writeScriptScope } from './resource-reader';
 
 function decodePath(path: string): string[] {
   return path
@@ -103,6 +104,19 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
     } else if (segments[0] === 'bindings') {
       if (segments[1] === 'chat') await this.bridge.setChatWorldbook(next.bindings.chat);
       else await this.bridge.setCharacterBindings({ additional: next.bindings.additional, primary: next.bindings.primary });
+    } else if (segments[0] === 'resources') {
+      const kind = segments[1] as keyof CardWorkspaceState['resources'];
+      const scope = segments[2] as keyof CardWorkspaceState['resources'][typeof kind];
+      const beforeTarget = current.resources[kind][scope].targetId;
+      const afterTarget = next.resources[kind][scope].targetId;
+      if (beforeTarget !== afterTarget) {
+        throw new Error(`TARGET_SCOPE_CHANGED：${scope}作用域目标已经切换，请重新读取工作区后再修改。`);
+      }
+      if (kind === 'regexes') {
+        await this.bridge.replaceRawRegexes(scope, writeRegexScope(next.resources.regexes[scope]));
+      } else {
+        await this.bridge.replaceRawScriptTrees(scope, writeScriptScope(next.resources.scripts[scope]));
+      }
     }
     this.cached = next;
     return normalized;
