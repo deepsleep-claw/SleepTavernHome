@@ -132,6 +132,7 @@ export function parseString(content: string): any {
     }
   }
 }
+<<<<<<< HEAD
 
 export function getComplementString(string: string) {
   const encoder = new TextEncoder();
@@ -149,3 +150,5 @@ export function getComplementString(string: string) {
   }
   return hex;
 }
+=======
+>>>>>>> ad523eba6d41b01a9154c98517a61825ef3ea546
