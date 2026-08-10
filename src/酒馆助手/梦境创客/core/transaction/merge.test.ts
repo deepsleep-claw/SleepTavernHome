@@ -64,4 +64,31 @@ describe('three-way merge', () => {
     expect(defaultApprovals(preparation, 'normal')).toEqual({});
     expect(defaultApprovals(preparation, 'yolo')).toEqual({ '/character/fields/description': 'agent' });
   });
+
+  it('自动合并同一脚本文本中互不重叠的玩家与Agent行修改', () => {
+    const base = transactionState();
+    base.resources.scripts.character.scripts.push({
+      button: { buttons: [], enabled: false },
+      content: 'first\nmiddle\nlast',
+      data: {},
+      enabled: false,
+      exportWith: { button: true, data: true },
+      id: 's1',
+      info: '',
+      name: '脚本',
+      resourceId: 'script:s1',
+      unknownFields: {},
+    });
+    base.resources.scripts.character.trees = [{ scriptId: 's1', type: 'script' }];
+    const working = klona(base);
+    const current = klona(base);
+    working.resources.scripts.character.scripts[0].content = 'agent first\nmiddle\nlast';
+    current.resources.scripts.character.scripts[0].content = 'first\nmiddle\nplayer last';
+    const preparation = prepareThreeWayMerge(base, working, current);
+    const path = '/resources/scripts/character/items/script:s1/content';
+    expect(preparation.conflicts).toEqual([]);
+    expect(resolveMerge(current, preparation, { [path]: 'agent' }).state.resources.scripts.character.scripts[0].content).toBe(
+      'agent first\nmiddle\nplayer last',
+    );
+  });
 });

@@ -81,6 +81,7 @@ export type DreamCardAgentSettings = {
   agentConfigurations: AgentConfiguration[];
   characterStores: Record<string, CharacterStoreReference>;
   developerMode: boolean;
+  dangerousNonCharacterResourceWrites: boolean;
   files: Record<string, StoredFileReference>;
   floatingButton: boolean;
   floatingButtonAnchor: FloatingButtonAnchor;
@@ -110,6 +111,7 @@ export const DEFAULT_DREAM_CARD_AGENT_SETTINGS: DreamCardAgentSettings = {
   agentConfigurations: [defaultAgentConfiguration(DEFAULT_PRESET.id)],
   characterStores: {},
   developerMode: false,
+  dangerousNonCharacterResourceWrites: false,
   files: {},
   floatingButton: true,
   floatingButtonAnchor: 'middle-right',
@@ -193,6 +195,7 @@ function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamCardAgen
     ...structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS),
     ...structuredClone(raw ?? {}),
     characterStores: structuredClone(raw?.characterStores ?? {}),
+    dangerousNonCharacterResourceWrites: raw?.dangerousNonCharacterResourceWrites === true,
     files: structuredClone(raw?.files ?? {}),
     activeAgentConfigurationId,
     activePresetId,
@@ -239,6 +242,7 @@ export function mergeSettingsChanges(
     agentConfigurations: choose('agentConfigurations'),
     characterStores: applyRecordChanges(base.characterStores, incoming.characterStores, latest.characterStores),
     developerMode: choose('developerMode'),
+    dangerousNonCharacterResourceWrites: choose('dangerousNonCharacterResourceWrites'),
     files: applyRecordChanges(base.files, incoming.files, latest.files),
     floatingButton: choose('floatingButton'),
     floatingButtonAnchor: choose('floatingButtonAnchor'),

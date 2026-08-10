@@ -40,22 +40,94 @@ describe('workspace runner tools', () => {
     await expect(repository.read('/character/moved.md')).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
-  it('内置Skill禁止改写，已有用户Skill需要确认，新Skill无需确认', () => {
+  it('内置Skill禁止改写，已有用户Skill需要确认，新Skill无需确认', async () => {
     const repository = new MemoryWorkspaceRepository();
     const tools = new Map(createWorkspaceRunnerTools(repository, ['old']).map(item => [item.name, item]));
-    expect(() =>
+    await expect(
       tools.get('write_file')!.confirmation?.({ path: '/skills/builtin/card-workspace-io/SKILL.md' }, 'call'),
-    ).toThrow('不可修改');
-    expect(tools.get('apply_patch')!.confirmation?.({ path: '/skills/user/old/SKILL.md' }, 'call')).toMatchObject({
+    ).rejects.toThrow('不可修改');
+    expect(await tools.get('apply_patch')!.confirmation?.({ path: '/skills/user/old/SKILL.md' }, 'call')).toMatchObject({
       toolName: 'apply_patch',
     });
-    expect(tools.get('write_file')!.confirmation?.({ path: '/skills/user/new/SKILL.md' }, 'call')).toBeUndefined();
+    expect(await tools.get('write_file')!.confirmation?.({ path: '/skills/user/new/SKILL.md' }, 'call')).toBeUndefined();
     expect(
-      tools.get('move_path')!.confirmation?.({ from: '/skills/user/old', to: '/skills/user/renamed' }, 'call'),
+      await tools.get('move_path')!.confirmation?.({ from: '/skills/user/old', to: '/skills/user/renamed' }, 'call'),
     ).toBeDefined();
     expect(
-      tools.get('move_path')!.confirmation?.({ from: '/skills/user/new', to: '/skills/user/old', }, 'call'),
+      await tools.get('move_path')!.confirmation?.({ from: '/skills/user/new', to: '/skills/user/old' }, 'call'),
     ).toBeDefined();
-    expect(tools.get('delete_path')!.confirmation?.({ path: '/character/description.md' }, 'call')).toBeUndefined();
+    expect(await tools.get('delete_path')!.confirmation?.({ path: '/character/description.md' }, 'call')).toBeUndefined();
+  });
+
+  it('遮罩 data.yaml 的读取、搜索和Patch视图，底层始终保留真实值', async () => {
+    const key = `sk_test_${'A'.repeat(24)}`;
+    const path = '/tavern-helper-scripts/character/scripts/s1/data.yaml';
+    const repository = new MemoryWorkspaceRepository({
+      files: [{ content: `key: ${key}\nname: old\n`, mediaType: 'text/yaml', path, readonly: false, resourceId: 'data' }],
+    });
+    const tools = new Map(createWorkspaceRunnerTools(repository).map(item => [item.name, item]));
+    const read = (await tools.get('read_file')!.execute({ path }, 'read-secret')) as {
+      secretProtection: { masked: number };
+      view: string;
+    };
+    expect(read.secretProtection.masked).toBe(1);
+    expect(read.view).not.toContain(key);
+    const token = read.view.match(/<<DCA_SECRET:[a-f0-9]{20}>>/u)?.[0];
+    expect(token).toBeTruthy();
+    const search = (await tools.get('search_files')!.execute({ pattern: key }, 'search-secret')) as {
+      matches: Array<{ text: string }>;
+    };
+    expect(search.matches[0].text).not.toContain(key);
+    await tools.get('apply_patch')!.execute(
+      { patch: `@@ -1,2 +1,2 @@\n key: ${token}\n-name: old\n+name: new`, path },
+      'patch-secret',
+    );
+    expect((await repository.read(path)).content).toBe(`key: ${key}\nname: new\n`);
+  });
+
+  it('禁止未授权的非角色资源写入，授权后仍要求逐次确认', async () => {
+    const repository = new MemoryWorkspaceRepository();
+    let allowed = false;
+    const tools = new Map(
+      createWorkspaceRunnerTools(repository, [], { canWriteNonCharacterResources: () => allowed }).map(item => [
+        item.name,
+        item,
+      ]),
+    );
+    const input = { content: 'enabled: true', path: '/regexes/global/new.yaml' };
+    await expect(tools.get('write_file')!.confirmation?.(input, 'global-write')).rejects.toThrow(
+      'NON_CHARACTER_RESOURCE_WRITE_DISABLED',
+    );
+    allowed = true;
+    expect(await tools.get('write_file')!.confirmation?.(input, 'global-write')).toMatchObject({ toolName: 'write_file' });
+  });
+
+  it('仅在启用脚本或修改已启用脚本代码时要求角色脚本确认', async () => {
+    const root = '/tavern-helper-scripts/character/scripts/s1';
+    const repository = new MemoryWorkspaceRepository({
+      files: [
+        {
+          content: 'enabled: false\nname: test\n',
+          mediaType: 'text/yaml',
+          path: `${root}/info.yaml`,
+          readonly: false,
+          resourceId: 'info',
+        },
+        { content: '', mediaType: 'text/plain', path: `${root}/script.js`, readonly: false, resourceId: 'script' },
+      ],
+    });
+    const tools = new Map(createWorkspaceRunnerTools(repository).map(item => [item.name, item]));
+    expect(
+      await tools
+        .get('write_file')!
+        .confirmation?.({ content: 'enabled: true\nname: test\n', path: `${root}/info.yaml` }, 'enable'),
+    ).toBeDefined();
+    expect(
+      await tools.get('write_file')!.confirmation?.({ content: 'return 1;', path: `${root}/script.js` }, 'edit-off'),
+    ).toBeUndefined();
+    await repository.write(`${root}/info.yaml`, 'enabled: true\nname: test\n', 'set-enabled');
+    expect(
+      await tools.get('write_file')!.confirmation?.({ content: 'return 2;', path: `${root}/script.js` }, 'edit-on'),
+    ).toBeDefined();
   });
 });

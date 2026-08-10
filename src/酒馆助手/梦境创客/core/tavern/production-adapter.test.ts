@@ -178,4 +178,26 @@ describe('ProductionCardStateAdapter', () => {
       adapter.apply(operation('/resources/scripts/preset-current', base.resources.scripts['preset-current'], changedPreset)),
     ).rejects.toThrow('TARGET_SCOPE_CHANGED');
   });
+
+  it('一次事务内同一资源作用域无论多少语义字段都只写酒馆一次', async () => {
+    const bridge = new FakeTavernBridge();
+    bridge.regexes.set('character', [
+      { disabled: false, findRegex: '/old/u', id: 'r1', placement: [1], replaceString: 'old', scriptName: '旧正则' },
+    ]);
+    const adapter = new ProductionCardStateAdapter(bridge);
+    const base = await adapter.read();
+    const working = klona(base);
+    working.resources.regexes.character.regexes[0].name = '新正则';
+    working.resources.regexes.character.regexes[0].findRegex = '/new/u';
+    working.resources.regexes.character.regexes[0].replaceString = 'new';
+    const changes = diffCardStates(base, working);
+    const result = await commitWorkingCopy({
+      adapter,
+      base,
+      decisions: Object.fromEntries(changes.map(change => [change.path, 'agent' as const])),
+      working,
+    });
+    expect(result.status).toBe('committed');
+    expect(bridge.calls.filter(call => call === 'replace-regexes:character')).toHaveLength(1);
+  });
 });

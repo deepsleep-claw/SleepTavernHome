@@ -107,6 +107,54 @@ describe('semantic state diff', () => {
     expect(pathsOverlap('/a', '/ab')).toBe(false);
   });
 
+  it('把正则与脚本修改细化到语义字段和 data 对象路径，并完整重放', () => {
+    const base = transactionState();
+    base.resources.regexes.character.regexes.push({
+      destination: { display: true, prompt: true },
+      enabled: true,
+      findRegex: '/a/u',
+      id: 'r1',
+      maxDepth: null,
+      minDepth: null,
+      name: '正则',
+      order: 100,
+      replaceString: 'a',
+      resourceId: 'regex:r1',
+      runOnEdit: false,
+      source: { aiOutput: true, reasoning: false, slashCommand: false, userInput: false, worldInfo: false },
+      substituteRegex: 'none',
+      trimStrings: [],
+      unknownFields: { keep: true },
+      unknownPlacements: [],
+    });
+    base.resources.scripts.character.scripts.push({
+      button: { buttons: [], enabled: false },
+      content: 'line 1\nline 2',
+      data: { nested: { key: 'old', untouched: true } },
+      enabled: false,
+      exportWith: { button: true, data: true },
+      id: 's1',
+      info: 'info',
+      name: '脚本',
+      resourceId: 'script:s1',
+      unknownFields: { keep: true },
+    });
+    base.resources.scripts.character.trees = [{ scriptId: 's1', type: 'script' }];
+    const working = klona(base);
+    working.resources.regexes.character.regexes[0].source.reasoning = true;
+    working.resources.scripts.character.scripts[0].data.nested = { key: 'new', untouched: true };
+    working.resources.scripts.character.scripts[0].content = 'line 1\nline 2 changed';
+    const operations = diffCardStates(base, working);
+    expect(operations.map(item => item.path)).toEqual(
+      expect.arrayContaining([
+        '/resources/regexes/character/items/regex:r1/source/reasoning',
+        '/resources/scripts/character/items/script:s1/data/nested/key',
+        '/resources/scripts/character/items/script:s1/content',
+      ]),
+    );
+    expect(applyStateOperations(base, operations)).toEqual(working);
+  });
+
   it('读取并应用全部语义路径分支', () => {
     const state = transactionState();
     expect(readStatePath(state, '/character/creator')).toBe('作者');

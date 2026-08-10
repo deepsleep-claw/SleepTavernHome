@@ -1,6 +1,10 @@
 import { tool, type Tool } from 'ai';
 import { z } from 'zod';
+import { parseYamlObject } from '../mapping/serde';
 import { assessSkillMutation } from '../skills/skill-registry';
+import { parentWorkspacePath } from '../workspace/path';
+import { applyUnifiedPatch } from '../workspace/unified-patch';
+import { maskSecretsForModel, restoreSecretsFromModel } from '../workspace/secret-protection';
 import type { WorkspaceRepository } from '../workspace/types';
 
 export type ToolConfirmation = {
@@ -10,7 +14,7 @@ export type ToolConfirmation = {
 };
 
 export type RunnerTool = {
-  confirmation?: (input: unknown, toolCallId: string) => ToolConfirmation | undefined;
+  confirmation?: (input: unknown, toolCallId: string) => Promise<ToolConfirmation | undefined> | ToolConfirmation | undefined;
   definition: Tool;
   execute: (input: unknown, toolCallId: string) => Promise<unknown>;
   name: string;
@@ -84,9 +88,74 @@ function skillConfirmation(
     : undefined;
 }
 
+export type WorkspaceRunnerToolOptions = {
+  canWriteNonCharacterResources?: () => boolean;
+};
+
+type MutationOperation = 'delete' | 'move' | 'patch' | 'write';
+
+function nonCharacterResourcePath(path: string): boolean {
+  return /^\/(?:regexes|tavern-helper-scripts)\/(?:global|preset-current)(?:\/|$)/u.test(path);
+}
+
+function characterScriptPath(path: string): boolean {
+  return path.startsWith('/tavern-helper-scripts/character/');
+}
+
+async function currentScriptEnabled(repository: WorkspaceRepository, path: string): Promise<boolean> {
+  const directory = parentWorkspacePath(path);
+  try {
+    const info = await repository.read(`${directory}/info.yaml`);
+    return parseYamlObject(info.content, info.path).enabled === true;
+  } catch {
+    return false;
+  }
+}
+
+async function resourceConfirmation(
+  operation: MutationOperation,
+  path: string,
+  input: unknown,
+  repository: WorkspaceRepository,
+  options: WorkspaceRunnerToolOptions,
+  toolCallId: string,
+  toolName: string,
+): Promise<ToolConfirmation | undefined> {
+  if (nonCharacterResourcePath(path)) {
+    if (!options.canWriteNonCharacterResources?.()) {
+      throw new Error(
+        'NON_CHARACTER_RESOURCE_WRITE_DISABLED：全局与当前预设的正则/脚本默认只读。请让用户在开发者模式中显式开启危险写入权限。',
+      );
+    }
+    return { description: `高危非角色资源操作需要确认：${operation} ${path}`, toolCallId, toolName };
+  }
+  if (!characterScriptPath(path) || operation === 'delete' || operation === 'move') return undefined;
+  if (path.endsWith('/script.js') && (await currentScriptEnabled(repository, path))) {
+    return { description: `修改已启用脚本的代码需要确认：${path}`, toolCallId, toolName };
+  }
+  if (!path.endsWith('/info.yaml')) return undefined;
+  let candidate: string;
+  try {
+    if (operation === 'write') candidate = (input as { content: string }).content;
+    else {
+      const current = await repository.read(path);
+      candidate = applyUnifiedPatch(current.content, (input as { patch: string }).patch);
+    }
+    const nextEnabled = parseYamlObject(candidate, path).enabled === true;
+    const previousEnabled = await currentScriptEnabled(repository, path);
+    if (nextEnabled && !previousEnabled) {
+      return { description: `启用或创建已启用脚本需要确认：${path}`, toolCallId, toolName };
+    }
+  } catch {
+    // 无效 YAML 会在文件工具或候选物化时返回明确错误，不在确认阶段吞掉真正写入。
+  }
+  return undefined;
+}
+
 export function createWorkspaceRunnerTools(
   repository: WorkspaceRepository,
   existingSkillIds: string[] = [],
+  options: WorkspaceRunnerToolOptions = {},
 ): RunnerTool[] {
   return [
     {
@@ -110,47 +179,78 @@ export function createWorkspaceRunnerTools(
       }),
       execute: async input => {
         const value = input as { limit?: number; offset?: number; path: string };
-        return lineNumberedView(await repository.read(value.path), value);
+        const file = await repository.read(value.path);
+        const protectedView = await maskSecretsForModel(file.content, file.path);
+        return {
+          ...lineNumberedView({ ...file, content: protectedView.maskedContent }, value),
+          secretProtection: {
+            masked: protectedView.findings.length,
+            warning: protectedView.warning,
+          },
+        };
       },
       name: 'read_file',
       readonly: true,
     },
     {
-      confirmation: (input, toolCallId) =>
-        skillConfirmation('write', (input as { path: string }).path, existingSkillIds, toolCallId, 'write_file'),
+      confirmation: async (input, toolCallId) => {
+        const path = (input as { path: string }).path;
+        return (
+          skillConfirmation('write', path, existingSkillIds, toolCallId, 'write_file') ??
+          (await resourceConfirmation('write', path, input, repository, options, toolCallId, 'write_file'))
+        );
+      },
       definition: tool({
         description: '新建或整体写入文本文件。已有长文件优先使用apply_patch。',
         inputSchema: z.object({ content: z.string(), path: pathSchema }),
       }),
       execute: async (input, toolCallId) => {
         const value = input as { content: string; path: string };
-        await repository.write(value.path, value.content, toolCallId);
-        return { path: value.path, written: true };
+        let current = '';
+        try {
+          current = (await repository.read(value.path)).content;
+        } catch {
+          // 新文件没有可恢复的敏感占位符。
+        }
+        const restored = await restoreSecretsFromModel(current, value.content, value.path);
+        await repository.write(value.path, restored.content, toolCallId);
+        return { path: value.path, secretProtectionWarning: restored.warning, written: true };
       },
       name: 'write_file',
       readonly: false,
     },
     {
-      confirmation: (input, toolCallId) =>
-        skillConfirmation('patch', (input as { path: string }).path, existingSkillIds, toolCallId, 'apply_patch'),
+      confirmation: async (input, toolCallId) => {
+        const path = (input as { path: string }).path;
+        return (
+          skillConfirmation('patch', path, existingSkillIds, toolCallId, 'apply_patch') ??
+          (await resourceConfirmation('patch', path, input, repository, options, toolCallId, 'apply_patch'))
+        );
+      },
       definition: tool({
         description: '用精确的统一Diff修改已有文本文件；上下文不匹配时失败，不做模糊套用。',
         inputSchema: z.object({ patch: z.string().min(1), path: pathSchema }),
       }),
       execute: async (input, toolCallId) => {
         const value = input as { patch: string; path: string };
-        await repository.patch(value.path, value.patch, toolCallId);
-        return { patched: true, path: value.path };
+        const current = await repository.read(value.path);
+        const masked = await maskSecretsForModel(current.content, current.path);
+        const patched = applyUnifiedPatch(masked.maskedContent, value.patch);
+        const restored = await restoreSecretsFromModel(current.content, patched, current.path);
+        await repository.write(current.path, restored.content, toolCallId);
+        return { patched: true, path: value.path, secretProtectionWarning: restored.warning };
       },
       name: 'apply_patch',
       readonly: false,
     },
     {
-      confirmation: (input, toolCallId) => {
+      confirmation: async (input, toolCallId) => {
         const value = input as { from: string; to: string };
         return (
           skillConfirmation('move', value.from, existingSkillIds, toolCallId, 'move_path') ??
-          skillConfirmation('move', value.to, existingSkillIds, toolCallId, 'move_path')
+          skillConfirmation('move', value.to, existingSkillIds, toolCallId, 'move_path') ??
+          (await resourceConfirmation('move', value.from, input, repository, options, toolCallId, 'move_path')) ??
+          (await resourceConfirmation('move', value.to, input, repository, options, toolCallId, 'move_path'))
         );
       },
       definition: tool({
@@ -166,8 +266,13 @@ export function createWorkspaceRunnerTools(
       readonly: false,
     },
     {
-      confirmation: (input, toolCallId) =>
-        skillConfirmation('delete', (input as { path: string }).path, existingSkillIds, toolCallId, 'delete_path'),
+      confirmation: async (input, toolCallId) => {
+        const path = (input as { path: string }).path;
+        return (
+          skillConfirmation('delete', path, existingSkillIds, toolCallId, 'delete_path') ??
+          (await resourceConfirmation('delete', path, input, repository, options, toolCallId, 'delete_path'))
+        );
+      },
       definition: tool({
         description: '删除文件或整个目录。删除世界书等高危变更仍会在最终提交阶段再次确认。',
         inputSchema: z.object({ path: pathSchema }),
@@ -198,7 +303,29 @@ export function createWorkspaceRunnerTools(
           wordMatch: z.boolean().optional(),
         }),
       }),
-      execute: async input => repository.search(input as Parameters<WorkspaceRepository['search']>[0]),
+      execute: async input => {
+        const result = await repository.search(input as Parameters<WorkspaceRepository['search']>[0]);
+        const maskedLines = new Map<string, string[]>();
+        for (const path of new Set(result.matches.map(match => match.path))) {
+          const file = await repository.read(path);
+          const masked = await maskSecretsForModel(file.content, file.path);
+          maskedLines.set(path, masked.maskedContent.split(/\r\n|\n|\r/u));
+        }
+        return {
+          ...result,
+          matches: result.matches.map(match => {
+            const lines = maskedLines.get(match.path) ?? [];
+            const beforeCount = match.contextBefore.length;
+            const afterCount = match.contextAfter.length;
+            return {
+              ...match,
+              contextAfter: lines.slice(match.line, match.line + afterCount),
+              contextBefore: lines.slice(Math.max(0, match.line - 1 - beforeCount), match.line - 1),
+              text: lines[match.line - 1] ?? '',
+            };
+          }),
+        };
+      },
       name: 'search_files',
       readonly: true,
     },

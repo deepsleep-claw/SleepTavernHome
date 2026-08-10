@@ -20,6 +20,40 @@ export type MergePreparation = {
 
 export type ApprovalDecision = 'agent' | 'current';
 
+type LineChange = { end: number; replacement: string[]; start: number };
+
+function lineChange(base: string, changed: string): LineChange | undefined {
+  const baseLines = base.split('\n');
+  const changedLines = changed.split('\n');
+  let start = 0;
+  while (start < baseLines.length && start < changedLines.length && baseLines[start] === changedLines[start]) start += 1;
+  if (start === baseLines.length && start === changedLines.length) return undefined;
+  let baseEnd = baseLines.length;
+  let changedEnd = changedLines.length;
+  while (baseEnd > start && changedEnd > start && baseLines[baseEnd - 1] === changedLines[changedEnd - 1]) {
+    baseEnd -= 1;
+    changedEnd -= 1;
+  }
+  return { end: baseEnd, replacement: changedLines.slice(start, changedEnd), start };
+}
+
+function mergeIndependentLineChanges(base: string, agent: string, current: string): string | undefined {
+  const agentChange = lineChange(base, agent);
+  const currentChange = lineChange(base, current);
+  if (!agentChange) return current;
+  if (!currentChange) return agent;
+  const separate = agentChange.end <= currentChange.start || currentChange.end <= agentChange.start;
+  const sameInsertionPoint =
+    agentChange.start === agentChange.end &&
+    currentChange.start === currentChange.end &&
+    agentChange.start === currentChange.start;
+  if (!separate || sameInsertionPoint) return undefined;
+  const lines = base.split('\n');
+  const changes = [agentChange, currentChange].sort((left, right) => right.start - left.start);
+  for (const change of changes) lines.splice(change.start, change.end - change.start, ...change.replacement);
+  return lines.join('\n');
+}
+
 export function prepareThreeWayMerge(
   base: CardWorkspaceState,
   working: CardWorkspaceState,
@@ -42,9 +76,18 @@ export function prepareThreeWayMerge(
       redundantPaths.push(change.path);
       continue;
     }
+    const baseValue = readStatePath(base, change.path);
+    if (typeof baseValue === 'string' && typeof agentValue === 'string' && typeof currentValue === 'string') {
+      const merged = mergeIndependentLineChanges(baseValue, agentValue, currentValue);
+      if (merged !== undefined) {
+        if (canonicalEqual(merged, currentValue)) redundantPaths.push(change.path);
+        else cleanChanges.push({ ...change, after: merged, before: currentValue });
+        continue;
+      }
+    }
     conflicts.push({
       agent: klona(agentValue),
-      base: klona(readStatePath(base, change.path)),
+      base: klona(baseValue),
       current: klona(currentValue),
       label: change.label,
       path: change.path,
@@ -68,6 +111,9 @@ export function resolveMerge(
   preparation: MergePreparation,
   decisions: Record<string, ApprovalDecision>,
 ): { operations: StateOperation[]; state: CardWorkspaceState } {
-  const operations = preparation.agentChanges.filter(change => decisions[change.path] === 'agent');
+  const cleanByPath = new Map(preparation.cleanChanges.map(change => [change.path, change]));
+  const operations = preparation.agentChanges
+    .filter(change => decisions[change.path] === 'agent')
+    .map(change => cleanByPath.get(change.path) ?? change);
   return { operations, state: applyStateOperations(current, operations) };
 }

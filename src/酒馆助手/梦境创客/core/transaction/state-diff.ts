@@ -1,5 +1,12 @@
 import { klona } from 'klona';
-import type { CardWorkspaceState, WorldbookData, WorldbookEntryData } from '../mapping/types';
+import type {
+  CardWorkspaceState,
+  TavernRegexData,
+  TavernResourceScope,
+  TavernScriptData,
+  WorldbookData,
+  WorldbookEntryData,
+} from '../mapping/types';
 import { canonicalEqual } from './canonical';
 
 export type StateOperationKind = 'create' | 'delete' | 'modify' | 'reorder';
@@ -95,6 +102,174 @@ function diffWorldbook(before: WorldbookData, after: WorldbookData, target: Stat
   pushOperation(target, operation(`${root}/entries-order`, `调整世界书“${after.name}”条目顺序`, beforeOrder, afterOrder, 'reorder'));
 }
 
+function resourceHighRisk(scope: TavernResourceScope, before?: TavernScriptData, after?: TavernScriptData): boolean {
+  if (scope !== 'character') return true;
+  if (!after) return false;
+  if (!before) return after.enabled;
+  return (!before.enabled && after.enabled) || (before.enabled && before.content !== after.content);
+}
+
+function plainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof RegExp);
+}
+
+function diffSemanticFields(
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+  root: string,
+  label: string,
+  target: StateOperation[],
+  highRisk: (path: string, before: unknown, after: unknown) => boolean,
+): void {
+  for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    const beforeValue = before[key];
+    const afterValue = after[key];
+    const path = `${root}/${escapePath(key)}`;
+    if (plainRecord(beforeValue) && plainRecord(afterValue)) {
+      diffSemanticFields(beforeValue, afterValue, path, label, target, highRisk);
+    } else {
+      pushOperation(
+        target,
+        operation(path, `${label} · ${key}`, beforeValue, afterValue, undefined, highRisk(path, beforeValue, afterValue)),
+      );
+    }
+  }
+}
+
+function editableRegex(regex: TavernRegexData): Record<string, unknown> {
+  const { id: _id, order: _order, resourceId: _resourceId, unknownFields: _unknown, unknownPlacements: _placements, ...rest } = regex;
+  return rest;
+}
+
+function editableScript(script: TavernScriptData): Record<string, unknown> {
+  const { id: _id, resourceId: _resourceId, unknownFields: _unknown, ...rest } = script;
+  return rest;
+}
+
+function diffResourceScopes(before: CardWorkspaceState, after: CardWorkspaceState, target: StateOperation[]): void {
+  for (const scope of ['character', 'global', 'preset-current'] as const) {
+    const beforeRegex = before.resources.regexes[scope];
+    const afterRegex = after.resources.regexes[scope];
+    const regexRoot = `/resources/regexes/${scope}`;
+    pushOperation(
+      target,
+      operation(
+        `${regexRoot}/metadata`,
+        `修改${scope}正则作用域信息`,
+        { available: beforeRegex.available, reason: beforeRegex.reason, targetId: beforeRegex.targetId },
+        { available: afterRegex.available, reason: afterRegex.reason, targetId: afterRegex.targetId },
+        'modify',
+        true,
+      ),
+    );
+    diffIdentified(
+      beforeRegex.regexes,
+      afterRegex.regexes,
+      `${regexRoot}/items`,
+      item => item.resourceId,
+      item => `正则“${item.name}”`,
+      target,
+      scope !== 'character',
+    );
+    const beforeRegexById = new Map(beforeRegex.regexes.map(item => [item.resourceId, item]));
+    for (const regex of afterRegex.regexes) {
+      const previous = beforeRegexById.get(regex.resourceId);
+      if (previous) {
+        diffSemanticFields(
+          editableRegex(previous),
+          editableRegex(regex),
+          `${regexRoot}/items/${escapePath(regex.resourceId)}`,
+          `修改正则“${regex.name}”`,
+          target,
+          () => scope !== 'character',
+        );
+      }
+    }
+    pushOperation(
+      target,
+      operation(
+        `${regexRoot}/order`,
+        `调整${scope}正则顺序`,
+        beforeRegex.regexes.map(item => item.resourceId),
+        afterRegex.regexes.map(item => item.resourceId),
+        'reorder',
+        scope !== 'character',
+      ),
+    );
+
+    const beforeScripts = before.resources.scripts[scope];
+    const afterScripts = after.resources.scripts[scope];
+    const scriptRoot = `/resources/scripts/${scope}`;
+    pushOperation(
+      target,
+      operation(
+        `${scriptRoot}/metadata`,
+        `修改${scope}脚本作用域信息`,
+        { available: beforeScripts.available, reason: beforeScripts.reason, targetId: beforeScripts.targetId },
+        { available: afterScripts.available, reason: afterScripts.reason, targetId: afterScripts.targetId },
+        'modify',
+        true,
+      ),
+    );
+    const beforeScriptById = new Map(beforeScripts.scripts.map(item => [item.resourceId, item]));
+    const afterScriptById = new Map(afterScripts.scripts.map(item => [item.resourceId, item]));
+    for (const script of beforeScripts.scripts) {
+      if (!afterScriptById.has(script.resourceId)) {
+        pushOperation(
+          target,
+          operation(
+            `${scriptRoot}/items/${escapePath(script.resourceId)}`,
+            `删除脚本“${script.name}”`,
+            script,
+            undefined,
+            'delete',
+            scope !== 'character',
+          ),
+        );
+      }
+    }
+    for (const script of afterScripts.scripts) {
+      const previous = beforeScriptById.get(script.resourceId);
+      if (!previous) {
+        pushOperation(
+          target,
+          operation(
+              `${scriptRoot}/items/${escapePath(script.resourceId)}`,
+              `新增脚本“${script.name}”`,
+              undefined,
+              script,
+              'create',
+              resourceHighRisk(scope, undefined, script),
+          ),
+        );
+      } else {
+        diffSemanticFields(
+          editableScript(previous),
+          editableScript(script),
+          `${scriptRoot}/items/${escapePath(script.resourceId)}`,
+          `修改脚本“${script.name}”`,
+          target,
+          path =>
+            scope !== 'character' ||
+            (path.endsWith('/enabled') && !previous.enabled && script.enabled) ||
+            (path.endsWith('/content') && previous.enabled),
+        );
+      }
+    }
+    pushOperation(
+      target,
+      operation(
+        `${scriptRoot}/trees`,
+        `调整${scope}脚本树`,
+        beforeScripts.trees,
+        afterScripts.trees,
+        'reorder',
+        scope !== 'character',
+      ),
+    );
+  }
+}
+
 export function diffCardStates(before: CardWorkspaceState, after: CardWorkspaceState): StateOperation[] {
   const result: StateOperation[] = [];
   for (const field of Object.keys(before.character.fields) as Array<keyof CardWorkspaceState['character']['fields']>) {
@@ -179,21 +354,7 @@ export function diffCardStates(before: CardWorkspaceState, after: CardWorkspaceS
     );
   }
 
-  for (const kind of ['regexes', 'scripts'] as const) {
-    for (const scope of ['character', 'global', 'preset-current'] as const) {
-      pushOperation(
-        result,
-        operation(
-          `/resources/${kind}/${scope}`,
-          `修改${scope}作用域的${kind === 'regexes' ? '正则' : '酒馆助手脚本'}`,
-          before.resources[kind][scope],
-          after.resources[kind][scope],
-          'modify',
-          scope !== 'character',
-        ),
-      );
-    }
-  }
+  diffResourceScopes(before, after, result);
 
   const deletedEntries = result.filter(item => item.kind === 'delete' && item.path.includes('/entries/'));
   const originalEntryCount = before.worldbooks.reduce((total, book) => total + book.entries.length, 0);
@@ -236,9 +397,22 @@ export function readStatePath(state: CardWorkspaceState, path: string): unknown 
   }
   if (segments[0] === 'bindings') return state.bindings[segments[1] as keyof typeof state.bindings];
   if (segments[0] === 'resources') {
-    const kind = segments[1] as keyof CardWorkspaceState['resources'];
-    const scope = segments[2] as keyof CardWorkspaceState['resources'][typeof kind];
-    return state.resources[kind]?.[scope];
+    const kind = segments[1] as 'regexes' | 'scripts';
+    const scope = segments[2] as TavernResourceScope;
+    const common = state.resources[kind][scope];
+    if (segments.length === 3) return common;
+    if (segments[3] === 'metadata') {
+      return { available: common.available, reason: common.reason, targetId: common.targetId };
+    }
+    if (kind === 'regexes') {
+      const resource = state.resources.regexes[scope];
+      if (segments[3] === 'order') return resource.regexes.map(item => item.resourceId);
+      if (segments[3] === 'items') return readNested(resource.regexes.find(item => item.resourceId === segments[4]), segments.slice(5));
+    } else {
+      const resource = state.resources.scripts[scope];
+      if (segments[3] === 'trees') return resource.trees;
+      if (segments[3] === 'items') return readNested(resource.scripts.find(item => item.resourceId === segments[4]), segments.slice(5));
+    }
   }
   return undefined;
 }
@@ -257,6 +431,27 @@ function replaceIdentified<T>(items: T[], identity: (item: T) => string, id: str
 function reorder<T>(items: T[], identity: (item: T) => string, order: string[]): T[] {
   const positions = new Map(order.map((id, index) => [id, index]));
   return [...items].sort((left, right) => (positions.get(identity(left)) ?? Number.MAX_SAFE_INTEGER) - (positions.get(identity(right)) ?? Number.MAX_SAFE_INTEGER));
+}
+
+function readNested(value: unknown, segments: string[]): unknown {
+  let current = value;
+  for (const segment of segments) {
+    if (!plainRecord(current)) return undefined;
+    current = current[segment];
+  }
+  return current;
+}
+
+function writeNested(target: Record<string, unknown>, segments: string[], value: unknown): void {
+  if (segments.length === 0) return;
+  let current = target;
+  for (const segment of segments.slice(0, -1)) {
+    if (!plainRecord(current[segment])) current[segment] = {};
+    current = current[segment] as Record<string, unknown>;
+  }
+  const key = segments.at(-1)!;
+  if (value === undefined) delete current[key];
+  else current[key] = klona(value);
 }
 
 export function applyStateOperation(state: CardWorkspaceState, input: StateOperation, side: 'after' | 'before' = 'after'): void {
@@ -294,9 +489,35 @@ export function applyStateOperation(state: CardWorkspaceState, input: StateOpera
     return;
   }
   if (segments[0] === 'resources') {
-    const kind = segments[1] as keyof CardWorkspaceState['resources'];
-    const scope = segments[2] as keyof CardWorkspaceState['resources'][typeof kind];
-    Object.assign(state.resources[kind], { [scope]: value });
+    const kind = segments[1] as 'regexes' | 'scripts';
+    const scope = segments[2] as TavernResourceScope;
+    if (segments.length === 3) {
+      Object.assign(state.resources[kind], { [scope]: value });
+    } else if (segments[3] === 'metadata') {
+      Object.assign(state.resources[kind][scope], value);
+    } else if (kind === 'regexes') {
+      const resource = state.resources.regexes[scope];
+      if (segments[3] === 'order') resource.regexes = reorder(resource.regexes, item => item.resourceId, value as string[]);
+      else if (segments[3] === 'items') {
+        if (segments.length === 5) {
+          replaceIdentified(resource.regexes, item => item.resourceId, segments[4], value as TavernRegexData | undefined);
+        } else {
+          const regex = resource.regexes.find(item => item.resourceId === segments[4]);
+          if (regex) writeNested(regex as unknown as Record<string, unknown>, segments.slice(5), value);
+        }
+      }
+    } else {
+      const resource = state.resources.scripts[scope];
+      if (segments[3] === 'trees') resource.trees = value as typeof resource.trees;
+      else if (segments[3] === 'items') {
+        if (segments.length === 5) {
+          replaceIdentified(resource.scripts, item => item.resourceId, segments[4], value as TavernScriptData | undefined);
+        } else {
+          const script = resource.scripts.find(item => item.resourceId === segments[4]);
+          if (script) writeNested(script as unknown as Record<string, unknown>, segments.slice(5), value);
+        }
+      }
+    }
   }
 }
 

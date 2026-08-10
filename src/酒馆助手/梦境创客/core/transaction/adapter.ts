@@ -4,6 +4,7 @@ import { applyStateOperation, type StateOperation } from './state-diff';
 
 export interface CardStateAdapter {
   apply(operation: StateOperation): Promise<StateOperation | void>;
+  applyBatch?(operations: StateOperation[]): Promise<Array<StateOperation | void>>;
   read(): Promise<CardWorkspaceState>;
 }
 

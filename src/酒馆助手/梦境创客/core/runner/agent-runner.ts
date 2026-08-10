@@ -271,12 +271,12 @@ export class AgentRunner {
     const target = this.toolMap.get(call.toolName);
     if (!target) throw new Error(`模型调用了未知工具：${call.toolName}`);
     await this.journal.append({ at: this.now(), call, type: 'tool-started' });
-    const confirmation = target.confirmation?.(call.input, call.toolCallId);
+    const confirmation = await target.confirmation?.(call.input, call.toolCallId);
     if (confirmation) {
       await this.setStatus('waiting-approval');
       const approved = (await this.requestApproval?.(confirmation)) ?? false;
       await this.setStatus('running');
-      if (!approved) return { approved: false, message: '用户拒绝了这次高危Skill操作。' };
+      if (!approved) return { approved: false, message: '用户拒绝了这次高危操作。' };
     }
     return target.execute(call.input, call.toolCallId);
   }

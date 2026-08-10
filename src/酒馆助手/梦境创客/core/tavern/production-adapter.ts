@@ -122,6 +122,30 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
     return normalized;
   }
 
+  async applyBatch(operations: StateOperation[]): Promise<Array<StateOperation | void>> {
+    if (operations.length === 0) return [];
+    const roots = new Set(operations.map(operation => decodePath(operation.path).slice(0, 3).join('/')));
+    const [first] = operations;
+    const segments = decodePath(first.path);
+    if (segments[0] !== 'resources' || roots.size !== 1) {
+      const result: Array<StateOperation | void> = [];
+      for (const operation of operations) result.push(await this.apply(operation));
+      return result;
+    }
+    const current = this.cached ?? (await this.read());
+    const next = klona(current);
+    operations.forEach(operation => applyStateOperation(next, operation));
+    const kind = segments[1] as keyof CardWorkspaceState['resources'];
+    const scope = segments[2] as keyof CardWorkspaceState['resources'][typeof kind];
+    if (current.resources[kind][scope].targetId !== next.resources[kind][scope].targetId) {
+      throw new Error(`TARGET_SCOPE_CHANGED：${scope}作用域目标已经切换，请重新读取工作区后再修改。`);
+    }
+    if (kind === 'regexes') await this.bridge.replaceRawRegexes(scope, writeRegexScope(next.resources.regexes[scope]));
+    else await this.bridge.replaceRawScriptTrees(scope, writeScriptScope(next.resources.scripts[scope]));
+    this.cached = next;
+    return operations.map(() => undefined);
+  }
+
   private async applyWorldbook(
     operation: StateOperation,
     current: CardWorkspaceState,

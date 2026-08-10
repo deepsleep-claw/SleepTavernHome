@@ -21,6 +21,30 @@ function inverse(operation: StateOperation): StateOperation {
   return { ...operation, after: operation.before, before: operation.after };
 }
 
+function resourceRoot(operation: StateOperation): string | undefined {
+  const match = operation.path.match(/^\/resources\/(?:regexes|scripts)\/(?:character|global|preset-current)(?:\/|$)/u);
+  return match?.[0].replace(/\/$/u, '');
+}
+
+async function applyOperations(
+  adapter: CardStateAdapter,
+  operations: StateOperation[],
+  onApplied: (operation: StateOperation) => void,
+): Promise<void> {
+  for (let index = 0; index < operations.length; ) {
+    const root = resourceRoot(operations[index]);
+    if (root && adapter.applyBatch) {
+      const batch: StateOperation[] = [];
+      while (index < operations.length && resourceRoot(operations[index]) === root) batch.push(operations[index++]);
+      const normalized = await adapter.applyBatch(batch);
+      batch.forEach((operation, batchIndex) => onApplied(normalized[batchIndex] || operation));
+      continue;
+    }
+    const operation = operations[index++];
+    onApplied((await adapter.apply(operation)) || operation);
+  }
+}
+
 function verifyOperations(expected: CardWorkspaceState, actual: CardWorkspaceState, operations: StateOperation[]): void {
   for (const operation of operations) {
     if (!canonicalEqual(readStatePath(expected, operation.path), readStatePath(actual, operation.path))) {
@@ -46,15 +70,16 @@ export async function commitWorkingCopy(options: {
   );
   const applied: StateOperation[] = [];
   try {
-    for (const operation of operations) {
-      const normalized = (await options.adapter.apply(operation)) || operation;
+    await applyOperations(options.adapter, operations, normalized => {
+      const operation = operations.find(candidate => candidate.path === normalized.path && candidate.kind === normalized.kind);
+      if (!operation) throw new Error(`无法定位规范化操作：${normalized.path}`);
       if (normalized !== operation) {
         const index = resolved.operations.indexOf(operation);
         if (index >= 0) resolved.operations[index] = normalized;
         applyStateOperation(resolved.state, normalized);
       }
       applied.push(normalized);
-    }
+    });
     const actual = await options.adapter.read();
     verifyOperations(resolved.state, actual, operations);
     return { preparation, state: actual, status: 'committed' };
@@ -65,9 +90,7 @@ export async function commitWorkingCopy(options: {
       if ('beginRollback' in options.adapter && typeof options.adapter.beginRollback === 'function') {
         options.adapter.beginRollback();
       }
-      for (const operation of applied.reverse()) {
-        await options.adapter.apply(inverse(operation));
-      }
+      await applyOperations(options.adapter, applied.reverse().map(inverse), () => undefined);
       const rolledBack = await options.adapter.read();
       verifyOperations(current, rolledBack, applied);
     } catch (rollback) {

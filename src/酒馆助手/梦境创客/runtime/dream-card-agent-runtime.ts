@@ -52,6 +52,7 @@ export type DreamCardAgentRuntimeState = {
   currentCharacter?: { avatarId: string; bindingId: string; name: string };
   debugLogs: DebugLogEntry[];
   developerMode: boolean;
+  dangerousNonCharacterResourceWrites: boolean;
   error?: string;
   floatingButton: boolean;
   floatingButtonAnchor: FloatingButtonAnchor;
@@ -135,6 +136,7 @@ export class DreamCardAgentRuntime {
       busy: false,
       debugLogs: [],
       developerMode: settings.developerMode,
+      dangerousNonCharacterResourceWrites: settings.dangerousNonCharacterResourceWrites,
       floatingButton: settings.floatingButton,
       floatingButtonAnchor: settings.floatingButtonAnchor,
       floatingButtonOffset: settings.floatingButtonOffset,
@@ -200,6 +202,7 @@ export class DreamCardAgentRuntime {
         executor: this.executorFactory(profile),
         lock: this.lock,
         mode: input.mode,
+        canWriteNonCharacterResources: () => this.canWriteNonCharacterResources(),
         now: this.now,
         onPersist: async (runtime, files) => {
           await persistence.persist(runtime, files, retainedSnapshotBlobs(runtime, snapshotBlobs.dump()));
@@ -260,6 +263,7 @@ export class DreamCardAgentRuntime {
           executor: this.executorFactory(profile),
           lock: this.lock,
           now: this.now,
+          canWriteNonCharacterResources: () => this.canWriteNonCharacterResources(),
           onPersist: async (runtime, files) => {
             await persistence.persist(runtime, files, retainedSnapshotBlobs(runtime, snapshotBlobs.dump()));
           },
@@ -651,6 +655,7 @@ export class DreamCardAgentRuntime {
   }
 
   async updateSettings(input: {
+    dangerousNonCharacterResourceWrites?: boolean;
     developerMode?: boolean;
     floatingButton?: boolean;
     floatingButtonAnchor?: FloatingButtonAnchor;
@@ -658,6 +663,12 @@ export class DreamCardAgentRuntime {
     onboardingDone?: boolean;
   }): Promise<void> {
     const settings = this.settingsStore.load();
+    if (input.dangerousNonCharacterResourceWrites !== undefined) {
+      if (!settings.developerMode && input.dangerousNonCharacterResourceWrites) {
+        throw new Error('请先开启开发者模式，再启用非角色正则与脚本写入权限。');
+      }
+      settings.dangerousNonCharacterResourceWrites = input.dangerousNonCharacterResourceWrites;
+    }
     if (input.developerMode !== undefined) settings.developerMode = input.developerMode;
     if (input.floatingButton !== undefined) settings.floatingButton = input.floatingButton;
     if (input.floatingButtonAnchor !== undefined) settings.floatingButtonAnchor = input.floatingButtonAnchor;
@@ -845,6 +856,7 @@ export class DreamCardAgentRuntime {
     this.state.activePresetId = settings.activePresetId;
     this.state.agentConfigurations = settings.agentConfigurations;
     this.state.developerMode = settings.developerMode;
+    this.state.dangerousNonCharacterResourceWrites = settings.dangerousNonCharacterResourceWrites;
     this.state.floatingButton = settings.floatingButton;
     this.state.floatingButtonAnchor = settings.floatingButtonAnchor;
     this.state.floatingButtonOffset = settings.floatingButtonOffset;
@@ -855,6 +867,11 @@ export class DreamCardAgentRuntime {
       .filter(file => file.bindingId === 'global')
       .reduce((total, file) => total + file.size, 0);
     this.emit();
+  }
+
+  private canWriteNonCharacterResources(): boolean {
+    const settings = this.settingsStore.load();
+    return settings.developerMode && settings.dangerousNonCharacterResourceWrites;
   }
 
   private async run(action: () => Promise<void>): Promise<DreamCardAgentRuntimeState> {

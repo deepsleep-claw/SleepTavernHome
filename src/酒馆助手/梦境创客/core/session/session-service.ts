@@ -3,6 +3,7 @@ import type { ModelMessage } from 'ai';
 import type { ContentAddressedSnapshotStore } from '../history/snapshot-store';
 import { HistoryTimeline } from '../history/timeline';
 import { materializeCardWorkspace, projectCardWorkspace } from '../mapping/card-workspace-mapper';
+import { serializeYaml } from '../mapping/serde';
 import type { CardWorkspaceState } from '../mapping/types';
 import { compilePreset, DEFAULT_PRESET, type CompiledPreset, type StructuredPreset } from '../preset/compiler';
 import { PersistentRunnerJournal } from '../persistence/journal';
@@ -19,6 +20,7 @@ import { commitWorkingCopy } from '../transaction/commit';
 import { defaultApprovals, prepareThreeWayMerge, type ApprovalDecision } from '../transaction/merge';
 import { diffCardStates } from '../transaction/state-diff';
 import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
+import { scanSecrets } from '../workspace/secret-protection';
 import type { WorkspaceFile } from '../workspace/types';
 import { defaultPresetValues } from './prompt';
 import { globalAgentTaskLock, type GlobalAgentTaskLock } from './task-lock';
@@ -36,6 +38,7 @@ import type {
 
 type SessionServiceOptions = {
   adapter: CardStateAdapter;
+  canWriteNonCharacterResources?: () => boolean;
   agentConfiguration?: SessionAgentConfiguration;
   contextWindow?: number;
   executor: ModelStepExecutor;
@@ -54,6 +57,10 @@ type SessionServiceOptions = {
 };
 
 const DEFAULT_SESSION_TITLE = '新的创作会话';
+
+function isNonCharacterResourcePath(path: string): boolean {
+  return /^\/(?:regexes|tavern-helper-scripts)\/(?:global|preset-current)(?:\/|$)/u.test(path);
+}
 
 function sessionTitleFromMessage(message: string): string {
   const normalized = message.trim().replace(/\s+/gu, ' ');
@@ -141,6 +148,32 @@ function conflictsChanged(previous: PendingCandidate, current: ReturnType<typeof
   return canonicalStringify(previous.preparation.conflicts) !== canonicalStringify(current.conflicts);
 }
 
+async function markSecretRemovalRisks(preparation: ReturnType<typeof prepareThreeWayMerge>): Promise<void> {
+  for (const change of preparation.agentChanges) {
+    if (!change.path.startsWith('/resources/scripts/') || change.kind === 'create') continue;
+    const dataPath = change.path.includes('/data/') || change.path.endsWith('/data');
+    const beforeScript = change.before as { data?: Record<string, unknown> } | undefined;
+    const afterScript = change.after as { data?: Record<string, unknown> } | undefined;
+    const beforeValue = dataPath ? change.before : beforeScript?.data;
+    const afterValue = dataPath ? change.after : afterScript?.data;
+    if (beforeValue === undefined) continue;
+    try {
+      const beforeText = serializeYaml({ value: beforeValue });
+      const afterText = serializeYaml({ value: afterValue ?? null });
+      const checkPath = '/tavern-helper-scripts/character/scripts/check/data.yaml';
+      const beforeFindings = await scanSecrets(beforeText, checkPath);
+      const afterFindings = await scanSecrets(afterText, checkPath);
+      const remaining = new Set(afterFindings.map(finding => afterText.slice(finding.start, finding.end)));
+      if (beforeFindings.some(finding => !remaining.has(beforeText.slice(finding.start, finding.end)))) {
+        change.highRisk = true;
+        change.label = `${change.label}（移除敏感内容）`;
+      }
+    } catch {
+      // 检测失败按 fail-open 策略继续，不阻断正常提交。
+    }
+  }
+}
+
 export class CardAgentSessionService {
   readonly bindingId: string;
   readonly characterName: string;
@@ -150,6 +183,7 @@ export class CardAgentSessionService {
   private activeCheckpointId?: string;
   private agentConfiguration: SessionAgentConfiguration;
   private readonly adapter: CardStateAdapter;
+  private readonly canWriteNonCharacterResources: () => boolean;
   private compiledPreset: CompiledPreset;
   private readonly contextWindow: number;
   private executor: ModelStepExecutor;
@@ -183,6 +217,7 @@ export class CardAgentSessionService {
     restored?: { files: WorkspaceFile[]; runtime: PersistedSessionRuntime },
   ) {
     this.adapter = options.adapter;
+    this.canWriteNonCharacterResources = options.canWriteNonCharacterResources ?? (() => false);
     this.agentConfiguration = klona(
       restored?.runtime.agentConfiguration ??
         options.agentConfiguration ?? {
@@ -300,7 +335,10 @@ export class CardAgentSessionService {
       ui: klona(this.ui.filter(item => !item.hidden)),
       warnings: [...this.warnings],
       workingChanges: this.repository?.changes() ?? [],
-      workingFiles: this.repository?.snapshot() ?? [],
+      workingFiles: (this.repository?.snapshot() ?? []).map(file => ({
+        ...file,
+        readonly: file.readonly || (!this.canWriteNonCharacterResources() && isNonCharacterResourcePath(file.path)),
+      })),
     };
   }
 
@@ -493,12 +531,14 @@ export class CardAgentSessionService {
   }
 
   async writeWorkingFile(path: string, content: string): Promise<SessionView> {
+    this.assertManualResourceWrite(path);
     return this.mutateWorkingCopy(`手动编辑 ${path}`, repository =>
       repository.write(path, content, `manual:${crypto.randomUUID()}`),
     );
   }
 
   async deleteWorkingPath(path: string): Promise<SessionView> {
+    this.assertManualResourceWrite(path);
     return this.mutateWorkingCopy(`手动删除 ${path}`, repository =>
       repository.remove(path, `manual:${crypto.randomUUID()}`),
     );
@@ -559,7 +599,7 @@ export class CardAgentSessionService {
 
   private createRepository(state: CardWorkspaceState): MemoryWorkspaceRepository {
     return new MemoryWorkspaceRepository({
-      files: [...projectCardWorkspace(state), ...projectSkills(this.skills)],
+      files: [...projectCardWorkspace(state, 100, { allowNonCharacterWrites: true }), ...projectSkills(this.skills)],
       readonlyRoots: ['/context', '/worldbooks-global-readonly', '/skills/builtin'],
     });
   }
@@ -573,7 +613,7 @@ export class CardAgentSessionService {
         .filter(event => event.type === 'tool-completed')
         .map(event => event.call.toolCallId),
       currentFiles,
-      files: [...projectCardWorkspace(state), ...projectSkills(this.skills)],
+      files: [...projectCardWorkspace(state, 100, { allowNonCharacterWrites: true }), ...projectSkills(this.skills)],
       readonlyRoots: ['/context', '/worldbooks-global-readonly', '/skills/builtin'],
     });
   }
@@ -600,8 +640,15 @@ export class CardAgentSessionService {
       tools: createWorkspaceRunnerTools(
         this.repository,
         this.skills.map(skill => skill.id),
+        { canWriteNonCharacterResources: this.canWriteNonCharacterResources },
       ),
     });
+  }
+
+  private assertManualResourceWrite(path: string): void {
+    if (isNonCharacterResourcePath(path) && !this.canWriteNonCharacterResources()) {
+      throw new Error('该路径属于全局或当前预设资源。请在开发者模式中显式启用危险写入权限后再修改。');
+    }
   }
 
   private async refreshCompiledHeader(): Promise<void> {
@@ -677,6 +724,7 @@ export class CardAgentSessionService {
     const candidateSkills = materializeUserSkills(this.repository.snapshot());
     const current = await this.adapter.read();
     const preparation = prepareThreeWayMerge(base, materialized.state, current);
+    await markSecretRemovalRisks(preparation);
     const skillChanges = diffSkills(this.skills, candidateSkills);
     const candidateSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
       card: materialized.state,
