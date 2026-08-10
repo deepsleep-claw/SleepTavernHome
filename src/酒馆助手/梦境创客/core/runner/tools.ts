@@ -18,6 +18,56 @@ export type RunnerTool = {
 };
 
 const pathSchema = z.string().min(1).describe('工作区内的POSIX路径');
+const DEFAULT_READ_LIMIT = 1_000;
+const MAX_READ_CHARACTERS = 100_000;
+
+function lineNumberedView(
+  file: Awaited<ReturnType<WorkspaceRepository['read']>>,
+  input: { limit?: number; offset?: number },
+) {
+  const lines = file.content === '' ? [] : file.content.split(/\r\n|\n|\r/u);
+  const offset = input.offset ?? 1;
+  const limit = input.limit ?? DEFAULT_READ_LIMIT;
+  const requested = lines.slice(offset - 1, offset - 1 + limit);
+  const selected: string[] = [];
+  let characters = 0;
+  let partialLine = false;
+  for (const line of requested) {
+    const extra = line.length + (selected.length > 0 ? 1 : 0);
+    if (characters + extra <= MAX_READ_CHARACTERS) {
+      selected.push(line);
+      characters += extra;
+      continue;
+    }
+    if (selected.length === 0) {
+      selected.push(`${line.slice(0, MAX_READ_CHARACTERS)}…`);
+      partialLine = true;
+    }
+    break;
+  }
+  const startLine = selected.length > 0 ? offset : 0;
+  const endLine = selected.length > 0 ? offset + selected.length - 1 : 0;
+  const moreLines = endLine > 0 && endLine < lines.length;
+  const width = Math.max(String(endLine || offset).length, 1);
+  return {
+    endLine,
+    lineNumbering: {
+      format: '<line> | <source>',
+      prefixesAreFileContent: false,
+      warning: '行号和分隔符只是读取视图的元数据，不属于文件正文；写入或Patch时不要复制它们。',
+    },
+    mediaType: file.mediaType,
+    nextOffset: moreLines && !partialLine ? endLine + 1 : undefined,
+    partialLine,
+    path: file.path,
+    readonly: file.readonly,
+    resourceId: file.resourceId,
+    startLine,
+    totalLines: lines.length,
+    truncated: moreLines || partialLine,
+    view: selected.map((line, index) => `${String(offset + index).padStart(width)} | ${line}`).join('\n'),
+  };
+}
 
 function skillConfirmation(
   operation: 'delete' | 'move' | 'patch' | 'write',
@@ -34,7 +84,10 @@ function skillConfirmation(
     : undefined;
 }
 
-export function createWorkspaceRunnerTools(repository: WorkspaceRepository, existingSkillIds: string[] = []): RunnerTool[] {
+export function createWorkspaceRunnerTools(
+  repository: WorkspaceRepository,
+  existingSkillIds: string[] = [],
+): RunnerTool[] {
   return [
     {
       definition: tool({
@@ -47,10 +100,18 @@ export function createWorkspaceRunnerTools(repository: WorkspaceRepository, exis
     },
     {
       definition: tool({
-        description: '读取一个文本文件及其媒体类型、资源ID和只读状态。',
-        inputSchema: z.object({ path: pathSchema }),
+        description:
+          '读取文本文件的带行号视图。返回的“行号 | ”前缀只是定位元数据，不属于文件正文，写入或Patch时禁止复制。默认最多1000行和100000字符；用1基offset与limit继续分段读取。',
+        inputSchema: z.object({
+          limit: z.number().int().min(1).max(DEFAULT_READ_LIMIT).optional().describe('最多读取多少行，默认1000'),
+          offset: z.number().int().min(1).optional().describe('从第几行开始，1基，默认1'),
+          path: pathSchema,
+        }),
       }),
-      execute: async input => repository.read((input as { path: string }).path),
+      execute: async input => {
+        const value = input as { limit?: number; offset?: number; path: string };
+        return lineNumberedView(await repository.read(value.path), value);
+      },
       name: 'read_file',
       readonly: true,
     },
@@ -121,15 +182,20 @@ export function createWorkspaceRunnerTools(repository: WorkspaceRepository, exis
     },
     {
       definition: tool({
-        description: '像rg一样按路径、Glob、正则/固定字符串、大小写、上下文行和结果上限搜索文本文件。',
+        description:
+          '像rg一样搜索文本。pattern默认是普通文本，搜索*、[等符号无需转义；仅在mode="regex"时按正则解释。glob/excludeGlob只筛选文件路径，例如**/*.md。',
         inputSchema: z.object({
           caseSensitive: z.boolean().optional(),
+          contextAfter: z.number().int().min(0).max(5).optional(),
+          contextBefore: z.number().int().min(0).max(5).optional(),
           contextLines: z.number().int().min(0).max(5).optional(),
-          fixedStrings: z.boolean().optional(),
-          glob: z.string().optional(),
+          excludeGlob: z.union([z.string(), z.array(z.string())]).optional(),
+          glob: z.union([z.string(), z.array(z.string())]).optional(),
           maxResults: z.number().int().min(1).max(500).optional(),
+          mode: z.enum(['literal', 'regex']).optional(),
           path: pathSchema.optional(),
-          pattern: z.string(),
+          pattern: z.string().min(1),
+          wordMatch: z.boolean().optional(),
         }),
       }),
       execute: async input => repository.search(input as Parameters<WorkspaceRepository['search']>[0]),

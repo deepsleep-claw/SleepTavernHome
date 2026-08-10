@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { transactionState } from '../transaction/test-fixture';
-import { MemoryBinaryBlobStore } from './blob-store';
+import { MemoryBinaryBlobStore, StagedBinaryBlobStore } from './blob-store';
 import { ContentAddressedSnapshotStore } from './snapshot-store';
 
 describe('content addressed snapshots', () => {
@@ -63,5 +63,20 @@ describe('content addressed snapshots', () => {
     const hash = await snapshots.put({ value: 'gzip' });
     vi.stubGlobal('DecompressionStream', undefined);
     await expect(snapshots.get(hash)).rejects.toThrow('不支持gzip');
+  });
+
+  it('运行期间把快照暂存在内存，显式flush后才写入后端', async () => {
+    const backing = new MemoryBinaryBlobStore();
+    const staged = new StagedBinaryBlobStore(backing);
+    const snapshots = new ContentAddressedSnapshotStore(staged);
+    const hash = await snapshots.put({ value: '本轮快照' });
+
+    expect(staged.pendingCount()).toBe(1);
+    expect(await backing.keys()).toEqual([]);
+    expect(await snapshots.get(hash)).toEqual({ value: '本轮快照' });
+
+    await staged.flush();
+    expect(staged.pendingCount()).toBe(0);
+    expect(await backing.keys()).toEqual([hash]);
   });
 });

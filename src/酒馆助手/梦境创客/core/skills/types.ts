@@ -5,7 +5,6 @@ export type AgentSkill = {
   body: string;
   builtin: boolean;
   description: string;
-  enabled: boolean;
   id: string;
   loading: SkillLoadingMode;
   name: string;

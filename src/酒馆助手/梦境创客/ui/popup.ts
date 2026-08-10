@@ -1,12 +1,13 @@
 import { teleportStyle } from '@util/script';
 import { createApp } from 'vue';
-import AgentWindow from './AgentWindow.vue';
+import WorkspaceWindow from './WorkspaceWindow.vue';
 
 type Frame = { height: number; width: number; x: number; y: number };
-type Popup = { destroy: () => void; focus: () => void };
+type Popup = { connected: () => boolean; destroy: () => void; focus: () => void };
 
 let popup: Popup | undefined;
 const MARGIN = 10;
+const WINDOW_ID = 'dream-card-agent-window';
 
 function viewport() {
   const host = window.parent;
@@ -60,33 +61,99 @@ function applyFrame($window: JQuery<HTMLElement>, frame: Frame): void {
 }
 
 export function openDreamCardAgentWindow(): void {
-  if (popup) {
+  if (popup?.connected()) {
     popup.focus();
     return;
   }
+  popup?.destroy();
+  popup = undefined;
+  $(`#${WINDOW_ID}`).remove();
   const host = window.parent;
   const $window = $('<section>')
-    .attr({ 'aria-label': '梦境创客', 'data-tt-mobile-surface': 'free-window', role: 'dialog', script_id: getScriptId() })
+    .attr({ 'aria-label': '梦境创客', 'data-tt-mobile-surface': 'free-window', id: WINDOW_ID, role: 'dialog', script_id: getScriptId() })
     .addClass('dca-floating-window')
     .appendTo('body');
   const $title = $('<header>').addClass('dca-floating-titlebar').appendTo($window);
   $('<span>').append($('<i>').addClass('fa-solid fa-wand-magic-sparkles')).append(' 梦境创客').appendTo($title);
   const $close = $('<button>').attr({ 'aria-label': '关闭窗口', title: '关闭窗口（Agent继续运行）', type: 'button' }).append($('<i>').addClass('fa-solid fa-xmark')).appendTo($title);
-  const $body = $('<div>').addClass('dca-floating-body').appendTo($window);
+  let destroyed = false;
+  const frameElement = window.frameElement;
+  if (!frameElement || frameElement.tagName !== 'IFRAME') {
+    $window.remove();
+    throw new Error('梦境创客只能在酒馆助手脚本 iframe 中打开');
+  }
+  const frame = frameElement as HTMLIFrameElement;
+  const originalStyle = frame.getAttribute('style');
+  const originalClass = frame.getAttribute('class');
+  const originalTitle = frame.getAttribute('title');
+  const originalAriaLabel = frame.getAttribute('aria-label');
+
+  // Vue在酒馆助手自己的iframe里创建节点。直接把这些节点挂到父页面会发生
+  // 跨document采用，第三方焦点监听和动态事件都会变得不可靠。iframe本身也
+  // 不能被移动，否则浏览器会重载脚本。这里保持它仍是body直属子节点，仅用
+  // fixed定位把它显示在浮窗内容区，让Vue、DOM与事件始终属于同一文档。
+  frame.classList.add('dca-floating-body-frame');
+  frame.setAttribute('aria-label', '梦境创客工作台');
+  frame.style.display = 'block';
+  frame.style.position = 'fixed';
+  frame.style.minHeight = '0';
+  frame.style.border = '0';
+  frame.style.zIndex = '6000';
+
+  $window.css({ background: 'transparent', pointerEvents: 'none', zIndex: 6001 });
+  $title.css('pointer-events', 'auto');
+
+  document.documentElement.style.height = '100%';
+  document.body.style.height = '100%';
+  document.body.style.margin = '0';
+  document.body.style.overflow = 'hidden';
+  document.body.querySelector('[data-dca-ui-root]')?.remove();
+  let iconStyle = document.head.querySelector<HTMLLinkElement>('link[data-dca-fontawesome]');
+  if (!iconStyle) {
+    iconStyle = document.createElement('link');
+    iconStyle.rel = 'stylesheet';
+    iconStyle.href = 'https://testingcf.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css';
+    iconStyle.dataset.dcaFontawesome = 'true';
+    document.head.append(iconStyle);
+  }
+  const mountPoint = document.createElement('div');
+  mountPoint.className = 'dca-shadow-root';
+  mountPoint.dataset.dcaUiRoot = 'true';
+  document.body.append(mountPoint);
+  const app = createApp(WorkspaceWindow);
+  app.mount(mountPoint);
   const $resize = $('<div>').addClass('dca-floating-resize').attr('title', '拖拽调整大小').appendTo($window);
-  const app = createApp(AgentWindow);
-  app.mount($body[0]);
+  $resize.css('pointer-events', 'auto');
   const style = teleportStyle();
-  applyFrame($window, defaultFrame());
+  const placeFrame = (value: Frame) => {
+    applyFrame($window, value);
+    const actual = readFrame($window);
+    const titleHeight = $title.outerHeight() ?? 43;
+    $(frame).css({
+      height: `${Math.max(1, actual.height - titleHeight)}px`,
+      left: `${actual.x}px`,
+      top: `${actual.y + titleHeight}px`,
+      width: `${actual.width}px`,
+    });
+  };
+  placeFrame(defaultFrame());
 
   let removePointer = () => {};
-  let destroyed = false;
-  const keepVisible = () => applyFrame($window, readFrame($window));
+  const keepVisible = () => placeFrame(readFrame($window));
   const destroy = () => {
     if (destroyed) return;
     destroyed = true;
     removePointer();
     app.unmount();
+    mountPoint.remove();
+    if (originalClass === null) frame.removeAttribute('class');
+    else frame.setAttribute('class', originalClass);
+    if (originalStyle === null) frame.removeAttribute('style');
+    else frame.setAttribute('style', originalStyle);
+    if (originalTitle === null) frame.removeAttribute('title');
+    else frame.setAttribute('title', originalTitle);
+    if (originalAriaLabel === null) frame.removeAttribute('aria-label');
+    else frame.setAttribute('aria-label', originalAriaLabel);
     $window.remove();
     style.destroy();
     host.removeEventListener('resize', keepVisible);
@@ -98,7 +165,7 @@ export function openDreamCardAgentWindow(): void {
     const start = readFrame($window);
     const startX = event.clientX;
     const startY = event.clientY;
-    const move = (next: PointerEvent) => applyFrame($window, resize
+    const move = (next: PointerEvent) => placeFrame(resize
       ? { ...start, height: start.height + next.clientY - startY, width: start.width + next.clientX - startX }
       : { ...start, x: start.x + next.clientX - startX, y: start.y + next.clientY - startY });
     const end = () => {
@@ -118,10 +185,15 @@ export function openDreamCardAgentWindow(): void {
   $close.on('pointerdown', event => event.stopPropagation()).on('click', destroy);
   host.addEventListener('resize', keepVisible);
   popup = {
+    connected: () => $window[0]?.isConnected === true && frame.isConnected,
     destroy,
     focus: () => {
-      $window.css('z-index', 6100);
-      window.setTimeout(() => $window.css('z-index', ''), 0);
+      $(frame).css('z-index', 6100);
+      $window.css('z-index', 6101);
+      window.setTimeout(() => {
+        $(frame).css('z-index', 6000);
+        $window.css('z-index', 6001);
+      }, 0);
     },
   };
 }

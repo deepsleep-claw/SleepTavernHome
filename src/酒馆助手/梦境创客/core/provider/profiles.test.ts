@@ -3,6 +3,7 @@ import { decryptLocalPayload, encryptLocalPayload } from './crypto';
 import {
   ApiProfileRegistry,
   createApiProfile,
+  listApiModels,
   normalizeProviderFailure,
   updateApiProfile,
   withApiModel,
@@ -54,6 +55,28 @@ describe('encrypted API profiles', () => {
     expect(registry.get(profile.id)).toBeUndefined();
   });
 
+  it('编辑已有Profile时留空Key和请求头会保留原凭据', async () => {
+    const profile = await createApiProfile({
+      apiKey: 'keep-key',
+      baseURL: 'https://example.test/v1',
+      headers: { 'X-Keep': 'header' },
+      model: 'old-model',
+      name: '旧配置',
+      protocol: 'openai-responses',
+    });
+    const updated = await updateApiProfile(profile, {
+      apiKey: '',
+      baseURL: 'https://example.test/v2',
+      model: 'new-model',
+      name: '新配置',
+      protocol: 'openai-responses',
+    });
+    await expect(decryptLocalPayload(updated.secrets)).resolves.toEqual({
+      apiKey: 'keep-key',
+      headers: { 'X-Keep': 'header' },
+    });
+  });
+
   it('仅在真实请求作用域临时创建Provider模型', async () => {
     const profile = await createApiProfile({
       apiKey: 'key',
@@ -68,11 +91,60 @@ describe('encrypted API profiles', () => {
     expect(action).toHaveBeenCalledOnce();
   });
 
-  it('把疑似CORS与普通请求失败分开呈现', () => {
+  it('按接口类型显式拉取并整理模型列表', async () => {
+    const profile = await createApiProfile({
+      apiKey: 'key',
+      baseURL: 'https://example.test/v1',
+      headers: { 'X-Custom': 'value' },
+      model: '',
+      name: 'test',
+      protocol: 'openai-responses',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      data: [{ id: 'model-b' }, { id: 'model-a' }, { id: 'model-a' }],
+    }), { status: 200 }));
+    await expect(listApiModels(profile)).resolves.toEqual(['model-a', 'model-b']);
+    expect(String(fetchMock.mock.calls[0][0])).toBe('https://example.test/v1/models');
+    expect(fetchMock.mock.calls[0][1]?.method).toBe('GET');
+    const headers = new Headers(fetchMock.mock.calls[0][1]?.headers);
+    expect(headers.get('authorization')).toBe('Bearer key');
+    expect(headers.get('x-custom')).toBe('value');
+    fetchMock.mockRestore();
+  });
+
+  it('模型地址返回HTML时提示检查API版本根路径', async () => {
+    const profile = await createApiProfile({
+      apiKey: 'key',
+      baseURL: 'https://example.test/',
+      model: '',
+      name: 'test',
+      protocol: 'openai-responses',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('<!doctype html>', { status: 200 }));
+    await expect(listApiModels(profile)).rejects.toThrow('API版本根路径');
+    fetchMock.mockRestore();
+  });
+
+  it('模型列表鉴权失败沿用友好错误归一化', async () => {
+    const profile = await createApiProfile({
+      apiKey: 'bad',
+      baseURL: 'https://example.test/v1/',
+      model: '',
+      name: 'test',
+      protocol: 'anthropic',
+    });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 401 }));
+    await expect(listApiModels(profile)).rejects.toMatchObject({ statusCode: 401 });
+    fetchMock.mockRestore();
+  });
+
+  it('把鉴权、疑似CORS与普通请求失败分开呈现', () => {
     expect(normalizeProviderFailure(new TypeError('Failed to fetch'))).toMatchObject({ code: 'CORS_SUSPECTED' });
-    expect(normalizeProviderFailure(new Error('401 Unauthorized'))).toEqual({
+    expect(normalizeProviderFailure(new Error('401 Unauthorized'))).toMatchObject({ code: 'AUTH_REJECTED' });
+    expect(normalizeProviderFailure({ lastError: { statusCode: 401 } })).toMatchObject({ code: 'AUTH_REJECTED' });
+    expect(normalizeProviderFailure(new Error('500 Server Error'))).toEqual({
       code: 'REQUEST_FAILED',
-      message: '401 Unauthorized',
+      message: '500 Server Error',
     });
     expect(normalizeProviderFailure('NetworkError')).toMatchObject({ code: 'CORS_SUSPECTED' });
   });

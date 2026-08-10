@@ -1,0 +1,69 @@
+import { describe, expect, it } from 'vitest';
+import { DEFAULT_DREAM_CARD_AGENT_SETTINGS, mergeSettingsChanges, type CharacterStoreReference } from './settings';
+
+function character(bindingId: string, revision: number): CharacterStoreReference {
+  return {
+    bindingId,
+    characterName: bindingId,
+    revision,
+    sha256: `hash-${bindingId}`,
+    size: 10,
+    updatedAt: revision,
+    url: `/meta-${bindingId}.json`,
+  };
+}
+
+describe('settings cross-window merge', () => {
+  it('合并两个页面分别创建的角色元信息引用', () => {
+    const base = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS);
+    const fromFirstWindow = structuredClone(base);
+    fromFirstWindow.characterStores.first = character('first', 1);
+    const latestFromSecondWindow = structuredClone(base);
+    latestFromSecondWindow.characterStores.second = character('second', 1);
+    latestFromSecondWindow.syncRevision = 3;
+
+    const merged = mergeSettingsChanges(base, fromFirstWindow, latestFromSecondWindow);
+    expect(Object.keys(merged.characterStores).sort()).toEqual(['first', 'second']);
+    expect(merged.syncRevision).toBe(4);
+  });
+
+  it('只重放本页真正改变的字段，并保留另一页刚保存的设置', () => {
+    const base = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS);
+    const incoming = structuredClone(base);
+    incoming.floatingButtonAnchor = 'top-left';
+    const latest = structuredClone(base);
+    latest.developerMode = true;
+    latest.characterStores.other = character('other', 2);
+
+    const merged = mergeSettingsChanges(base, incoming, latest);
+    expect(merged).toMatchObject({ developerMode: true, floatingButtonAnchor: 'top-left' });
+    expect(merged.characterStores.other).toBeDefined();
+  });
+
+  it('保留显式删除语义', () => {
+    const base = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS);
+    base.characterStores.old = character('old', 1);
+    const incoming = structuredClone(base);
+    delete incoming.characterStores.old;
+    const latest = structuredClone(base);
+    latest.characterStores.new = character('new', 1);
+
+    const merged = mergeSettingsChanges(base, incoming, latest);
+    expect(merged.characterStores.old).toBeUndefined();
+    expect(merged.characterStores.new).toBeDefined();
+  });
+
+  it('按Skill记录合并两个窗口的全局Skill索引', () => {
+    const base = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS);
+    const first = structuredClone(base);
+    first.globalSkills.writer = {
+      description: '写作', id: 'writer', loading: 'full', name: '写作', revision: 1, updatedAt: 1, url: '/writer.md',
+    };
+    const latest = structuredClone(base);
+    latest.globalSkills.reviewer = {
+      description: '审阅', id: 'reviewer', loading: 'on-demand', name: '审阅', revision: 1, updatedAt: 2, url: '/reviewer.md',
+    };
+
+    expect(Object.keys(mergeSettingsChanges(base, first, latest).globalSkills).sort()).toEqual(['reviewer', 'writer']);
+  });
+});

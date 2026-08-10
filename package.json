@@ -68,6 +68,7 @@
     "postcss-minify": "^1.2.0",
     "prettier": "^3.9.6",
     "remark": "^15.0.1",
+    "remark-gfm": "^4.0.1",
     "remark-html": "^16.0.1",
     "remark-loader": "^6.0.0",
     "sass": "^1.102.0",

@@ -18,12 +18,18 @@ export type WorkspaceFile = {
 
 export type SearchQuery = {
   caseSensitive?: boolean;
+  contextAfter?: number;
+  contextBefore?: number;
   contextLines?: number;
+  excludeGlob?: string | string[];
+  /** @deprecated 使用mode: 'literal'或mode: 'regex'。 */
   fixedStrings?: boolean;
-  glob?: string;
+  glob?: string | string[];
   maxResults?: number;
+  mode?: 'literal' | 'regex';
   path?: string;
   pattern: string;
+  wordMatch?: boolean;
 };
 
 export type SearchMatch = {

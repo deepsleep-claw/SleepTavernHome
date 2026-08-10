@@ -42,21 +42,23 @@ describe('session persistence coordinator', () => {
     const files = [
       { content: '正文', mediaType: 'text/markdown' as const, path: '/character/description.md', readonly: false, resourceId: 'r' },
     ];
-    await persistence.persist(state, files);
+    await persistence.persist(state, files, { snapshot: Uint8Array.of(1) });
     const loaded = await persistence.load('session');
     expect(loaded.runtime).toEqual(state);
     expect(loaded.workingCopy).toEqual(files);
-    expect(settings.load().sessions.session).toMatchObject({ avatarId: 'avatar.png', bindingId: 'binding' });
+    expect(loaded.snapshotBlobs.snapshot).toEqual(Uint8Array.of(1));
+    expect(settings.load().characterStores.binding).toMatchObject({ avatarId: 'avatar.png', bindingId: 'binding' });
   });
 
-  it('非租约持有者不能写Revision', async () => {
+  it('持久化不再依赖后端租约文件', async () => {
+    const settings = new MemoryAgentSettingsStore();
     const persistence = new SessionPersistenceCoordinator({
       avatarId: 'avatar.png',
       bindingId: 'binding',
       characterName: '梦梦',
-      lease: () => ({ isOwner: () => false }) as never,
-      store: new SessionRevisionStore(new MemoryTavernFileClient(), new MemoryAgentSettingsStore()),
+      store: new SessionRevisionStore(new MemoryTavernFileClient(), settings),
     });
-    await expect(persistence.persist(await runtime(), [])).rejects.toThrow('租约持有者');
+    await persistence.persist(await runtime(), [], {});
+    expect(Object.keys(settings.load().characterStores)).toEqual(['binding']);
   });
 });

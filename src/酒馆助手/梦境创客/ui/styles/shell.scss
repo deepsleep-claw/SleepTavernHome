@@ -1,0 +1,141 @@
+// 父页面窗口外壳样式。这些元素不在 .dca-app 内：
+// popup.ts 在父页面创建窗口外壳，teleportStyle 会把这些规则带过去。
+
+.dca-floating-window {
+  position: fixed;
+  z-index: 6000;
+  display: flex;
+  min-width: 420px;
+  min-height: 380px;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--dca-border-strong);
+  border-radius: var(--dca-radius-lg);
+  background: var(--dca-canvas);
+  box-shadow: var(--dca-shadow-3);
+}
+
+.dca-floating-titlebar {
+  display: flex;
+  flex: 0 0 auto;
+  height: 2.6rem;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--dca-border);
+  padding: 0 0.5rem 0 0.85rem;
+  background: var(--dca-surface);
+  color: var(--dca-text);
+  cursor: move;
+  font-size: 0.86rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+
+.dca-floating-titlebar > span i {
+  margin-right: 0.35rem;
+  color: var(--dca-accent);
+}
+
+.dca-floating-titlebar button {
+  display: grid;
+  width: 1.9rem;
+  height: 1.9rem;
+  place-items: center;
+  border: 0;
+  border-radius: var(--dca-radius-sm);
+  background: transparent;
+  color: var(--dca-text-secondary);
+  cursor: pointer;
+  transition:
+    background var(--dca-motion-fast) ease,
+    color var(--dca-motion-fast) ease;
+}
+
+.dca-floating-titlebar button:hover {
+  background: var(--dca-danger-soft);
+  color: #f2a3b3;
+}
+
+.dca-floating-body-frame {
+  display: block;
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--dca-canvas);
+}
+
+.dca-shadow-root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--dca-canvas);
+}
+
+.dca-floating-resize {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+}
+
+.dca-floating-resize::after {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--dca-accent);
+  border-bottom: 2px solid var(--dca-accent);
+  border-radius: 0 0 2px;
+  content: '';
+  opacity: 0.8;
+}
+
+.dca-floating-resize:hover::after {
+  opacity: 1;
+}
+
+.dca-floating-window-mobile {
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.dca-floating-window-mobile .dca-floating-titlebar {
+  cursor: default;
+}
+
+.dca-floating-window-mobile .dca-floating-resize {
+  display: none;
+}
+
+.dca-floating-trigger {
+  position: fixed;
+  z-index: 5900;
+  display: grid;
+  width: 3.1rem;
+  height: 3.1rem;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 22%);
+  border-radius: var(--dca-radius-lg);
+  background: var(--dca-accent);
+  box-shadow: 0 10px 30px rgb(0 0 0 / 55%);
+  color: #fff;
+  cursor: pointer;
+  font-size: 1.15rem;
+  touch-action: none;
+  transition:
+    transform var(--dca-motion-fast) ease,
+    filter var(--dca-motion-fast) ease;
+  user-select: none;
+}
+
+.dca-floating-trigger:hover {
+  filter: brightness(1.1);
+  transform: translateY(-2px);
+}

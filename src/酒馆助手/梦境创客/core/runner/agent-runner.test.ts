@@ -24,7 +24,9 @@ function modelStep(toolCalls: RunnerToolCall[] = [], text = 'done'): ModelStepRe
 
 class QueueExecutor implements ModelStepExecutor {
   readonly requests: ModelStepRequest[] = [];
-  constructor(private readonly queue: Array<ModelStepResult | Error | ((request: ModelStepRequest) => Promise<ModelStepResult>)>) {}
+  constructor(
+    private readonly queue: Array<ModelStepResult | Error | ((request: ModelStepRequest) => Promise<ModelStepResult>)>,
+  ) {}
   async execute(request: ModelStepRequest): Promise<ModelStepResult> {
     this.requests.push(request);
     const next = this.queue.shift();
@@ -112,14 +114,18 @@ describe('AgentRunner', () => {
     await vi.waitFor(() => expect(started).toEqual(['a', 'b']));
     resolvers.reverse().forEach(resolve => resolve());
     await running;
-    expect(journal.events.filter(event => event.type === 'tool-completed').map(event => event.call.toolName)).toEqual(['a', 'b']);
+    expect(journal.events.filter(event => event.type === 'tool-completed').map(event => event.call.toolName)).toEqual([
+      'a',
+      'b',
+    ]);
   });
 
-  it('工具失败后不执行后续调用，恢复时从失败调用继续', async () => {
+  it('工具失败作为结果返回给模型，由模型决定是否修正重试', async () => {
     let fail = true;
     const invoked: string[] = [];
     const calls = ['one', 'two', 'three'].map(name => ({ input: {}, toolCallId: name, toolName: name }));
-    const executor = new QueueExecutor([modelStep(calls), modelStep()]);
+    const executor = new QueueExecutor([modelStep(calls), modelStep(calls.slice(1)), modelStep()]);
+    const journal = new MemoryRunnerJournal();
     const tools = calls.map(call =>
       runnerTool(call.toolName, false, async () => {
         invoked.push(call.toolName);
@@ -130,11 +136,20 @@ describe('AgentRunner', () => {
         return { ok: true };
       }),
     );
-    const runner = new AgentRunner({ executor, journal: new MemoryRunnerJournal(), tools });
-    expect((await runner.start('retry')).status).toBe('failed');
-    expect(invoked).toEqual(['one', 'two']);
-    expect((await runner.resume()).status).toBe('completed');
+    const runner = new AgentRunner({ executor, journal, tools });
+    const state = await runner.start('retry');
+    expect(state.status).toBe('completed');
+    expect(state.failure).toBeUndefined();
     expect(invoked).toEqual(['one', 'two', 'two', 'three']);
+
+    const firstResults = executor.requests[1].messages.filter(message => message.role === 'tool');
+    expect(firstResults).toHaveLength(3);
+    expect(JSON.stringify(firstResults[1])).toContain('temporary failure');
+    expect(JSON.stringify(firstResults[2])).toContain('"skipped":true');
+    expect(journal.events.filter(event => event.type === 'tool-failed')).toEqual([
+      expect.objectContaining({ call: expect.objectContaining({ toolCallId: 'two' }) }),
+      expect.objectContaining({ call: expect.objectContaining({ toolCallId: 'three' }) }),
+    ]);
   });
 
   it('中途引导在工具结果后注入；已完成时作为下一条用户消息', async () => {
@@ -219,14 +234,21 @@ describe('AgentRunner', () => {
     const state = await runner.start('small user');
     expect(executor.requests[0].forceTool).toBe('compact_context');
     expect(executor.requests[1].forceTool).toBeUndefined();
-    expect(state.messages.some(message => message.role === 'system' && String(message.content).includes('保留目标与完成项'))).toBe(true);
+    expect(
+      state.messages.some(message => message.role === 'system' && String(message.content).includes('保留目标与完成项')),
+    ).toBe(true);
     expect(state.messages.some(message => String(message.content).includes('x'.repeat(100)))).toBe(false);
     expect(state.status).toBe('completed');
   });
 
   it('用户消息超过80%时暂停；强制压缩未调用工具时失败', async () => {
     const exhaustedExecutor = new QueueExecutor([]);
-    const exhausted = new AgentRunner({ contextWindow: 100, executor: exhaustedExecutor, journal: new MemoryRunnerJournal(), tools: [] });
+    const exhausted = new AgentRunner({
+      contextWindow: 100,
+      executor: exhaustedExecutor,
+      journal: new MemoryRunnerJournal(),
+      tools: [],
+    });
     expect((await exhausted.start('u'.repeat(500))).status).toBe('context-exhausted');
     expect(exhaustedExecutor.requests).toHaveLength(0);
 
@@ -252,9 +274,7 @@ describe('AgentRunner', () => {
 
   it('覆盖空引导、并发启动、未知工具和批准执行分支', async () => {
     let release!: (value: ModelStepResult) => void;
-    const waitingExecutor = new QueueExecutor([
-      () => new Promise<ModelStepResult>(resolve => (release = resolve)),
-    ]);
+    const waitingExecutor = new QueueExecutor([() => new Promise<ModelStepResult>(resolve => (release = resolve))]);
     const waiting = new AgentRunner({ executor: waitingExecutor, journal: new MemoryRunnerJournal(), tools: [] });
     waiting.enqueueGuidance('   ');
     const first = waiting.start('one');
@@ -263,19 +283,21 @@ describe('AgentRunner', () => {
     release(modelStep());
     await first;
 
+    const unknownExecutor = new QueueExecutor([
+      modelStep([{ input: {}, toolCallId: 'x', toolName: 'unknown' }]),
+      modelStep([], '已根据错误改用其他方案'),
+    ]);
     const unknown = new AgentRunner({
-      executor: new QueueExecutor([modelStep([{ input: {}, toolCallId: 'x', toolName: 'unknown' }])]),
+      executor: unknownExecutor,
       journal: new MemoryRunnerJournal(),
       tools: [],
     });
-    expect((await unknown.start('unknown')).status).toBe('failed');
+    expect((await unknown.start('unknown')).status).toBe('completed');
+    expect(JSON.stringify(unknownExecutor.requests[1].messages.at(-1))).toContain('未知工具');
 
     const execute = vi.fn(async () => ({ changed: true }));
     const approved = new AgentRunner({
-      executor: new QueueExecutor([
-        modelStep([{ input: {}, toolCallId: 'ok', toolName: 'danger' }]),
-        modelStep(),
-      ]),
+      executor: new QueueExecutor([modelStep([{ input: {}, toolCallId: 'ok', toolName: 'danger' }]), modelStep()]),
       journal: new MemoryRunnerJournal(),
       requestApproval: async () => true,
       tools: [

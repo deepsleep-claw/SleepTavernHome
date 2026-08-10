@@ -35,16 +35,27 @@ function globToRegex(glob: string): RegExp {
 
 export function searchWorkspaceFiles(files: Iterable<WorkspaceFile>, query: SearchQuery): SearchResult {
   const root = normalizeWorkspacePath(query.path ?? '/');
-  const contextLines = Math.min(5, Math.max(0, query.contextLines ?? 0));
+  const defaultContext = Math.min(5, Math.max(0, query.contextLines ?? 0));
+  const contextBefore = Math.min(5, Math.max(0, query.contextBefore ?? defaultContext));
+  const contextAfter = Math.min(5, Math.max(0, query.contextAfter ?? defaultContext));
   const maxResults = Math.min(500, Math.max(1, query.maxResults ?? 100));
   const flags = query.caseSensitive ? 'u' : 'iu';
+  const regexMode = query.mode === 'regex' || (query.mode === undefined && query.fixedStrings === false);
   let expression: RegExp;
   try {
-    expression = new RegExp(query.fixedStrings ? escapeRegex(query.pattern) : query.pattern, flags);
+    const source = regexMode ? query.pattern : escapeRegex(query.pattern);
+    expression = new RegExp(query.wordMatch ? `\\b(?:${source})\\b` : source, flags);
   } catch (error) {
-    throw new WorkspaceError('INVALID_PATTERN', error instanceof Error ? error.message : String(error));
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new WorkspaceError(
+      'INVALID_PATTERN',
+      `无效正则：${detail}。若要搜索普通符号，请使用mode="literal"；只有正则表达式才使用mode="regex"。`,
+    );
   }
-  const glob = query.glob ? globToRegex(query.glob.replace(/^\/+/, '')) : undefined;
+  const compileGlobs = (value?: string | string[]) =>
+    (value ? (Array.isArray(value) ? value : [value]) : []).map(item => globToRegex(item.replace(/^\/+/, '')));
+  const includeGlobs = compileGlobs(query.glob);
+  const excludeGlobs = compileGlobs(query.excludeGlob);
   const matches: SearchMatch[] = [];
   const matchedFiles = new Set<string>();
   let truncated = false;
@@ -54,7 +65,11 @@ export function searchWorkspaceFiles(files: Iterable<WorkspaceFile>, query: Sear
     if (!(file.path === root || file.path.startsWith(`${root === '/' ? '' : root}/`))) {
       continue;
     }
-    if (glob && !glob.test(file.path.slice(1))) {
+    const relativePath = file.path.slice(1);
+    if (includeGlobs.length > 0 && !includeGlobs.some(glob => glob.test(relativePath))) {
+      continue;
+    }
+    if (excludeGlobs.some(glob => glob.test(relativePath))) {
       continue;
     }
     const lines = file.content.replace(/\r\n?/gu, '\n').split('\n');
@@ -66,8 +81,8 @@ export function searchWorkspaceFiles(files: Iterable<WorkspaceFile>, query: Sear
       matchedFiles.add(file.path);
       matches.push({
         column: (match.index ?? 0) + 1,
-        contextAfter: lines.slice(index + 1, index + 1 + contextLines),
-        contextBefore: lines.slice(Math.max(0, index - contextLines), index),
+        contextAfter: lines.slice(index + 1, index + 1 + contextAfter),
+        contextBefore: lines.slice(Math.max(0, index - contextBefore), index),
         line: index + 1,
         path: file.path,
         text: lines[index],

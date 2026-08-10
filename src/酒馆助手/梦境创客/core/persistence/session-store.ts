@@ -1,32 +1,29 @@
-import type { ModelMessage } from 'ai';
 import type { WorkspaceFile } from '../workspace/types';
 import { canonicalParse, canonicalStringify, sha256 } from '../transaction/canonical';
-import type { RunnerEvent } from '../runner/agent-runner';
 import type { PersistedSessionRuntime } from '../session/types';
+import { CharacterMetadataStore } from './character-store';
 import type { AgentSettingsStore, SessionIndexEntry } from './settings';
 import type { TavernFileClient } from './file-client';
 
-export type SessionManifest = {
-  avatarId?: string;
-  bindingId: string;
-  contextUrl: string;
-  createdAt: number;
-  eventSegmentUrls: string[];
+type SessionFilePayload = {
+  runtime: PersistedSessionRuntime;
+  snapshotBlobs: Record<string, string>;
+  workingCopy: WorkspaceFile[];
+};
+
+type SessionFileEnvelope = {
+  data: string;
+  encoding: 'base64' | 'gzip+base64';
+  format: 'dream-card-agent-session';
   revision: number;
-  runtimeUrl?: string;
-  schemaVersion: 1;
-  sessionId: string;
-  snapshotHashes: string[];
-  status: 'abnormal' | 'completed' | 'idle' | 'running' | 'stopped';
-  updatedAt: number;
-  workingCopyUrl: string;
+  schemaVersion: 2;
+  sha256: string;
 };
 
 export type SessionRevision = {
-  context: ModelMessage[];
-  events: RunnerEvent[];
-  manifest: SessionManifest;
-  runtime?: PersistedSessionRuntime;
+  entry: SessionIndexEntry;
+  runtime: PersistedSessionRuntime;
+  snapshotBlobs: Record<string, Uint8Array>;
   workingCopy: WorkspaceFile[];
 };
 
@@ -34,13 +31,9 @@ export type CommitSessionRevision = {
   avatarId?: string;
   bindingId: string;
   characterName: string;
-  context: ModelMessage[];
-  events: RunnerEvent[];
-  runtime?: PersistedSessionRuntime;
-  sessionId: string;
-  snapshotHashes: string[];
-  status: SessionManifest['status'];
-  title: string;
+  runtime: PersistedSessionRuntime;
+  snapshotBlobs: Record<string, Uint8Array>;
+  status: SessionIndexEntry['status'];
   workingCopy: WorkspaceFile[];
 };
 
@@ -48,121 +41,124 @@ function safe(value: string): string {
   return value.replace(/[^a-zA-Z\d_-]/gu, '_').slice(0, 80);
 }
 
-function bytes(value: unknown): Uint8Array {
-  return new TextEncoder().encode(canonicalStringify(value));
+function toBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function fromBase64(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+async function transform(bytes: Uint8Array, stream: CompressionStream | DecompressionStream): Promise<Uint8Array> {
+  const buffer = Uint8Array.from(bytes).buffer;
+  return new Uint8Array(await new Response(new Blob([buffer]).stream().pipeThrough(stream)).arrayBuffer());
+}
+
+async function envelope(payload: SessionFilePayload, revision: number): Promise<SessionFileEnvelope> {
+  const raw = new TextEncoder().encode(canonicalStringify(payload));
+  const compressed =
+    typeof CompressionStream === 'undefined' ? raw : await transform(raw, new CompressionStream('gzip'));
+  return {
+    data: toBase64(compressed),
+    encoding: typeof CompressionStream === 'undefined' ? 'base64' : 'gzip+base64',
+    format: 'dream-card-agent-session',
+    revision,
+    schemaVersion: 2,
+    sha256: await sha256(raw),
+  };
+}
+
+async function openEnvelope(value: SessionFileEnvelope): Promise<SessionFilePayload> {
+  if (value.format !== 'dream-card-agent-session' || value.schemaVersion !== 2) {
+    throw new Error('会话文件格式不匹配。');
+  }
+  let raw = fromBase64(value.data);
+  if (value.encoding === 'gzip+base64') {
+    if (typeof DecompressionStream === 'undefined') throw new Error('当前浏览器不支持gzip会话解压。');
+    raw = await transform(raw, new DecompressionStream('gzip'));
+  }
+  if ((await sha256(raw)) !== value.sha256) throw new Error('会话文件内容校验失败。');
+  return canonicalParse<SessionFilePayload>(new TextDecoder().decode(raw));
+}
+
+function encodeSnapshots(blobs: Record<string, Uint8Array>): Record<string, string> {
+  return Object.fromEntries(Object.entries(blobs).map(([hash, bytes]) => [hash, toBase64(bytes)]));
+}
+
+function decodeSnapshots(blobs: Record<string, string>): Record<string, Uint8Array> {
+  return Object.fromEntries(Object.entries(blobs).map(([hash, bytes]) => [hash, fromBase64(bytes)]));
 }
 
 export class SessionRevisionStore {
+  private readonly characters: CharacterMetadataStore;
+
   constructor(
     private readonly client: TavernFileClient,
-    private readonly settingsStore: AgentSettingsStore,
+    settingsStore: AgentSettingsStore,
     private readonly now: () => number = Date.now,
-    private readonly eventSegmentSize = 256,
-  ) {}
+  ) {
+    this.characters = new CharacterMetadataStore(client, settingsStore, now);
+  }
 
   async commit(input: CommitSessionRevision): Promise<SessionIndexEntry> {
-    const settings = this.settingsStore.load();
-    const previous = settings.sessions[input.sessionId];
-    const revision = (previous?.revision ?? 0) + 1;
-    const prefix = `dream-card-agent--${safe(input.bindingId)}--${safe(input.sessionId)}--r${revision}`;
-    const upload = async (name: string, data: Uint8Array): Promise<string> => {
-      const url = await this.client.upload(name, data);
-      settings.files[`session:${name}`] = {
-        bindingId: input.bindingId,
-        createdAt: this.now(),
-        name,
-        size: data.byteLength,
-        url,
-      };
-      await this.settingsStore.save(settings);
-      return url;
-    };
-    const workingCopyUrl = await upload(`${prefix}--working.json`, bytes(input.workingCopy));
-    const contextUrl = await upload(`${prefix}--context.json`, bytes(input.context));
-    const runtimeUrl = input.runtime
-      ? await upload(`${prefix}--runtime.json`, bytes(input.runtime))
-      : undefined;
-    const eventSegmentUrls: string[] = [];
-    for (let offset = 0; offset < input.events.length; offset += this.eventSegmentSize) {
-      eventSegmentUrls.push(
-        await upload(
-          `${prefix}--events-${String(offset / this.eventSegmentSize + 1).padStart(4, '0')}.json`,
-          bytes(input.events.slice(offset, offset + this.eventSegmentSize)),
-        ),
-      );
-    }
-    const timestamp = this.now();
-    const manifest: SessionManifest = {
-      bindingId: input.bindingId,
+    const metadata = await this.characters.load(input.bindingId, {
       avatarId: input.avatarId,
-      contextUrl,
-      createdAt: previous?.createdAt ?? timestamp,
-      eventSegmentUrls,
+      characterName: input.characterName,
+    });
+    const previous = metadata.sessions[input.runtime.sessionId];
+    const revision = (previous?.revision ?? 0) + 1;
+    const packed = await envelope(
+      {
+        runtime: input.runtime,
+        snapshotBlobs: encodeSnapshots(input.snapshotBlobs),
+        workingCopy: input.workingCopy,
+      },
       revision,
-      runtimeUrl,
-      schemaVersion: 1,
-      sessionId: input.sessionId,
-      snapshotHashes: [...new Set(input.snapshotHashes)],
-      status: input.status,
-      updatedAt: timestamp,
-      workingCopyUrl,
-    };
-    const manifestBytes = bytes(manifest);
-    const manifestHash = await sha256(manifestBytes);
-    const manifestName = `${prefix}--manifest-${manifestHash.slice(0, 12)}.json`;
-    const manifestUrl = await upload(manifestName, manifestBytes);
+    );
+    const bytes = new TextEncoder().encode(canonicalStringify(packed));
+    const name = `dream-card-agent--${safe(input.bindingId)}--session--${safe(input.runtime.sessionId)}.json`;
+    const url = await this.client.upload(name, bytes);
+    const timestamp = this.now();
     const entry: SessionIndexEntry = {
       avatarId: input.avatarId ?? previous?.avatarId,
       bindingId: input.bindingId,
       characterName: input.characterName,
-      createdAt: previous?.createdAt ?? timestamp,
-      manifestHash,
-      manifestUrl,
-      leaseUrl: previous?.leaseUrl,
-      previousManifestHash: previous?.manifestHash,
-      previousManifestUrl: previous?.manifestUrl,
+      createdAt: previous?.createdAt ?? input.runtime.createdAt,
       revision,
-      sessionId: input.sessionId,
-      title: input.title,
+      sessionId: input.runtime.sessionId,
+      sha256: await sha256(bytes),
+      size: bytes.byteLength,
+      status: input.status,
+      title: input.runtime.title,
       updatedAt: timestamp,
+      url,
     };
-    settings.sessions[input.sessionId] = entry;
-    await this.settingsStore.save(settings);
+    await this.characters.upsertSession(entry);
     return entry;
   }
 
-  async load(sessionId: string): Promise<SessionRevision> {
-    const entry = this.settingsStore.load().sessions[sessionId];
+  async load(bindingId: string, sessionId: string): Promise<SessionRevision> {
+    const metadata = await this.characters.load(bindingId);
+    const entry = metadata.sessions[sessionId];
     if (!entry) throw new Error(`会话不存在：${sessionId}`);
-    try {
-      return await this.loadManifest(entry.manifestUrl, entry.manifestHash, entry.revision);
-    } catch (error) {
-      if (!entry.previousManifestUrl || entry.revision <= 1) throw error;
-      return this.loadManifest(entry.previousManifestUrl, entry.previousManifestHash ?? '', entry.revision - 1);
-    }
-  }
-
-  private async loadManifest(url: string, expectedHash: string, expectedRevision: number): Promise<SessionRevision> {
-    const manifestBytes = await this.client.download(url);
-    if (expectedHash && (await sha256(manifestBytes)) !== expectedHash) {
-      throw new Error(`会话Manifest哈希不匹配：${url}`);
-    }
-    const manifest = canonicalParse<SessionManifest>(new TextDecoder().decode(manifestBytes));
-    if (manifest.schemaVersion !== 1 || manifest.revision !== expectedRevision) {
-      throw new Error(`会话Manifest版本不匹配：${url}`);
-    }
-    const [workingCopy, context, runtime, segments] = await Promise.all([
-      this.client.download(manifest.workingCopyUrl),
-      this.client.download(manifest.contextUrl),
-      manifest.runtimeUrl ? this.client.download(manifest.runtimeUrl) : undefined,
-      Promise.all(manifest.eventSegmentUrls.map(segment => this.client.download(segment))),
-    ]);
+    const bytes = await this.client.download(entry.url);
+    if ((await sha256(bytes)) !== entry.sha256) throw new Error(`会话文件校验失败：${sessionId}`);
+    const packed = canonicalParse<SessionFileEnvelope>(new TextDecoder().decode(bytes));
+    if (packed.revision !== entry.revision) throw new Error(`会话Revision不匹配：${sessionId}`);
+    const payload = await openEnvelope(packed);
+    if (payload.runtime.sessionId !== sessionId) throw new Error(`会话ID不匹配：${sessionId}`);
     return {
-      context: canonicalParse<ModelMessage[]>(new TextDecoder().decode(context)),
-      events: segments.flatMap(segment => canonicalParse<RunnerEvent[]>(new TextDecoder().decode(segment))),
-      manifest,
-      runtime: runtime ? canonicalParse<PersistedSessionRuntime>(new TextDecoder().decode(runtime)) : undefined,
-      workingCopy: canonicalParse<WorkspaceFile[]>(new TextDecoder().decode(workingCopy)),
+      entry,
+      runtime: payload.runtime,
+      snapshotBlobs: decodeSnapshots(payload.snapshotBlobs),
+      workingCopy: payload.workingCopy,
     };
   }
 }

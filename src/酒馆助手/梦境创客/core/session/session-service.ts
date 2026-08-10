@@ -25,6 +25,7 @@ import { globalAgentTaskLock, type GlobalAgentTaskLock } from './task-lock';
 import type {
   PendingCandidate,
   PersistedSessionRuntime,
+  SessionAgentConfiguration,
   SessionLifecycleStatus,
   SessionMode,
   SessionSnapshotPayload,
@@ -35,21 +36,29 @@ import type {
 
 type SessionServiceOptions = {
   adapter: CardStateAdapter;
+  agentConfiguration?: SessionAgentConfiguration;
   contextWindow?: number;
   executor: ModelStepExecutor;
   lock?: GlobalAgentTaskLock;
   mode?: SessionMode;
   now?: () => number;
   onPersist?: (runtime: PersistedSessionRuntime, files: WorkspaceFile[]) => Promise<void>;
+  onSkillsCommit?: (skills: AgentSkill[], previouslyMountedSkillIds: string[]) => Promise<AgentSkill[]>;
   onUpdate?: (view: SessionView) => void;
   preset?: StructuredPreset;
-  readOnly?: boolean;
   requestToolApproval?: (request: ToolConfirmation) => Promise<boolean>;
   sessionId?: string;
   skills?: AgentSkill[];
   snapshots: ContentAddressedSnapshotStore;
   title?: string;
 };
+
+const DEFAULT_SESSION_TITLE = '新的创作会话';
+
+function sessionTitleFromMessage(message: string): string {
+  const normalized = message.trim().replace(/\s+/gu, ' ');
+  return Array.from(normalized).slice(0, 10).join('') || DEFAULT_SESSION_TITLE;
+}
 
 function assistantText(messages: ModelMessage[]): string {
   return messages
@@ -62,6 +71,17 @@ function assistantText(messages: ModelMessage[]): string {
     .join('');
 }
 
+function assistantReasoning(messages: ModelMessage[]): string {
+  return messages
+    .filter(message => message.role === 'assistant')
+    .flatMap(message =>
+      typeof message.content === 'string'
+        ? []
+        : message.content.flatMap(part => (part.type === 'reasoning' ? [part.text] : [])),
+    )
+    .join('');
+}
+
 function diffSkills(before: AgentSkill[], after: AgentSkill[]): SkillChange[] {
   const beforeById = new Map(before.map(skill => [skill.id, skill]));
   const afterById = new Map(after.map(skill => [skill.id, skill]));
@@ -69,14 +89,33 @@ function diffSkills(before: AgentSkill[], after: AgentSkill[]): SkillChange[] {
   for (const skill of before) {
     const next = afterById.get(skill.id);
     if (!next) {
-      result.push({ before: klona(skill), highRisk: true, kind: 'delete', label: `删除Skill“${skill.name}”`, path: `/skills/user/${skill.id}` });
+      result.push({
+        before: klona(skill),
+        highRisk: true,
+        kind: 'delete',
+        label: `删除Skill“${skill.name}”`,
+        path: `/skills/user/${skill.id}`,
+      });
     } else if (!canonicalEqual(skill, next)) {
-      result.push({ after: klona(next), before: klona(skill), highRisk: true, kind: 'modify', label: `修改Skill“${next.name}”`, path: `/skills/user/${skill.id}` });
+      result.push({
+        after: klona(next),
+        before: klona(skill),
+        highRisk: true,
+        kind: 'modify',
+        label: `修改Skill“${next.name}”`,
+        path: `/skills/user/${skill.id}`,
+      });
     }
   }
   for (const skill of after) {
     if (!beforeById.has(skill.id)) {
-      result.push({ after: klona(skill), highRisk: false, kind: 'create', label: `新增Skill“${skill.name}”`, path: `/skills/user/${skill.id}` });
+      result.push({
+        after: klona(skill),
+        highRisk: false,
+        kind: 'create',
+        label: `新增Skill“${skill.name}”`,
+        path: `/skills/user/${skill.id}`,
+      });
     }
   }
   return result.sort((left, right) => left.path.localeCompare(right.path));
@@ -109,6 +148,7 @@ export class CardAgentSessionService {
   readonly sessionId: string;
   private activeBase?: CardWorkspaceState;
   private activeCheckpointId?: string;
+  private agentConfiguration: SessionAgentConfiguration;
   private readonly adapter: CardStateAdapter;
   private compiledPreset: CompiledPreset;
   private readonly contextWindow: number;
@@ -116,9 +156,9 @@ export class CardAgentSessionService {
   private readonly lock: GlobalAgentTaskLock;
   private readonly now: () => number;
   private readonly onPersist?: SessionServiceOptions['onPersist'];
+  private readonly onSkillsCommit?: SessionServiceOptions['onSkillsCommit'];
   private readonly onUpdate?: SessionServiceOptions['onUpdate'];
   private readonly requestToolApproval?: SessionServiceOptions['requestToolApproval'];
-  private readonly readOnly: boolean;
   private readonly snapshots: ContentAddressedSnapshotStore;
   private timeline: HistoryTimeline;
   private events: RunnerEvent[] = [];
@@ -132,7 +172,7 @@ export class CardAgentSessionService {
   private runner?: AgentRunner;
   private skills: AgentSkill[];
   private status: SessionLifecycleStatus = 'idle';
-  private readonly title: string;
+  private title: string;
   private ui: SessionUiItem[] = [];
   private warnings: string[] = [];
 
@@ -143,6 +183,15 @@ export class CardAgentSessionService {
     restored?: { files: WorkspaceFile[]; runtime: PersistedSessionRuntime },
   ) {
     this.adapter = options.adapter;
+    this.agentConfiguration = klona(
+      restored?.runtime.agentConfiguration ??
+        options.agentConfiguration ?? {
+          id: 'agent:legacy',
+          name: '旧版会话配置',
+          presetId: (restored?.runtime.preset ?? options.preset ?? DEFAULT_PRESET).id,
+          skillIds: (restored?.runtime.skills ?? options.skills ?? []).map(skill => skill.id),
+        },
+    );
     this.bindingId = initial.character.bindingId;
     this.characterName = initial.character.name;
     this.compiledPreset = restored?.runtime.compiledPreset ?? compiled;
@@ -155,10 +204,10 @@ export class CardAgentSessionService {
     this.modelMessages = klona(restored?.runtime.modelMessages ?? compiled.messages);
     this.now = options.now ?? Date.now;
     this.onPersist = options.onPersist;
+    this.onSkillsCommit = options.onSkillsCommit;
     this.onUpdate = options.onUpdate;
     this.preset = klona(restored?.runtime.preset ?? options.preset ?? DEFAULT_PRESET);
     this.requestToolApproval = options.requestToolApproval;
-    this.readOnly = options.readOnly ?? false;
     this.sessionId = restored?.runtime.sessionId ?? options.sessionId ?? crypto.randomUUID();
     this.skills = klona(restored?.runtime.skills ?? options.skills ?? []);
     this.snapshots = options.snapshots;
@@ -167,13 +216,15 @@ export class CardAgentSessionService {
       now: this.now,
       position: restored?.runtime.history.position,
     });
-    this.title = restored?.runtime.title ?? (options.title?.trim() || '新的创作会话');
+    this.title = restored?.runtime.title ?? (options.title?.trim() || DEFAULT_SESSION_TITLE);
     this.activeBase = restored?.runtime.activeBase;
     this.activeCheckpointId = restored?.runtime.activeCheckpointId;
     this.events = klona(restored?.runtime.events ?? []);
+    this.lastError = restored?.runtime.lastError;
     this.pending = klona(restored?.runtime.pending);
     this.status = restored?.runtime.status ?? 'idle';
     this.ui = klona(restored?.runtime.ui ?? []);
+    this.warnings = [...(restored?.runtime.warnings ?? [])];
     this.repository = restored
       ? this.createRestoredRepository(this.activeBase ?? initial, restored.files)
       : this.createRepository(initial);
@@ -196,9 +247,10 @@ export class CardAgentSessionService {
       files: workingFiles,
       runtime,
     });
-    if (!service.readOnly && (runtime.status === 'running' || runtime.status === 'waiting-approval' || runtime.status === 'abnormal')) {
+    if (runtime.status === 'running' || runtime.status === 'waiting-approval' || runtime.status === 'abnormal') {
       service.status = 'abnormal';
       service.lastError = '上次页面在任务完成前关闭，已恢复到最后一个成功步骤。';
+      service.completeRunUi('abnormal', service.now());
       service.buildRunner('failed', recoverPendingRunnerStep(service.modelMessages, service.events));
       service.ui.push({
         at: service.now(),
@@ -210,6 +262,8 @@ export class CardAgentSessionService {
       });
       await service.persist();
     } else if (runtime.status === 'failed' || runtime.status === 'stopped' || runtime.status === 'context-exhausted') {
+      service.lastError ??=
+        runtime.status === 'failed' ? '上次模型步骤失败，可从中断处继续或回退本轮消息。' : undefined;
       service.buildRunner(runtime.status, recoverPendingRunnerStep(service.modelMessages, service.events));
     }
     return service;
@@ -230,6 +284,7 @@ export class CardAgentSessionService {
         }
       : undefined;
     return {
+      agentConfiguration: klona(this.agentConfiguration),
       approval,
       bindingId: this.bindingId,
       characterName: this.characterName,
@@ -238,7 +293,6 @@ export class CardAgentSessionService {
       events: klona(this.events),
       mode: this.mode,
       preset: klona(this.preset),
-      readOnly: this.readOnly,
       sessionId: this.sessionId,
       skills: klona(this.skills),
       status: this.status,
@@ -251,7 +305,6 @@ export class CardAgentSessionService {
   }
 
   setMode(mode: SessionMode): void {
-    this.assertWritable();
     this.mode = mode;
     this.notify();
     void this.persist();
@@ -261,18 +314,47 @@ export class CardAgentSessionService {
     await this.persist();
   }
 
+  async rename(title: string): Promise<SessionView> {
+    const normalized = title.trim().replace(/\s+/gu, ' ');
+    if (!normalized) throw new Error('会话名称不能为空。');
+    this.title = Array.from(normalized).slice(0, 80).join('');
+    await this.persist();
+    return this.view();
+  }
+
   async applyPreset(preset: StructuredPreset): Promise<void> {
-    this.assertWritable();
     if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status)) {
       throw new Error('Agent运行期间不能替换预设头部。');
     }
     this.preset = klona(preset);
+    this.agentConfiguration.presetId = preset.id;
+    await this.refreshCompiledHeader();
+    await this.persist();
+  }
+
+  async applyAgentConfiguration(
+    configuration: SessionAgentConfiguration,
+    preset: StructuredPreset,
+    availableSkills: AgentSkill[],
+  ): Promise<void> {
+    if (
+      this.pending ||
+      this.activeCheckpointId ||
+      ['running', 'waiting-approval', 'committing'].includes(this.status)
+    ) {
+      throw new Error('当前轮次结束前不能替换Agent配置。');
+    }
+    const current = await this.adapter.read();
+    this.assertBinding(current);
+    this.agentConfiguration = klona(configuration);
+    this.preset = klona(preset);
+    this.skills = klona(availableSkills.filter(skill => configuration.skillIds.includes(skill.id)));
+    this.repository = this.createRepository(current);
     await this.refreshCompiledHeader();
     await this.persist();
   }
 
   async setExecutor(executor: ModelStepExecutor): Promise<void> {
-    this.assertWritable();
     if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status)) {
       throw new Error('Agent运行期间不能切换API Profile。');
     }
@@ -283,14 +365,38 @@ export class CardAgentSessionService {
     await this.persist();
   }
 
+  async setSkills(skills: AgentSkill[]): Promise<void> {
+    if (
+      this.pending ||
+      this.activeCheckpointId ||
+      ['running', 'waiting-approval', 'committing'].includes(this.status)
+    ) {
+      throw new Error('当前轮次结束前不能更新全局Skill挂载。');
+    }
+    const mounted = skills.filter(skill => this.agentConfiguration.skillIds.includes(skill.id));
+    if (canonicalEqual(this.skills, mounted)) return;
+    const current = await this.adapter.read();
+    this.assertBinding(current);
+    this.skills = klona(mounted);
+    this.repository = this.createRepository(current);
+    await this.refreshCompiledHeader();
+    this.notify();
+  }
+
   async send(message: string, userMessageId: string = crypto.randomUUID()): Promise<SessionView> {
-    this.assertWritable();
     const text = message.trim();
     if (!text) throw new Error('请输入要交给Agent的要求。');
     if (this.pending) throw new Error('请先处理当前待批准的修改。');
-    if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status)) throw new Error('Agent已经在运行。');
+    if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status))
+      throw new Error('Agent已经在运行。');
+    if (this.activeCheckpointId || this.activeBase) {
+      throw new Error('当前轮次尚未结束，请从中断处继续，或回退这条用户消息后再发送新要求。');
+    }
     this.lock.acquire(this.sessionId);
     try {
+      if (this.title === DEFAULT_SESSION_TITLE && !this.ui.some(item => item.kind === 'user')) {
+        this.title = sessionTitleFromMessage(text);
+      }
       const base = await this.adapter.read();
       this.assertBinding(base);
       this.activeBase = klona(base);
@@ -298,7 +404,6 @@ export class CardAgentSessionService {
         card: base,
         events: this.events,
         modelMessages: this.modelMessages,
-        skills: this.skills,
       });
       const checkpoint = this.timeline.beginTurn({
         beforeAgentCursor: this.modelMessages.length,
@@ -322,7 +427,8 @@ export class CardAgentSessionService {
       this.modelMessages = klona(state.messages);
       this.status = state.status;
       this.lastError = state.failure;
-      if (state.status === 'completed' || state.status === 'stopped') await this.freezeCandidate(base, state.status === 'stopped');
+      if (state.status === 'completed' || state.status === 'stopped')
+        await this.freezeCandidate(base, state.status === 'stopped');
       await this.persist();
       return this.view();
     } finally {
@@ -331,7 +437,6 @@ export class CardAgentSessionService {
   }
 
   async resume(): Promise<SessionView> {
-    this.assertWritable();
     if (!this.runner) throw new Error('当前会话没有可恢复的Runner。');
     this.lock.acquire(this.sessionId);
     try {
@@ -355,56 +460,17 @@ export class CardAgentSessionService {
   }
 
   enqueueGuidance(message: string): void {
-    this.assertWritable();
-    if (!this.runner || this.runner.state.status !== 'running') throw new Error('当前没有正在运行的Agent步骤。');
+    if (!this.runner || !['running', 'waiting-approval'].includes(this.runner.state.status)) {
+      throw new Error('当前没有正在运行的Agent步骤。');
+    }
     this.runner.enqueueGuidance(message);
   }
 
   async approve(decisions: Record<string, ApprovalDecision>): Promise<SessionView> {
-    this.assertWritable();
     if (!this.pending) throw new Error('当前没有待批准的修改。');
     this.lock.acquire(this.sessionId);
     try {
-      const current = await this.adapter.read();
-      this.assertBinding(current);
-      const latest = prepareThreeWayMerge(this.pending.base, this.pending.state, current);
-      if (conflictsChanged(this.pending, latest)) {
-        this.pending.preparation = latest;
-        this.status = 'awaiting-approval';
-        this.warnings = ['批准期间酒馆数据再次变化，请重新检查冲突。'];
-        await this.persist();
-        return this.view();
-      }
-      this.status = 'committing';
-      await this.persist();
-      const result = await commitWorkingCopy({ adapter: this.adapter, base: this.pending.base, decisions, working: this.pending.state });
-      if (result.status === 'rolled-back') {
-        this.status = 'failed';
-        this.lastError = result.rollbackError
-          ? `${result.error.message}；回滚也失败：${result.rollbackError.message}`
-          : result.error.message;
-        await this.persist();
-        return this.view();
-      }
-      this.skills = applySkillDecisions(this.skills, this.pending.skillChanges, decisions);
-      const afterSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
-        card: result.state,
-        events: this.events,
-        modelMessages: this.modelMessages,
-        skills: this.skills,
-      });
-      this.timeline.completeTurn(this.pending.checkpointId, {
-        afterAgentCursor: this.modelMessages.length,
-        afterSnapshot,
-        stopped: this.pending.stopped,
-      });
-      this.syncUiVisibility();
-      this.pending = undefined;
-      this.activeCheckpointId = undefined;
-      this.activeBase = undefined;
-      this.status = 'completed';
-      this.lastError = undefined;
-      this.repository = this.createRepository(result.state);
+      await this.applyApproval(decisions);
       await this.persist();
       return this.view();
     } finally {
@@ -417,7 +483,6 @@ export class CardAgentSessionService {
   }
 
   async undoToUserMessage(messageId: string): Promise<SessionView> {
-    this.assertWritable();
     const restore = this.timeline.undoToUserMessage(messageId);
     if (!restore) throw new Error('该消息当前不能回退。');
     return this.restoreSnapshot(restore);
@@ -428,7 +493,21 @@ export class CardAgentSessionService {
   }
 
   async writeWorkingFile(path: string, content: string): Promise<SessionView> {
-    this.assertWritable();
+    return this.mutateWorkingCopy(`手动编辑 ${path}`, repository =>
+      repository.write(path, content, `manual:${crypto.randomUUID()}`),
+    );
+  }
+
+  async deleteWorkingPath(path: string): Promise<SessionView> {
+    return this.mutateWorkingCopy(`手动删除 ${path}`, repository =>
+      repository.remove(path, `manual:${crypto.randomUUID()}`),
+    );
+  }
+
+  private async mutateWorkingCopy(
+    label: string,
+    mutate: (repository: MemoryWorkspaceRepository) => Promise<void>,
+  ): Promise<SessionView> {
     if (['running', 'waiting-approval', 'committing'].includes(this.status)) {
       throw new Error('Agent运行或工具确认期间不能手动编辑Working Copy。');
     }
@@ -440,7 +519,6 @@ export class CardAgentSessionService {
         card: base,
         events: this.events,
         modelMessages: this.modelMessages,
-        skills: this.skills,
       });
       const messageId = `manual:${crypto.randomUUID()}`;
       const checkpoint = this.timeline.beginTurn({
@@ -451,26 +529,29 @@ export class CardAgentSessionService {
       this.activeBase = klona(base);
       this.activeCheckpointId = checkpoint.id;
       this.repository = this.createRepository(base);
-      this.ui.push({ at: this.now(), checkpointId: checkpoint.id, content: `手动编辑 ${path}`, id: messageId, kind: 'user' });
+      this.ui.push({
+        at: this.now(),
+        checkpointId: checkpoint.id,
+        content: label,
+        id: messageId,
+        kind: 'user',
+      });
     }
     if (!this.repository) throw new Error('Working Copy不存在。');
-    await this.repository.write(path, content, `manual:${crypto.randomUUID()}`);
+    await mutate(this.repository);
     await this.freezeCandidate(base, false);
     await this.persist();
     return this.view();
   }
 
   editUserMessage(messageId: string, content: string): void {
-    this.assertWritable();
     const item = this.ui.find(message => message.id === messageId && message.kind === 'user');
     if (!item) throw new Error(`用户消息不存在：${messageId}`);
     item.content = content;
     this.notify();
-    void this.persist();
   }
 
   async resend(messageId: string): Promise<SessionView> {
-    this.assertWritable();
     const item = this.ui.find(message => message.id === messageId && message.kind === 'user');
     if (!item) throw new Error(`用户消息不存在：${messageId}`);
     return this.send(item.content, messageId);
@@ -483,7 +564,10 @@ export class CardAgentSessionService {
     });
   }
 
-  private createRestoredRepository(state: CardWorkspaceState, currentFiles: WorkspaceFile[]): MemoryWorkspaceRepository {
+  private createRestoredRepository(
+    state: CardWorkspaceState,
+    currentFiles: WorkspaceFile[],
+  ): MemoryWorkspaceRepository {
     return new MemoryWorkspaceRepository({
       completedToolCallIds: this.events
         .filter(event => event.type === 'tool-completed')
@@ -500,7 +584,7 @@ export class CardAgentSessionService {
       this.events = events;
       this.consumeLatestEvent(events.at(-1)!);
       this.modelMessages = klona(this.runner?.state.messages ?? this.modelMessages);
-      await this.persist();
+      this.notify();
     });
     this.runner = new AgentRunner({
       contextWindow: this.contextWindow,
@@ -509,9 +593,14 @@ export class CardAgentSessionService {
       initialPending,
       initialStatus,
       journal,
+      now: this.now,
+      onReasoningDelta: delta => this.appendStreamingReasoning(delta),
       onTextDelta: delta => this.appendStreamingText(delta),
       requestApproval: this.requestToolApproval,
-      tools: createWorkspaceRunnerTools(this.repository, this.skills.map(skill => skill.id)),
+      tools: createWorkspaceRunnerTools(
+        this.repository,
+        this.skills.map(skill => skill.id),
+      ),
     });
   }
 
@@ -520,6 +609,66 @@ export class CardAgentSessionService {
     this.modelMessages.splice(0, this.headerMessageCount, ...klona(next.messages));
     this.headerMessageCount = next.messages.length;
     this.compiledPreset = next;
+  }
+
+  private async applyApproval(decisions: Record<string, ApprovalDecision>): Promise<void> {
+    const pending = this.pending;
+    if (!pending) throw new Error('当前没有待批准的修改。');
+    const current = await this.adapter.read();
+    this.assertBinding(current);
+    const latest = prepareThreeWayMerge(pending.base, pending.state, current);
+    if (conflictsChanged(pending, latest)) {
+      pending.preparation = latest;
+      this.status = 'awaiting-approval';
+      this.warnings = ['批准期间酒馆数据再次变化，请重新检查冲突。'];
+      return;
+    }
+    this.status = 'committing';
+    this.notify();
+    const result = await commitWorkingCopy({
+      adapter: this.adapter,
+      base: pending.base,
+      decisions,
+      working: pending.state,
+    });
+    if (result.status === 'rolled-back') {
+      this.status = 'failed';
+      this.lastError = result.rollbackError
+        ? `${result.error.message}；回滚也失败：${result.rollbackError.message}`
+        : result.error.message;
+      return;
+    }
+    const previouslyMountedSkillIds = this.skills.map(skill => skill.id);
+    const approvedSkills = applySkillDecisions(this.skills, pending.skillChanges, decisions);
+    const approvedIds = new Set(approvedSkills.map(skill => skill.id));
+    this.agentConfiguration.skillIds = [
+      ...new Set([
+        ...this.agentConfiguration.skillIds.filter(
+          id => !previouslyMountedSkillIds.includes(id) || approvedIds.has(id),
+        ),
+        ...approvedSkills.map(skill => skill.id),
+      ]),
+    ];
+    this.skills = this.onSkillsCommit
+      ? await this.onSkillsCommit(approvedSkills, previouslyMountedSkillIds)
+      : approvedSkills;
+    const afterSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
+      card: result.state,
+      events: this.events,
+      modelMessages: this.modelMessages,
+    });
+    this.timeline.completeTurn(pending.checkpointId, {
+      afterAgentCursor: this.modelMessages.length,
+      afterSnapshot,
+      stopped: pending.stopped,
+    });
+    this.syncUiVisibility();
+    this.pending = undefined;
+    this.activeCheckpointId = undefined;
+    this.activeBase = undefined;
+    this.status = 'completed';
+    this.lastError = undefined;
+    this.repository = this.createRepository(result.state);
   }
 
   private async freezeCandidate(base: CardWorkspaceState, stopped: boolean): Promise<void> {
@@ -533,7 +682,6 @@ export class CardAgentSessionService {
       card: materialized.state,
       events: this.events,
       modelMessages: this.modelMessages,
-      skills: candidateSkills,
     });
     this.pending = {
       base,
@@ -551,7 +699,7 @@ export class CardAgentSessionService {
     );
     const hasChanges = effectiveStateChanges.length > 0 || skillChanges.length > 0;
     if (!hasChanges) {
-      await this.approve({});
+      await this.applyApproval({});
       return;
     }
     const decisions = defaultApprovals(preparation, this.mode);
@@ -559,13 +707,15 @@ export class CardAgentSessionService {
       preparation.redundantPaths.forEach(path => {
         decisions[path] = 'current';
       });
-      skillChanges.filter(change => !change.highRisk).forEach(change => {
-        decisions[change.path] = 'agent';
-      });
+      skillChanges
+        .filter(change => !change.highRisk)
+        .forEach(change => {
+          decisions[change.path] = 'agent';
+        });
       const unresolvedState = effectiveStateChanges.some(change => decisions[change.path] === undefined);
       const unresolvedSkills = skillChanges.some(change => decisions[change.path] === undefined);
       if (!unresolvedState && !unresolvedSkills) {
-        await this.approve(decisions);
+        await this.applyApproval(decisions);
         return;
       }
     }
@@ -574,7 +724,6 @@ export class CardAgentSessionService {
   }
 
   private async restore(direction: 'redo' | 'undo'): Promise<SessionView> {
-    this.assertWritable();
     if (this.pending || ['running', 'waiting-approval', 'committing'].includes(this.status)) {
       throw new Error('运行或审批期间不能回退历史。');
     }
@@ -597,13 +746,17 @@ export class CardAgentSessionService {
         working: payload.card,
       });
       if (result.status === 'rolled-back') throw result.error;
-      this.skills = payload.skills;
       this.modelMessages = payload.modelMessages;
       this.events = payload.events;
       this.repository = this.createRepository(result.state);
       this.syncUiVisibility();
+      this.pending = undefined;
+      this.activeCheckpointId = undefined;
+      this.activeBase = undefined;
+      this.runner = undefined;
       this.status = 'completed';
       this.lastError = undefined;
+      this.warnings = [];
       await this.persist();
       return this.view();
     } finally {
@@ -617,32 +770,98 @@ export class CardAgentSessionService {
     }
   }
 
-  private assertWritable(): void {
-    if (this.readOnly) throw new Error('当前页面未持有会话租约，只能查看。请先手动接管。');
-  }
-
   private appendStreamingText(delta: string): void {
-    const id = `stream:${this.activeCheckpointId}`;
-    let item = this.ui.find(message => message.id === id);
+    let item = [...this.ui]
+      .reverse()
+      .find(
+        message =>
+          message.checkpointId === this.activeCheckpointId &&
+          message.kind === 'assistant' &&
+          message.status === 'running',
+      );
     if (!item) {
-      item = { at: this.now(), checkpointId: this.activeCheckpointId, content: '', id, kind: 'assistant', status: 'running' };
+      item = {
+        at: this.now(),
+        checkpointId: this.activeCheckpointId,
+        content: '',
+        id: `stream:${this.activeCheckpointId}:${crypto.randomUUID()}`,
+        kind: 'assistant',
+        status: 'running',
+      };
       this.ui.push(item);
     }
     item.content += delta;
     this.notify();
   }
 
+  private completeStreamingText(at: number, fallback = ''): void {
+    const item = [...this.ui]
+      .reverse()
+      .find(
+        message =>
+          message.checkpointId === this.activeCheckpointId &&
+          message.kind === 'assistant' &&
+          message.status === 'running',
+      );
+    if (item) {
+      if (!item.content) item.content = fallback;
+      item.status = 'completed';
+    } else if (fallback) {
+      this.ui.push({
+        at,
+        checkpointId: this.activeCheckpointId,
+        content: fallback,
+        id: crypto.randomUUID(),
+        kind: 'assistant',
+        status: 'completed',
+      });
+    }
+  }
+
+  private appendStreamingReasoning(delta: string): void {
+    let item = [...this.ui].reverse().find(message => message.kind === 'reasoning' && message.status === 'running');
+    if (!item) {
+      item = {
+        at: this.now(),
+        checkpointId: this.activeCheckpointId,
+        content: '',
+        id: `reasoning:${this.activeCheckpointId}:${crypto.randomUUID()}`,
+        kind: 'reasoning',
+        status: 'running',
+      };
+      this.ui.push(item);
+    }
+    item.content += delta;
+    this.notify();
+  }
+
+  private completeStreamingReasoning(at: number, fallback = ''): void {
+    const item = [...this.ui].reverse().find(message => message.kind === 'reasoning' && message.status === 'running');
+    if (item) {
+      if (!item.content) item.content = fallback;
+      item.durationMs = Math.max(0, at - item.at);
+      item.status = 'completed';
+    } else if (fallback) {
+      this.ui.push({
+        at,
+        checkpointId: this.activeCheckpointId,
+        content: fallback,
+        durationMs: 0,
+        id: `reasoning:${this.activeCheckpointId}:${crypto.randomUUID()}`,
+        kind: 'reasoning',
+        status: 'completed',
+      });
+    }
+  }
+
   private consumeLatestEvent(event: RunnerEvent): void {
     if (event.type === 'model-completed') {
       const text = assistantText(event.messages);
-      const stream = this.ui.find(item => item.id === `stream:${this.activeCheckpointId}`);
-      if (stream) {
-        if (!stream.content) stream.content = text;
-        stream.status = 'completed';
-      } else if (text) {
-        this.ui.push({ at: event.at, checkpointId: this.activeCheckpointId, content: text, id: crypto.randomUUID(), kind: 'assistant', status: 'completed' });
-      }
+      this.completeStreamingReasoning(event.at, assistantReasoning(event.messages));
+      this.completeStreamingText(event.at, text);
     } else if (event.type === 'tool-started') {
+      // 工具调用是可见时间线的硬边界；它之后的新文本必须创建新的助手消息。
+      this.completeStreamingText(event.at);
       this.ui.push({
         at: event.at,
         checkpointId: this.activeCheckpointId,
@@ -660,21 +879,49 @@ export class CardAgentSessionService {
         item.content = event.type === 'tool-completed' ? canonicalStringify(event.output) : event.error;
       }
     } else if (event.type === 'guidance-injected') {
-      this.ui.push({ at: event.at, checkpointId: this.activeCheckpointId, content: event.message, id: crypto.randomUUID(), kind: 'guidance' });
+      this.ui.push({
+        at: event.at,
+        checkpointId: this.activeCheckpointId,
+        content: event.message,
+        id: crypto.randomUUID(),
+        kind: 'guidance',
+      });
     } else if (event.type === 'status') {
       this.status = event.status;
+      if (!['running', 'waiting-approval'].includes(event.status)) {
+        this.completeStreamingReasoning(event.at);
+        this.completeStreamingText(event.at);
+        if (['completed', 'context-exhausted', 'failed', 'stopped'].includes(event.status)) {
+          this.completeRunUi(event.status as 'completed' | 'context-exhausted' | 'failed' | 'stopped', event.at);
+        }
+      }
+      if (event.failure) this.lastError = event.failure;
     }
+  }
+
+  private completeRunUi(
+    status: NonNullable<SessionUiItem['runStatus']>,
+    endedAt: number,
+  ): void {
+    const user = [...this.ui]
+      .reverse()
+      .find(item => item.checkpointId === this.activeCheckpointId && item.kind === 'user');
+    if (!user) return;
+    user.durationMs = Math.max(0, endedAt - user.at);
+    user.runStatus = status;
   }
 
   private exportRuntime(): PersistedSessionRuntime {
     return {
       activeBase: this.activeBase ? klona(this.activeBase) : undefined,
       activeCheckpointId: this.activeCheckpointId,
+      agentConfiguration: klona(this.agentConfiguration),
       compiledPreset: klona(this.compiledPreset),
       createdAt: this.createdAt,
       events: klona(this.events),
       headerMessageCount: this.headerMessageCount,
       history: this.timeline.export(),
+      lastError: this.lastError,
       mode: this.mode,
       modelMessages: klona(this.modelMessages),
       pending: this.pending ? klona(this.pending) : undefined,
@@ -686,6 +933,7 @@ export class CardAgentSessionService {
       ui: klona(this.ui),
       updatedAt: this.now(),
       version: 1,
+      warnings: [...this.warnings],
     };
   }
 

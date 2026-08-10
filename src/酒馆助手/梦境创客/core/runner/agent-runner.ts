@@ -4,13 +4,7 @@ import type { ModelStepExecutor, RunnerToolCall } from './step-executor';
 import { COMPACT_CONTEXT_TOOL, type RunnerTool, type ToolConfirmation } from './tools';
 
 export type RunnerStatus =
-  | 'completed'
-  | 'context-exhausted'
-  | 'failed'
-  | 'idle'
-  | 'running'
-  | 'stopped'
-  | 'waiting-approval';
+  'completed' | 'context-exhausted' | 'failed' | 'idle' | 'running' | 'stopped' | 'waiting-approval';
 
 export type RunnerEvent =
   | { at: number; messages: ModelMessage[]; type: 'model-completed' }
@@ -19,7 +13,7 @@ export type RunnerEvent =
   | { at: number; call: RunnerToolCall; error: string; type: 'tool-failed' }
   | { at: number; message: string; type: 'guidance-injected' }
   | { at: number; summary: string; type: 'context-compacted' }
-  | { at: number; status: RunnerStatus; type: 'status' };
+  | { at: number; failure?: string; status: RunnerStatus; type: 'status' };
 
 export interface RunnerJournal {
   append(event: RunnerEvent): Promise<void>;
@@ -54,6 +48,7 @@ export type AgentRunnerOptions = {
   initialStatus?: RunnerStatus;
   journal: RunnerJournal;
   now?: () => number;
+  onReasoningDelta?: (delta: string) => void;
   onTextDelta?: (delta: string) => void;
   requestApproval?: (request: ToolConfirmation) => Promise<boolean>;
   tools: RunnerTool[];
@@ -73,6 +68,24 @@ function toolResultMessage(call: RunnerToolCall, output: unknown): ModelMessage 
   };
 }
 
+function toolFailureOutput(error: unknown, skipped = false): Record<string, unknown> {
+  const value = error && typeof error === 'object' ? (error as Record<string, unknown>) : undefined;
+  const message = error instanceof Error ? error.message : String(error);
+  return {
+    error: {
+      code: typeof value?.code === 'string' ? value.code : 'TOOL_EXECUTION_FAILED',
+      message,
+      path: typeof value?.path === 'string' ? value.path : undefined,
+    },
+    instruction: skipped
+      ? '前一个有依赖关系的工具失败，本调用没有执行。请根据错误重新规划。'
+      : '请检查参数与当前工作区状态，自行决定修正后重试、改用其他工具或向用户说明。',
+    ok: false,
+    retryable: true,
+    skipped,
+  };
+}
+
 function guidanceMessage(messages: string[]): string {
   return `<mid_turn_guidance>\n这是对当前未完成目标的中途补充，不是替换旧目标的新任务。\n${messages.join('\n')}\n</mid_turn_guidance>`;
 }
@@ -84,6 +97,7 @@ export class AgentRunner {
   private readonly executor: ModelStepExecutor;
   private readonly journal: RunnerJournal;
   private readonly now: () => number;
+  private readonly onReasoningDelta?: (delta: string) => void;
   private readonly onTextDelta?: (delta: string) => void;
   private readonly requestApproval?: (request: ToolConfirmation) => Promise<boolean>;
   private stopRequested = false;
@@ -97,6 +111,7 @@ export class AgentRunner {
     this.executor = options.executor;
     this.journal = options.journal;
     this.now = options.now ?? Date.now;
+    this.onReasoningDelta = options.onReasoningDelta;
     this.onTextDelta = options.onTextDelta;
     this.requestApproval = options.requestApproval;
     this.tools = [...options.tools, COMPACT_CONTEXT_TOOL];
@@ -163,6 +178,7 @@ export class AgentRunner {
           abortSignal: this.controller.signal,
           forceTool: compacting ? 'compact_context' : undefined,
           messages: structuredClone(this.state.messages),
+          onReasoningDelta: this.onReasoningDelta,
           onTextDelta: this.onTextDelta,
           tools: this.tools,
         });
@@ -209,21 +225,28 @@ export class AgentRunner {
         const call = remaining[index];
         if (result.status === 'rejected') {
           await this.failTool(call, result.reason);
-          return false;
+        } else {
+          await this.completeTool(call, result.value);
         }
-        await this.completeTool(call, result.value);
         pending.nextCall += 1;
       }
     } else {
+      let dependencyFailed = false;
       for (const call of remaining) {
         if (this.stopRequested) return this.finishStopped().then(() => false);
+        if (dependencyFailed) {
+          await this.skipTool(call);
+          pending.nextCall += 1;
+          continue;
+        }
         try {
           const output = await this.executeOne(call);
           await this.completeTool(call, output);
           pending.nextCall += 1;
         } catch (error) {
           await this.failTool(call, error);
-          return false;
+          pending.nextCall += 1;
+          dependencyFailed = true;
         }
       }
     }
@@ -265,9 +288,15 @@ export class AgentRunner {
 
   private async failTool(call: RunnerToolCall, error: unknown): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
-    this.state.failure = message;
+    this.state.messages.push(toolResultMessage(call, toolFailureOutput(error)));
     await this.journal.append({ at: this.now(), call, error: message, type: 'tool-failed' });
-    await this.setStatus('failed');
+  }
+
+  private async skipTool(call: RunnerToolCall): Promise<void> {
+    const message = '前一个有依赖关系的工具失败，本调用未执行。';
+    await this.journal.append({ at: this.now(), call, type: 'tool-started' });
+    this.state.messages.push(toolResultMessage(call, toolFailureOutput(message, true)));
+    await this.journal.append({ at: this.now(), call, error: message, type: 'tool-failed' });
   }
 
   private async injectGuidance(): Promise<void> {
@@ -285,6 +314,6 @@ export class AgentRunner {
 
   private async setStatus(status: RunnerStatus): Promise<void> {
     this.state.status = status;
-    await this.journal.append({ at: this.now(), status, type: 'status' });
+    await this.journal.append({ at: this.now(), failure: this.state.failure, status, type: 'status' });
   }
 }

@@ -1,0 +1,638 @@
+// 梦境创客控件基元与全局基样。
+// 全部限制在 .dca-app 下，避免污染酒馆与其它插件；窗口外壳样式见 shell.scss。
+
+.dca-app {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--dca-canvas);
+  color: var(--dca-text);
+  font:
+    14px/1.5 system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+
+.dca-app * {
+  box-sizing: border-box;
+}
+
+// ---------- 按钮 ----------
+
+.dca-app button,
+.dca-app input,
+.dca-app textarea,
+.dca-app select {
+  font: inherit;
+}
+
+.dca-app button {
+  display: inline-flex;
+  min-height: var(--dca-control-h-sm);
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-sm);
+  padding: 0.32rem 0.7rem;
+  background: var(--dca-raised);
+  color: var(--dca-text);
+  cursor: pointer;
+  transition:
+    background var(--dca-motion-fast) ease,
+    border-color var(--dca-motion-fast) ease,
+    color var(--dca-motion-fast) ease;
+}
+
+.dca-app button:hover:not(:disabled) {
+  border-color: var(--dca-border-strong);
+  background: var(--dca-overlay);
+}
+
+.dca-app button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.dca-app button.dca-btn-primary {
+  border-color: transparent;
+  background: var(--dca-accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.dca-app button.dca-btn-primary:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--dca-accent-strong);
+}
+
+.dca-app button.dca-btn-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--dca-text-secondary);
+}
+
+.dca-app button.dca-btn-ghost:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--dca-accent-soft);
+  color: var(--dca-text);
+}
+
+.dca-app button.dca-btn-danger {
+  border-color: rgb(224 108 130 / 45%);
+  background: var(--dca-danger-soft);
+  color: #f2a3b3;
+}
+
+.dca-app button.dca-btn-danger:hover:not(:disabled) {
+  border-color: var(--dca-danger);
+  background: rgb(224 108 130 / 20%);
+}
+
+.dca-app button.dca-icon-btn {
+  width: var(--dca-control-h-sm);
+  min-width: var(--dca-control-h-sm);
+  height: var(--dca-control-h-sm);
+  min-height: var(--dca-control-h-sm);
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--dca-text-muted);
+}
+
+.dca-app button.dca-icon-btn:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--dca-accent-soft);
+  color: var(--dca-text);
+}
+
+.dca-app button.dca-text-link {
+  min-height: 0;
+  border: 0;
+  padding: 0.1rem 0.2rem;
+  background: transparent;
+  color: var(--dca-accent);
+}
+
+.dca-app button.dca-text-link:hover:not(:disabled) {
+  background: transparent;
+  color: var(--dca-accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+// ---------- 输入控件 ----------
+
+.dca-app input,
+.dca-app textarea,
+.dca-app select {
+  width: 100%;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-sm);
+  padding: 0.42rem 0.6rem;
+  background: var(--dca-canvas);
+  color: var(--dca-text);
+  transition:
+    border-color var(--dca-motion-fast) ease,
+    box-shadow var(--dca-motion-fast) ease;
+}
+
+.dca-app input:focus,
+.dca-app textarea:focus,
+.dca-app select:focus {
+  border-color: var(--dca-accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--dca-accent-soft);
+}
+
+.dca-app input::placeholder,
+.dca-app textarea::placeholder {
+  color: var(--dca-text-disabled);
+}
+
+.dca-app textarea {
+  resize: vertical;
+}
+
+.dca-app input[type='checkbox'],
+.dca-app input[type='radio'] {
+  width: auto;
+  accent-color: var(--dca-accent);
+}
+
+// 表单字段：标签 + 控件
+.dca-field {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.dca-field > span {
+  color: var(--dca-text-secondary);
+  font-size: 0.8rem;
+}
+
+.dca-field > small {
+  color: var(--dca-text-muted);
+  font-size: 0.76rem;
+}
+
+// 开关（勾选行）
+.dca-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-md);
+  padding: 0.7rem 0.8rem;
+  background: var(--dca-surface);
+}
+
+.dca-toggle-row > span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.dca-toggle-row small {
+  color: var(--dca-text-muted);
+}
+
+// ---------- 通用卡片 / 徽章 / 提示 ----------
+
+.dca-card {
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-md);
+  background: var(--dca-surface);
+  box-shadow: var(--dca-shadow-1);
+}
+
+.dca-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-sm);
+  padding: 0.14rem 0.5rem;
+  color: var(--dca-text-muted);
+  font-size: 0.76rem;
+  white-space: nowrap;
+}
+
+.dca-badge::before {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 50%;
+  background: currentcolor;
+  content: '';
+}
+
+.dca-badge-running,
+.dca-badge-committing {
+  border-color: rgb(92 201 167 / 45%);
+  background: var(--dca-success-soft);
+  color: var(--dca-success);
+}
+
+.dca-badge-running::before {
+  animation: dca-pulse 1.2s ease-in-out infinite;
+}
+
+.dca-badge-failed,
+.dca-badge-abnormal {
+  border-color: rgb(224 108 130 / 45%);
+  background: var(--dca-danger-soft);
+  color: #f2a3b3;
+}
+
+.dca-badge-awaiting-approval,
+.dca-badge-waiting-approval,
+.dca-badge-context-exhausted,
+.dca-badge-stopped {
+  border-color: rgb(223 177 94 / 45%);
+  background: var(--dca-warning-soft);
+  color: var(--dca-warning);
+}
+
+@keyframes dca-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.dca-alert {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid;
+  border-radius: var(--dca-radius-md);
+  padding: 0.5rem 0.65rem;
+}
+
+.dca-alert-error {
+  border-color: rgb(224 108 130 / 45%);
+  background: var(--dca-danger-soft);
+  color: #f2a3b3;
+}
+
+.dca-alert-warning {
+  border-color: rgb(223 177 94 / 45%);
+  background: var(--dca-warning-soft);
+  color: var(--dca-warning);
+}
+
+.dca-alert button {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.dca-empty {
+  border: 1px dashed var(--dca-border-strong);
+  border-radius: var(--dca-radius-md);
+  padding: 1rem;
+  color: var(--dca-text-muted);
+  text-align: center;
+}
+
+.dca-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.dca-hidden-input {
+  display: none;
+}
+
+.dca-muted-note {
+  margin: 0;
+  color: var(--dca-text-muted);
+  font-size: 0.82rem;
+}
+
+// ---------- details/summary 基样 ----------
+
+.dca-app details summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.dca-app details summary::-webkit-details-marker {
+  display: none;
+}
+
+.dca-app details pre {
+  max-height: 18rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.dca-details-chevron {
+  transition: transform var(--dca-motion-fast) ease;
+}
+
+[open] > summary .dca-details-chevron,
+.dca-details-chevron-open {
+  transform: rotate(180deg);
+}
+
+// ---------- 弹窗 ----------
+
+.dca-modal-backdrop {
+  position: fixed;
+  z-index: 10000;
+  display: grid;
+  padding: 1rem;
+  background: rgb(8 7 12 / 72%);
+  backdrop-filter: blur(6px);
+  inset: 0;
+  place-items: center;
+}
+
+.dca-modal {
+  width: min(30rem, 100%);
+  border: 1px solid var(--dca-border-strong);
+  border-radius: var(--dca-radius-lg);
+  padding: 1.1rem;
+  background: var(--dca-raised);
+  box-shadow: var(--dca-shadow-3);
+}
+
+// ---------- 滚动条 ----------
+
+.dca-app ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.dca-app ::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: var(--dca-border-strong);
+  background-clip: padding-box;
+}
+
+.dca-app ::-webkit-scrollbar-thumb:hover {
+  background: var(--dca-text-disabled);
+  background-clip: padding-box;
+}
+
+.dca-app ::-webkit-scrollbar-track,
+.dca-app ::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+// ---------- 焦点可见 ----------
+
+.dca-app button:focus-visible,
+.dca-app summary:focus-visible,
+.dca-app [tabindex]:focus-visible {
+  outline: 2px solid var(--dca-accent);
+  outline-offset: 1px;
+}
+
+// ---------- Markdown 渲染 ----------
+
+.dca-markdown {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dca-markdown > :first-child {
+  margin-top: 0;
+}
+
+.dca-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.dca-markdown p,
+.dca-markdown ul,
+.dca-markdown ol,
+.dca-markdown blockquote,
+.dca-markdown pre,
+.dca-markdown h1,
+.dca-markdown h2,
+.dca-markdown h3,
+.dca-markdown h4,
+.dca-markdown h5,
+.dca-markdown h6 {
+  margin: 0.55rem 0;
+}
+
+.dca-markdown h1,
+.dca-markdown h2,
+.dca-markdown h3,
+.dca-markdown h4,
+.dca-markdown h5,
+.dca-markdown h6 {
+  line-height: 1.3;
+}
+
+.dca-markdown h1 {
+  font-size: 1.38rem;
+}
+
+.dca-markdown h2 {
+  font-size: 1.22rem;
+}
+
+.dca-markdown h3 {
+  font-size: 1.08rem;
+}
+
+.dca-markdown ul,
+.dca-markdown ol {
+  padding-left: 1.4rem;
+}
+
+.dca-markdown li + li {
+  margin-top: 0.18rem;
+}
+
+.dca-markdown blockquote {
+  border-left: 3px solid var(--dca-accent);
+  padding: 0.05rem 0 0.05rem 0.7rem;
+  color: var(--dca-text-secondary);
+}
+
+.dca-markdown code {
+  border-radius: 4px;
+  padding: 0.08rem 0.28rem;
+  background: var(--dca-canvas);
+  font-family: var(--dca-font-mono);
+  font-size: 0.9em;
+}
+
+.dca-markdown pre {
+  max-width: 100%;
+  overflow: auto;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-sm);
+  padding: 0.65rem;
+  background: var(--dca-canvas);
+}
+
+.dca-markdown pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.dca-markdown a {
+  color: var(--dca-accent-strong);
+  text-decoration: underline;
+  text-underline-offset: 0.14em;
+}
+
+.dca-markdown img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: 32rem;
+  margin: 0.55rem 0;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-md);
+  object-fit: contain;
+}
+
+.dca-markdown hr {
+  border: 0;
+  border-top: 1px solid var(--dca-border);
+  margin: 0.75rem 0;
+}
+
+.dca-markdown table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-spacing: 0;
+  border-collapse: collapse;
+  margin: 0.65rem 0;
+}
+
+.dca-markdown th,
+.dca-markdown td {
+  border: 1px solid var(--dca-border);
+  padding: 0.38rem 0.55rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+.dca-markdown th {
+  background: var(--dca-raised);
+  font-weight: 700;
+}
+
+.dca-markdown tr:nth-child(even) td {
+  background: rgb(255 255 255 / 2%);
+}
+
+// ---------- 设置区块骨架（工具栏 + 编辑区 + 粘性保存栏） ----------
+
+.dca-section-stack {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 0.85rem;
+}
+
+.dca-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.dca-section-header > div:first-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.dca-section-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.dca-section-header p {
+  margin: 0.15rem 0 0;
+  color: var(--dca-text-muted);
+  font-size: 0.82rem;
+}
+
+.dca-resource-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.65rem;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-md);
+  padding: 0.65rem;
+  background: var(--dca-surface);
+}
+
+.dca-resource-toolbar > .dca-field {
+  min-width: min(24rem, 100%);
+  flex: 1;
+}
+
+.dca-resource-savebar {
+  position: sticky;
+  bottom: -0.85rem;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  margin-top: auto;
+  border-top: 1px solid var(--dca-border);
+  padding: 0.65rem 0.2rem;
+  background: var(--dca-canvas);
+}
+
+.dca-resource-savebar > span {
+  margin-right: auto;
+  color: var(--dca-text-muted);
+  font-size: 0.8rem;
+}
+
+.dca-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem 0.65rem;
+}
+
+.dca-form-grid .wide {
+  grid-column: 1 / -1;
+}
+
+@media (max-width: 720px) {
+  .dca-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+// ---------- 动画偏好 ----------
+
+@media (prefers-reduced-motion: reduce) {
+  .dca-app *,
+  .dca-floating-window,
+  .dca-floating-trigger {
+    animation: none !important;
+    transition: none !important;
+  }
+}

@@ -4,7 +4,6 @@ import { PageDebugLog } from './debug-log';
 import { MemoryTavernFileClient } from './file-client';
 import { FileRegistryGarbageCollector } from './garbage-collector';
 import { PersistentRunnerJournal } from './journal';
-import { SessionRevisionStore } from './session-store';
 import { MemoryAgentSettingsStore } from './settings';
 
 describe('persistence maintenance', () => {
@@ -20,30 +19,23 @@ describe('persistence maintenance', () => {
     expect(journal.list()).toHaveLength(2);
   });
 
-  it('仅清理超过七天且未被有效Manifest引用的登记文件', async () => {
+  it('仅清理超过七天且未被全局资源引用的登记文件', async () => {
     const client = new MemoryTavernFileClient();
     const settings = new MemoryAgentSettingsStore();
-    const sessions = new SessionRevisionStore(client, settings, () => 1);
-    const entry = await sessions.commit({
-      bindingId: 'role',
-      characterName: '梦梦',
-      context: [{ content: '请求', role: 'user' }],
-      events: [],
-      sessionId: 's',
-      snapshotHashes: [],
-      status: 'idle',
-      title: '会话',
-      workingCopy: [],
-    });
+    const skillUrl = await client.upload('skill.md', new TextEncoder().encode('skill'));
     const orphanUrl = await client.upload('orphan.bin', Uint8Array.of(1));
     const current = settings.load();
+    current.globalSkills.skill = {
+      description: 'skill', id: 'skill', loading: 'full', name: 'skill', revision: 1, updatedAt: 1, url: skillUrl,
+    };
+    current.files.skill = { bindingId: 'global', createdAt: 1, name: 'skill.md', size: 5, url: skillUrl };
     current.files.orphan = { bindingId: 'role', createdAt: 1, name: 'orphan.bin', size: 1, url: orphanUrl };
     await settings.save(current);
-    const retainedUrls = client.urls().filter(url => url !== orphanUrl);
     const collector = new FileRegistryGarbageCollector(client, settings, () => 8 * 24 * 60 * 60 * 1000);
+    const download = vi.spyOn(client, 'download');
     expect(await collector.collect()).toEqual([orphanUrl]);
-    expect(client.urls()).toContain(entry.manifestUrl);
-    expect(client.urls()).toEqual(retainedUrls);
+    expect(download).not.toHaveBeenCalled();
+    expect(client.urls()).toEqual([skillUrl]);
   });
 
   it('开发日志限长、可清空，并在诊断包中递归脱敏', () => {

@@ -12,6 +12,7 @@ export type ModelStepRequest = {
   abortSignal: AbortSignal;
   forceTool?: string;
   messages: ModelMessage[];
+  onReasoningDelta?: (delta: string) => void;
   onTextDelta?: (delta: string) => void;
   tools: RunnerTool[];
 };
@@ -35,6 +36,7 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
   async execute(request: ModelStepRequest): Promise<ModelStepResult> {
     const model = await this.getModel();
     const tools = Object.fromEntries(request.tools.map(item => [item.name, item.definition])) as ToolSet;
+    let streamError: unknown;
     const result = streamText({
       abortSignal: request.abortSignal,
       allowSystemInMessages: true,
@@ -42,19 +44,50 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
       model,
       onChunk: chunk => {
         if (chunk.chunk.type === 'text-delta') request.onTextDelta?.(chunk.chunk.text);
+        if (chunk.chunk.type === 'reasoning-delta') request.onReasoningDelta?.(chunk.chunk.text);
+      },
+      onError: event => {
+        streamError = event.error;
       },
       telemetry: { isEnabled: false },
       toolChoice: request.forceTool ? { toolName: request.forceTool, type: 'tool' } : 'auto',
       toolOrder: request.tools.map(item => item.name),
       tools,
     });
-    const [assistantMessages, toolCalls, text, usage, finishReason] = await Promise.all([
-      result.responseMessages,
-      result.toolCalls,
-      result.text,
-      result.usage,
-      result.finishReason,
-    ]);
+    let resolved: Awaited<
+      ReturnType<
+        typeof Promise.all<
+          [
+            typeof result.responseMessages,
+            typeof result.toolCalls,
+            typeof result.text,
+            typeof result.usage,
+            typeof result.finishReason,
+            typeof result.rawFinishReason,
+          ]
+        >
+      >
+    >;
+    try {
+      resolved = await Promise.all([
+        result.responseMessages,
+        result.toolCalls,
+        result.text,
+        result.usage,
+        result.finishReason,
+        result.rawFinishReason,
+      ]);
+    } catch (error) {
+      throw streamError ?? error;
+    }
+    const [assistantMessages, toolCalls, text, usage, finishReason, rawFinishReason] = resolved;
+    if (streamError) throw streamError;
+    if (assistantMessages.length === 0 && toolCalls.length === 0 && !text.trim()) {
+      const reason = rawFinishReason ? `${finishReason}/${rawFinishReason}` : finishReason;
+      throw new Error(
+        `模型返回了空响应（finishReason: ${reason}）。接口可能与所选协议不兼容；若使用OpenAI Responses，请确认Base URL填写到API版本根路径（常见形式为https://服务地址/v1），而不是站点根地址。`,
+      );
+    }
     return {
       assistantMessages: assistantMessages as ModelMessage[],
       finishReason,

@@ -97,6 +97,7 @@ describe('MemoryWorkspaceRepository', () => {
       contextLines: 1,
       glob: '**/*.md',
       maxResults: 1,
+      mode: 'regex',
       path: '/worldbooks',
       pattern: '学院|安静',
     });
@@ -105,11 +106,11 @@ describe('MemoryWorkspaceRepository', () => {
     expect(result.matches[0].contextAfter).toEqual(['这里很安静。']);
   });
 
-  it('固定字符串搜索不会把正则字符当作表达式', async () => {
+  it('默认的普通文本搜索不会把正则字符当作表达式', async () => {
     const workspace = new MemoryWorkspaceRepository({
       files: [{ ...files[0], content: 'a+b\nab' }],
     });
-    const result = await workspace.search({ fixedStrings: true, pattern: 'a+b' });
+    const result = await workspace.search({ pattern: 'a+b' });
     expect(result.matches).toHaveLength(1);
     expect(result.matches[0].text).toBe('a+b');
   });

@@ -25,6 +25,9 @@ describe('AiSdkModelStepExecutor', () => {
       doStream: {
         stream: simulateReadableStream({
           chunks: [
+            { id: 'reasoning', type: 'reasoning-start' },
+            { delta: '先读取文件', id: 'reasoning', type: 'reasoning-delta' },
+            { id: 'reasoning', type: 'reasoning-end' },
             { id: 'text', type: 'text-start' },
             { delta: 'hello', id: 'text', type: 'text-delta' },
             { id: 'text', type: 'text-end' },
@@ -35,11 +38,13 @@ describe('AiSdkModelStepExecutor', () => {
       },
     });
     const delta = vi.fn();
+    const reasoningDelta = vi.fn();
     const executor = new AiSdkModelStepExecutor(async () => model);
     const result = await executor.execute({
       abortSignal: new AbortController().signal,
       forceTool: 'read_file',
       messages: [{ content: 'go', role: 'user' }],
+      onReasoningDelta: reasoningDelta,
       onTextDelta: delta,
       tools: [runnerTool('read_file'), runnerTool('search_files')],
     });
@@ -51,10 +56,47 @@ describe('AiSdkModelStepExecutor', () => {
       toolCalls: [{ input: { value: 'x' }, toolCallId: 'call-1', toolName: 'read_file' }],
     });
     expect(delta).toHaveBeenCalledWith('hello');
+    expect(reasoningDelta).toHaveBeenCalledWith('先读取文件');
     expect(model.doStreamCalls).toHaveLength(1);
     expect(model.doStreamCalls[0]).toMatchObject({
       toolChoice: { toolName: 'read_file', type: 'tool' },
     });
     expect(model.doStreamCalls[0].tools?.map(item => item.name)).toEqual(['read_file', 'search_files']);
+  });
+
+  it('把HTTP成功但没有文本、消息或工具调用的结果视为协议错误', async () => {
+    const model = new MockLanguageModelV3({
+      doStream: {
+        stream: simulateReadableStream({
+          chunks: [{ finishReason: { raw: 'other', unified: 'other' }, type: 'finish', usage }],
+        }),
+      },
+    });
+    const executor = new AiSdkModelStepExecutor(async () => model);
+    await expect(
+      executor.execute({
+        abortSignal: new AbortController().signal,
+        messages: [{ content: 'probe', role: 'user' }],
+        tools: [runnerTool('read_file')],
+      }),
+    ).rejects.toThrow(/空响应.*Base URL/u);
+  });
+
+  it('保留流式接口返回的真实错误，而不是只抛出无输出占位错误', async () => {
+    const model = new MockLanguageModelV3({
+      doStream: {
+        stream: simulateReadableStream({
+          chunks: [{ error: new Error('provider rejected request'), type: 'error' }],
+        }),
+      },
+    });
+    const executor = new AiSdkModelStepExecutor(async () => model);
+    await expect(
+      executor.execute({
+        abortSignal: new AbortController().signal,
+        messages: [{ content: 'probe', role: 'user' }],
+        tools: [runnerTool('read_file')],
+      }),
+    ).rejects.toThrow('provider rejected request');
   });
 });

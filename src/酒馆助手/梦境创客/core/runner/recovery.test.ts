@@ -15,7 +15,7 @@ const messages: ModelMessage[] = [
 ];
 
 describe('runner recovery', () => {
-  it('从最后一个成功工具之后恢复，保留原工具调用ID', () => {
+  it('只从真正未完成的工具恢复，保留原工具调用ID', () => {
     const events: RunnerEvent[] = [
       {
         at: 1,
@@ -26,20 +26,31 @@ describe('runner recovery', () => {
       {
         at: 2,
         call: { input: { path: '/b' }, toolCallId: 'b', toolName: 'write_file' },
-        error: 'closed',
+        type: 'tool-started',
+      },
+    ];
+    expect(recoverPendingRunnerStep(messages, events)).toEqual({
+      calls: expect.any(Array),
+      compacting: false,
+      nextCall: 1,
+    });
+  });
+
+  it('已成功或已把失败返回给模型的工具链不产生待恢复步骤', () => {
+    const events: RunnerEvent[] = [
+      {
+        at: 1,
+        call: { input: {}, toolCallId: 'a', toolName: 'tool' },
+        output: {},
+        type: 'tool-completed',
+      },
+      {
+        at: 2,
+        call: { input: {}, toolCallId: 'b', toolName: 'tool' },
+        error: 'invalid input',
         type: 'tool-failed',
       },
     ];
-    expect(recoverPendingRunnerStep(messages, events)).toEqual({ calls: expect.any(Array), compacting: false, nextCall: 1 });
-  });
-
-  it('完整工具链或无工具消息不产生待恢复步骤', () => {
-    const events: RunnerEvent[] = ['a', 'b'].map(toolCallId => ({
-      at: 1,
-      call: { input: {}, toolCallId, toolName: 'tool' },
-      output: {},
-      type: 'tool-completed' as const,
-    }));
     expect(recoverPendingRunnerStep(messages, events)).toBeUndefined();
     expect(recoverPendingRunnerStep([{ content: 'done', role: 'assistant' }], [])).toBeUndefined();
   });

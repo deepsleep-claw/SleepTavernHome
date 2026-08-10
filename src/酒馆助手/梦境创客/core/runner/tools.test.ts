@@ -20,8 +20,15 @@ describe('workspace runner tools', () => {
       { name: 'description.md' },
     ]);
     expect(await tools.get('read_file')!.execute({ path: '/character/description.md' }, 'read')).toMatchObject({
-      content: 'hello\nworld',
+      endLine: 2,
+      lineNumbering: { prefixesAreFileContent: false },
+      startLine: 1,
+      totalLines: 2,
+      view: '1 | hello\n2 | world',
     });
+    expect(
+      await tools.get('read_file')!.execute({ limit: 1, offset: 2, path: '/character/description.md' }, 'read-page'),
+    ).toMatchObject({ endLine: 2, startLine: 2, totalLines: 2, truncated: false, view: '2 | world' });
     await tools.get('apply_patch')!.execute(
       { patch: '@@ -1,2 +1,2 @@\n-hello\n+HELLO\n world', path: '/character/description.md' },
       'patch',

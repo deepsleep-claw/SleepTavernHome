@@ -4,7 +4,7 @@ import type { WorkspaceFile } from './types';
 
 const searchFiles: WorkspaceFile[] = [
   {
-    content: 'Alpha\nbeta\nALPHA',
+    content: 'Alpha\nbeta\nALPHA\nasterisk * and [literal]',
     mediaType: 'text/plain',
     path: '/a/one.txt',
     readonly: false,
@@ -50,11 +50,38 @@ describe('searchWorkspaceFiles', () => {
       pattern: 'alpha',
     });
     expect(result).toMatchObject({ matchedFiles: 1, returnedMatches: 1, truncated: true });
-    expect(result.matches[0].contextAfter).toEqual(['beta', 'ALPHA']);
+    expect(result.matches[0].contextAfter).toEqual(['beta', 'ALPHA', 'asterisk * and [literal]']);
+  });
+
+  it('默认按普通文本搜索，并仅在显式指定时启用正则', () => {
+    expect(searchWorkspaceFiles(searchFiles, { pattern: '*' }).matches).toHaveLength(1);
+    expect(searchWorkspaceFiles(searchFiles, { pattern: '[literal]' }).matches).toHaveLength(1);
+
+    const regex = searchWorkspaceFiles(searchFiles, {
+      caseSensitive: true,
+      mode: 'regex',
+      pattern: '^Alpha$',
+    });
+    expect(regex.matches).toEqual([expect.objectContaining({ line: 1, path: '/a/one.txt' })]);
+  });
+
+  it('支持多组包含Glob、排除Glob与独立的前后文行数', () => {
+    const result = searchWorkspaceFiles(searchFiles, {
+      contextAfter: 0,
+      contextBefore: 1,
+      excludeGlob: 'b/**',
+      glob: ['**/*.txt', '**/*.md'],
+      pattern: 'alpha',
+    });
+    expect(result.matchedFiles).toBe(2);
+    expect(result.matches).toHaveLength(3);
+    expect(result.matches).toContainEqual(
+      expect.objectContaining({ contextAfter: [], contextBefore: ['beta'], line: 3, path: '/a/one.txt' }),
+    );
   });
 
   it('报告非法正则和Glob', () => {
-    expect(() => searchWorkspaceFiles(searchFiles, { pattern: '[' })).toThrowError(
+    expect(() => searchWorkspaceFiles(searchFiles, { mode: 'regex', pattern: '[' })).toThrowError(
       expect.objectContaining({ code: 'INVALID_PATTERN' }),
     );
     expect(() => searchWorkspaceFiles(searchFiles, { glob: '../*.md', pattern: 'x' })).toThrowError(

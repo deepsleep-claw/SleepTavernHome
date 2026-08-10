@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseFrontmatter } from '../mapping/serde';
-import { BUILTIN_CARD_WORKSPACE_SKILL } from './builtin-card-workspace';
+import { BUILTIN_CARD_WORKSPACE_SKILL, parseBuiltinSkillSource } from './builtin-card-workspace';
 import {
   assessSkillMutation,
   compileFullSkillInstructions,
@@ -16,7 +16,6 @@ function userSkill(overrides: Partial<AgentSkill> = {}): AgentSkill {
     body: '# 写作步骤\n\n先理解需求，再修改文件。',
     builtin: false,
     description: '辅助编写学院角色。',
-    enabled: true,
     id: 'academy-writer',
     loading: 'on-demand',
     name: '学院写作',
@@ -26,12 +25,31 @@ function userSkill(overrides: Partial<AgentSkill> = {}): AgentSkill {
 }
 
 describe('agent skills', () => {
+  it('从带Frontmatter的Markdown读取内置Skill', () => {
+    expect(BUILTIN_CARD_WORKSPACE_SKILL).toMatchObject({
+      builtin: true,
+      id: 'card-workspace-io',
+      loading: 'full',
+      name: '角色卡工作区读写',
+    });
+    expect(BUILTIN_CARD_WORKSPACE_SKILL.body).toContain('# 角色卡工作区读写');
+    expect(() => parseBuiltinSkillSource('没有Frontmatter', 'broken.md')).toThrowError(
+      expect.objectContaining({ path: 'broken.md' }),
+    );
+  });
+
   it('投影摘要索引、内置只读Skill和用户资源', () => {
     const files = projectSkills([userSkill()]);
     expect(files.find(file => file.path === '/skills/index.md')).toMatchObject({ readonly: true });
-    expect(files.find(file => file.path.endsWith('/builtin/card-workspace-io/SKILL.md'))).toMatchObject({ readonly: true });
-    expect(files.find(file => file.path === '/skills/user/academy-writer/references/style.md')?.content).toBe('保持轻快文风。');
-    expect(files.find(file => file.path === '/skills/index.md')?.content).toContain('/skills/user/academy-writer/SKILL.md');
+    expect(files.find(file => file.path.endsWith('/builtin/card-workspace-io/SKILL.md'))).toMatchObject({
+      readonly: true,
+    });
+    expect(files.find(file => file.path === '/skills/user/academy-writer/references/style.md')?.content).toBe(
+      '保持轻快文风。',
+    );
+    expect(files.find(file => file.path === '/skills/index.md')?.content).toContain(
+      '/skills/user/academy-writer/SKILL.md',
+    );
   });
 
   it('从文件无损读取用户Skill，但忽略内置Skill', () => {
@@ -45,15 +63,13 @@ describe('agent skills', () => {
     });
   });
 
-  it('全量提示只包含启用的full Skill，并始终包含内置读写Skill', () => {
+  it('全量提示只包含当前配置传入的full Skill，并始终包含内置读写Skill', () => {
     const prompt = compileFullSkillInstructions([
       userSkill({ loading: 'full' }),
-      userSkill({ enabled: false, id: 'disabled', name: '禁用' }),
       userSkill({ id: 'on-demand', name: '按需', loading: 'on-demand' }),
     ]);
     expect(prompt).toContain(BUILTIN_CARD_WORKSPACE_SKILL.body);
     expect(prompt).toContain('学院写作');
-    expect(prompt).not.toContain('禁用');
     expect(prompt).not.toContain('Skill：按需');
   });
 
@@ -63,7 +79,8 @@ describe('agent skills', () => {
       loading: 'full',
     });
     const files = projectSkills([userSkill()]);
-    files.find(file => file.path.endsWith('/academy-writer/SKILL.md'))!.content = '---\nname: x\ndescription: y\nloading: invalid\nenabled: true\n---\nbody';
+    files.find(file => file.path.endsWith('/academy-writer/SKILL.md'))!.content =
+      '---\nname: x\ndescription: y\nloading: invalid\n---\nbody';
     expect(() => materializeUserSkills(files)).toThrowError(expect.objectContaining({ code: 'INVALID_PATCH' }));
   });
 

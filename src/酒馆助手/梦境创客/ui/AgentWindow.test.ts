@@ -4,9 +4,12 @@ import { createApp, nextTick } from 'vue';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 describe('AgentWindow', () => {
-  afterEach(() => vi.unstubAllGlobals());
+  afterEach(() => {
+    localStorage.clear();
+    vi.unstubAllGlobals();
+  });
 
-  it('呈现五步引导、角色缺失错误与API设置页，并把引导状态保存到酒馆设置', async () => {
+  it('呈现五步引导、固定设置页签与API子页，并把引导状态保存到酒馆设置', async () => {
     const saveSettingsDebounced = vi.fn(async () => undefined);
     vi.stubGlobal('SillyTavern', {
       extensionSettings: {},
@@ -29,11 +32,16 @@ describe('AgentWindow', () => {
     expect(saveSettingsDebounced).toHaveBeenCalled();
     await vi.waitFor(() => expect(root.textContent).toContain('请先打开一张角色卡'));
 
+    const settingsTab = [...root.querySelectorAll('button')].find(button => button.textContent?.trim() === '设置');
+    settingsTab?.click();
+    await nextTick();
     const apiTab = [...root.querySelectorAll('button')].find(button => button.textContent?.trim() === 'API');
     apiTab?.click();
     await nextTick();
     expect(root.textContent).toContain('接口类型只决定协议');
-    expect(root.textContent).toContain('保存（不测试连接）');
+    expect(root.textContent).toContain('获取模型');
+    expect(root.textContent).not.toContain('保存（不测试连接）');
+    expect([...root.querySelectorAll('button')].some(button => button.textContent?.trim() === '保存 Profile')).toBe(true);
     expect((root.querySelector('textarea') as HTMLTextAreaElement).value).toBe('{}');
     app.unmount();
   });

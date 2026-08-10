@@ -1,0 +1,66 @@
+// 梦境创客设计 Token。
+// 工作台内样式挂在 .dca-app 下；窗口外壳在父页面，类名为 .dca-floating-*。
+// 两者都需要同一组变量，因此 Token 同时定义在这两个根上。
+.dca-app,
+.dca-floating-window,
+.dca-floating-body-frame,
+.dca-shadow-root,
+.dca-floating-trigger {
+  // 背景层级：页面底 → 普通面板 → 抬升卡片 → 浮层
+  --dca-canvas: #0e0d14;
+  --dca-surface: #15131d;
+  --dca-raised: #1c1a26;
+  --dca-overlay: #252131;
+
+  // 文字层级
+  --dca-text: #ede9f8;
+  --dca-text-secondary: #b3aac8;
+  --dca-text-muted: #837a9b;
+  --dca-text-disabled: #58516d;
+
+  // 语义色（-soft 为同色系低透明底色）
+  --dca-accent: #9d7cff;
+  --dca-accent-strong: #b9a3ff;
+  --dca-accent-soft: rgb(157 124 255 / 14%);
+  --dca-success: #5cc9a7;
+  --dca-success-soft: rgb(92 201 167 / 12%);
+  --dca-warning: #dfb15e;
+  --dca-warning-soft: rgb(223 177 94 / 12%);
+  --dca-danger: #e06c82;
+  --dca-danger-soft: rgb(224 108 130 / 12%);
+  --dca-info: #6fa8e8;
+  --dca-info-soft: rgb(111 168 232 / 12%);
+
+  // 边框
+  --dca-border: #2b2738;
+  --dca-border-strong: #403a54;
+
+  // 圆角
+  --dca-radius-sm: 6px;
+  --dca-radius-md: 10px;
+  --dca-radius-lg: 14px;
+
+  // 阴影
+  --dca-shadow-1: 0 1px 2px rgb(0 0 0 / 35%);
+  --dca-shadow-2: 0 8px 28px rgb(0 0 0 / 42%);
+  --dca-shadow-3: 0 24px 70px rgb(0 0 0 / 60%);
+
+  // 间距
+  --dca-space-1: 4px;
+  --dca-space-2: 8px;
+  --dca-space-3: 12px;
+  --dca-space-4: 16px;
+  --dca-space-5: 20px;
+  --dca-space-6: 24px;
+
+  // 控件
+  --dca-control-h: 34px;
+  --dca-control-h-sm: 28px;
+
+  // 字体
+  --dca-font-mono: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+
+  // 动画
+  --dca-motion-fast: 0.14s;
+  --dca-motion-normal: 0.22s;
+}

@@ -30,7 +30,9 @@ function step(toolCalls: RunnerToolCall[] = [], text = '完成啦'): ModelStepRe
 
 class QueueExecutor implements ModelStepExecutor {
   readonly requests: ModelStepRequest[] = [];
-  constructor(private readonly queue: Array<ModelStepResult | ((request: ModelStepRequest) => Promise<ModelStepResult>)>) {}
+  constructor(
+    private readonly queue: Array<ModelStepResult | ((request: ModelStepRequest) => Promise<ModelStepResult>)>,
+  ) {}
   async execute(request: ModelStepRequest): Promise<ModelStepResult> {
     this.requests.push(request);
     const next = this.queue.shift();
@@ -175,7 +177,6 @@ describe('card agent session service', () => {
       body: '# 原流程',
       builtin: false,
       description: '原技能',
-      enabled: true,
       id: 'writer',
       loading: 'on-demand' as const,
       name: '写作',
@@ -188,7 +189,7 @@ describe('card agent session service', () => {
         step([
           {
             input: {
-              content: '---\ndescription: 已修改\nenabled: true\nloading: on-demand\nname: 写作\n---\n# 新流程\n',
+              content: '---\ndescription: 已修改\nloading: on-demand\nname: 写作\n---\n# 新流程\n',
               path: '/skills/user/writer/SKILL.md',
             },
             toolCallId: 'skill-edit',
@@ -214,7 +215,7 @@ describe('card agent session service', () => {
         step([
           {
             input: {
-              content: '---\ndescription: 新技能\nenabled: true\nloading: on-demand\nname: 灵感\n---\n# 流程\n',
+              content: '---\ndescription: 新技能\nloading: on-demand\nname: 灵感\n---\n# 流程\n',
               path: '/skills/user/idea/SKILL.md',
             },
             toolCallId: 'skill-new',
@@ -231,50 +232,93 @@ describe('card agent session service', () => {
     expect(created.view().workingFiles.some(file => file.path === '/skills/user/idea/SKILL.md')).toBe(true);
   });
 
-  it('页面意外关闭后从最后成功步骤恢复，不重跑已经完成的写工具', async () => {
+  it('Runner运行期间只更新前端状态，轮次结束后才持久化一次', async () => {
     const adapter = new MemoryCardStateAdapter(transactionState());
-    let crashRuntime: PersistedSessionRuntime | undefined;
-    let crashFiles: WorkspaceFile[] = [];
-    const firstExecutor = new QueueExecutor([
-      step([writeDescription('恢复后的描述', 'stable-write')]),
-      request =>
-        new Promise<ModelStepResult>((_resolve, reject) => {
-          request.abortSignal.addEventListener('abort', () => reject(new DOMException('closed', 'AbortError')));
+    const persist = vi.fn(async (_runtime: PersistedSessionRuntime, _files: WorkspaceFile[]) => undefined);
+    let finish!: (result: ModelStepResult) => void;
+    const executor = new QueueExecutor([
+      step([writeDescription('批量保存后的描述', 'batched-write')]),
+      () =>
+        new Promise<ModelStepResult>(resolve => {
+          finish = resolve;
         }),
     ]);
-    const original = await CardAgentSessionService.create({
+    const service = await CardAgentSessionService.create({
       adapter,
-      executor: firstExecutor,
+      executor,
       lock: new GlobalAgentTaskLock(),
-      mode: 'yolo',
-      onPersist: async (runtime, files) => {
-        if (runtime.events.some(event => event.type === 'tool-completed')) {
-          crashRuntime ??= structuredClone(runtime);
-          if (crashFiles.length === 0) crashFiles = structuredClone(files);
-        }
-      },
+      onPersist: persist,
       snapshots: snapshots(),
     });
-    const running = original.send('修改后模拟关闭');
-    await vi.waitFor(() => expect(crashRuntime).toBeDefined());
-    await vi.waitFor(() => expect(firstExecutor.requests).toHaveLength(2));
-    original.stop();
-    await running;
+    const running = service.send('测试整轮批量保存');
+    await vi.waitFor(() => expect(executor.requests).toHaveLength(2));
+    expect(service.view().events.some(event => event.type === 'tool-completed')).toBe(true);
+    expect(persist).not.toHaveBeenCalled();
 
-    const restored = await CardAgentSessionService.restore(
-      {
-        adapter,
-        executor: new QueueExecutor([step([], '恢复完成')]),
-        lock: new GlobalAgentTaskLock(),
-        snapshots: snapshots(),
+    finish(step([], '完成'));
+    expect((await running).status).toBe('awaiting-approval');
+    expect(persist).toHaveBeenCalledTimes(1);
+  });
+
+  it('流式展示模型思考，并在模型步骤结束后记录耗时和折叠状态', async () => {
+    let now = 1_000;
+    const executor = new QueueExecutor([
+      async request => {
+        request.onReasoningDelta?.('先检查角色描述。\n');
+        now = 3_400;
+        request.onReasoningDelta?.('再确认世界书关联。');
+        return step([], '检查完成');
       },
-      crashRuntime!,
-      crashFiles,
-    );
-    expect(restored.view().status).toBe('abnormal');
-    expect((await restored.resume()).status).toBe('completed');
-    expect((await adapter.read()).character.fields.description).toBe('恢复后的描述');
-    expect(restored.view().events.filter(event => event.type === 'tool-completed' && event.call.toolCallId === 'stable-write')).toHaveLength(1);
+    ]);
+    const service = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      executor,
+      lock: new GlobalAgentTaskLock(),
+      now: () => now,
+      snapshots: snapshots(),
+    });
+    await service.send('只读检查');
+    expect(service.view().ui.find(item => item.kind === 'reasoning')).toMatchObject({
+      content: '先检查角色描述。\n再确认世界书关联。',
+      durationMs: 2_400,
+      status: 'completed',
+    });
+  });
+
+  it('工具调用前后的流式正文保持原有时间线顺序', async () => {
+    const service = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      executor: new QueueExecutor([
+        async request => {
+          request.onTextDelta?.('输出1');
+          return step([
+            {
+              input: { path: '/character/description.md' },
+              toolCallId: 'ordered-read',
+              toolName: 'read_file',
+            },
+          ]);
+        },
+        async request => {
+          request.onTextDelta?.('输出2');
+          return step([], '输出2');
+        },
+      ]),
+      lock: new GlobalAgentTaskLock(),
+      snapshots: snapshots(),
+    });
+
+    await service.send('检查输出顺序');
+    expect(
+      service
+        .view()
+        .ui.filter(item => item.kind === 'assistant' || item.kind === 'tool')
+        .map(item => ({ content: item.content, kind: item.kind })),
+    ).toEqual([
+      { content: '输出1', kind: 'assistant' },
+      { content: expect.stringContaining('description'), kind: 'tool' },
+      { content: '输出2', kind: 'assistant' },
+    ]);
   });
 
   it('提交失败后回滚并保留候选供再次处理', async () => {
@@ -331,5 +375,30 @@ describe('card agent session service', () => {
     expect(redone.ui.some(item => item.content === '第一轮回复')).toBe(true);
     expect(redone.ui.some(item => item.id === 'early-user-2')).toBe(true);
     expect(redone.ui.some(item => item.content === '第二轮回复')).toBe(false);
+  });
+
+  it('失败原因可以持久化，失败轮次禁止叠加消息且回退后可重新发送', async () => {
+    let persisted:
+      Parameters<NonNullable<Parameters<typeof CardAgentSessionService.create>[0]['onPersist']>>[0] | undefined;
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const service = await CardAgentSessionService.create({
+      adapter,
+      executor: new QueueExecutor([
+        async () => {
+          throw new Error('provider failed');
+        },
+      ]),
+      lock: new GlobalAgentTaskLock(),
+      onPersist: async runtime => {
+        persisted = structuredClone(runtime);
+      },
+      snapshots: snapshots(),
+    });
+    const failed = await service.send('触发失败', 'failed-user');
+    expect(failed).toMatchObject({ error: 'provider failed', status: 'failed' });
+    expect(persisted).toMatchObject({ lastError: 'provider failed', status: 'failed' });
+    await expect(service.send('不应叠加')).rejects.toThrow('当前轮次尚未结束');
+    await service.undoToUserMessage('failed-user');
+    expect(service.view()).toMatchObject({ error: undefined, status: 'completed' });
   });
 });

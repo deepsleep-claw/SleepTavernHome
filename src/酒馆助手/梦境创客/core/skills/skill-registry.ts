@@ -14,7 +14,6 @@ function skillFile(skill: AgentSkill): WorkspaceFile {
     content: serializeFrontmatter(
       {
         description: skill.description,
-        enabled: skill.enabled,
         loading: skill.loading,
         name: skill.name,
       },
@@ -38,11 +37,10 @@ function resourceFile(skill: AgentSkill, kind: 'assets' | 'references', name: st
 }
 
 function buildIndex(skills: AgentSkill[]): string {
-  const enabled = skills.filter(skill => skill.enabled);
   return [
     '# 已启用 Skill',
     '',
-    ...enabled.flatMap(skill => [
+    ...skills.flatMap(skill => [
       `## ${skill.name}`,
       '',
       `- 摘要：${skill.description}`,
@@ -84,9 +82,6 @@ function parseSkill(input: WorkspaceFile, allFiles: WorkspaceFile[]): AgentSkill
   if (loading !== 'full' && loading !== 'on-demand') {
     throw new WorkspaceError('INVALID_PATCH', `Skill loading必须是full或on-demand：${input.path}`, input.path);
   }
-  if (typeof metadata.enabled !== 'boolean') {
-    throw new WorkspaceError('INVALID_PATCH', `Skill enabled必须是布尔值：${input.path}`, input.path);
-  }
   const collect = (kind: 'assets' | 'references') =>
     Object.fromEntries(
       allFiles
@@ -98,7 +93,6 @@ function parseSkill(input: WorkspaceFile, allFiles: WorkspaceFile[]): AgentSkill
     body,
     builtin: input.path.startsWith('/skills/builtin/'),
     description: requiredString(metadata.description, 'description', input.path),
-    enabled: metadata.enabled,
     id: workspaceBasename(root),
     loading,
     name: requiredString(metadata.name, 'name', input.path),
@@ -116,7 +110,7 @@ export function materializeUserSkills(files: Iterable<WorkspaceFile>): AgentSkil
 
 export function compileFullSkillInstructions(skills: AgentSkill[]): string {
   return [BUILTIN_CARD_WORKSPACE_SKILL, ...skills]
-    .filter(skill => skill.enabled && skill.loading === 'full')
+    .filter(skill => skill.loading === 'full')
     .map(skill => `## Skill：${skill.name}\n\n${skill.body.trim()}`)
     .join('\n\n');
 }
@@ -128,7 +122,6 @@ export function createSkillTemplate(name: string, description: string, loading: 
     body: '# 工作流程\n\n在这里写入简短、可执行的步骤。',
     builtin: false,
     description,
-    enabled: true,
     id,
     loading,
     name,
