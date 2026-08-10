@@ -51,11 +51,44 @@
               <strong>{{ selectedFile.path }}</strong>
               <small>{{ selectedFile.mediaType }} · {{ selectedFile.resourceId }}</small>
             </div>
-            <button type="button" :disabled="!canEditFile || fileDraft === selectedFile.content" @click="saveFile">
-              保存
-            </button>
+            <div class="dca-editor-actions">
+              <div v-if="isMarkdownFile" class="dca-editor-view-switch" aria-label="Markdown查看方式">
+                <button type="button" :class="{ active: editorView === 'edit' }" @click="editorView = 'edit'">编辑</button>
+                <button type="button" :class="{ active: editorView === 'preview' }" @click="editorView = 'preview'">
+                  预览
+                </button>
+              </div>
+              <button type="button" :disabled="!canEditFile || fileDraft === selectedFile.content" @click="saveFile">
+                保存
+              </button>
+            </div>
           </header>
-          <textarea v-model="fileDraft" spellcheck="false" :readonly="!canEditFile"></textarea>
+          <div v-if="secretWarning" class="dca-secret-banner warning" role="status">
+            <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+            <span>{{ secretWarning }}</span>
+          </div>
+          <div v-else-if="secretFindings.length" class="dca-secret-banner protected" role="status">
+            <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
+            <span>检测到 {{ secretFindings.length }} 处敏感内容；界面显示原文，Agent读取时自动遮罩。</span>
+          </div>
+          <template v-if="editorView === 'preview' && isMarkdownFile">
+            <div v-if="largeMarkdownFile && !largePreviewApproved" class="dca-large-preview">
+              <i class="fa-regular fa-file-lines" aria-hidden="true"></i>
+              <strong>这个Markdown文件超过1MB</strong>
+              <span>为避免界面卡顿，预览只在你明确需要时渲染。</span>
+              <button type="button" @click="largePreviewApproved = true">仍然加载预览</button>
+            </div>
+            <!-- eslint-disable vue/no-v-html -- 内容已由 ui/markdown.ts 的默认安全 Schema 清洗。 -->
+            <div v-else class="dca-markdown dca-file-preview" v-html="renderMarkdown(fileDraft)"></div>
+            <!-- eslint-enable vue/no-v-html -->
+          </template>
+          <VfsTextEditor
+            v-else
+            v-model="fileDraft"
+            :markers="secretMarkers"
+            :path="selectedFile.path"
+            :readonly="!canEditFile"
+          />
           <small v-if="!canEditFile" class="dca-editor-note">只读资源或 Agent 运行期间不能编辑。</small>
         </template>
         <div v-else class="dca-empty">选择文件查看或编辑。</div>
@@ -151,9 +184,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { maskSecretsForModel } from '../../../../core/workspace/secret-protection';
 import { pretty } from '../../../composables/format';
 import { useDreamCardAgent, type SidebarTab } from '../../../composables/runtime';
+import { renderMarkdown } from '../../../markdown';
+import VfsTextEditor, { type VfsEditorMarker } from '../../../editor/VfsTextEditor.vue';
 
 type FileTreeRow = {
   depth: number;
@@ -170,7 +206,13 @@ const { action, runtime, state } = useDreamCardAgent();
 
 const selectedFilePath = ref('');
 const fileDraft = ref('');
+const editorView = ref<'edit' | 'preview'>('edit');
+const largePreviewApproved = ref(false);
+const secretFindings = ref<Awaited<ReturnType<typeof maskSecretsForModel>>['findings']>([]);
+const secretWarning = ref('');
 const expandedDirectories = ref(new Set(['/character', '/greetings', '/skills', '/skills/user', '/worldbooks']));
+let secretScanTimer: number | undefined;
+let secretScanRevision = 0;
 
 const tab = computed({
   get: () => props.tab,
@@ -220,9 +262,20 @@ const visibleFileTreeRows = computed<FileTreeRow[]>(() => {
   return rows;
 });
 const selectedFile = computed(() => files.value.find(file => file.path === selectedFilePath.value));
-const isRunning = computed(() => ['running', 'waiting-approval'].includes(state.value.active?.status ?? ''));
+const isRunning = computed(() => ['committing', 'running'].includes(state.value.active?.status ?? ''));
 const canEditFile = computed(() =>
   Boolean(selectedFile.value && !selectedFile.value.readonly && state.value.active && !isRunning.value),
+);
+const isMarkdownFile = computed(() => /\.md$/iu.test(selectedFile.value?.path ?? ''));
+const largeMarkdownFile = computed(() => new Blob([fileDraft.value]).size > 1024 * 1024);
+const secretMarkers = computed<VfsEditorMarker[]>(() =>
+  secretFindings.value.map(finding => ({
+    endColumn: Math.max(0, finding.endColumn - 1),
+    endLine: Math.max(0, finding.endLine - 1),
+    label: `可能的敏感内容（${finding.ruleId}）`,
+    startColumn: Math.max(0, finding.startColumn - 1),
+    startLine: Math.max(0, finding.startLine - 1),
+  })),
 );
 const approvalChanges = computed(() => [
   ...(state.value.active?.approval?.stateChanges ?? []),
@@ -232,6 +285,30 @@ const changeCount = computed(() => approvalChanges.value.length);
 
 watch(selectedFile, file => {
   fileDraft.value = file?.content ?? '';
+  editorView.value = 'edit';
+  largePreviewApproved.value = false;
+});
+
+watch(
+  [() => selectedFile.value?.path, fileDraft],
+  ([path]) => {
+    if (secretScanTimer !== undefined) window.clearTimeout(secretScanTimer);
+    const revision = ++secretScanRevision;
+    secretFindings.value = [];
+    secretWarning.value = '';
+    if (!path?.endsWith('/data.yaml')) return;
+    secretScanTimer = window.setTimeout(async () => {
+      const result = await maskSecretsForModel(fileDraft.value, path);
+      if (revision !== secretScanRevision) return;
+      secretFindings.value = result.findings;
+      secretWarning.value = result.warning ?? '';
+    }, 250);
+  },
+  { immediate: true },
+);
+
+onBeforeUnmount(() => {
+  if (secretScanTimer !== undefined) window.clearTimeout(secretScanTimer);
 });
 
 // 外部请求定位到某个文件（如 Skill 设置页的“查看挂载版本”）。
@@ -463,6 +540,35 @@ async function redo() {
   gap: 0.65rem;
 }
 
+.dca-editor-actions,
+.dca-editor-view-switch {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.dca-editor-view-switch {
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-sm);
+  padding: 0.1rem;
+  background: var(--dca-canvas);
+}
+
+.dca-app .dca-editor-view-switch button {
+  min-height: 1.65rem;
+  border-color: transparent;
+  padding: 0.15rem 0.45rem;
+  background: transparent;
+  color: var(--dca-text-muted);
+  font-size: 0.72rem;
+}
+
+.dca-app .dca-editor-view-switch button.active {
+  background: var(--dca-accent-soft);
+  color: var(--dca-text);
+}
+
 .dca-editor > header > div {
   display: flex;
   min-width: 0;
@@ -482,12 +588,59 @@ async function redo() {
   font-size: 0.76rem;
 }
 
-.dca-app .dca-editor textarea {
+.dca-secret-banner {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  gap: 0.4rem;
+  border: 1px solid;
+  border-radius: var(--dca-radius-sm);
+  padding: 0.4rem 0.5rem;
+  font-size: 0.74rem;
+}
+
+.dca-secret-banner.protected {
+  border-color: rgb(239 189 85 / 40%);
+  background: rgb(239 189 85 / 9%);
+  color: #efd18a;
+}
+
+.dca-secret-banner.warning {
+  border-color: rgb(224 108 130 / 45%);
+  background: var(--dca-danger-soft);
+  color: #f2a3b3;
+}
+
+.dca-file-preview {
   flex: 1 1 auto;
-  min-height: 8rem;
-  font:
-    12px/1.5 var(--dca-font-mono);
-  resize: none;
+  overflow: auto;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-sm);
+  padding: 0.75rem;
+  background: var(--dca-canvas);
+}
+
+.dca-large-preview {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 0.45rem;
+  border: 1px dashed var(--dca-border-strong);
+  border-radius: var(--dca-radius-sm);
+  padding: 1rem;
+  color: var(--dca-text-muted);
+  text-align: center;
+}
+
+.dca-large-preview > i {
+  color: var(--dca-accent);
+  font-size: 1.5rem;
+}
+
+.dca-large-preview > strong {
+  color: var(--dca-text);
 }
 
 .dca-editor > .dca-empty {
