@@ -1,4 +1,4 @@
-import type { ApiProfile } from '../provider/profiles';
+import { normalizeApiProfile, type ApiProfile } from '../provider/profiles';
 import { cloneStructuredPreset, DEFAULT_PRESET, type StructuredPreset } from '../preset/compiler';
 
 export type FloatingButtonAnchor =
@@ -206,7 +206,7 @@ function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamCardAgen
       y: Number.isFinite(offset?.y) ? offset!.y : defaultOffset.y,
     },
     globalSkills: structuredClone(raw?.globalSkills ?? {}),
-    profiles: structuredClone(raw?.profiles ?? []),
+    profiles: (raw?.profiles ?? []).map(normalizeApiProfile),
     presetProfiles,
     syncRevision: Number.isFinite(raw?.syncRevision) ? Math.max(0, raw!.syncRevision!) : 0,
     version: 3,

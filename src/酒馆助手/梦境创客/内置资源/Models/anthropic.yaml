@@ -1,0 +1,69 @@
+revision: "2026-08-10"
+models:
+  - id: anthropic:claude-5
+    name: Claude 5（Opus / Sonnet / Fable）
+    provider: anthropic
+    aliases: [claude-opus-5, claude-sonnet-5, claude-fable-5]
+    patterns: ["claude-*-5*", "*/claude-*-5*"]
+    sourceUrl: https://platform.claude.com/docs/en/about-claude/models/overview
+    confidence: high
+    settings: &claude5
+      contextWindow: 1000000
+      maxOutputTokens: 128000
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: enabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 中, id: medium }
+        - { name: 高, id: high }
+        - { name: 极高, id: xhigh }
+        - { name: 最高, id: max }
+  - id: anthropic:claude-opus-4.8
+    name: Claude Opus 4.7 / 4.8
+    provider: anthropic
+    aliases: [claude-opus-4-7, claude-opus-4-8]
+    patterns: ["claude-opus-4-7*", "claude-opus-4-8*", "*/claude-opus-4-7*", "*/claude-opus-4-8*"]
+    sourceUrl: https://platform.claude.com/docs/en/about-claude/models/overview
+    confidence: high
+    settings: *claude5
+  - id: anthropic:claude-4.6
+    name: Claude Opus / Sonnet 4.6
+    provider: anthropic
+    aliases: [claude-opus-4-6, claude-sonnet-4-6]
+    patterns: ["claude-*-4-6*", "*/claude-*-4-6*"]
+    sourceUrl: https://platform.claude.com/docs/en/about-claude/models/overview
+    confidence: high
+    settings:
+      contextWindow: 1000000
+      maxOutputTokens: 128000
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: enabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 中, id: medium }
+        - { name: 高, id: high }
+        - { name: 最高, id: max }
+  - id: anthropic:claude-4.5
+    name: Claude 4.5 系列
+    provider: anthropic
+    aliases: [claude-haiku-4-5, claude-sonnet-4-5, claude-opus-4-5]
+    patterns: ["claude-*-4-5*", "*/claude-*-4-5*"]
+    sourceUrl: https://platform.claude.com/docs/en/about-claude/models/overview
+    confidence: high
+    settings:
+      contextWindow: 200000
+      maxOutputTokens: 64000
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: enabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 中, id: medium }
+        - { name: 高, id: high }
+  - id: anthropic:claude-4
+    name: Claude 4 系列
+    provider: anthropic
+    aliases: [claude-opus-4, claude-sonnet-4]
+    patterns: ["claude-*-4*", "*/claude-*-4*"]
+    sourceUrl: https://platform.claude.com/docs/en/about-claude/models/overview
+    confidence: high
+    settings:
+      contextWindow: 200000
+      maxOutputTokens: 64000
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: enabled }

@@ -1,0 +1,92 @@
+revision: "2026-08-10"
+models:
+  - id: openai:gpt-5.6-sol
+    name: GPT-5.6 Sol
+    provider: openai
+    aliases: [gpt-5.6, gpt-5.6-sol]
+    patterns: ["*/gpt-5.6-sol", "*/gpt-5.6-sol-*", "gpt-5.6-sol-*"]
+    sourceUrl: https://developers.openai.com/api/docs/models/gpt-5.6-sol
+    confidence: high
+    settings: &gpt56
+      contextWindow: 1050000
+      maxOutputTokens: 128000
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: enabled }
+      reasoningEfforts:
+        - { name: 关闭, id: none }
+        - { name: 低, id: low }
+        - { name: 中, id: medium }
+        - { name: 高, id: high }
+        - { name: 极高, id: xhigh }
+        - { name: 最高, id: max }
+  - id: openai:gpt-5.6-terra
+    name: GPT-5.6 Terra
+    provider: openai
+    aliases: [gpt-5.6-terra]
+    patterns: ["*/gpt-5.6-terra", "*/gpt-5.6-terra-*", "gpt-5.6-terra-*"]
+    sourceUrl: https://developers.openai.com/api/docs/models
+    confidence: high
+    settings: *gpt56
+  - id: openai:gpt-5.6-luna
+    name: GPT-5.6 Luna
+    provider: openai
+    aliases: [gpt-5.6-luna]
+    patterns: ["*/gpt-5.6-luna", "*/gpt-5.6-luna-*", "gpt-5.6-luna-*"]
+    sourceUrl: https://developers.openai.com/api/docs/models
+    confidence: high
+    settings: *gpt56
+  - id: openai:gpt-5
+    name: GPT-5 系列
+    provider: openai
+    aliases: [gpt-5, gpt-5.1, gpt-5.2]
+    patterns: ["gpt-5", "gpt-5.1*", "gpt-5.2*", "*/gpt-5", "*/gpt-5.1*", "*/gpt-5.2*"]
+    sourceUrl: https://developers.openai.com/api/docs/models
+    confidence: high
+    settings:
+      contextWindow: 400000
+      maxOutputTokens: 128000
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: enabled }
+      reasoningEfforts:
+        - { name: 关闭, id: none }
+        - { name: 低, id: low }
+        - { name: 中, id: medium }
+        - { name: 高, id: high }
+        - { name: 极高, id: xhigh }
+  - id: openai:gpt-5.4
+    name: GPT-5.4 系列
+    provider: openai
+    aliases: [gpt-5.4, gpt-5.5]
+    patterns: ["gpt-5.4*", "gpt-5.5*", "*/gpt-5.4*", "*/gpt-5.5*"]
+    sourceUrl: https://developers.openai.com/api/docs/models
+    confidence: high
+    settings:
+      contextWindow: 1050000
+      maxOutputTokens: 128000
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: enabled }
+      reasoningEfforts:
+        - { name: 关闭, id: none }
+        - { name: 低, id: low }
+        - { name: 中, id: medium }
+        - { name: 高, id: high }
+        - { name: 极高, id: xhigh }
+  - id: openai:gpt-4.1
+    name: GPT-4.1 系列
+    provider: openai
+    aliases: [gpt-4.1, gpt-4.1-mini, gpt-4.1-nano]
+    patterns: ["gpt-4.1*", "*/gpt-4.1*"]
+    sourceUrl: https://developers.openai.com/api/docs/models
+    confidence: high
+    settings:
+      contextWindow: 1047576
+      maxOutputTokens: 32768
+      capabilities: { vision: enabled, reasoning: disabled, toolCalling: enabled, webSearch: enabled }
+  - id: openai:gpt-4o
+    name: GPT-4o 系列
+    provider: openai
+    aliases: [gpt-4o, gpt-4o-mini]
+    patterns: ["gpt-4o*", "*/gpt-4o*"]
+    sourceUrl: https://developers.openai.com/api/docs/models
+    confidence: high
+    settings:
+      contextWindow: 128000
+      maxOutputTokens: 16384
+      capabilities: { vision: enabled, reasoning: disabled, toolCalling: enabled, webSearch: enabled }

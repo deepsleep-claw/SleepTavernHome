@@ -1,0 +1,40 @@
+revision: "2026-08-10"
+models:
+  - id: google:gemini-3.6-flash
+    name: Gemini 3.6 Flash
+    provider: google
+    aliases: [gemini-3.6-flash]
+    patterns: ["gemini-3.6-flash*", "*/gemini-3.6-flash*"]
+    sourceUrl: https://ai.google.dev/gemini-api/docs/models
+    confidence: medium
+    settings:
+      contextWindow: 1048576
+      maxOutputTokens: 65536
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: auto }
+      reasoningEfforts:
+        - { name: 最低, id: minimal }
+        - { name: 低, id: low }
+        - { name: 中, id: medium }
+        - { name: 高, id: high }
+  - id: google:gemini-3
+    name: Gemini 3 系列
+    provider: google
+    aliases: [gemini-3-pro, gemini-3-flash, gemini-3.1-pro]
+    patterns: ["gemini-3*", "*/gemini-3*"]
+    sourceUrl: https://ai.google.dev/gemini-api/docs/models
+    confidence: medium
+    settings:
+      contextWindow: 1048576
+      maxOutputTokens: 65536
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: auto }
+  - id: google:gemini-2.5
+    name: Gemini 2.5 Pro / Flash
+    provider: google
+    aliases: [gemini-2.5-pro, gemini-2.5-flash]
+    patterns: ["gemini-2.5*", "*/gemini-2.5*"]
+    sourceUrl: https://ai.google.dev/gemini-api/docs/models
+    confidence: high
+    settings:
+      contextWindow: 1048576
+      maxOutputTokens: 65536
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: auto }

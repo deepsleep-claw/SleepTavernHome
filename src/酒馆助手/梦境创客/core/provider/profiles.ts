@@ -1,6 +1,12 @@
 import type { LanguageModel } from 'ai';
 import { createProbeModel, type ProviderProtocol } from '../provider-probe';
 import { decryptLocalPayload, encryptLocalPayload, type EncryptedPayload } from './crypto';
+import {
+  defaultModelSettings,
+  normalizeModelSettings,
+  type AppliedModelTemplate,
+  type ModelSettings,
+} from './model-catalog';
 
 export type ApiSecrets = {
   apiKey: string;
@@ -8,25 +14,31 @@ export type ApiSecrets = {
 };
 
 export type ApiProfile = {
+  appliedModelTemplate?: AppliedModelTemplate;
   baseURL: string;
   id: string;
   model: string;
+  modelSettings: ModelSettings;
   name: string;
   protocol: ProviderProtocol;
   secrets: EncryptedPayload;
 };
 
-export type ApiProfileInput = Omit<ApiProfile, 'id' | 'secrets'> & {
+export type ApiProfileInput = Omit<ApiProfile, 'appliedModelTemplate' | 'id' | 'modelSettings' | 'secrets'> & {
+  appliedModelTemplate?: AppliedModelTemplate | null;
   apiKey?: string;
   headers?: Record<string, string>;
   id?: string;
+  modelSettings?: Partial<ModelSettings>;
 };
 
 export async function createApiProfile(input: ApiProfileInput): Promise<ApiProfile> {
   return {
+    appliedModelTemplate: input.appliedModelTemplate ? structuredClone(input.appliedModelTemplate) : undefined,
     baseURL: input.baseURL.trim(),
     id: input.id ?? crypto.randomUUID(),
     model: input.model.trim(),
+    modelSettings: normalizeModelSettings(input.modelSettings ?? defaultModelSettings()),
     name: input.name.trim(),
     protocol: input.protocol,
     secrets: await encryptLocalPayload({ apiKey: input.apiKey ?? '', headers: input.headers ?? {} }),
@@ -38,9 +50,14 @@ export async function updateApiProfile(profile: ApiProfile, input: ApiProfileInp
   try {
     return await createApiProfile({
       ...input,
+      appliedModelTemplate:
+        input.appliedModelTemplate === undefined
+          ? structuredClone(profile.appliedModelTemplate)
+          : input.appliedModelTemplate ?? undefined,
       apiKey: input.apiKey || previous.apiKey,
       headers: input.headers ?? previous.headers,
       id: profile.id,
+      modelSettings: input.modelSettings ?? profile.modelSettings,
     });
   } finally {
     previous.apiKey = '';
@@ -49,6 +66,14 @@ export async function updateApiProfile(profile: ApiProfile, input: ApiProfileInp
       delete previous.headers[key];
     });
   }
+}
+
+export function normalizeApiProfile(profile: ApiProfile): ApiProfile {
+  return {
+    ...structuredClone(profile),
+    appliedModelTemplate: profile.appliedModelTemplate ? structuredClone(profile.appliedModelTemplate) : undefined,
+    modelSettings: normalizeModelSettings(profile.modelSettings ?? defaultModelSettings()),
+  };
 }
 
 export async function withApiModel<T>(profile: ApiProfile, action: (model: LanguageModel) => Promise<T>): Promise<T> {
@@ -155,7 +180,7 @@ export class ApiProfileRegistry {
   private readonly profiles = new Map<string, ApiProfile>();
 
   constructor(profiles: ApiProfile[] = []) {
-    profiles.forEach(profile => this.profiles.set(profile.id, profile));
+    profiles.forEach(profile => this.profiles.set(profile.id, normalizeApiProfile(profile)));
   }
 
   get(id: string): ApiProfile | undefined {

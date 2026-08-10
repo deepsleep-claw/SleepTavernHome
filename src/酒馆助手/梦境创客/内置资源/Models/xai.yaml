@@ -1,0 +1,24 @@
+revision: "2026-08-10"
+models:
+  - id: xai:grok-4
+    name: Grok 4 系列
+    provider: xai
+    aliases: [grok-4, grok-4-fast, grok-4-1-fast, grok-4.20]
+    patterns: ["grok-4*", "*/grok-4*"]
+    sourceUrl: https://docs.x.ai/docs/models
+    confidence: medium
+    settings:
+      contextWindow: 2000000
+      maxOutputTokens: 128000
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: auto }
+  - id: xai:grok-3
+    name: Grok 3 系列
+    provider: xai
+    aliases: [grok-3, grok-3-mini]
+    patterns: ["grok-3*", "*/grok-3*"]
+    sourceUrl: https://docs.x.ai/docs/models
+    confidence: high
+    settings:
+      contextWindow: 131072
+      maxOutputTokens: 65536
+      capabilities: { vision: auto, reasoning: enabled, toolCalling: enabled, webSearch: auto }

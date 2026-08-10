@@ -1,0 +1,18 @@
+revision: "2026-08-10"
+models:
+  - id: xiaomi:mimo-v2
+    name: MiMo-V2 系列
+    provider: xiaomi
+    aliases: [mimo-v2-flash, mimo-v2-pro, mimo-v2-omni, mimo-v2.5, mimo-v2.5-pro]
+    patterns: ["mimo-v2*", "*/mimo-v2*"]
+    sourceUrl: https://platform.xiaomimimo.com/#/docs
+    confidence: medium
+    settings:
+      contextWindow: 1048576
+      maxOutputTokens: 131072
+      capabilities: { vision: auto, reasoning: enabled, toolCalling: enabled, webSearch: enabled }
+      reasoningEfforts:
+        - { name: 关闭, id: none }
+        - { name: 低, id: low }
+        - { name: 中, id: medium }
+        - { name: 高, id: high }

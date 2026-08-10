@@ -1,0 +1,38 @@
+revision: "2026-08-10"
+models:
+  - id: deepseek:deepseek-v4
+    name: DeepSeek V4 系列
+    provider: deepseek
+    aliases: [deepseek-v4, deepseek-v4-pro, deepseek-v4-flash]
+    patterns: ["deepseek-v4*", "*/deepseek-v4*"]
+    sourceUrl: https://api-docs.deepseek.com/quick_start/pricing
+    confidence: medium
+    settings:
+      contextWindow: 1000000
+      maxOutputTokens: 384000
+      capabilities: { vision: disabled, reasoning: enabled, toolCalling: enabled, webSearch: disabled }
+      reasoningEfforts:
+        - { name: 高, id: high }
+        - { name: 最高, id: max }
+  - id: deepseek:deepseek-v3
+    name: DeepSeek V3 系列
+    provider: deepseek
+    aliases: [deepseek-chat, deepseek-v3, deepseek-v3.1, deepseek-v3.2]
+    patterns: ["deepseek-v3*", "*/deepseek-v3*", "deepseek-chat"]
+    sourceUrl: https://api-docs.deepseek.com/quick_start/pricing
+    confidence: high
+    settings:
+      contextWindow: 128000
+      maxOutputTokens: 8192
+      capabilities: { vision: disabled, reasoning: auto, toolCalling: enabled, webSearch: disabled }
+  - id: deepseek:deepseek-r1
+    name: DeepSeek R1 系列
+    provider: deepseek
+    aliases: [deepseek-reasoner, deepseek-r1]
+    patterns: ["deepseek-r1*", "*/deepseek-r1*", "deepseek-reasoner"]
+    sourceUrl: https://api-docs.deepseek.com/guides/reasoning_model
+    confidence: high
+    settings:
+      contextWindow: 128000
+      maxOutputTokens: 65536
+      capabilities: { vision: disabled, reasoning: enabled, toolCalling: auto, webSearch: disabled }

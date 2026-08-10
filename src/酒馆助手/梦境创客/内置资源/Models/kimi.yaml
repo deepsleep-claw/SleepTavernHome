@@ -1,0 +1,28 @@
+revision: "2026-08-10"
+models:
+  - id: moonshot:kimi-k3
+    name: Kimi K3
+    provider: moonshot
+    aliases: [kimi-k3]
+    patterns: ["kimi-k3*", "*/kimi-k3*"]
+    sourceUrl: https://platform.moonshot.cn/docs/intro
+    confidence: medium
+    settings:
+      contextWindow: 1048576
+      maxOutputTokens: 131072
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: auto }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 高, id: high }
+        - { name: 最高, id: max }
+  - id: moonshot:kimi-k2
+    name: Kimi K2 / K2.5
+    provider: moonshot
+    aliases: [kimi-k2, kimi-k2.5, kimi-k2-thinking]
+    patterns: ["kimi-k2*", "*/kimi-k2*"]
+    sourceUrl: https://platform.moonshot.cn/docs/intro
+    confidence: high
+    settings:
+      contextWindow: 262144
+      maxOutputTokens: 131072
+      capabilities: { vision: auto, reasoning: enabled, toolCalling: enabled, webSearch: auto }
