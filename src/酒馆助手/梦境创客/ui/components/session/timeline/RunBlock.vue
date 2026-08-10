@@ -13,6 +13,7 @@
     <div v-show="!collapsed" class="dca-run-content">
       <template v-for="inner in contentBlocks" :key="inner.id">
         <ToolGroup v-if="inner.type === 'tools'" :items="inner.items" />
+        <ManualChangeCard v-else-if="inner.item.kind === 'manual'" :item="inner.item" />
         <ReasoningBlock v-else-if="inner.item.kind === 'reasoning'" :item="inner.item" />
         <div v-else class="dca-step-text">
           <header>
@@ -48,6 +49,7 @@ import {
 } from '../../../composables/timeline';
 import { renderMarkdown } from '../../../markdown';
 import ReasoningBlock from './ReasoningBlock.vue';
+import ManualChangeCard from './ManualChangeCard.vue';
 import ToolGroup from './ToolGroup.vue';
 
 const props = defineProps<{ block: RunTimelineBlock; collapsed: boolean }>();

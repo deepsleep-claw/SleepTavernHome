@@ -169,6 +169,7 @@ export class DreamCardAgentRuntime {
 
   async refreshCharacter(): Promise<DreamCardAgentRuntimeState> {
     return this.run(async () => {
+      await this.activeService?.finalizeManualEdits();
       await this.reloadSkills();
       const current = await this.adapterFactory().read();
       this.state.currentCharacter = {
@@ -182,6 +183,7 @@ export class DreamCardAgentRuntime {
 
   async createSession(input: { mode?: SessionMode; profileId?: string; title?: string } = {}): Promise<SessionView> {
     await this.run(async () => {
+      await this.activeService?.finalizeManualEdits();
       await this.reloadSkills();
       const profile = this.requireProfile(input.profileId);
       const agentConfiguration = this.selectedAgentConfiguration();
@@ -232,6 +234,7 @@ export class DreamCardAgentRuntime {
 
   async openSession(sessionId: string): Promise<SessionView> {
     await this.run(async () => {
+      if (this.activeService?.sessionId !== sessionId) await this.activeService?.finalizeManualEdits();
       const loaded = this.services.get(sessionId);
       if (loaded) {
         this.activeService = loaded;
@@ -289,12 +292,13 @@ export class DreamCardAgentRuntime {
   }
 
   /** 关闭页签只卸载前端运行实例，持久化的会话与快照仍保留，可从历史重新打开。 */
-  closeSession(sessionId: string): void {
+  async closeSession(sessionId: string): Promise<void> {
     const loaded = this.services.get(sessionId);
     if (!loaded) return;
     if (isSessionOperationActive(loaded.view().status)) {
       throw new Error('运行中或等待处理的会话不能关闭，请先停止或完成当前操作。');
     }
+    await loaded.finalizeManualEdits();
     this.services.delete(sessionId);
     delete this.state.sessionStatuses[sessionId];
     if (this.activeService?.sessionId === sessionId) {
@@ -337,8 +341,12 @@ export class DreamCardAgentRuntime {
     return this.runActiveView(service => service.resend(messageId));
   }
 
-  async writeWorkingFile(path: string, content: string): Promise<SessionView> {
-    return this.runActiveView(service => service.writeWorkingFile(path, content));
+  async writeWorkingFile(path: string, content: string, overwriteConflict = false): Promise<SessionView> {
+    return this.runActiveView(service => service.writeWorkingFile(path, content, overwriteConflict));
+  }
+
+  async useCurrentWorkingFile(path: string): Promise<SessionView> {
+    return this.runActiveView(service => service.useCurrentWorkingFile(path));
   }
 
   async deleteWorkingPath(path: string): Promise<SessionView> {

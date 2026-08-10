@@ -27,11 +27,30 @@ export type SessionUiItem = {
   durationMs?: number;
   hidden?: boolean;
   id: string;
-  kind: 'assistant' | 'guidance' | 'reasoning' | 'status' | 'tool' | 'user';
+  kind: 'assistant' | 'guidance' | 'manual' | 'reasoning' | 'status' | 'tool' | 'user';
+  manualStatus?: 'active' | 'failed' | 'undone';
   runStatus?: 'abnormal' | 'completed' | 'context-exhausted' | 'failed' | 'stopped';
   status?: 'completed' | 'failed' | 'running';
   toolCallId?: string;
   toolName?: string;
+};
+
+export type ManualWorkspaceFileChange = {
+  after?: string;
+  before?: string;
+  error?: string;
+  kind: 'delete' | 'write';
+  path: string;
+};
+
+export type ManualEditGroup = {
+  attachedToAgent: boolean;
+  beforeSnapshot?: string;
+  checkpointId: string;
+  completed: boolean;
+  files: Record<string, ManualWorkspaceFileChange>;
+  modelMessageIndex?: number;
+  uiItemId: string;
 };
 
 export type SkillChange = {
@@ -69,6 +88,7 @@ export type PersistedSessionRuntime = {
   headerMessageCount: number;
   history: { checkpoints: HistoryCheckpoint[]; position: number };
   lastError?: string;
+  manualEditGroup?: ManualEditGroup;
   mode: SessionMode;
   modelMessages: ModelMessage[];
   pending?: PendingCandidate;

@@ -276,7 +276,22 @@ function toggleDirectory(path: string) {
 }
 
 async function saveFile() {
-  if (selectedFile.value) await action(() => runtime.writeWorkingFile(selectedFile.value!.path, fileDraft.value));
+  const file = selectedFile.value;
+  if (!file) return;
+  try {
+    await runtime.writeWorkingFile(file.path, fileDraft.value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!message.startsWith('MANUAL_EDIT_CONFLICT')) {
+      toastr.error(message, '梦境创客');
+      return;
+    }
+    const usePlayer = window.confirm(
+      '这个文件在你编辑期间又被修改了。\n\n确定：保存你的版本\n取消：保留酒馆当前版本',
+    );
+    if (usePlayer) await action(() => runtime.writeWorkingFile(file.path, fileDraft.value, true));
+    else await action(() => runtime.useCurrentWorkingFile(file.path));
+  }
 }
 
 function conflictByPath(path: string) {

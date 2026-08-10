@@ -20,13 +20,14 @@ import { commitWorkingCopy } from '../transaction/commit';
 import { defaultApprovals, prepareThreeWayMerge, type ApprovalDecision } from '../transaction/merge';
 import { diffCardStates } from '../transaction/state-diff';
 import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
-import { scanSecrets } from '../workspace/secret-protection';
+import { maskSecretsForModel, scanSecrets } from '../workspace/secret-protection';
 import type { WorkspaceFile } from '../workspace/types';
 import { defaultPresetValues } from './prompt';
 import { globalAgentTaskLock, type GlobalAgentTaskLock } from './task-lock';
 import type {
   PendingCandidate,
   PersistedSessionRuntime,
+  ManualEditGroup,
   SessionAgentConfiguration,
   SessionLifecycleStatus,
   SessionMode,
@@ -198,6 +199,7 @@ export class CardAgentSessionService {
   private events: RunnerEvent[] = [];
   private headerMessageCount: number;
   private lastError?: string;
+  private manualEditGroup?: ManualEditGroup;
   private mode: SessionMode;
   private modelMessages: ModelMessage[];
   private pending?: PendingCandidate;
@@ -235,6 +237,7 @@ export class CardAgentSessionService {
     this.executor = options.executor;
     this.headerMessageCount = restored?.runtime.headerMessageCount ?? compiled.messages.length;
     this.lock = options.lock ?? globalAgentTaskLock;
+    this.manualEditGroup = restored?.runtime.manualEditGroup ? klona(restored.runtime.manualEditGroup) : undefined;
     this.mode = restored?.runtime.mode ?? options.mode ?? 'normal';
     this.modelMessages = klona(restored?.runtime.modelMessages ?? compiled.messages);
     this.now = options.now ?? Date.now;
@@ -364,6 +367,7 @@ export class CardAgentSessionService {
     if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status)) {
       throw new Error('Agent运行期间不能替换预设头部。');
     }
+    await this.finalizeManualEdits();
     this.preset = klona(preset);
     this.agentConfiguration.presetId = preset.id;
     await this.refreshCompiledHeader();
@@ -382,6 +386,7 @@ export class CardAgentSessionService {
     ) {
       throw new Error('当前轮次结束前不能替换Agent配置。');
     }
+    await this.finalizeManualEdits();
     const current = await this.adapter.read();
     this.assertBinding(current);
     this.agentConfiguration = klona(configuration);
@@ -411,6 +416,7 @@ export class CardAgentSessionService {
     ) {
       throw new Error('当前轮次结束前不能更新全局Skill挂载。');
     }
+    await this.finalizeManualEdits();
     const mounted = skills.filter(skill => this.agentConfiguration.skillIds.includes(skill.id));
     if (canonicalEqual(this.skills, mounted)) return;
     const current = await this.adapter.read();
@@ -430,6 +436,7 @@ export class CardAgentSessionService {
     if (this.activeCheckpointId || this.activeBase) {
       throw new Error('当前轮次尚未结束，请从中断处继续，或回退这条用户消息后再发送新要求。');
     }
+    await this.finalizeManualEdits();
     this.lock.acquire(this.sessionId);
     try {
       if (this.title === DEFAULT_SESSION_TITLE && !this.ui.some(item => item.kind === 'user')) {
@@ -517,69 +524,136 @@ export class CardAgentSessionService {
   }
 
   async undo(): Promise<SessionView> {
+    await this.finalizeManualEdits();
     return this.restore('undo');
   }
 
   async undoToUserMessage(messageId: string): Promise<SessionView> {
+    await this.finalizeManualEdits();
     const restore = this.timeline.undoToUserMessage(messageId);
     if (!restore) throw new Error('该消息当前不能回退。');
     return this.restoreSnapshot(restore);
   }
 
   async redo(): Promise<SessionView> {
+    await this.finalizeManualEdits();
     return this.restore('redo');
   }
 
-  async writeWorkingFile(path: string, content: string): Promise<SessionView> {
+  async writeWorkingFile(path: string, content: string, overwriteConflict = false): Promise<SessionView> {
     this.assertManualResourceWrite(path);
-    return this.mutateWorkingCopy(`手动编辑 ${path}`, repository =>
-      repository.write(path, content, `manual:${crypto.randomUUID()}`),
-    );
+    return this.applyManualWorkspaceChange({ content, kind: 'write', overwriteConflict, path });
+  }
+
+  async useCurrentWorkingFile(path: string): Promise<SessionView> {
+    const current = await this.adapter.read();
+    this.assertBinding(current);
+    const file = projectCardWorkspace(current, 100, { allowNonCharacterWrites: true }).find(item => item.path === path);
+    if (!file) throw new Error(`当前实际数据中不存在文件：${path}`);
+    this.repository = this.createRepository(current);
+    this.notify();
+    return this.view();
   }
 
   async deleteWorkingPath(path: string): Promise<SessionView> {
     this.assertManualResourceWrite(path);
-    return this.mutateWorkingCopy(`手动删除 ${path}`, repository =>
-      repository.remove(path, `manual:${crypto.randomUUID()}`),
-    );
+    return this.applyManualWorkspaceChange({ kind: 'delete', path });
   }
 
-  private async mutateWorkingCopy(
-    label: string,
-    mutate: (repository: MemoryWorkspaceRepository) => Promise<void>,
-  ): Promise<SessionView> {
+  async finalizeManualEdits(): Promise<void> {
+    if (!this.manualEditGroup) return;
+    if (!this.manualEditGroup.attachedToAgent && !this.manualEditGroup.completed) {
+      this.timeline.markAbnormal(this.manualEditGroup.checkpointId);
+      this.syncUiVisibility();
+    }
+    this.manualEditGroup = undefined;
+    await this.persist();
+  }
+
+  private async applyManualWorkspaceChange(input: {
+    content?: string;
+    kind: 'delete' | 'write';
+    overwriteConflict?: boolean;
+    path: string;
+  }): Promise<SessionView> {
     if (['running', 'waiting-approval', 'committing'].includes(this.status)) {
       throw new Error('Agent运行或工具确认期间不能手动编辑Working Copy。');
     }
-    let base = this.pending?.base;
-    if (!base) {
-      base = await this.adapter.read();
-      this.assertBinding(base);
-      const beforeSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
-        card: base,
+    const current = await this.adapter.read();
+    this.assertBinding(current);
+    const actualFiles = projectCardWorkspace(current, 100, { allowNonCharacterWrites: true });
+    const actualFile = actualFiles.find(file => file.path === input.path);
+    if (!input.overwriteConflict && !this.pending && input.kind === 'write' && this.repository) {
+      const editorFile = await this.repository.read(input.path).catch(() => undefined);
+      if (editorFile && actualFile && editorFile.content !== actualFile.content && input.content !== actualFile.content) {
+        throw new Error(
+          `MANUAL_EDIT_CONFLICT：${input.path}\nBase：${editorFile.content}\nCurrent：${actualFile.content}\nPlayer：${input.content ?? ''}`,
+        );
+      }
+    }
+    const manualRepository = new MemoryWorkspaceRepository({
+      files: actualFiles,
+      readonlyRoots: ['/context', '/worldbooks-global-readonly', '/skills/builtin'],
+    });
+    const toolCallId = `manual:${crypto.randomUUID()}`;
+    if (input.kind === 'write') await manualRepository.write(input.path, input.content ?? '', toolCallId);
+    else await manualRepository.remove(input.path, toolCallId);
+    const materialized = materializeCardWorkspace(current, manualRepository.snapshot());
+    const operations = diffCardStates(current, materialized.state);
+    if (operations.length === 0) return this.view();
+    const group = await this.ensureManualEditGroup(current);
+    const previous = group.files[input.path];
+    group.files[input.path] = {
+      after: input.kind === 'write' ? input.content ?? '' : undefined,
+      before: previous?.before ?? actualFile?.content,
+      kind: input.kind,
+      path: input.path,
+    };
+    this.updateManualUi(group, 'active');
+    const result = await commitWorkingCopy({
+      adapter: this.adapter,
+      base: current,
+      decisions: Object.fromEntries(operations.map(operation => [operation.path, 'agent' as const])),
+      working: materialized.state,
+    });
+    if (result.status === 'rolled-back') {
+      group.files[input.path].error = result.error.message;
+      this.updateManualUi(group, 'failed');
+      await this.persist();
+      return this.view();
+    }
+    delete group.files[input.path].error;
+    await this.updateManualModelMessage(group);
+    if (group.attachedToAgent) {
+      if (!this.repository || !this.pending) throw new Error('Agent候选修改已丢失。');
+      if (input.kind === 'write') await this.repository.write(input.path, input.content ?? '', `manual-sync:${crypto.randomUUID()}`);
+      else {
+        await this.repository.remove(input.path, `manual-sync:${crypto.randomUUID()}`).catch(() => undefined);
+      }
+      await this.refreshPendingAfterManualChange();
+    } else {
+      const afterSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
+        card: result.state,
         events: this.events,
         modelMessages: this.modelMessages,
       });
-      const messageId = `manual:${crypto.randomUUID()}`;
-      const checkpoint = this.timeline.beginTurn({
-        beforeAgentCursor: this.modelMessages.length,
-        beforeSnapshot,
-        userMessageId: messageId,
-      });
-      this.activeBase = klona(base);
-      this.activeCheckpointId = checkpoint.id;
-      this.repository = this.createRepository(base);
-      this.ui.push({
-        at: this.now(),
-        checkpointId: checkpoint.id,
-        content: label,
-        id: messageId,
-        kind: 'user',
-      });
+      if (group.completed) {
+        this.timeline.updateCompletedTurn(group.checkpointId, {
+          afterAgentCursor: this.modelMessages.length,
+          afterSnapshot,
+        });
+      } else {
+        this.timeline.completeTurn(group.checkpointId, {
+          afterAgentCursor: this.modelMessages.length,
+          afterSnapshot,
+        });
+        group.completed = true;
+      }
+      this.repository = this.createRepository(result.state);
+      this.status = 'completed';
     }
-    if (!this.repository) throw new Error('Working Copy不存在。');
-    await mutate(this.repository);
-    await this.freezeCandidate(base, false);
+    this.updateManualUi(group, 'active');
+    this.syncUiVisibility();
     await this.persist();
     return this.view();
   }
@@ -651,6 +725,124 @@ export class CardAgentSessionService {
     }
   }
 
+  private async ensureManualEditGroup(current: CardWorkspaceState): Promise<ManualEditGroup> {
+    if (this.manualEditGroup) return this.manualEditGroup;
+    const attachedToAgent = Boolean(this.pending && this.activeCheckpointId);
+    let checkpointId = this.activeCheckpointId;
+    let beforeSnapshot: string | undefined;
+    if (!attachedToAgent) {
+      beforeSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
+        card: current,
+        events: this.events,
+        modelMessages: this.modelMessages,
+      });
+      checkpointId = this.timeline.beginTurn({
+        beforeAgentCursor: this.modelMessages.length,
+        beforeSnapshot,
+        userMessageId: `manual:${crypto.randomUUID()}`,
+      }).id;
+    }
+    if (!checkpointId) throw new Error('无法为玩家修改建立检查点。');
+    const uiItemId = `manual:${crypto.randomUUID()}`;
+    this.manualEditGroup = {
+      attachedToAgent,
+      beforeSnapshot,
+      checkpointId,
+      completed: false,
+      files: {},
+      uiItemId,
+    };
+    this.ui.push({
+      at: this.now(),
+      checkpointId,
+      content: '{}',
+      id: uiItemId,
+      kind: 'manual',
+      manualStatus: 'active',
+      status: 'completed',
+      toolName: '玩家修改工作区',
+    });
+    return this.manualEditGroup;
+  }
+
+  private updateManualUi(group: ManualEditGroup, status: 'active' | 'failed' | 'undone'): void {
+    const item = this.ui.find(candidate => candidate.id === group.uiItemId);
+    if (!item) return;
+    item.content = canonicalStringify({ changes: Object.values(group.files) });
+    item.manualStatus = status;
+    item.status = status === 'failed' ? 'failed' : 'completed';
+  }
+
+  private async updateManualModelMessage(group: ManualEditGroup): Promise<void> {
+    const entries = await Promise.all(
+      Object.values(group.files).map(async change => {
+        const before = change.before === undefined ? undefined : (await maskSecretsForModel(change.before, change.path)).maskedContent;
+        const after = change.after === undefined ? undefined : (await maskSecretsForModel(change.after, change.path)).maskedContent;
+        return { after, before, kind: change.kind, path: change.path };
+      }),
+    );
+    const unified = entries
+      .map(change => {
+        const before = change.before?.split(/\r\n|\n|\r/u) ?? [];
+        const after = change.after?.split(/\r\n|\n|\r/u) ?? [];
+        return [
+          `--- a${change.path}`,
+          `+++ b${change.path}`,
+          `@@ -1,${before.length} +1,${after.length} @@`,
+          ...before.map(line => `-${line}`),
+          ...after.map(line => `+${line}`),
+        ].join('\n');
+      })
+      .join('\n');
+    const details = unified.length <= 6_000
+      ? unified
+      : `修改规模较大，请按需重新读取这些路径：\n${entries.map(change => `- ${change.kind} ${change.path}`).join('\n')}`;
+    const content = [
+      '<manual_workspace_changes>',
+      '这是玩家对工作区的直接修改，不是新的创作目标。请把这些变化作为继续旧目标时的最新事实。',
+      details,
+      '</manual_workspace_changes>',
+    ].join('\n');
+    if (group.modelMessageIndex !== undefined && this.modelMessages[group.modelMessageIndex]?.role === 'user') {
+      this.modelMessages[group.modelMessageIndex] = { content, role: 'user' };
+    } else {
+      group.modelMessageIndex = this.modelMessages.length;
+      this.modelMessages.push({ content, role: 'user' });
+    }
+  }
+
+  private async refreshPendingAfterManualChange(): Promise<void> {
+    if (!this.pending || !this.repository) return;
+    const previous = this.pending;
+    const materialized = materializeCardWorkspace(previous.base, this.repository.snapshot());
+    const candidateSkills = materializeUserSkills(this.repository.snapshot());
+    const current = await this.adapter.read();
+    const preparation = prepareThreeWayMerge(previous.base, materialized.state, current);
+    await markSecretRemovalRisks(preparation);
+    const skillChanges = diffSkills(this.skills, candidateSkills);
+    const candidateSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
+      card: materialized.state,
+      events: this.events,
+      modelMessages: this.modelMessages,
+    });
+    this.pending = {
+      ...previous,
+      candidateSnapshot,
+      preparation,
+      skillChanges,
+      skills: candidateSkills,
+      state: materialized.state,
+      warnings: materialized.warnings,
+    };
+    const effective = preparation.agentChanges.filter(change => !preparation.redundantPaths.includes(change.path));
+    if (effective.length === 0 && skillChanges.length === 0) {
+      await this.applyApproval({});
+      this.manualEditGroup = undefined;
+    } else {
+      this.status = 'awaiting-approval';
+    }
+  }
+
   private async refreshCompiledHeader(): Promise<void> {
     const next = await compilePreset(this.preset, defaultPresetValues(this.skills));
     this.modelMessages.splice(0, this.headerMessageCount, ...klona(next.messages));
@@ -716,6 +908,9 @@ export class CardAgentSessionService {
     this.status = 'completed';
     this.lastError = undefined;
     this.repository = this.createRepository(result.state);
+    if (this.manualEditGroup?.attachedToAgent && this.manualEditGroup.checkpointId === pending.checkpointId) {
+      this.manualEditGroup = undefined;
+    }
   }
 
   private async freezeCandidate(base: CardWorkspaceState, stopped: boolean): Promise<void> {
@@ -970,6 +1165,7 @@ export class CardAgentSessionService {
       headerMessageCount: this.headerMessageCount,
       history: this.timeline.export(),
       lastError: this.lastError,
+      manualEditGroup: this.manualEditGroup ? klona(this.manualEditGroup) : undefined,
       mode: this.mode,
       modelMessages: klona(this.modelMessages),
       pending: this.pending ? klona(this.pending) : undefined,
@@ -1006,8 +1202,10 @@ export class CardAgentSessionService {
         item.hidden = true;
       } else if (index <= history.position) {
         item.hidden = false;
+        if (item.kind === 'manual') item.manualStatus = item.status === 'failed' ? 'failed' : 'active';
       } else if (index === history.position + 1) {
-        item.hidden = item.kind !== 'user';
+        item.hidden = item.kind !== 'user' && item.kind !== 'manual';
+        if (item.kind === 'manual') item.manualStatus = 'undone';
       } else {
         item.hidden = true;
       }

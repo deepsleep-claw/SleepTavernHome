@@ -338,7 +338,80 @@ describe('card agent session service', () => {
     expect(waiting.status).toBe('awaiting-approval');
   });
 
-  it('完成状态可手动编辑Working Copy，并沿用同一审批与快照保护', async () => {
+  it('玩家编辑立即写入实际数据，连续保存合并为单一可回退检查点与内部消息', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    let persisted: PersistedSessionRuntime | undefined;
+    const service = await CardAgentSessionService.create({
+      adapter,
+      executor: new QueueExecutor([]),
+      lock: new GlobalAgentTaskLock(),
+      onPersist: async runtime => {
+        persisted = structuredClone(runtime);
+      },
+      snapshots: snapshots(),
+    });
+    await service.writeWorkingFile('/character/description.md', '玩家写入描述');
+    const saved = await service.writeWorkingFile('/character/personality.md', '玩家写入性格');
+    expect(saved.status).toBe('completed');
+    expect(saved.approval).toBeUndefined();
+    expect(await adapter.read()).toMatchObject({
+      character: { fields: { description: '玩家写入描述', personality: '玩家写入性格' } },
+    });
+    expect(saved.ui.filter(item => item.kind === 'manual')).toHaveLength(1);
+    expect(persisted?.modelMessages.at(-1)).toMatchObject({
+      content: expect.stringContaining('<manual_workspace_changes>'),
+      role: 'user',
+    });
+    expect(String(persisted?.modelMessages.at(-1)?.content)).toContain('/character/personality.md');
+
+    const undone = await service.undo();
+    expect((await adapter.read()).character.fields).toMatchObject({
+      description: 'base description',
+      personality: 'base personality',
+    });
+    expect(undone.ui.find(item => item.kind === 'manual')).toMatchObject({ manualStatus: 'undone' });
+    await service.redo();
+    expect((await adapter.read()).character.fields).toMatchObject({
+      description: '玩家写入描述',
+      personality: '玩家写入性格',
+    });
+  });
+
+  it('玩家保存待审批文件时立即接管该路径，并让已被实际数据覆盖的Agent修改自动结束', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const service = await CardAgentSessionService.create({
+      adapter,
+      executor: new QueueExecutor([step([writeDescription('Agent候选')]), step()]),
+      lock: new GlobalAgentTaskLock(),
+      snapshots: snapshots(),
+    });
+    expect((await service.send('修改描述')).status).toBe('awaiting-approval');
+    const saved = await service.writeWorkingFile('/character/description.md', '玩家最终版本');
+    expect(saved.status).toBe('completed');
+    expect(saved.approval).toBeUndefined();
+    expect((await adapter.read()).character.fields.description).toBe('玩家最终版本');
+    expect(saved.ui.find(item => item.kind === 'manual')).toMatchObject({ manualStatus: 'active' });
+  });
+
+  it('玩家保存失败会保留展开的失败记录，重试沿用原检查点并在成功后可回退', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState(), { failAtApply: 1 });
+    const service = await CardAgentSessionService.create({
+      adapter,
+      executor: new QueueExecutor([]),
+      lock: new GlobalAgentTaskLock(),
+      snapshots: snapshots(),
+    });
+    const failed = await service.writeWorkingFile('/character/description.md', '第一次失败');
+    expect((await adapter.read()).character.fields.description).toBe('base description');
+    expect(failed.ui.find(item => item.kind === 'manual')).toMatchObject({ manualStatus: 'failed', status: 'failed' });
+    const retried = await service.writeWorkingFile('/character/description.md', '重试成功');
+    expect(retried.ui.filter(item => item.kind === 'manual')).toHaveLength(1);
+    expect((await adapter.read()).character.fields.description).toBe('重试成功');
+    await service.undo();
+    expect((await adapter.read()).character.fields.description).toBe('base description');
+  });
+
+  it('玩家基于过期文件保存时报告 Base、Current、Player 冲突而不覆盖外部编辑', async () => {
     const adapter = new MemoryCardStateAdapter(transactionState());
     const service = await CardAgentSessionService.create({
       adapter,
@@ -346,12 +419,13 @@ describe('card agent session service', () => {
       lock: new GlobalAgentTaskLock(),
       snapshots: snapshots(),
     });
-    const waiting = await service.writeWorkingFile('/character/description.md', '用户在文件编辑器写入');
-    expect(waiting.status).toBe('awaiting-approval');
-    expect((await adapter.read()).character.fields.description).toBe('base description');
-    expect((await service.approve({ '/character/fields/description': 'agent' })).status).toBe('completed');
-    expect((await adapter.read()).character.fields.description).toBe('用户在文件编辑器写入');
-    expect(service.view().ui.some(item => item.kind === 'user' && item.content.includes('手动编辑'))).toBe(true);
+    const external = transactionState();
+    external.character.fields.description = '外部编辑';
+    adapter.replaceExternal(external);
+    await expect(service.writeWorkingFile('/character/description.md', '玩家编辑')).rejects.toThrow(
+      'MANUAL_EDIT_CONFLICT',
+    );
+    expect((await adapter.read()).character.fields.description).toBe('外部编辑');
   });
 
   it('从较早消息回退时隐藏其Agent结果和全部后续消息，重做按检查点逐步恢复', async () => {

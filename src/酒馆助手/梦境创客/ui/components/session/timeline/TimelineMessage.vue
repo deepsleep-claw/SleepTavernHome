@@ -1,5 +1,6 @@
 <template>
-  <article class="dca-message" :class="`dca-message-${item.kind}`">
+  <ManualChangeCard v-if="item.kind === 'manual'" :item="item" />
+  <article v-else class="dca-message" :class="`dca-message-${item.kind}`">
     <header>
       <span>{{ itemKindLabel(item.kind) }}</span>
       <small>{{ formatTime(item.at) }}</small>
@@ -36,6 +37,7 @@ import { formatTime } from '../../../composables/format';
 import { useDreamCardAgent } from '../../../composables/runtime';
 import { cleanGuidance, isMarkdownMessage, itemKindLabel } from '../../../composables/timeline';
 import { renderMarkdown } from '../../../markdown';
+import ManualChangeCard from './ManualChangeCard.vue';
 
 const props = defineProps<{ item: SessionUiItem }>();
 

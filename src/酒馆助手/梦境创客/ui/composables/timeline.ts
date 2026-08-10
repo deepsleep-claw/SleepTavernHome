@@ -175,6 +175,7 @@ export function itemKindLabel(kind: SessionUiItem['kind']): string {
   return {
     assistant: '梦境创客',
     guidance: '中途引导',
+    manual: '玩家修改工作区',
     reasoning: '思考过程',
     status: '运行状态',
     tool: '工具调用',

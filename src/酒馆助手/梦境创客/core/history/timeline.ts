@@ -79,6 +79,13 @@ export class HistoryTimeline {
     checkpoint.status = input.stopped ? 'stopped' : 'committed';
   }
 
+  updateCompletedTurn(id: string, input: { afterAgentCursor: number; afterSnapshot: string }): void {
+    const checkpoint = this.requireCheckpoint(id);
+    if (checkpoint.status !== 'committed') throw new Error(`检查点尚未完成，不能更新：${id}`);
+    checkpoint.afterAgentCursor = input.afterAgentCursor;
+    checkpoint.afterSnapshot = input.afterSnapshot;
+  }
+
   markAbnormal(id: string): void {
     const checkpoint = this.requireCheckpoint(id);
     checkpoint.afterAgentCursor = checkpoint.beforeAgentCursor;
