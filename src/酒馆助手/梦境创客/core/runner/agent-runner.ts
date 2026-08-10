@@ -1,6 +1,12 @@
 import type { ModelMessage } from 'ai';
-import { decideContext, compactModelMessages, measureContext, type ContextUsage } from './context';
-import type { ModelStepExecutor, RunnerToolCall } from './step-executor';
+import {
+  decideContext,
+  compactModelMessages,
+  measureContext,
+  type ApiUsageBaseline,
+  type ContextUsage,
+} from './context';
+import type { ModelRequestControls, ModelStepExecutor, RunnerToolCall } from './step-executor';
 import { COMPACT_CONTEXT_TOOL, type RunnerTool, type ToolConfirmation } from './tools';
 
 export type RunnerStatus =
@@ -47,6 +53,7 @@ export type AgentRunnerOptions = {
   initialPending?: PendingRunnerStep;
   initialStatus?: RunnerStatus;
   journal: RunnerJournal;
+  modelControls?: ModelRequestControls;
   now?: () => number;
   onReasoningDelta?: (delta: string) => void;
   onTextDelta?: (delta: string) => void;
@@ -91,11 +98,14 @@ function guidanceMessage(messages: string[]): string {
 }
 
 export class AgentRunner {
+  private apiUsageBaseline?: ApiUsageBaseline;
   private readonly contextWindow: number;
   private controller?: AbortController;
   private compactionFresh = false;
   private readonly executor: ModelStepExecutor;
   private readonly journal: RunnerJournal;
+  private readonly modelControls: ModelRequestControls;
+  private providerWebSearchCount = 0;
   private readonly now: () => number;
   private readonly onReasoningDelta?: (delta: string) => void;
   private readonly onTextDelta?: (delta: string) => void;
@@ -110,6 +120,7 @@ export class AgentRunner {
     this.contextWindow = options.contextWindow ?? 128_000;
     this.executor = options.executor;
     this.journal = options.journal;
+    this.modelControls = options.modelControls ?? { reasoningEffort: 'auto', webSearch: false };
     this.now = options.now ?? Date.now;
     this.onReasoningDelta = options.onReasoningDelta;
     this.onTextDelta = options.onTextDelta;
@@ -163,8 +174,8 @@ export class AgentRunner {
         await this.injectGuidance();
         continue;
       }
-      const decision = decideContext(measureContext(this.state.messages, this.contextWindow));
-      this.state.contextUsage = measureContext(this.state.messages, this.contextWindow);
+      const decision = decideContext(this.measureContext());
+      this.state.contextUsage = this.measureContext();
       if (decision === 'users-exhausted') {
         this.state.failure = '全部用户消息已超过上下文窗口的80%，请新建会话、编辑历史或更换更大上下文模型。';
         await this.setStatus('context-exhausted');
@@ -173,11 +184,27 @@ export class AgentRunner {
       const compacting = decision === 'compact' && !this.compactionFresh;
       this.controller = new AbortController();
       let result;
+      const liveProviderStarted = new Set<string>();
+      const liveProviderCompleted = new Set<string>();
       try {
         result = await this.executor.execute({
           abortSignal: this.controller.signal,
           forceTool: compacting ? 'compact_context' : undefined,
           messages: structuredClone(this.state.messages),
+          modelSettings: {
+            ...this.modelControls,
+            webSearch: this.modelControls.webSearch && this.providerWebSearchCount < 10,
+            webSearchMaxUses: Math.max(0, 10 - this.providerWebSearchCount),
+          },
+          onProviderToolCompleted: async call => {
+            liveProviderCompleted.add(call.toolCallId);
+            await this.journal.append({ at: this.now(), call, output: call.output ?? { ok: true }, type: 'tool-completed' });
+          },
+          onProviderToolStarted: async call => {
+            liveProviderStarted.add(call.toolCallId);
+            if (call.toolName === 'web_search') this.providerWebSearchCount += 1;
+            await this.journal.append({ at: this.now(), call, type: 'tool-started' });
+          },
           onReasoningDelta: this.onReasoningDelta,
           onTextDelta: this.onTextDelta,
           tools: this.tools,
@@ -191,7 +218,23 @@ export class AgentRunner {
       modelSteps += 1;
       if (!compacting) this.compactionFresh = false;
       this.state.messages.push(...structuredClone(result.assistantMessages));
+      if (typeof result.inputTokens === 'number' && typeof result.outputTokens === 'number') {
+        this.apiUsageBaseline = {
+          estimatedTokens: measureContext(this.state.messages, this.contextWindow).totalTokens,
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+        };
+      }
       await this.journal.append({ at: this.now(), messages: result.assistantMessages, type: 'model-completed' });
+      for (const call of result.providerToolCalls ?? []) {
+        if (!liveProviderStarted.has(call.toolCallId)) {
+          if (call.toolName === 'web_search') this.providerWebSearchCount += 1;
+          await this.journal.append({ at: this.now(), call, type: 'tool-started' });
+        }
+        if (!liveProviderCompleted.has(call.toolCallId)) {
+          await this.journal.append({ at: this.now(), call, output: call.output ?? { ok: true }, type: 'tool-completed' });
+        }
+      }
       if (compacting && !result.toolCalls.some(call => call.toolName === 'compact_context')) {
         this.state.failure = '模型没有按要求调用compact_context。';
         await this.setStatus('failed');
@@ -205,7 +248,7 @@ export class AgentRunner {
         await this.injectGuidance();
         continue;
       }
-      this.state.contextUsage = measureContext(this.state.messages, this.contextWindow);
+      this.state.contextUsage = this.measureContext();
       await this.setStatus('completed');
       return this.state;
     }
@@ -259,11 +302,12 @@ export class AgentRunner {
         return false;
       }
       this.state.messages = compactModelMessages(this.state.messages, summary);
+      this.apiUsageBaseline = undefined;
       this.compactionFresh = true;
       await this.journal.append({ at: this.now(), summary, type: 'context-compacted' });
     }
     this.state.pending = undefined;
-    this.state.contextUsage = measureContext(this.state.messages, this.contextWindow);
+    this.state.contextUsage = this.measureContext();
     return true;
   }
 
@@ -307,7 +351,7 @@ export class AgentRunner {
   }
 
   private async finishStopped(): Promise<AgentRunnerState> {
-    this.state.contextUsage = measureContext(this.state.messages, this.contextWindow);
+    this.state.contextUsage = this.measureContext();
     await this.setStatus('stopped');
     return this.state;
   }
@@ -315,5 +359,9 @@ export class AgentRunner {
   private async setStatus(status: RunnerStatus): Promise<void> {
     this.state.status = status;
     await this.journal.append({ at: this.now(), failure: this.state.failure, status, type: 'status' });
+  }
+
+  private measureContext(): ContextUsage {
+    return measureContext(this.state.messages, this.contextWindow, this.apiUsageBaseline);
   }
 }

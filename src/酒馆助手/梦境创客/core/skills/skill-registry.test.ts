@@ -33,6 +33,7 @@ describe('agent skills', () => {
       name: '角色卡工作区读写',
     });
     expect(BUILTIN_CARD_WORKSPACE_SKILL.body).toContain('# 角色卡工作区读写');
+    expect(BUILTIN_CARD_WORKSPACE_SKILL.body).toContain('不要主动列目录、搜索或读取');
     expect(() => parseBuiltinSkillSource('没有Frontmatter', 'broken.md')).toThrowError(
       expect.objectContaining({ path: 'broken.md' }),
     );

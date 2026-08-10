@@ -20,6 +20,34 @@ describe('runner context', () => {
     expect(estimateTokens('x')).toBeGreaterThan(0);
   });
 
+  it('优先使用API用量，并只对请求后新增消息做本地增量估算', () => {
+    const before: ModelMessage[] = [{ content: 'hello', role: 'user' }];
+    const estimatedAtRequest = measureContext(before, 100_000).totalTokens;
+    const baseline = { estimatedTokens: estimatedAtRequest, inputTokens: 120, outputTokens: 30 };
+    const exact = measureContext(before, 100_000, baseline);
+    expect(exact).toMatchObject({
+      apiInputTokens: 120,
+      apiOutputTokens: 30,
+      estimatedDeltaTokens: 0,
+      measurement: 'api',
+      totalTokens: 150,
+    });
+    const after = measureContext([
+      ...before,
+      {
+        content: [{
+          output: { type: 'text', value: 'new local tool result' },
+          toolCallId: 'local-1',
+          toolName: 'read_file',
+          type: 'tool-result',
+        }],
+        role: 'tool',
+      },
+    ], 100_000, baseline);
+    expect(after.totalTokens).toBeGreaterThan(150);
+    expect(after.toolTokens).toBeGreaterThan(0);
+  });
+
   it('优先识别用户消息耗尽，否则在70%或输出空间不足时压缩', () => {
     expect(
       decideContext({

@@ -19,6 +19,7 @@ import {
   type SessionIndexEntry,
 } from '../core/persistence/settings';
 import { cloneStructuredPreset, compilePreset, type StructuredPreset } from '../core/preset/compiler';
+import { DEFAULT_CONTEXT_WINDOW } from '../core/provider/model-catalog';
 import {
   ApiProfileRegistry,
   createApiProfile,
@@ -33,7 +34,13 @@ import type { ToolConfirmation } from '../core/runner/tools';
 import { CardAgentSessionService } from '../core/session/session-service';
 import { defaultPresetValues } from '../core/session/prompt';
 import { GlobalAgentTaskLock } from '../core/session/task-lock';
-import type { PersistedSessionRuntime, SessionLifecycleStatus, SessionMode, SessionView } from '../core/session/types';
+import type {
+  PersistedSessionRuntime,
+  SessionLifecycleStatus,
+  SessionMode,
+  SessionModelControls,
+  SessionView,
+} from '../core/session/types';
 import { GlobalSkillStore } from '../core/skills/global-skill-store';
 import type { AgentSkill } from '../core/skills/types';
 import { createGlobalTavernBridge, type TavernBridge } from '../core/tavern/bridge';
@@ -202,6 +209,7 @@ export class DreamCardAgentRuntime {
         adapter,
         agentConfiguration,
         executor: this.executorFactory(profile),
+        contextWindow: this.profileContextWindow(profile),
         lock: this.lock,
         mode: input.mode,
         canWriteNonCharacterResources: () => this.canWriteNonCharacterResources(),
@@ -264,6 +272,7 @@ export class DreamCardAgentRuntime {
         {
           adapter,
           executor: this.executorFactory(profile),
+          contextWindow: this.profileContextWindow(profile),
           lock: this.lock,
           now: this.now,
           canWriteNonCharacterResources: () => this.canWriteNonCharacterResources(),
@@ -319,6 +328,13 @@ export class DreamCardAgentRuntime {
 
   async resume(): Promise<SessionView> {
     return this.runActiveView(service => service.resume());
+  }
+
+  async setModelControls(controls: Partial<SessionModelControls>): Promise<SessionView> {
+    return this.runActiveView(async service => {
+      await service.setModelControls(controls);
+      return service.view();
+    });
   }
 
   async approve(decisions: Record<string, 'agent' | 'current'>): Promise<SessionView> {
@@ -833,7 +849,21 @@ export class DreamCardAgentRuntime {
   }
 
   private async updateActiveExecutor(profile: ApiProfile): Promise<void> {
-    for (const service of this.services.values()) await service.setExecutor(this.executorFactory(profile));
+    for (const service of this.services.values()) {
+      const effort = service.view().modelControls.reasoningEffort;
+      if (
+        effort !== 'auto' &&
+        effort !== 'off' &&
+        !profile.modelSettings.reasoningEfforts.some(item => item.id === effort)
+      ) {
+        await service.setModelControls({ reasoningEffort: 'auto' });
+      }
+      await service.setExecutor(this.executorFactory(profile), this.profileContextWindow(profile));
+    }
+  }
+
+  private profileContextWindow(profile: ApiProfile): number {
+    return profile.modelSettings.contextWindow || DEFAULT_CONTEXT_WINDOW;
   }
 
   private requireService(): CardAgentSessionService {

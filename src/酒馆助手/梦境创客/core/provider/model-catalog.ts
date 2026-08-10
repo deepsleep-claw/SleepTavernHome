@@ -96,6 +96,11 @@ function strings(value: unknown): string[] {
     : [];
 }
 
+function modalities(value: unknown): string[] {
+  if (typeof value === 'string') return value.split(/\s+/u).filter(Boolean);
+  return strings(value);
+}
+
 function capability(value: unknown): CapabilitySetting {
   if (value === true || value === 'enabled' || value === 'yes') return 'enabled';
   if (value === false || value === 'disabled' || value === 'no') return 'disabled';
@@ -230,11 +235,33 @@ export function matchModelTemplates(
 
 function modalitySupportsText(model: Record<string, unknown>): boolean {
   const modalities = record(model.modalities);
-  const output = strings(modalities?.output);
+  const output = modalitiesList(modalities?.output);
   if (output.length > 0 && !output.includes('text')) return false;
   return !/(?:embedding|embed|tts|speech|transcri|whisper|image|imagen|imagine|video|veo|realtime|live|audio)/iu.test(
     String(model.id ?? model.name ?? ''),
   );
+}
+
+function modalitiesList(value: unknown): string[] {
+  return modalities(value);
+}
+
+function cloudReasoningEfforts(model: Record<string, unknown>): ReasoningEffort[] {
+  if (!Array.isArray(model.reasoning_options)) return [];
+  const values = model.reasoning_options.flatMap(option => {
+    const parsed = record(option);
+    return parsed?.type === 'effort' ? modalities(parsed.values) : [];
+  });
+  const names: Record<string, string> = {
+    high: '高',
+    low: '低',
+    max: '最高',
+    medium: '中',
+    minimal: '最低',
+    none: '关闭',
+    xhigh: '极高',
+  };
+  return [...new Set(values)].map(id => ({ id, name: names[id] ?? id }));
 }
 
 function cloudCapabilities(model: Record<string, unknown>): ModelSettings['capabilities'] {
@@ -242,7 +269,7 @@ function cloudCapabilities(model: Record<string, unknown>): ModelSettings['capab
   return {
     reasoning: capability(model.reasoning),
     toolCalling: capability(model.tool_call ?? model.toolCall),
-    vision: capability(strings(modalities?.input).includes('image')),
+    vision: capability(modalitiesList(modalities?.input).includes('image')),
     webSearch: 'auto',
   };
 }
@@ -271,7 +298,7 @@ export function parseModelsDevCatalog(payload: unknown): ModelTemplate[] {
           capabilities: cloudCapabilities(model),
           contextWindow: number(limit?.context, DEFAULT_CONTEXT_WINDOW),
           maxOutputTokens: number(limit?.output),
-          reasoningEfforts: [],
+          reasoningEfforts: cloudReasoningEfforts(model),
           temperature: model.temperature === false ? undefined : undefined,
         },
         source: 'cloud',

@@ -14,11 +14,18 @@
       <details v-for="tool in items" :key="tool.id" class="dca-tool-row" :open="tool.status === 'failed'">
         <summary>
           <i class="dca-tool-dot" :class="`dca-tool-dot-${tool.status ?? 'completed'}`" aria-hidden="true"></i>
-          <span>{{ tool.toolName }}</span>
+          <span><i v-if="tool.providerTool" class="fa-solid fa-globe" aria-hidden="true"></i>{{ tool.toolName }}</span>
           <small :class="`dca-tool-${tool.status}`">{{ toolStatusLabel(tool.status) }}</small>
           <i class="fa-solid fa-chevron-down dca-details-chevron" aria-hidden="true"></i>
         </summary>
-        <pre>{{ tool.content }}</pre>
+        <div class="dca-tool-details">
+          <template v-if="tool.toolInput">
+            <small>输入</small>
+            <pre>{{ tool.toolInput }}</pre>
+          </template>
+          <small>结果</small>
+          <pre>{{ tool.content }}</pre>
+        </div>
       </details>
     </div>
   </details>
@@ -109,14 +116,33 @@ const hasRunning = computed(() => props.items.some(item => item.status === 'runn
   white-space: nowrap;
 }
 
+.dca-tool-row > summary span > i {
+  margin-right: 0.35rem;
+  color: var(--dca-info);
+}
+
 .dca-tool-row > summary small {
   font-size: 0.74rem;
 }
 
+.dca-tool-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  border-top: 1px solid var(--dca-border);
+  padding: 0.45rem 0.5rem;
+}
+
+.dca-tool-details > small {
+  color: var(--dca-text-muted);
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
 .dca-tool-row pre {
   margin: 0;
-  border-top: 1px solid var(--dca-border);
-  padding: 0.5rem;
+  padding: 0;
   color: var(--dca-text-secondary);
   font-size: 0.8rem;
 }

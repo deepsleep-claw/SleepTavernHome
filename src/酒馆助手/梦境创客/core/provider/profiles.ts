@@ -1,5 +1,5 @@
 import type { LanguageModel } from 'ai';
-import { createProbeModel, type ProviderProtocol } from '../provider-probe';
+import { createProviderRuntime, type ProviderProtocol, type ProviderRuntime } from '../provider-probe';
 import { decryptLocalPayload, encryptLocalPayload, type EncryptedPayload } from './crypto';
 import {
   defaultModelSettings,
@@ -77,16 +77,27 @@ export function normalizeApiProfile(profile: ApiProfile): ApiProfile {
 }
 
 export async function withApiModel<T>(profile: ApiProfile, action: (model: LanguageModel) => Promise<T>): Promise<T> {
+  return withApiRuntime(profile, runtime => action(runtime.model));
+}
+
+export async function withApiRuntime<T>(
+  profile: ApiProfile,
+  action: (runtime: ProviderRuntime) => Promise<T>,
+  webSearchMaxUses = 10,
+): Promise<T> {
   const secrets = await decryptLocalPayload<ApiSecrets>(profile.secrets);
   try {
-    const model = createProbeModel({
-      apiKey: secrets.apiKey,
-      baseURL: profile.baseURL,
-      headers: secrets.headers,
-      model: profile.model,
-      protocol: profile.protocol,
-    });
-    return await action(model);
+    const runtime = createProviderRuntime(
+      {
+        apiKey: secrets.apiKey,
+        baseURL: profile.baseURL,
+        headers: secrets.headers,
+        model: profile.model,
+        protocol: profile.protocol,
+      },
+      webSearchMaxUses,
+    );
+    return await action(runtime);
   } finally {
     secrets.apiKey = '';
     Object.keys(secrets.headers).forEach(key => {

@@ -1,17 +1,40 @@
 import { streamText, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
-import { normalizeProviderFailure, withApiModel, type ApiProfile } from '../provider/profiles';
+import type { ProviderProtocol, ProviderRuntime } from '../provider-probe';
+import { normalizeProviderFailure, withApiRuntime, type ApiProfile } from '../provider/profiles';
 import type { RunnerTool } from './tools';
 
 export type RunnerToolCall = {
   input: unknown;
+  providerExecuted?: boolean;
   toolCallId: string;
   toolName: string;
+};
+
+export type ProviderToolCall = RunnerToolCall & {
+  output?: unknown;
+  providerExecuted: true;
+};
+
+export type ModelRequestControls = {
+  reasoningEffort: 'auto' | 'off' | string;
+  webSearch: boolean;
+};
+
+export type ModelRequestSettings = ModelRequestControls & {
+  maxOutputTokens?: number;
+  protocol?: ProviderProtocol;
+  temperature?: number;
+  topP?: number;
+  webSearchMaxUses?: number;
 };
 
 export type ModelStepRequest = {
   abortSignal: AbortSignal;
   forceTool?: string;
   messages: ModelMessage[];
+  modelSettings?: ModelRequestSettings;
+  onProviderToolCompleted?: (call: ProviderToolCall) => Promise<void> | void;
+  onProviderToolStarted?: (call: ProviderToolCall) => Promise<void> | void;
   onReasoningDelta?: (delta: string) => void;
   onTextDelta?: (delta: string) => void;
   tools: RunnerTool[];
@@ -22,6 +45,7 @@ export type ModelStepResult = {
   finishReason: string;
   inputTokens?: number;
   outputTokens?: number;
+  providerToolCalls?: ProviderToolCall[];
   text: string;
   toolCalls: RunnerToolCall[];
 };
@@ -30,29 +54,106 @@ export interface ModelStepExecutor {
   execute(request: ModelStepRequest): Promise<ModelStepResult>;
 }
 
+function reasoningEffort(settings?: ModelRequestSettings): string | undefined {
+  if (!settings || settings.reasoningEffort === 'auto') return undefined;
+  return settings.reasoningEffort === 'off' ? 'none' : settings.reasoningEffort;
+}
+
+export function requestProviderOptions(
+  settings?: ModelRequestSettings,
+): Record<string, Record<string, unknown>> | undefined {
+  const effort = reasoningEffort(settings);
+  switch (settings?.protocol) {
+    case 'anthropic':
+      return {
+        anthropic: {
+          effort: effort === 'none' ? undefined : effort,
+          sendReasoning: true,
+          thinking:
+            settings?.reasoningEffort === 'auto'
+              ? undefined
+              : effort === 'none'
+                ? { type: 'disabled' }
+                : { type: 'adaptive' },
+        },
+      };
+    case 'openai-chat':
+      return effort ? { openai: { reasoningEffort: effort } } : undefined;
+    case 'openai-compatible':
+      return effort ? { dreamCardAgentCompatible: { reasoningEffort: effort } } : undefined;
+    case 'openai-responses':
+      return {
+        openai: {
+          include: ['reasoning.encrypted_content'],
+          maxToolCalls: settings.webSearch ? settings.webSearchMaxUses ?? 10 : undefined,
+          reasoningEffort: effort,
+        },
+      };
+    case undefined:
+      return undefined;
+  }
+}
+
+function sanitizeProviderOutput(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeProviderOutput);
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .filter(([key]) => key !== 'encryptedContent')
+      .map(([key, item]) => [key, sanitizeProviderOutput(item)]),
+  );
+}
+
 export class AiSdkModelStepExecutor implements ModelStepExecutor {
-  constructor(private readonly getModel: () => Promise<LanguageModel>) {}
+  constructor(private readonly getModel: () => Promise<LanguageModel | ProviderRuntime>) {}
 
   async execute(request: ModelStepRequest): Promise<ModelStepResult> {
-    const model = await this.getModel();
-    const tools = Object.fromEntries(request.tools.map(item => [item.name, item.definition])) as ToolSet;
+    const resolvedModel = await this.getModel();
+    const runtime: ProviderRuntime =
+      typeof resolvedModel === 'object' && resolvedModel !== null && 'model' in resolvedModel
+        ? resolvedModel
+        : { model: resolvedModel };
+    const entries: [string, ToolSet[string]][] = request.tools.map(item => [item.name, item.definition]);
+    if (request.modelSettings?.webSearch && runtime.webSearchTool) entries.push(['web_search', runtime.webSearchTool]);
+    const tools = Object.fromEntries(entries) as ToolSet;
     let streamError: unknown;
     const result = streamText({
       abortSignal: request.abortSignal,
       allowSystemInMessages: true,
+      maxOutputTokens: request.modelSettings?.maxOutputTokens,
       messages: request.messages,
-      model,
-      onChunk: chunk => {
+      model: runtime.model,
+      onChunk: async chunk => {
         if (chunk.chunk.type === 'text-delta') request.onTextDelta?.(chunk.chunk.text);
         if (chunk.chunk.type === 'reasoning-delta') request.onReasoningDelta?.(chunk.chunk.text);
+        if (chunk.chunk.type === 'tool-call' && chunk.chunk.providerExecuted) {
+          await request.onProviderToolStarted?.({
+            input: chunk.chunk.input,
+            providerExecuted: true,
+            toolCallId: chunk.chunk.toolCallId,
+            toolName: chunk.chunk.toolName,
+          });
+        }
+        if (chunk.chunk.type === 'tool-result' && chunk.chunk.providerExecuted) {
+          await request.onProviderToolCompleted?.({
+            input: undefined,
+            output: sanitizeProviderOutput(chunk.chunk.output),
+            providerExecuted: true,
+            toolCallId: chunk.chunk.toolCallId,
+            toolName: chunk.chunk.toolName,
+          });
+        }
       },
       onError: event => {
         streamError = event.error;
       },
       telemetry: { isEnabled: false },
+      temperature: request.modelSettings?.temperature,
       toolChoice: request.forceTool ? { toolName: request.forceTool, type: 'tool' } : 'auto',
-      toolOrder: request.tools.map(item => item.name),
+      toolOrder: entries.map(([name]) => name),
+      topP: request.modelSettings?.topP,
       tools,
+      providerOptions: requestProviderOptions(request.modelSettings) as never,
     });
     let resolved: Awaited<
       ReturnType<
@@ -60,6 +161,7 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
           [
             typeof result.responseMessages,
             typeof result.toolCalls,
+            typeof result.toolResults,
             typeof result.text,
             typeof result.usage,
             typeof result.finishReason,
@@ -72,6 +174,7 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
       resolved = await Promise.all([
         result.responseMessages,
         result.toolCalls,
+        result.toolResults,
         result.text,
         result.usage,
         result.finishReason,
@@ -80,7 +183,7 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
     } catch (error) {
       throw streamError ?? error;
     }
-    const [assistantMessages, toolCalls, text, usage, finishReason, rawFinishReason] = resolved;
+    const [assistantMessages, toolCalls, toolResults, text, usage, finishReason, rawFinishReason] = resolved;
     if (streamError) throw streamError;
     if (assistantMessages.length === 0 && toolCalls.length === 0 && !text.trim()) {
       const reason = rawFinishReason ? `${finishReason}/${rawFinishReason}` : finishReason;
@@ -88,13 +191,23 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
         `模型返回了空响应（finishReason: ${reason}）。接口可能与所选协议不兼容；若使用OpenAI Responses，请确认Base URL填写到API版本根路径（常见形式为https://服务地址/v1），而不是站点根地址。`,
       );
     }
+    const resultByCallId = new Map(toolResults.map(result => [result.toolCallId, result]));
+    const localCalls = toolCalls.filter(call => !call.providerExecuted);
+    const providerCalls = toolCalls.filter(call => call.providerExecuted);
     return {
       assistantMessages: assistantMessages as ModelMessage[],
       finishReason,
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
+      providerToolCalls: providerCalls.map(call => ({
+        input: call.input,
+        output: sanitizeProviderOutput(resultByCallId.get(call.toolCallId)?.output),
+        providerExecuted: true,
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+      })),
       text,
-      toolCalls: toolCalls.map(call => ({ input: call.input, toolCallId: call.toolCallId, toolName: call.toolName })),
+      toolCalls: localCalls.map(call => ({ input: call.input, toolCallId: call.toolCallId, toolName: call.toolName })),
     };
   }
 }
@@ -104,7 +217,22 @@ export class ProfileModelStepExecutor implements ModelStepExecutor {
 
   async execute(request: ModelStepRequest): Promise<ModelStepResult> {
     try {
-      return await withApiModel(this.profile, model => new AiSdkModelStepExecutor(async () => model).execute(request));
+      const modelSettings = this.profile.modelSettings;
+      return await withApiRuntime(this.profile, runtime =>
+        new AiSdkModelStepExecutor(async () => runtime).execute({
+          ...request,
+          modelSettings: {
+            maxOutputTokens: modelSettings.maxOutputTokens || undefined,
+            protocol: this.profile.protocol,
+            reasoningEffort: request.modelSettings?.reasoningEffort ?? 'auto',
+            temperature: modelSettings.temperature,
+            topP: modelSettings.topP,
+            webSearch: request.modelSettings?.webSearch === true,
+            webSearchMaxUses: request.modelSettings?.webSearchMaxUses,
+          },
+        }),
+        request.modelSettings?.webSearchMaxUses ?? 10,
+      );
     } catch (error) {
       throw new Error(normalizeProviderFailure(error).message, { cause: error });
     }

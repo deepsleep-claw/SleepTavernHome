@@ -2,7 +2,7 @@ import { tool } from 'ai';
 import { MockLanguageModelV3, simulateReadableStream } from 'ai/test';
 import { z } from 'zod';
 import { describe, expect, it, vi } from 'vitest';
-import { AiSdkModelStepExecutor } from './step-executor';
+import { AiSdkModelStepExecutor, requestProviderOptions } from './step-executor';
 import type { RunnerTool } from './tools';
 
 const usage = {
@@ -44,6 +44,13 @@ describe('AiSdkModelStepExecutor', () => {
       abortSignal: new AbortController().signal,
       forceTool: 'read_file',
       messages: [{ content: 'go', role: 'user' }],
+      modelSettings: {
+        maxOutputTokens: 4096,
+        reasoningEffort: 'high',
+        temperature: 0.7,
+        topP: 0.9,
+        webSearch: false,
+      },
       onReasoningDelta: reasoningDelta,
       onTextDelta: delta,
       tools: [runnerTool('read_file'), runnerTool('search_files')],
@@ -59,9 +66,25 @@ describe('AiSdkModelStepExecutor', () => {
     expect(reasoningDelta).toHaveBeenCalledWith('先读取文件');
     expect(model.doStreamCalls).toHaveLength(1);
     expect(model.doStreamCalls[0]).toMatchObject({
+      maxOutputTokens: 4096,
+      temperature: 0.7,
       toolChoice: { toolName: 'read_file', type: 'tool' },
+      topP: 0.9,
     });
     expect(model.doStreamCalls[0].tools?.map(item => item.name)).toEqual(['read_file', 'search_files']);
+  });
+
+  it('按协议映射推理参数，自动不强制开启Anthropic思考', () => {
+    expect(requestProviderOptions({ protocol: 'openai-responses', reasoningEffort: 'xhigh', webSearch: true }))
+      .toMatchObject({ openai: { maxToolCalls: 10, reasoningEffort: 'xhigh' } });
+    expect(requestProviderOptions({ protocol: 'openai-chat', reasoningEffort: 'off', webSearch: false }))
+      .toEqual({ openai: { reasoningEffort: 'none' } });
+    expect(requestProviderOptions({ protocol: 'anthropic', reasoningEffort: 'auto', webSearch: false }))
+      .toMatchObject({ anthropic: { effort: undefined, thinking: undefined } });
+    expect(requestProviderOptions({ protocol: 'anthropic', reasoningEffort: 'high', webSearch: true }))
+      .toMatchObject({ anthropic: { effort: 'high', thinking: { type: 'adaptive' } } });
+    expect(requestProviderOptions({ protocol: 'openai-compatible', reasoningEffort: 'custom-id', webSearch: false }))
+      .toEqual({ dreamCardAgentCompatible: { reasoningEffort: 'custom-id' } });
   });
 
   it('把HTTP成功但没有文本、消息或工具调用的结果视为协议错误', async () => {

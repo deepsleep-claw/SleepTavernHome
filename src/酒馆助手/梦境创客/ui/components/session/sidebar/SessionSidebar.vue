@@ -142,7 +142,7 @@
       <header class="dca-side-heading">
         <div>
           <strong>上下文监视器</strong>
-          <small>70% 自动压缩，用户消息 80% 时暂停</small>
+          <small>{{ contextSourceLabel }} · 70% 自动压缩，用户消息 80% 时暂停</small>
         </div>
       </header>
       <div class="dca-context-meter">
@@ -152,7 +152,7 @@
       <div class="dca-metric-grid">
         <div>
           <strong>{{ state.active?.contextUsage.totalTokens }}</strong>
-          <span>估算总 Token</span>
+          <span>{{ state.active?.contextUsage.measurement === 'api' ? 'API 基准总 Token' : '估算总 Token' }}</span>
         </div>
         <div>
           <strong>{{ state.active?.contextUsage.remainingTokens }}</strong>
@@ -174,6 +174,11 @@
           <strong>{{ state.active?.contextUsage.toolTokens }}</strong>
           <span>工具链</span>
         </div>
+      </div>
+      <div v-if="state.active?.contextUsage.measurement === 'api'" class="dca-context-source-note">
+        最近请求：输入 {{ state.active.contextUsage.apiInputTokens ?? 0 }} · 输出
+        {{ state.active.contextUsage.apiOutputTokens ?? 0 }} · 请求后增量估算
+        {{ state.active.contextUsage.estimatedDeltaTokens ?? 0 }}
       </div>
       <details>
         <summary>上下文事件</summary>
@@ -220,6 +225,11 @@ const tab = computed({
 });
 
 const files = computed(() => state.value.active?.workingFiles ?? []);
+const activeProfile = computed(() => state.value.profiles.find(profile => profile.id === state.value.activeProfileId));
+const contextSourceLabel = computed(() => {
+  const source = state.value.active?.contextUsage.measurement === 'api' ? 'API 用量 + 增量估算' : '本地估算';
+  return activeProfile.value?.modelSettings?.contextWindow ? source : `${source}（默认 128K）`;
+});
 const visibleFileTreeRows = computed<FileTreeRow[]>(() => {
   const directories = new Set<string>();
   const children = new Map<string, FileTreeRow[]>();
@@ -778,6 +788,13 @@ async function redo() {
 .dca-metric-grid span {
   color: var(--dca-text-muted);
   font-size: 0.76rem;
+}
+
+.dca-context-source-note {
+  border-left: 3px solid var(--dca-accent);
+  padding-left: 0.55rem;
+  color: var(--dca-text-muted);
+  font-size: 0.74rem;
 }
 
 @media (max-width: 720px) {

@@ -11,6 +11,11 @@ import type { WorkspaceChange, WorkspaceFile } from '../workspace/types';
 
 export type SessionMode = 'normal' | 'yolo';
 
+export type SessionModelControls = {
+  reasoningEffort: 'auto' | 'off' | string;
+  webSearch: boolean;
+};
+
 export type SessionAgentConfiguration = {
   id: string;
   name: string;
@@ -32,7 +37,9 @@ export type SessionUiItem = {
   runStatus?: 'abnormal' | 'completed' | 'context-exhausted' | 'failed' | 'stopped';
   status?: 'completed' | 'failed' | 'running';
   toolCallId?: string;
+  toolInput?: string;
   toolName?: string;
+  providerTool?: boolean;
 };
 
 export type ManualWorkspaceFileChange = {
@@ -90,6 +97,7 @@ export type PersistedSessionRuntime = {
   lastError?: string;
   manualEditGroup?: ManualEditGroup;
   mode: SessionMode;
+  modelControls?: SessionModelControls;
   modelMessages: ModelMessage[];
   pending?: PendingCandidate;
   preset: StructuredPreset;
@@ -112,6 +120,7 @@ export type SessionView = {
   error?: string;
   events: RunnerEvent[];
   mode: SessionMode;
+  modelControls: SessionModelControls;
   preset: StructuredPreset;
   sessionId: string;
   skills: AgentSkill[];

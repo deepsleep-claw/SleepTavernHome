@@ -65,6 +65,49 @@ describe('AgentRunner', () => {
     expect(journal.events.some(event => event.type === 'model-completed')).toBe(true);
   });
 
+  it('把会话推理与联网选项传给每个模型步骤，并用API用量校准上下文', async () => {
+    const executor = new QueueExecutor([{ ...modelStep([], 'answer'), inputTokens: 120, outputTokens: 30 }]);
+    const runner = new AgentRunner({
+      executor,
+      journal: new MemoryRunnerJournal(),
+      modelControls: { reasoningEffort: 'xhigh', webSearch: true },
+      tools: [],
+    });
+    const state = await runner.start('request');
+    expect(executor.requests[0].modelSettings).toEqual({
+      reasoningEffort: 'xhigh',
+      webSearch: true,
+      webSearchMaxUses: 10,
+    });
+    expect(state.contextUsage).toMatchObject({
+      apiInputTokens: 120,
+      apiOutputTokens: 30,
+      measurement: 'api',
+      totalTokens: 150,
+    });
+  });
+
+  it('把Provider执行的联网活动只记入时间线，不送入本地工具队列', async () => {
+    const journal = new MemoryRunnerJournal();
+    const executor = new QueueExecutor([{
+      ...modelStep([], 'answer with sources'),
+      providerToolCalls: [{
+        input: { query: 'latest model' },
+        output: [{ title: 'Source', url: 'https://example.test' }],
+        providerExecuted: true,
+        toolCallId: 'web-1',
+        toolName: 'web_search',
+      }],
+    }]);
+    const runner = new AgentRunner({ executor, journal, tools: [] });
+    expect((await runner.start('search')).status).toBe('completed');
+    expect(journal.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ call: expect.objectContaining({ toolCallId: 'web-1' }), type: 'tool-started' }),
+      expect.objectContaining({ call: expect.objectContaining({ toolCallId: 'web-1' }), type: 'tool-completed' }),
+    ]));
+    expect(executor.requests).toHaveLength(1);
+  });
+
   it('批次含写入时，读取与写入全部严格按调用顺序执行', async () => {
     const calls: RunnerToolCall[] = [
       { input: {}, toolCallId: '1', toolName: 'read' },

@@ -2,8 +2,12 @@ import type { ModelMessage } from 'ai';
 import { canonicalStringify } from '../transaction/canonical';
 
 export type ContextUsage = {
+  apiInputTokens?: number;
+  apiOutputTokens?: number;
   assistantTokens: number;
   contextWindow: number;
+  estimatedDeltaTokens?: number;
+  measurement?: 'api' | 'estimated';
   ratio: number;
   remainingTokens: number;
   systemTokens: number;
@@ -13,19 +17,37 @@ export type ContextUsage = {
   userTokens: number;
 };
 
+export type ApiUsageBaseline = {
+  estimatedTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+};
+
 export type ContextDecision = 'compact' | 'continue' | 'users-exhausted';
 
 export function estimateTokens(value: unknown): number {
   return Math.max(1, Math.ceil(canonicalStringify(value).length / 4));
 }
 
-export function measureContext(messages: ModelMessage[], contextWindow: number): ContextUsage {
+export function measureContext(
+  messages: ModelMessage[],
+  contextWindow: number,
+  apiBaseline?: ApiUsageBaseline,
+): ContextUsage {
   const totals = { assistant: 0, system: 0, tool: 0, user: 0 };
   for (const message of messages) totals[message.role] += estimateTokens(message);
-  const totalTokens = totals.assistant + totals.system + totals.tool + totals.user;
+  const estimatedTokens = totals.assistant + totals.system + totals.tool + totals.user;
+  const estimatedDeltaTokens = apiBaseline ? estimatedTokens - apiBaseline.estimatedTokens : 0;
+  const totalTokens = apiBaseline
+    ? Math.max(0, apiBaseline.inputTokens + apiBaseline.outputTokens + estimatedDeltaTokens)
+    : estimatedTokens;
   return {
+    apiInputTokens: apiBaseline?.inputTokens,
+    apiOutputTokens: apiBaseline?.outputTokens,
     assistantTokens: totals.assistant,
     contextWindow,
+    estimatedDeltaTokens,
+    measurement: apiBaseline ? 'api' : 'estimated',
     ratio: totalTokens / contextWindow,
     remainingTokens: Math.max(0, contextWindow - totalTokens),
     systemTokens: totals.system,

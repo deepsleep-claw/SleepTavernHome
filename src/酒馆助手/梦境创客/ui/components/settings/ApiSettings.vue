@@ -3,7 +3,7 @@
     <header class="dca-section-header">
       <div>
         <h3>API Profile</h3>
-        <p>接口类型决定请求协议；模型模板只在你点击“应用”时复制参数。</p>
+        <p>接口类型只决定协议与请求格式；模型模板只在你点击“应用”时复制参数。</p>
       </div>
     </header>
     <div class="dca-resource-toolbar">
@@ -153,6 +153,7 @@ import {
   matchModelTemplates,
   templateSettings,
   type CapabilitySetting,
+  type AppliedModelTemplate,
   type ModelCapabilityKey,
   type ModelTemplate,
 } from '../../../core/provider/model-catalog';
@@ -183,6 +184,7 @@ const cloudLoading = ref(false);
 const modelOptions = ref<string[]>([]);
 const modelsLoading = ref(false);
 const selectedTemplateId = ref('custom');
+const appliedTemplateReference = ref<AppliedModelTemplate>();
 let formLoading = false;
 let cloudAttempted = false;
 let modelMatchTimer: number | undefined;
@@ -242,6 +244,9 @@ watch(
         topP: profile.modelSettings.topP ?? '',
       });
       selectedTemplateId.value = profile.appliedModelTemplate?.id ?? 'custom';
+      appliedTemplateReference.value = profile.appliedModelTemplate
+        ? { ...profile.appliedModelTemplate }
+        : undefined;
     }
     modelOptions.value = [];
     queueMicrotask(() => {
@@ -257,6 +262,7 @@ watch(
     if (formLoading) return;
     const localMatch = matchModelTemplates(model, builtinTemplates, 1)[0];
     selectedTemplateId.value = localMatch && localMatch.score >= 0.78 ? localMatch.template.id : 'custom';
+    appliedTemplateReference.value = undefined;
     if (modelMatchTimer !== undefined) window.clearTimeout(modelMatchTimer);
     if (!localMatch || localMatch.score < 0.85) {
       modelMatchTimer = window.setTimeout(() => void loadCloudCatalog(false), 350);
@@ -286,6 +292,7 @@ function resetProfileForm() {
   formLoading = true;
   Object.assign(profileForm, emptyProfileForm());
   selectedTemplateId.value = 'custom';
+  appliedTemplateReference.value = undefined;
   modelOptions.value = [];
   queueMicrotask(() => {
     formLoading = false;
@@ -314,12 +321,9 @@ function optionalNumber(value: number | string): number | undefined {
 
 function profileInput(): ApiProfileInput {
   const headers = profileForm.headers.trim() ? (JSON.parse(profileForm.headers) as Record<string, string>) : undefined;
-  const selected = selectedTemplate.value;
   return {
     apiKey: profileForm.apiKey,
-    appliedModelTemplate: selected
-      ? { id: selected.id, revision: selected.revision, source: selected.source }
-      : null,
+    appliedModelTemplate: appliedTemplateReference.value ? { ...appliedTemplateReference.value } : null,
     baseURL: profileForm.baseURL,
     headers,
     id: profileForm.id || undefined,
@@ -350,13 +354,17 @@ function applyTemplate() {
     temperature: settings.temperature ?? '',
     topP: settings.topP ?? '',
   });
+  appliedTemplateReference.value = { id: template.id, revision: template.revision, source: template.source };
   queueMicrotask(() => {
     formLoading = false;
   });
 }
 
 function markModelSettingsCustom() {
-  if (!formLoading) selectedTemplateId.value = 'custom';
+  if (!formLoading) {
+    selectedTemplateId.value = 'custom';
+    appliedTemplateReference.value = undefined;
+  }
 }
 
 async function saveProfile() {

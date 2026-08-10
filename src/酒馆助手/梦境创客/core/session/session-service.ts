@@ -30,6 +30,7 @@ import type {
   ManualEditGroup,
   SessionAgentConfiguration,
   SessionLifecycleStatus,
+  SessionModelControls,
   SessionMode,
   SessionSnapshotPayload,
   SessionUiItem,
@@ -188,7 +189,7 @@ export class CardAgentSessionService {
   private readonly adapter: CardStateAdapter;
   private readonly canWriteNonCharacterResources: () => boolean;
   private compiledPreset: CompiledPreset;
-  private readonly contextWindow: number;
+  private contextWindow: number;
   private executor: ModelStepExecutor;
   private readonly lock: GlobalAgentTaskLock;
   private readonly now: () => number;
@@ -205,6 +206,7 @@ export class CardAgentSessionService {
   private manualEditGroup?: ManualEditGroup;
   private mode: SessionMode;
   private modelMessages: ModelMessage[];
+  private modelControls: SessionModelControls;
   private pending?: PendingCandidate;
   private preset: StructuredPreset;
   private repository?: MemoryWorkspaceRepository;
@@ -244,6 +246,7 @@ export class CardAgentSessionService {
     this.manualEditGroup = restored?.runtime.manualEditGroup ? klona(restored.runtime.manualEditGroup) : undefined;
     this.mode = restored?.runtime.mode ?? options.mode ?? 'normal';
     this.modelMessages = klona(restored?.runtime.modelMessages ?? compiled.messages);
+    this.modelControls = klona(restored?.runtime.modelControls ?? { reasoningEffort: 'auto', webSearch: false });
     this.now = options.now ?? Date.now;
     this.onPersist = options.onPersist;
     this.onSkillsCommit = options.onSkillsCommit;
@@ -337,10 +340,11 @@ export class CardAgentSessionService {
       approval,
       bindingId: this.bindingId,
       characterName: this.characterName,
-      contextUsage: measureContext(this.modelMessages, this.contextWindow),
+      contextUsage: this.runner?.state.contextUsage ?? measureContext(this.modelMessages, this.contextWindow),
       error: this.lastError,
       events: klona(this.events),
       mode: this.mode,
+      modelControls: klona(this.modelControls),
       preset: klona(this.preset),
       sessionId: this.sessionId,
       skills: klona(this.skills),
@@ -360,6 +364,17 @@ export class CardAgentSessionService {
     this.mode = mode;
     this.notify();
     void this.persist();
+  }
+
+  async setModelControls(controls: Partial<SessionModelControls>): Promise<void> {
+    if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status)) {
+      throw new Error('Agent运行期间不能修改本轮模型选项。');
+    }
+    this.modelControls = {
+      reasoningEffort: controls.reasoningEffort ?? this.modelControls.reasoningEffort,
+      webSearch: controls.webSearch ?? this.modelControls.webSearch,
+    };
+    await this.persist();
   }
 
   async save(): Promise<void> {
@@ -408,11 +423,12 @@ export class CardAgentSessionService {
     await this.persist();
   }
 
-  async setExecutor(executor: ModelStepExecutor): Promise<void> {
+  async setExecutor(executor: ModelStepExecutor, contextWindow = this.contextWindow): Promise<void> {
     if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status)) {
       throw new Error('Agent运行期间不能切换API Profile。');
     }
     this.executor = executor;
+    this.contextWindow = contextWindow;
     if (this.runner && ['failed', 'stopped', 'context-exhausted'].includes(this.runner.state.status)) {
       this.buildRunner(this.runner.state.status, this.runner.state.pending);
     }
@@ -485,6 +501,7 @@ export class CardAgentSessionService {
       this.lastError = state.failure;
       if (state.status === 'completed' || state.status === 'stopped')
         await this.freezeCandidate(base, state.status === 'stopped');
+      if (state.status === 'completed' || state.status === 'stopped') this.modelControls.webSearch = false;
       await this.persist();
       return this.view();
     } finally {
@@ -496,6 +513,7 @@ export class CardAgentSessionService {
     if (!this.runner) throw new Error('当前会话没有可恢复的Runner。');
     this.lock.acquire(this.sessionId);
     try {
+      this.buildRunner(this.runner.state.status, this.runner.state.pending);
       const state = await this.runner.resume();
       this.modelMessages = klona(state.messages);
       this.status = state.status;
@@ -504,6 +522,7 @@ export class CardAgentSessionService {
         if (!this.activeBase) throw new Error('无法恢复：缺少本轮Base数据。');
         await this.freezeCandidate(this.activeBase, state.status === 'stopped');
       }
+      if (state.status === 'completed' || state.status === 'stopped') this.modelControls.webSearch = false;
       await this.persist();
       return this.view();
     } finally {
@@ -718,6 +737,7 @@ export class CardAgentSessionService {
       initialPending,
       initialStatus,
       journal,
+      modelControls: klona(this.modelControls),
       now: this.now,
       onReasoningDelta: delta => this.appendStreamingReasoning(delta),
       onTextDelta: delta => this.appendStreamingText(delta),
@@ -1124,7 +1144,9 @@ export class CardAgentSessionService {
         kind: 'tool',
         status: 'running',
         toolCallId: event.call.toolCallId,
+        toolInput: canonicalStringify(event.call.input),
         toolName: event.call.toolName,
+        providerTool: event.call.providerExecuted === true,
       });
     } else if (event.type === 'tool-completed' || event.type === 'tool-failed') {
       const item = this.ui.find(message => message.id === `tool:${event.call.toolCallId}`);
@@ -1178,6 +1200,7 @@ export class CardAgentSessionService {
       lastError: this.lastError,
       manualEditGroup: this.manualEditGroup ? klona(this.manualEditGroup) : undefined,
       mode: this.mode,
+      modelControls: klona(this.modelControls),
       modelMessages: klona(this.modelMessages),
       pending: this.pending ? klona(this.pending) : undefined,
       preset: klona(this.preset),

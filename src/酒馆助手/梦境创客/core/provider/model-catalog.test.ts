@@ -30,6 +30,7 @@ describe('model catalog', () => {
             modalities: { input: ['text', 'image'], output: ['text'] },
             name: 'GPT Test',
             reasoning: true,
+            reasoning_options: [{ type: 'effort', values: ['low', 'high', 'max'] }],
             tool_call: true,
           },
           'text-embedding-test': {
@@ -45,6 +46,7 @@ describe('model catalog', () => {
         capabilities: { reasoning: 'enabled', toolCalling: 'enabled', vision: 'enabled' },
         contextWindow: 200_000,
         maxOutputTokens: 32_000,
+        reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }, { id: 'max', name: '最高' }],
       },
       source: 'cloud',
     });
