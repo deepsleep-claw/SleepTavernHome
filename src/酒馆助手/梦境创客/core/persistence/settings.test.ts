@@ -33,10 +33,11 @@ describe('settings cross-window merge', () => {
     incoming.floatingButtonAnchor = 'top-left';
     const latest = structuredClone(base);
     latest.developerMode = true;
+    latest.sendWithCtrlEnter = true;
     latest.characterStores.other = character('other', 2);
 
     const merged = mergeSettingsChanges(base, incoming, latest);
-    expect(merged).toMatchObject({ developerMode: true, floatingButtonAnchor: 'top-left' });
+    expect(merged).toMatchObject({ developerMode: true, floatingButtonAnchor: 'top-left', sendWithCtrlEnter: true });
     expect(merged.characterStores.other).toBeDefined();
   });
 

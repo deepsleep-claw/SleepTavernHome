@@ -501,7 +501,6 @@ export class CardAgentSessionService {
       this.lastError = state.failure;
       if (state.status === 'completed' || state.status === 'stopped')
         await this.freezeCandidate(base, state.status === 'stopped');
-      if (state.status === 'completed' || state.status === 'stopped') this.modelControls.webSearch = false;
       await this.persist();
       return this.view();
     } finally {
@@ -522,7 +521,6 @@ export class CardAgentSessionService {
         if (!this.activeBase) throw new Error('无法恢复：缺少本轮Base数据。');
         await this.freezeCandidate(this.activeBase, state.status === 'stopped');
       }
-      if (state.status === 'completed' || state.status === 'stopped') this.modelControls.webSearch = false;
       await this.persist();
       return this.view();
     } finally {

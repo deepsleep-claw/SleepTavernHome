@@ -10,6 +10,13 @@
       <span><strong>显示悬浮按钮</strong><small>魔法棒入口始终保留</small></span>
       <input type="checkbox" :checked="state.floatingButton" @change="toggleFloating" />
     </label>
+    <label class="dca-toggle-row">
+      <span>
+        <strong>Ctrl + Enter 发送</strong>
+        <small>关闭时按 Enter 发送，Shift + Enter 换行；开启后按 Enter 换行</small>
+      </span>
+      <input type="checkbox" :checked="state.sendWithCtrlEnter" @change="toggleSendShortcut" />
+    </label>
     <label v-if="state.developerMode" class="dca-toggle-row dca-danger-row">
       <span>
         <strong>允许修改非角色正则与脚本</strong>
@@ -35,6 +42,10 @@ const { action, runtime, state } = useDreamCardAgent();
 
 async function toggleFloating(event: Event) {
   await action(() => runtime.updateSettings({ floatingButton: (event.target as HTMLInputElement).checked }));
+}
+
+async function toggleSendShortcut(event: Event) {
+  await action(() => runtime.updateSettings({ sendWithCtrlEnter: (event.target as HTMLInputElement).checked }));
 }
 
 async function toggleDeveloper(event: Event) {

@@ -90,6 +90,7 @@ export type DreamCardAgentSettings = {
   onboardingDone: boolean;
   profiles: ApiProfile[];
   presetProfiles: StructuredPreset[];
+  sendWithCtrlEnter: boolean;
   syncRevision: number;
   version: 3;
 };
@@ -120,6 +121,7 @@ export const DEFAULT_DREAM_CARD_AGENT_SETTINGS: DreamCardAgentSettings = {
   onboardingDone: false,
   profiles: [],
   presetProfiles: [cloneStructuredPreset(DEFAULT_PRESET)],
+  sendWithCtrlEnter: false,
   syncRevision: 0,
   version: 3,
 };
@@ -208,6 +210,7 @@ function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamCardAgen
     globalSkills: structuredClone(raw?.globalSkills ?? {}),
     profiles: (raw?.profiles ?? []).map(normalizeApiProfile),
     presetProfiles,
+    sendWithCtrlEnter: raw?.sendWithCtrlEnter === true,
     syncRevision: Number.isFinite(raw?.syncRevision) ? Math.max(0, raw!.syncRevision!) : 0,
     version: 3,
   };
@@ -251,6 +254,7 @@ export function mergeSettingsChanges(
     onboardingDone: choose('onboardingDone'),
     profiles: choose('profiles'),
     presetProfiles: choose('presetProfiles'),
+    sendWithCtrlEnter: choose('sendWithCtrlEnter'),
     syncRevision: Math.max(base.syncRevision, incoming.syncRevision, latest.syncRevision) + 1,
     version: 3,
   };

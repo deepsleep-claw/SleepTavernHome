@@ -278,8 +278,8 @@ describe('DreamCardAgentRuntime', () => {
     });
     await addProfile(runtime);
     const profile = runtime.snapshot().profiles[0];
-    await runtime.updateSettings({ developerMode: true, floatingButton: false });
-    expect(runtime.snapshot()).toMatchObject({ developerMode: true, floatingButton: false });
+    await runtime.updateSettings({ developerMode: true, floatingButton: false, sendWithCtrlEnter: true });
+    expect(runtime.snapshot()).toMatchObject({ developerMode: true, floatingButton: false, sendWithCtrlEnter: true });
     await runtime.selectProfile(profile.id);
     await runtime.removeProfile(profile.id);
     expect(runtime.snapshot().profiles).toEqual([]);

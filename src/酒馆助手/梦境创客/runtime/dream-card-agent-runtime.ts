@@ -68,6 +68,7 @@ export type DreamCardAgentRuntimeState = {
   onboardingDone: boolean;
   profiles: ApiProfile[];
   presetProfiles: StructuredPreset[];
+  sendWithCtrlEnter: boolean;
   skills: AgentSkill[];
   storage: { currentCharacterBytes: number; globalSkillBytes: number };
   sessions: SessionIndexEntry[];
@@ -151,6 +152,7 @@ export class DreamCardAgentRuntime {
       onboardingDone: settings.onboardingDone,
       profiles: settings.profiles,
       presetProfiles: settings.presetProfiles,
+      sendWithCtrlEnter: settings.sendWithCtrlEnter,
       skills: [],
       storage: { currentCharacterBytes: 0, globalSkillBytes: 0 },
       sessions: [],
@@ -685,6 +687,7 @@ export class DreamCardAgentRuntime {
     floatingButtonAnchor?: FloatingButtonAnchor;
     floatingButtonOffset?: FloatingButtonOffset;
     onboardingDone?: boolean;
+    sendWithCtrlEnter?: boolean;
   }): Promise<void> {
     const settings = this.settingsStore.load();
     if (input.dangerousNonCharacterResourceWrites !== undefined) {
@@ -698,6 +701,7 @@ export class DreamCardAgentRuntime {
     if (input.floatingButtonAnchor !== undefined) settings.floatingButtonAnchor = input.floatingButtonAnchor;
     if (input.floatingButtonOffset !== undefined) settings.floatingButtonOffset = input.floatingButtonOffset;
     if (input.onboardingDone !== undefined) settings.onboardingDone = input.onboardingDone;
+    if (input.sendWithCtrlEnter !== undefined) settings.sendWithCtrlEnter = input.sendWithCtrlEnter;
     await this.settingsStore.save(settings);
     this.reloadSettingsState();
   }
@@ -901,6 +905,7 @@ export class DreamCardAgentRuntime {
     this.state.onboardingDone = settings.onboardingDone;
     this.state.profiles = settings.profiles;
     this.state.presetProfiles = settings.presetProfiles;
+    this.state.sendWithCtrlEnter = settings.sendWithCtrlEnter;
     this.state.storage.globalSkillBytes = Object.values(settings.files)
       .filter(file => file.bindingId === 'global')
       .reduce((total, file) => total + file.size, 0);

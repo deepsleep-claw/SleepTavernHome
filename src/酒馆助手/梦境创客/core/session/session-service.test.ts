@@ -50,7 +50,7 @@ function snapshots(): ContentAddressedSnapshotStore {
 }
 
 describe('card agent session service', () => {
-  it('保存会话级推理档位，并在一轮完成后自动关闭联网开关', async () => {
+  it('保存会话级推理档位，并在一轮完成后保持联网开关', async () => {
     const executor = new QueueExecutor([step([], '完成')]);
     const service = await CardAgentSessionService.create({
       adapter: new MemoryCardStateAdapter(transactionState()),
@@ -62,7 +62,7 @@ describe('card agent session service', () => {
     expect(service.view().modelControls).toEqual({ reasoningEffort: 'high', webSearch: true });
     const completed = await service.send('检查设定');
     expect(executor.requests[0].modelSettings).toMatchObject({ reasoningEffort: 'high', webSearch: true });
-    expect(completed.modelControls).toEqual({ reasoningEffort: 'high', webSearch: false });
+    expect(completed.modelControls).toEqual({ reasoningEffort: 'high', webSearch: true });
   });
 
   it('完成读取到Diff审批再最小写回的普通模式闭环', async () => {

@@ -9,7 +9,7 @@
           ? '中途引导：追加到下一次工具调用后；若本轮已完成则成为下一条消息'
           : '例如：请检查角色动机，并补充三个互相呼应的世界书条目……'
       "
-      @keydown.ctrl.enter.prevent="submit"
+      @keydown="handleKeydown"
     ></textarea>
     <div class="dca-composer-footer">
       <div class="dca-composer-controls">
@@ -25,7 +25,7 @@
           <i class="fa-solid fa-globe" aria-hidden="true"></i>
           <span>联网</span>
         </button>
-        <small>{{ isRunning ? '运行中：发送即中途引导' : 'Ctrl + Enter 发送' }}</small>
+        <small>{{ shortcutHint }}</small>
       </div>
       <div class="dca-row-actions">
         <button v-if="canResume" type="button" :disabled="state.busy" @click="resume">从中断处继续</button>
@@ -89,9 +89,14 @@ const canSend = computed(() =>
   ),
 );
 const canCompose = computed(() => isRunning.value || canSend.value);
+const shortcutHint = computed(() => {
+  if (isRunning.value) return '运行中：发送即中途引导';
+  return state.value.sendWithCtrlEnter ? 'Ctrl + Enter 发送' : 'Enter 发送 · Shift + Enter 换行';
+});
 
 async function submit() {
   const text = message.value;
+  if (!text.trim()) return;
   if (isRunning.value) {
     try {
       runtime.enqueueGuidance(text);
@@ -101,7 +106,19 @@ async function submit() {
     }
     return;
   }
-  if (await action(() => runtime.send(text))) message.value = '';
+  message.value = '';
+  const succeeded = await action(() => runtime.send(text));
+  if (!succeeded && !message.value) message.value = text;
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  if (event.isComposing || event.key !== 'Enter') return;
+  const shouldSend = state.value.sendWithCtrlEnter
+    ? (event.ctrlKey || event.metaKey) && !event.shiftKey
+    : !event.shiftKey;
+  if (!shouldSend) return;
+  event.preventDefault();
+  void submit();
 }
 
 async function resume() {
