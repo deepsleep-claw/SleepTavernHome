@@ -1,8 +1,14 @@
 # API设置与常见错误
 
-一套API Profile只包含名称、接口类型、Base URL、API Key、模型和自定义请求头。接口类型只决定请求协议，不代表某个默认服务商，也不会替你填写地址。
+一套API Profile包含名称、接口格式、兼容模式、Base URL、API Key、模型、自定义请求头和模型设置。接口格式只决定请求结构，不代表某个默认服务商，也不会替你填写地址。
 
-支持的协议是OpenAI Responses、OpenAI Chat、Anthropic Messages和OpenAI-compatible Chat。保存Profile不会发送连接测试；第一次真实创作请求才会验证配置。
+接口格式分为OpenAI Responses、OpenAI Chat和Anthropic Messages。OpenAI Chat同时承担标准OpenAI兼容接口，不再单列“OpenAI-compatible”。兼容模式目前有“标准”和“DeepSeek”，它只处理相同接口格式下的渠道细节，不会根据模型ID自动切换。
+
+模型模板也按接口格式和兼容模式区分。修改模型ID或渠道后，下拉框只会推荐最接近的模板；必须点击“应用”才会复制设置。models.dev只补充上下文、输出、视觉和基础工具能力，不会覆盖推理档位、原生联网或采样细节。
+
+DeepSeek思考开启或使用“自动”时，温度和Top P的保存值会保留，但不会随请求发送；选择“关闭推理”后会恢复发送。DeepSeek Responses使用无状态上下文，梦境创客会自行回传工具调用前的完整思考，并把渠道专用的推理流与联网事件转换到会话时间线。
+
+保存Profile不会发送连接测试；第一次真实创作请求才会验证配置。
 
 Key与请求头对象会使用AES-GCM、随机盐和脚本内置固定密码保存。这能避免在酒馆设置中直接看到明文，但任何拿到脚本的人都能分析出固定密码，因此它只是可逆混淆，不是安全保险箱。建议只在本地酒馆中使用，并限制Key权限与额度。
 

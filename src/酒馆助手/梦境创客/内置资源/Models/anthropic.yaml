@@ -1,4 +1,6 @@
 revision: "2026-08-10"
+interfaceType: anthropic
+compatibilityMode: standard
 models:
   - id: anthropic:claude-5
     name: Claude 5（Opus / Sonnet / Fable）

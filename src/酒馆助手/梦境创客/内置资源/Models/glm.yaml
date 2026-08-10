@@ -1,4 +1,6 @@
 revision: "2026-08-10"
+interfaceType: openai-chat
+compatibilityMode: standard
 models:
   - id: zhipu:glm-5
     name: GLM-5 系列

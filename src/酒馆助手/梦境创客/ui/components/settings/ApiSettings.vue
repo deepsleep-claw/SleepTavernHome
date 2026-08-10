@@ -3,7 +3,7 @@
     <header class="dca-section-header">
       <div>
         <h3>API Profile</h3>
-        <p>接口类型只决定协议与请求格式；模型模板只在你点击“应用”时复制参数。</p>
+        <p>接口格式决定请求结构，兼容模式处理渠道差异；模型模板只在你点击“应用”时复制参数。</p>
       </div>
     </header>
     <div class="dca-resource-toolbar">
@@ -25,12 +25,18 @@
     <div class="dca-form-grid">
       <label class="dca-field"><span>名称</span><input v-model="profileForm.name" type="text" /></label>
       <label class="dca-field">
-        <span>接口类型</span>
-        <select v-model="profileForm.protocol">
+        <span>接口格式</span>
+        <select v-model="profileForm.interfaceType">
           <option value="openai-responses">OpenAI Responses</option>
           <option value="openai-chat">OpenAI Chat</option>
           <option value="anthropic">Anthropic Messages</option>
-          <option value="openai-compatible">OpenAI-compatible Chat</option>
+        </select>
+      </label>
+      <label class="dca-field">
+        <span>兼容模式</span>
+        <select v-model="profileForm.compatibilityMode">
+          <option value="standard">标准</option>
+          <option value="deepseek">DeepSeek</option>
         </select>
       </label>
       <label class="dca-field wide">
@@ -106,12 +112,28 @@
           <input v-model.number="profileForm.maxOutputTokens" min="0" step="1" type="number" />
           <small>填 0 表示不主动传入 maxOutputTokens。</small>
         </label>
-        <label class="dca-field">
-          <span>温度</span>
+        <label class="dca-field" :class="{ 'dca-sampling-muted': samplingIgnoredWhenReasoning }">
+          <span>
+            温度
+            <i
+              v-if="samplingIgnoredWhenReasoning"
+              class="fa-solid fa-circle-exclamation dca-field-hint"
+              title="当前兼容模式的思考状态下不会发送此参数；保存值会保留，关闭思考后恢复使用。"
+              aria-label="思考状态下不发送"
+            ></i>
+          </span>
           <input v-model.number="profileForm.temperature" min="0" step="0.01" type="number" placeholder="自动" />
         </label>
-        <label class="dca-field">
-          <span>Top P</span>
+        <label class="dca-field" :class="{ 'dca-sampling-muted': samplingIgnoredWhenReasoning }">
+          <span>
+            Top P
+            <i
+              v-if="samplingIgnoredWhenReasoning"
+              class="fa-solid fa-circle-exclamation dca-field-hint"
+              title="当前兼容模式的思考状态下不会发送此参数；保存值会保留，关闭思考后恢复使用。"
+              aria-label="思考状态下不发送"
+            ></i>
+          </span>
           <input v-model.number="profileForm.topP" min="0" max="1" step="0.01" type="number" placeholder="自动" />
         </label>
         <label v-for="capability in capabilityFields" :key="capability.key" class="dca-field">
@@ -149,9 +171,10 @@
 import { computed, reactive, ref, watch } from 'vue';
 import {
   builtinModelTemplates,
+  filterModelTemplatesForScope,
   fetchModelsDevCatalog,
   matchModelTemplates,
-  templateSettings,
+  settingsForAppliedTemplate,
   type CapabilitySetting,
   type AppliedModelTemplate,
   type ModelCapabilityKey,
@@ -165,13 +188,14 @@ type ProfileForm = {
   apiKey: string;
   baseURL: string;
   capabilities: Record<ModelCapabilityKey, CapabilitySetting>;
+  compatibilityMode: ApiProfileInput['compatibilityMode'];
   contextWindow: number;
   headers: string;
   id: string;
+  interfaceType: ApiProfileInput['interfaceType'];
   maxOutputTokens: number;
   model: string;
   name: string;
-  protocol: ApiProfileInput['protocol'];
   reasoningEfforts: string;
   temperature: number | string;
   topP: number | string;
@@ -202,10 +226,15 @@ const allTemplates = computed(() => {
   [...builtinTemplates, ...cloudTemplates.value].forEach(template => result.set(template.id, template));
   return [...result.values()];
 });
+const templateScope = computed(() => ({
+  compatibilityMode: profileForm.compatibilityMode,
+  interfaceType: profileForm.interfaceType,
+}));
+const availableTemplates = computed(() => filterModelTemplatesForScope(allTemplates.value, templateScope.value));
 const rankedTemplates = computed(() => {
-  const matches = matchModelTemplates(profileForm.model, allTemplates.value, 50);
+  const matches = matchModelTemplates(profileForm.model, availableTemplates.value, 50, templateScope.value);
   const matched = new Set(matches.map(item => item.template.id));
-  return [...matches.map(item => item.template), ...allTemplates.value.filter(item => !matched.has(item.id))];
+  return [...matches.map(item => item.template), ...availableTemplates.value.filter(item => !matched.has(item.id))];
 });
 const templateOptions = computed<ComboboxOption[]>(() => [
   { description: '保留你手动填写的参数', label: '自定义', value: 'custom' },
@@ -215,7 +244,8 @@ const templateOptions = computed<ComboboxOption[]>(() => [
     value: template.id,
   })),
 ]);
-const selectedTemplate = computed(() => allTemplates.value.find(template => template.id === selectedTemplateId.value));
+const selectedTemplate = computed(() => availableTemplates.value.find(template => template.id === selectedTemplateId.value));
+const samplingIgnoredWhenReasoning = computed(() => profileForm.compatibilityMode === 'deepseek');
 const templateSourceLabel = computed(() => {
   if (selectedTemplateId.value === 'custom') return '自定义';
   return sourceLabel(selectedTemplate.value?.source ?? 'builtin');
@@ -232,13 +262,14 @@ watch(
         apiKey: '',
         baseURL: profile.baseURL,
         capabilities: { ...profile.modelSettings.capabilities },
+        compatibilityMode: profile.compatibilityMode,
         contextWindow: profile.modelSettings.contextWindow,
         headers: '',
         id: profile.id,
+        interfaceType: profile.interfaceType,
         maxOutputTokens: profile.modelSettings.maxOutputTokens,
         model: profile.model,
         name: profile.name,
-        protocol: profile.protocol,
         reasoningEfforts: formatReasoningEfforts(profile.modelSettings.reasoningEfforts),
         temperature: profile.modelSettings.temperature ?? '',
         topP: profile.modelSettings.topP ?? '',
@@ -260,7 +291,7 @@ watch(
   () => profileForm.model,
   model => {
     if (formLoading) return;
-    const localMatch = matchModelTemplates(model, builtinTemplates, 1)[0];
+    const localMatch = matchModelTemplates(model, builtinTemplates, 1, templateScope.value)[0];
     selectedTemplateId.value = localMatch && localMatch.score >= 0.78 ? localMatch.template.id : 'custom';
     appliedTemplateReference.value = undefined;
     if (modelMatchTimer !== undefined) window.clearTimeout(modelMatchTimer);
@@ -270,18 +301,29 @@ watch(
   },
 );
 
+watch(
+  () => [profileForm.interfaceType, profileForm.compatibilityMode] as const,
+  () => {
+    if (formLoading) return;
+    const localMatch = matchModelTemplates(profileForm.model, builtinTemplates, 1, templateScope.value)[0];
+    selectedTemplateId.value = localMatch && localMatch.score >= 0.78 ? localMatch.template.id : 'custom';
+    appliedTemplateReference.value = undefined;
+  },
+);
+
 function emptyProfileForm(): ProfileForm {
   return {
     apiKey: '',
     baseURL: '',
     capabilities: { reasoning: 'auto', toolCalling: 'auto', vision: 'auto', webSearch: 'auto' },
+    compatibilityMode: 'standard',
     contextWindow: 0,
     headers: '{}',
     id: '',
+    interfaceType: 'openai-chat',
     maxOutputTokens: 0,
     model: '',
     name: '',
-    protocol: 'openai-chat',
     reasoningEfforts: '',
     temperature: '',
     topP: '',
@@ -325,8 +367,10 @@ function profileInput(): ApiProfileInput {
     apiKey: profileForm.apiKey,
     appliedModelTemplate: appliedTemplateReference.value ? { ...appliedTemplateReference.value } : null,
     baseURL: profileForm.baseURL,
+    compatibilityMode: profileForm.compatibilityMode,
     headers,
     id: profileForm.id || undefined,
+    interfaceType: profileForm.interfaceType,
     model: profileForm.model,
     modelSettings: {
       capabilities: { ...profileForm.capabilities },
@@ -337,7 +381,6 @@ function profileInput(): ApiProfileInput {
       topP: optionalNumber(profileForm.topP),
     },
     name: profileForm.name,
-    protocol: profileForm.protocol,
   };
 }
 
@@ -345,7 +388,14 @@ function applyTemplate() {
   const template = selectedTemplate.value;
   if (!template) return;
   formLoading = true;
-  const settings = templateSettings(template);
+  const settings = settingsForAppliedTemplate(template, {
+    capabilities: { ...profileForm.capabilities },
+    contextWindow: profileForm.contextWindow,
+    maxOutputTokens: profileForm.maxOutputTokens,
+    reasoningEfforts: parseReasoningEfforts(profileForm.reasoningEfforts),
+    temperature: optionalNumber(profileForm.temperature),
+    topP: optionalNumber(profileForm.topP),
+  });
   Object.assign(profileForm, {
     capabilities: { ...settings.capabilities },
     contextWindow: settings.contextWindow,
@@ -397,7 +447,7 @@ async function loadCloudCatalog(notify: boolean) {
   cloudLoading.value = true;
   try {
     cloudTemplates.value = await fetchModelsDevCatalog();
-    const match = matchModelTemplates(profileForm.model, allTemplates.value, 1)[0];
+    const match = matchModelTemplates(profileForm.model, allTemplates.value, 1, templateScope.value)[0];
     if (selectedTemplateId.value === 'custom' && match) selectedTemplateId.value = match.template.id;
     if (notify) toastr.success(`云端补充了 ${cloudTemplates.value.length} 个模型模板。`, '梦境创客');
   } catch (error) {
@@ -496,6 +546,16 @@ function formatTokens(value: number) {
 .dca-config-divider {
   height: 1px;
   background: var(--dca-border);
+}
+
+.dca-sampling-muted > span,
+.dca-sampling-muted input {
+  color: var(--dca-text-muted);
+}
+
+.dca-field-hint {
+  margin-left: 0.25rem;
+  cursor: help;
 }
 
 .dca-security-note {

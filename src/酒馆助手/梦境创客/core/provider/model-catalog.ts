@@ -1,4 +1,5 @@
 import { parse } from 'yaml';
+import type { ProviderCompatibilityMode, ProviderInterfaceType } from '../provider-probe';
 import anthropicSource from '../../内置资源/Models/anthropic.yaml?raw';
 import deepseekSource from '../../内置资源/Models/deepseek.yaml?raw';
 import glmSource from '../../内置资源/Models/glm.yaml?raw';
@@ -36,8 +37,10 @@ export type AppliedModelTemplate = {
 
 export type ModelTemplate = {
   aliases: string[];
+  compatibilityMode?: ProviderCompatibilityMode;
   confidence: 'high' | 'low' | 'medium';
   id: string;
+  interfaceType?: ProviderInterfaceType;
   name: string;
   patterns: string[];
   provider: string;
@@ -51,6 +54,11 @@ export type ModelTemplate = {
 export type ModelTemplateMatch = {
   score: number;
   template: ModelTemplate;
+};
+
+export type ModelTemplateScope = {
+  compatibilityMode: ProviderCompatibilityMode;
+  interfaceType: ProviderInterfaceType;
 };
 
 export type EndpointModel = {
@@ -120,6 +128,12 @@ function reasoningEfforts(value: unknown): ReasoningEffort[] {
 function parseBuiltinSource(source: string): ModelTemplate[] {
   const root = record(parse(source));
   const revision = typeof root?.revision === 'string' ? root.revision : 'unknown';
+  const rootCompatibilityMode =
+    root?.compatibilityMode === 'deepseek' ? 'deepseek' : root?.compatibilityMode === 'standard' ? 'standard' : undefined;
+  const rootInterfaceType =
+    root?.interfaceType === 'anthropic' || root?.interfaceType === 'openai-chat' || root?.interfaceType === 'openai-responses'
+      ? root.interfaceType
+      : undefined;
   if (!Array.isArray(root?.models)) return [];
   return root.models.flatMap(item => {
     const value = record(item);
@@ -132,8 +146,18 @@ function parseBuiltinSource(source: string): ModelTemplate[] {
     const capabilities = record(settings?.capabilities);
     return [{
       aliases: strings(value.aliases),
+      compatibilityMode:
+        value.compatibilityMode === 'deepseek'
+          ? 'deepseek'
+          : value.compatibilityMode === 'standard'
+            ? 'standard'
+            : rootCompatibilityMode,
       confidence: value.confidence === 'low' || value.confidence === 'medium' ? value.confidence : 'high',
       id,
+      interfaceType:
+        value.interfaceType === 'anthropic' || value.interfaceType === 'openai-chat' || value.interfaceType === 'openai-responses'
+          ? value.interfaceType
+          : rootInterfaceType,
       name,
       patterns: strings(value.patterns),
       provider,
@@ -224,13 +248,30 @@ export function matchModelTemplates(
   modelId: string,
   templates: ModelTemplate[] = builtinModelTemplates(),
   limit = 20,
+  scope?: ModelTemplateScope,
 ): ModelTemplateMatch[] {
-  if (!modelId.trim()) return templates.slice(0, limit).map(template => ({ score: 0, template }));
-  return templates
+  const available = scope ? filterModelTemplatesForScope(templates, scope) : templates;
+  if (!modelId.trim()) return available.slice(0, limit).map(template => ({ score: 0, template }));
+  return available
     .map(template => ({ score: matchScore(modelId, template), template }))
     .filter(match => match.score >= 0.66)
-    .sort((left, right) => right.score - left.score || left.template.name.localeCompare(right.template.name, 'zh-CN'))
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        Number(right.template.interfaceType !== undefined) - Number(left.template.interfaceType !== undefined) ||
+        left.template.name.localeCompare(right.template.name, 'zh-CN'),
+    )
     .slice(0, limit);
+}
+
+export function filterModelTemplatesForScope(
+  templates: ModelTemplate[],
+  scope: ModelTemplateScope,
+): ModelTemplate[] {
+  return templates.filter(template => {
+    if (template.interfaceType === undefined && template.compatibilityMode === undefined) return true;
+    return template.interfaceType === scope.interfaceType && template.compatibilityMode === scope.compatibilityMode;
+  });
 }
 
 function modalitySupportsText(model: Record<string, unknown>): boolean {
@@ -318,4 +359,21 @@ export async function fetchModelsDevCatalog(signal?: AbortSignal): Promise<Model
 
 export function templateSettings(template: ModelTemplate): ModelSettings {
   return normalizeModelSettings(template.settings);
+}
+
+/** 云端聚合目录只补充协议无关的可靠字段，不能覆盖推理档位、原生联网与采样细节。 */
+export function settingsForAppliedTemplate(template: ModelTemplate, current: ModelSettings): ModelSettings {
+  const next = templateSettings(template);
+  if (template.source !== 'cloud') return next;
+  const preserved = normalizeModelSettings(current);
+  return {
+    ...preserved,
+    capabilities: {
+      ...preserved.capabilities,
+      toolCalling: next.capabilities.toolCalling,
+      vision: next.capabilities.vision,
+    },
+    contextWindow: next.contextWindow,
+    maxOutputTokens: next.maxOutputTokens,
+  };
 }

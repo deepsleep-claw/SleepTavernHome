@@ -4,6 +4,7 @@ import {
   ApiProfileRegistry,
   createApiProfile,
   listApiModels,
+  normalizeApiProfile,
   normalizeProviderFailure,
   updateApiProfile,
   withApiModel,
@@ -32,19 +33,21 @@ describe('encrypted API profiles', () => {
     const profile = await createApiProfile({
       apiKey: 'key',
       baseURL: ' http://localhost:3000/v1 ',
+      compatibilityMode: 'standard',
       headers: {},
+      interfaceType: 'openai-chat',
       model: ' model ',
       name: ' 本地 ',
-      protocol: 'openai-compatible',
     });
     expect(profile).toMatchObject({ baseURL: 'http://localhost:3000/v1', model: 'model', name: '本地' });
     const updated = await updateApiProfile(profile, {
       apiKey: 'new',
       baseURL: 'https://example.test',
+      compatibilityMode: 'deepseek',
       headers: { Authorization: 'custom' },
+      interfaceType: 'openai-chat',
       model: 'next',
       name: '远程',
-      protocol: 'openai-chat',
     });
     expect(updated.id).toBe(profile.id);
     const registry = new ApiProfileRegistry([profile]);
@@ -55,21 +58,46 @@ describe('encrypted API profiles', () => {
     expect(registry.get(profile.id)).toBeUndefined();
   });
 
+  it('旧协议字段只做确定性迁移，不根据模型名猜测兼容模式', async () => {
+    const current = await createApiProfile({
+      apiKey: 'key',
+      baseURL: 'https://example.test/v1',
+      compatibilityMode: 'standard',
+      interfaceType: 'openai-chat',
+      model: 'deepseek-v4-flash',
+      name: '旧配置',
+    });
+    const legacy = {
+      ...current,
+      compatibilityMode: undefined,
+      interfaceType: undefined,
+      protocol: 'openai-compatible',
+    } as never;
+    expect(normalizeApiProfile(legacy)).toMatchObject({
+      compatibilityMode: 'standard',
+      interfaceType: 'openai-chat',
+      model: 'deepseek-v4-flash',
+    });
+    expect(normalizeApiProfile(legacy)).not.toHaveProperty('protocol');
+  });
+
   it('编辑已有Profile时留空Key和请求头会保留原凭据', async () => {
     const profile = await createApiProfile({
       apiKey: 'keep-key',
       baseURL: 'https://example.test/v1',
+      compatibilityMode: 'standard',
       headers: { 'X-Keep': 'header' },
+      interfaceType: 'openai-responses',
       model: 'old-model',
       name: '旧配置',
-      protocol: 'openai-responses',
     });
     const updated = await updateApiProfile(profile, {
       apiKey: '',
       baseURL: 'https://example.test/v2',
+      compatibilityMode: 'standard',
+      interfaceType: 'openai-responses',
       model: 'new-model',
       name: '新配置',
-      protocol: 'openai-responses',
     });
     await expect(decryptLocalPayload(updated.secrets)).resolves.toEqual({
       apiKey: 'keep-key',
@@ -81,10 +109,11 @@ describe('encrypted API profiles', () => {
     const profile = await createApiProfile({
       apiKey: 'key',
       baseURL: 'https://example.test/v1',
+      compatibilityMode: 'standard',
       headers: {},
+      interfaceType: 'openai-responses',
       model: 'model',
       name: 'test',
-      protocol: 'openai-responses',
     });
     const action = vi.fn(async model => model.modelId);
     await expect(withApiModel(profile, action)).resolves.toBe('model');
@@ -95,10 +124,11 @@ describe('encrypted API profiles', () => {
     const profile = await createApiProfile({
       apiKey: 'key',
       baseURL: 'https://example.test/v1',
+      compatibilityMode: 'standard',
       headers: { 'X-Custom': 'value' },
+      interfaceType: 'openai-responses',
       model: '',
       name: 'test',
-      protocol: 'openai-responses',
     });
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       data: [{ id: 'model-b' }, { id: 'model-a' }, { id: 'model-a' }],
@@ -116,9 +146,10 @@ describe('encrypted API profiles', () => {
     const profile = await createApiProfile({
       apiKey: 'key',
       baseURL: 'https://example.test/',
+      compatibilityMode: 'standard',
+      interfaceType: 'openai-responses',
       model: '',
       name: 'test',
-      protocol: 'openai-responses',
     });
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('<!doctype html>', { status: 200 }));
     await expect(listApiModels(profile)).rejects.toThrow('API版本根路径');
@@ -129,9 +160,10 @@ describe('encrypted API profiles', () => {
     const profile = await createApiProfile({
       apiKey: 'bad',
       baseURL: 'https://example.test/v1/',
+      compatibilityMode: 'standard',
+      interfaceType: 'anthropic',
       model: '',
       name: 'test',
-      protocol: 'anthropic',
     });
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('', { status: 401 }));
     await expect(listApiModels(profile)).rejects.toMatchObject({ statusCode: 401 });

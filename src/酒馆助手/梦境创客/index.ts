@@ -239,7 +239,12 @@ $(() => {
     $(`#${FLOATING_BUTTON_ID}, #${WAND_CONTAINER_ID}, #dream-card-agent-window`).remove();
   }
   checkMinimumVersion('4.0.0', DREAM_CARD_AGENT_NAME);
-  createProbeModel({ apiKey: '', baseURL: 'https://example.invalid/v1', model: 'probe', protocol: 'openai-responses' });
+  createProbeModel({
+    apiKey: '',
+    baseURL: 'https://example.invalid/v1',
+    interfaceType: 'openai-responses',
+    model: 'probe',
+  });
   const runtime = getDreamCardAgentRuntime();
   const style = teleportStyle();
   const floating = mountFloatingButton(owner);

@@ -68,10 +68,11 @@ async function addProfile(runtime: DreamCardAgentRuntime): Promise<void> {
   await runtime.saveProfile({
     apiKey: 'secret',
     baseURL: 'https://example.invalid/v1',
+    compatibilityMode: 'standard',
     headers: {},
+    interfaceType: 'openai-chat',
     model: 'model',
     name: '本地接口',
-    protocol: 'openai-chat',
   });
 }
 

@@ -1,5 +1,11 @@
 import type { LanguageModel } from 'ai';
-import { createProviderRuntime, type ProviderProtocol, type ProviderRuntime } from '../provider-probe';
+import {
+  createProviderRuntime,
+  type LegacyProviderProtocol,
+  type ProviderCompatibilityMode,
+  type ProviderInterfaceType,
+  type ProviderRuntime,
+} from '../provider-probe';
 import { decryptLocalPayload, encryptLocalPayload, type EncryptedPayload } from './crypto';
 import {
   defaultModelSettings,
@@ -16,12 +22,19 @@ export type ApiSecrets = {
 export type ApiProfile = {
   appliedModelTemplate?: AppliedModelTemplate;
   baseURL: string;
+  compatibilityMode: ProviderCompatibilityMode;
   id: string;
+  interfaceType: ProviderInterfaceType;
   model: string;
   modelSettings: ModelSettings;
   name: string;
-  protocol: ProviderProtocol;
   secrets: EncryptedPayload;
+};
+
+type LegacyApiProfile = Omit<ApiProfile, 'compatibilityMode' | 'interfaceType'> & {
+  compatibilityMode?: ProviderCompatibilityMode;
+  interfaceType?: ProviderInterfaceType;
+  protocol?: LegacyProviderProtocol;
 };
 
 export type ApiProfileInput = Omit<ApiProfile, 'appliedModelTemplate' | 'id' | 'modelSettings' | 'secrets'> & {
@@ -36,11 +49,12 @@ export async function createApiProfile(input: ApiProfileInput): Promise<ApiProfi
   return {
     appliedModelTemplate: input.appliedModelTemplate ? structuredClone(input.appliedModelTemplate) : undefined,
     baseURL: input.baseURL.trim(),
+    compatibilityMode: input.compatibilityMode,
     id: input.id ?? crypto.randomUUID(),
+    interfaceType: input.interfaceType,
     model: input.model.trim(),
     modelSettings: normalizeModelSettings(input.modelSettings ?? defaultModelSettings()),
     name: input.name.trim(),
-    protocol: input.protocol,
     secrets: await encryptLocalPayload({ apiKey: input.apiKey ?? '', headers: input.headers ?? {} }),
   };
 }
@@ -68,10 +82,17 @@ export async function updateApiProfile(profile: ApiProfile, input: ApiProfileInp
   }
 }
 
-export function normalizeApiProfile(profile: ApiProfile): ApiProfile {
+export function normalizeApiProfile(profile: ApiProfile | LegacyApiProfile): ApiProfile {
+  const legacyProtocol = (profile as LegacyApiProfile).protocol;
+  const interfaceType =
+    profile.interfaceType ?? (legacyProtocol === 'openai-compatible' ? 'openai-chat' : legacyProtocol) ?? 'openai-chat';
+  const normalized = structuredClone(profile) as LegacyApiProfile & { protocol?: LegacyProviderProtocol };
+  delete normalized.protocol;
   return {
-    ...structuredClone(profile),
+    ...normalized,
     appliedModelTemplate: profile.appliedModelTemplate ? structuredClone(profile.appliedModelTemplate) : undefined,
+    compatibilityMode: profile.compatibilityMode === 'deepseek' ? 'deepseek' : 'standard',
+    interfaceType,
     modelSettings: normalizeModelSettings(profile.modelSettings ?? defaultModelSettings()),
   };
 }
@@ -91,9 +112,10 @@ export async function withApiRuntime<T>(
       {
         apiKey: secrets.apiKey,
         baseURL: profile.baseURL,
+        compatibilityMode: profile.compatibilityMode,
         headers: secrets.headers,
+        interfaceType: profile.interfaceType,
         model: profile.model,
-        protocol: profile.protocol,
       },
       webSearchMaxUses,
     );
@@ -111,7 +133,7 @@ export async function listApiModels(profile: ApiProfile): Promise<string[]> {
   const secrets = await decryptLocalPayload<ApiSecrets>(profile.secrets);
   try {
     const headers = new Headers(secrets.headers);
-    if (profile.protocol === 'anthropic') {
+    if (profile.interfaceType === 'anthropic') {
       if (!headers.has('x-api-key')) headers.set('x-api-key', secrets.apiKey);
       if (!headers.has('anthropic-version')) headers.set('anthropic-version', '2023-06-01');
     } else if (!headers.has('authorization')) {

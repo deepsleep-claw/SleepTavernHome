@@ -1,4 +1,6 @@
 revision: "2026-08-10"
+interfaceType: openai-chat
+compatibilityMode: standard
 models:
   - id: google:gemini-3.6-flash
     name: Gemini 3.6 Flash

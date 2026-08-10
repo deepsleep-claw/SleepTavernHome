@@ -1,4 +1,6 @@
 revision: "2026-08-10"
+interfaceType: openai-chat
+compatibilityMode: standard
 models:
   - id: stepfun:step-3
     name: Step 3 / 3.5 系列

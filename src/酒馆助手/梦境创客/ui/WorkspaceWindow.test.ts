@@ -85,7 +85,14 @@ const mock = vi.hoisted(() => {
     loadedSessionIds: ['session-1'],
     onboardingDone: true,
     profiles: [
-      { baseURL: 'http://localhost/v1', id: 'profile', model: 'model', name: '本地', protocol: 'openai-chat' },
+      {
+        baseURL: 'http://localhost/v1',
+        compatibilityMode: 'standard',
+        id: 'profile',
+        interfaceType: 'openai-chat',
+        model: 'model',
+        name: '本地',
+      },
     ],
     presetProfiles: [
       {

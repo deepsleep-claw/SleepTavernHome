@@ -4,6 +4,7 @@ import {
   defaultModelSettings,
   matchModelTemplates,
   parseModelsDevCatalog,
+  settingsForAppliedTemplate,
   templateSettings,
 } from './model-catalog';
 
@@ -19,6 +20,22 @@ describe('model catalog', () => {
   it('支持显式Glob和低门槛模糊候选，但不会为无关ID硬匹配', () => {
     expect(matchModelTemplates('openai/gpt-5.6-sol-2026-08-01')[0]?.template.id).toBe('openai:gpt-5.6-sol');
     expect(matchModelTemplates('totally-unrelated-model')).toEqual([]);
+  });
+
+  it('模型模板按接口格式与兼容模式隔离，切换渠道不会串用模板', () => {
+    const templates = builtinModelTemplates();
+    expect(matchModelTemplates('deepseek-v4-flash', templates, 1, {
+      compatibilityMode: 'deepseek',
+      interfaceType: 'openai-responses',
+    })[0]?.template.id).toBe('deepseek:responses:v4-flash');
+    expect(matchModelTemplates('deepseek-v4-flash', templates, 1, {
+      compatibilityMode: 'deepseek',
+      interfaceType: 'anthropic',
+    })[0]?.template.id).toBe('deepseek:anthropic:v4-flash');
+    expect(matchModelTemplates('deepseek-v4-flash', templates, 1, {
+      compatibilityMode: 'standard',
+      interfaceType: 'openai-chat',
+    })).toEqual([]);
   });
 
   it('解析models.dev目录并排除非文本生成模型', () => {
@@ -57,5 +74,37 @@ describe('model catalog', () => {
     expect(defaults.contextWindow).toBe(0);
     const template = builtinModelTemplates()[0];
     expect(templateSettings(template)).not.toBe(template.settings);
+  });
+
+  it('云端补充只应用协议无关字段，不覆盖推理档位、联网与采样设置', () => {
+    const cloud = parseModelsDevCatalog({
+      vendor: {
+        models: {
+          model: {
+            limit: { context: 200_000, output: 16_000 },
+            modalities: { input: ['text', 'image'], output: ['text'] },
+            reasoning: true,
+            reasoning_options: [{ type: 'effort', values: ['low'] }],
+            tool_call: true,
+          },
+        },
+      },
+    })[0];
+    const applied = settingsForAppliedTemplate(cloud, {
+      capabilities: { reasoning: 'disabled', toolCalling: 'auto', vision: 'auto', webSearch: 'enabled' },
+      contextWindow: 0,
+      maxOutputTokens: 0,
+      reasoningEfforts: [{ id: 'custom', name: '自定义' }],
+      temperature: 0.7,
+      topP: 0.8,
+    });
+    expect(applied).toMatchObject({
+      capabilities: { reasoning: 'disabled', toolCalling: 'enabled', vision: 'enabled', webSearch: 'enabled' },
+      contextWindow: 200_000,
+      maxOutputTokens: 16_000,
+      reasoningEfforts: [{ id: 'custom', name: '自定义' }],
+      temperature: 0.7,
+      topP: 0.8,
+    });
   });
 });

@@ -2,46 +2,93 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { streamText, type LanguageModel, type ModelMessage, type Tool } from 'ai';
+import { createDeepSeekResponsesFetch } from './provider/deepseek-responses-adapter';
 
-export type ProviderProtocol = 'anthropic' | 'openai-chat' | 'openai-compatible' | 'openai-responses';
+export type ProviderInterfaceType = 'anthropic' | 'openai-chat' | 'openai-responses';
+export type ProviderCompatibilityMode = 'deepseek' | 'standard';
+export type LegacyProviderProtocol = ProviderInterfaceType | 'openai-compatible';
+
+export type ProviderAdapterCapabilities = {
+  nativeWebSearch: boolean;
+  samplingIgnoredWhenReasoning: boolean;
+};
+
+export const CHAT_PROVIDER_OPTIONS_KEY = 'dreamCardAgentChat';
+
+const ADAPTER_CAPABILITIES: Record<
+  ProviderInterfaceType,
+  Record<ProviderCompatibilityMode, ProviderAdapterCapabilities>
+> = {
+  anthropic: {
+    deepseek: { nativeWebSearch: true, samplingIgnoredWhenReasoning: true },
+    standard: { nativeWebSearch: true, samplingIgnoredWhenReasoning: false },
+  },
+  'openai-chat': {
+    deepseek: { nativeWebSearch: false, samplingIgnoredWhenReasoning: true },
+    standard: { nativeWebSearch: false, samplingIgnoredWhenReasoning: false },
+  },
+  'openai-responses': {
+    deepseek: { nativeWebSearch: true, samplingIgnoredWhenReasoning: true },
+    standard: { nativeWebSearch: true, samplingIgnoredWhenReasoning: false },
+  },
+};
+
+export function providerAdapterCapabilities(
+  interfaceType: ProviderInterfaceType,
+  compatibilityMode: ProviderCompatibilityMode,
+): ProviderAdapterCapabilities {
+  return { ...ADAPTER_CAPABILITIES[interfaceType][compatibilityMode] };
+}
 
 export type ProviderProbeProfile = {
   apiKey: string;
   baseURL: string;
+  compatibilityMode?: ProviderCompatibilityMode;
   headers?: Record<string, string>;
+  interfaceType: ProviderInterfaceType;
   model: string;
-  protocol: ProviderProtocol;
 };
 
 export type ProviderRuntime = {
+  capabilities: ProviderAdapterCapabilities;
   model: LanguageModel;
   webSearchTool?: Tool;
 };
 
 export function createProviderRuntime(profile: ProviderProbeProfile, webSearchMaxUses = 10): ProviderRuntime {
+  const compatibilityMode = profile.compatibilityMode ?? 'standard';
+  const capabilities = providerAdapterCapabilities(profile.interfaceType, compatibilityMode);
   const options = {
     apiKey: profile.apiKey,
     baseURL: profile.baseURL,
     headers: profile.headers,
   };
 
-  switch (profile.protocol) {
+  switch (profile.interfaceType) {
     case 'anthropic': {
       const provider = createAnthropic(options);
       return {
+        capabilities,
         model: provider(profile.model),
-        webSearchTool: provider.tools.webSearch_20260209({ maxUses: webSearchMaxUses }),
+        webSearchTool: capabilities.nativeWebSearch
+          ? provider.tools.webSearch_20260209({ maxUses: webSearchMaxUses })
+          : undefined,
       };
     }
     case 'openai-chat': {
-      const provider = createOpenAI(options);
-      return { model: provider.chat(profile.model) };
+      const provider = createOpenAICompatible({ ...options, name: 'dream-card-agent-chat' });
+      return { capabilities, model: provider(profile.model) };
     }
-    case 'openai-compatible':
-      return { model: createOpenAICompatible({ ...options, name: 'dream-card-agent-compatible' })(profile.model) };
     case 'openai-responses': {
-      const provider = createOpenAI(options);
-      return { model: provider.responses(profile.model), webSearchTool: provider.tools.webSearch() };
+      const provider = createOpenAI({
+        ...options,
+        fetch: compatibilityMode === 'deepseek' ? createDeepSeekResponsesFetch() : undefined,
+      });
+      return {
+        capabilities,
+        model: provider.responses(profile.model),
+        webSearchTool: capabilities.nativeWebSearch ? provider.tools.webSearch() : undefined,
+      };
     }
   }
 }

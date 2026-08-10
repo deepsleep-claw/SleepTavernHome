@@ -59,6 +59,7 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { providerAdapterCapabilities } from '../../../core/provider-probe';
 import { useDreamCardAgent } from '../../composables/runtime';
 
 const { action, runtime, state } = useDreamCardAgent();
@@ -69,8 +70,11 @@ const activeProfile = computed(() => state.value.profiles.find(profile => profil
 const supportsWebSearch = computed(
   () =>
     Boolean(activeProfile.value) &&
-    ['anthropic', 'openai-responses'].includes(activeProfile.value!.protocol) &&
-    activeProfile.value?.modelSettings?.capabilities.webSearch !== 'disabled',
+    providerAdapterCapabilities(
+      activeProfile.value!.interfaceType,
+      activeProfile.value!.compatibilityMode,
+    ).nativeWebSearch &&
+    activeProfile.value?.modelSettings?.capabilities.webSearch === 'enabled',
 );
 const supportsReasoning = computed(
   () => Boolean(activeProfile.value) && activeProfile.value?.modelSettings?.capabilities.reasoning !== 'disabled',

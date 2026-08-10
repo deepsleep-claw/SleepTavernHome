@@ -1,5 +1,10 @@
 import { streamText, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
-import type { ProviderProtocol, ProviderRuntime } from '../provider-probe';
+import {
+  CHAT_PROVIDER_OPTIONS_KEY,
+  type ProviderCompatibilityMode,
+  type ProviderInterfaceType,
+  type ProviderRuntime,
+} from '../provider-probe';
 import { normalizeProviderFailure, withApiRuntime, type ApiProfile } from '../provider/profiles';
 import type { RunnerTool } from './tools';
 
@@ -21,8 +26,9 @@ export type ModelRequestControls = {
 };
 
 export type ModelRequestSettings = ModelRequestControls & {
+  compatibilityMode?: ProviderCompatibilityMode;
+  interfaceType?: ProviderInterfaceType;
   maxOutputTokens?: number;
-  protocol?: ProviderProtocol;
   temperature?: number;
   topP?: number;
   webSearchMaxUses?: number;
@@ -63,8 +69,23 @@ export function requestProviderOptions(
   settings?: ModelRequestSettings,
 ): Record<string, Record<string, unknown>> | undefined {
   const effort = reasoningEffort(settings);
-  switch (settings?.protocol) {
+  const mode = settings?.compatibilityMode ?? 'standard';
+  switch (settings?.interfaceType) {
     case 'anthropic':
+      if (mode === 'deepseek') {
+        return {
+          anthropic: {
+            effort: effort === 'none' ? undefined : effort,
+            sendReasoning: true,
+            thinking:
+              settings?.reasoningEffort === 'auto'
+                ? undefined
+                : effort === 'none'
+                  ? { type: 'disabled' }
+                  : { type: 'enabled' },
+          },
+        };
+      }
       return {
         anthropic: {
           effort: effort === 'none' ? undefined : effort,
@@ -78,10 +99,27 @@ export function requestProviderOptions(
         },
       };
     case 'openai-chat':
-      return effort ? { openai: { reasoningEffort: effort } } : undefined;
-    case 'openai-compatible':
-      return effort ? { dreamCardAgentCompatible: { reasoningEffort: effort } } : undefined;
+      if (mode === 'deepseek') {
+        if (settings?.reasoningEffort === 'auto') return undefined;
+        return {
+          [CHAT_PROVIDER_OPTIONS_KEY]: {
+            reasoningEffort: effort === 'none' ? undefined : effort,
+            thinking: { type: effort === 'none' ? 'disabled' : 'enabled' },
+          },
+        };
+      }
+      return effort ? { [CHAT_PROVIDER_OPTIONS_KEY]: { reasoningEffort: effort } } : undefined;
     case 'openai-responses':
+      if (mode === 'deepseek') {
+        return {
+          openai: {
+            forceReasoning: effort !== 'none',
+            metadata: effort === 'none' ? { dream_card_agent_reasoning_effort: 'none' } : undefined,
+            reasoningEffort: effort === 'none' ? undefined : effort,
+            store: false,
+          },
+        };
+      }
       return {
         openai: {
           include: ['reasoning.encrypted_content'],
@@ -112,9 +150,14 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
     const runtime: ProviderRuntime =
       typeof resolvedModel === 'object' && resolvedModel !== null && 'model' in resolvedModel
         ? resolvedModel
-        : { model: resolvedModel };
+        : {
+            capabilities: { nativeWebSearch: false, samplingIgnoredWhenReasoning: false },
+            model: resolvedModel,
+          };
     const entries: [string, ToolSet[string]][] = request.tools.map(item => [item.name, item.definition]);
-    if (request.modelSettings?.webSearch && runtime.webSearchTool) entries.push(['web_search', runtime.webSearchTool]);
+    if (request.modelSettings?.webSearch && runtime.capabilities.nativeWebSearch && runtime.webSearchTool) {
+      entries.push(['web_search', runtime.webSearchTool]);
+    }
     const tools = Object.fromEntries(entries) as ToolSet;
     let streamError: unknown;
     const result = streamText({
@@ -218,16 +261,22 @@ export class ProfileModelStepExecutor implements ModelStepExecutor {
   async execute(request: ModelStepRequest): Promise<ModelStepResult> {
     try {
       const modelSettings = this.profile.modelSettings;
+      const reasoningEffort = request.modelSettings?.reasoningEffort ?? 'auto';
+      const reasoningActive = reasoningEffort !== 'off';
+      const suppressSampling = this.profile.compatibilityMode === 'deepseek' && reasoningActive;
+      const webSearch =
+        request.modelSettings?.webSearch === true && modelSettings.capabilities.webSearch === 'enabled';
       return await withApiRuntime(this.profile, runtime =>
         new AiSdkModelStepExecutor(async () => runtime).execute({
           ...request,
           modelSettings: {
+            compatibilityMode: this.profile.compatibilityMode,
+            interfaceType: this.profile.interfaceType,
             maxOutputTokens: modelSettings.maxOutputTokens || undefined,
-            protocol: this.profile.protocol,
-            reasoningEffort: request.modelSettings?.reasoningEffort ?? 'auto',
-            temperature: modelSettings.temperature,
-            topP: modelSettings.topP,
-            webSearch: request.modelSettings?.webSearch === true,
+            reasoningEffort,
+            temperature: suppressSampling ? undefined : modelSettings.temperature,
+            topP: suppressSampling ? undefined : modelSettings.topP,
+            webSearch,
             webSearchMaxUses: request.modelSettings?.webSearchMaxUses,
           },
         }),

@@ -1,4 +1,6 @@
 revision: "2026-08-10"
+interfaceType: openai-chat
+compatibilityMode: standard
 models:
   - id: moonshot:kimi-k3
     name: Kimi K3

@@ -38,7 +38,8 @@ describe('AgentWindow', () => {
     const apiTab = [...root.querySelectorAll('button')].find(button => button.textContent?.trim() === 'API');
     apiTab?.click();
     await nextTick();
-    expect(root.textContent).toContain('接口类型只决定协议');
+    expect(root.textContent).toContain('接口格式决定请求结构');
+    expect(root.textContent).toContain('兼容模式');
     expect(root.textContent).toContain('获取模型');
     expect(root.textContent).not.toContain('保存（不测试连接）');
     expect([...root.querySelectorAll('button')].some(button => button.textContent?.trim() === '保存 Profile')).toBe(true);

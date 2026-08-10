@@ -1,4 +1,6 @@
 revision: "2026-08-10"
+interfaceType: openai-chat
+compatibilityMode: standard
 models:
   - id: xiaomi:mimo-v2
     name: MiMo-V2 系列
