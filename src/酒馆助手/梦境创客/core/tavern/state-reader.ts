@@ -99,12 +99,13 @@ function worldbookEntry(bookId: string, input: TavernWorldbookEntry): WorldbookE
   };
 }
 
-async function readWorldbook(
+export async function readStandaloneWorldbook(
   bridge: TavernBridge,
   name: string,
-  id: string,
-  writable: boolean,
+  options: { resourceId?: string; writable?: boolean } = {},
 ): Promise<WorldbookData> {
+  const id = options.resourceId ?? `worldbook:${await shortHash(name)}`;
+  const writable = options.writable ?? true;
   try {
     const entries = await bridge.getWorldbook(name);
     return {
@@ -167,7 +168,10 @@ export async function readTavernState(bridge: TavernBridge): Promise<TavernState
   const worldbooks = await Promise.all(
     allNames.map(async worldbookName => {
       const id = storedBookIds.get(worldbookName) ?? `worldbook:${await shortHash(worldbookName)}`;
-      return readWorldbook(bridge, worldbookName, id, !globalNames.includes(worldbookName));
+      return readStandaloneWorldbook(bridge, worldbookName, {
+        resourceId: id,
+        writable: !globalNames.includes(worldbookName),
+      });
     }),
   );
   const warnings = worldbooks

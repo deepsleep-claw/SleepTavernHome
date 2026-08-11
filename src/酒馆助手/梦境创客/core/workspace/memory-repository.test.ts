@@ -115,6 +115,56 @@ describe('MemoryWorkspaceRepository', () => {
     expect(result.matches[0].text).toBe('a+b');
   });
 
+  it('替换外部投影时不产生Working Copy变更', async () => {
+    const workspace = new MemoryWorkspaceRepository({ files });
+    workspace.replaceProjection('/library/worldbooks/资料', [
+      {
+        content: 'name: 资料',
+        mediaType: 'text/yaml',
+        path: '/library/worldbooks/资料/book.yaml',
+        readonly: true,
+        resourceId: 'reference:book',
+      },
+    ]);
+    expect((await workspace.read('/library/worldbooks/资料/book.yaml')).content).toBe('name: 资料');
+    expect(workspace.changes()).toEqual([]);
+
+    workspace.replaceProjection('/library/worldbooks/资料', []);
+    await expect(workspace.read('/library/worldbooks/资料/book.yaml')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(workspace.changes()).toEqual([]);
+  });
+
+  it('批量建立文件时保持原子性与工具调用幂等', async () => {
+    const workspace = new MemoryWorkspaceRepository({ files });
+    const staged: WorkspaceFile[] = [
+      {
+        content: 'name: 新世界',
+        mediaType: 'text/yaml',
+        path: '/worldbooks/新世界/book.yaml',
+        readonly: false,
+        resourceId: 'new:book',
+      },
+      {
+        content: '正文',
+        mediaType: 'text/markdown',
+        path: '/worldbooks/新世界/entries/0001.md',
+        readonly: false,
+        resourceId: 'new:entry',
+      },
+    ];
+    await workspace.stageFiles(staged, 'stage-worldbook');
+    await workspace.stageFiles(staged, 'stage-worldbook');
+    expect(workspace.changes().filter(change => change.path.startsWith('/worldbooks/新世界'))).toHaveLength(2);
+
+    await expect(
+      workspace.stageFiles(
+        [staged[0], { ...staged[1], path: '/worldbooks/另一本/entry.md' }],
+        'stage-conflict',
+      ),
+    ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+    await expect(workspace.read('/worldbooks/另一本/entry.md')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
   it('记录创建、修改和删除，并返回不可外部篡改的快照', async () => {
     const workspace = new MemoryWorkspaceRepository({ files });
     await workspace.write('/character/description.md', '改写', 'modify');

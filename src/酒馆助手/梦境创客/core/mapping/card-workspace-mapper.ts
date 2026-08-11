@@ -49,8 +49,9 @@ function file(
   return { content, mediaType, path: normalizeWorkspacePath(path), readonly, resourceId };
 }
 
-function worldbookDirectory(name: string, readonly: boolean): string {
-  return `${readonly ? '/worldbooks-global-readonly' : '/worldbooks'}/${encodeWorkspaceSegment(name)}`;
+function worldbookDirectory(name: string, readonly: boolean, root?: string): string {
+  const base = root ? normalizeWorkspacePath(root) : readonly ? '/worldbooks-global-readonly' : '/worldbooks';
+  return `${base}/${encodeWorkspaceSegment(name)}`;
 }
 
 function entryFileName(entry: WorldbookEntryData, index: number): string {
@@ -80,8 +81,12 @@ function entryMetadata(entry: WorldbookEntryData): Record<string, unknown> {
   };
 }
 
-function projectWorldbook(book: WorldbookData, readonly: boolean): WorkspaceFile[] {
-  const directory = worldbookDirectory(book.name, readonly);
+export function projectWorldbookFiles(
+  book: WorldbookData,
+  options: { readonly?: boolean; root?: string } = {},
+): WorkspaceFile[] {
+  const readonly = options.readonly ?? false;
+  const directory = worldbookDirectory(book.name, readonly, options.root);
   const files = [
     file(
       `${directory}/book.yaml`,
@@ -191,7 +196,7 @@ export function projectCardWorkspace(
   const globalNames = new Set(state.globalWorldbookNames);
   for (const book of state.worldbooks) {
     const readonly = !book.writable || !book.roundTripSafe || globalNames.has(book.name);
-    files.push(...projectWorldbook(book, readonly));
+    files.push(...projectWorldbookFiles(book, { readonly }));
   }
   files.push(...projectTavernResources(state.resources, resourceOptions));
   files.push(...projectChat(state.chat, chatPageSize));

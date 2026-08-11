@@ -190,6 +190,49 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
     return [...this.current.values()].map(cloneFile).sort((left, right) => left.path.localeCompare(right.path));
   }
 
+  /**
+   * 用最新的外部投影替换一个目录，同时更新Base与Working Copy。
+   * 适用于聊天、只读资料库等不应进入角色卡Diff的实时视图。
+   */
+  replaceProjection(inputRoot: string, inputs: WorkspaceFile[]): void {
+    const root = normalizeWorkspacePath(inputRoot);
+    if (root === '/') throw new WorkspaceError('INVALID_PATH', '不能替换整个工作区投影。', root);
+    const files = inputs.map(input => {
+      const path = normalizeWorkspacePath(input.path);
+      if (!isSameOrDescendant(path, root)) {
+        throw new WorkspaceError('INVALID_PATH', `投影文件超出目标目录：${path}`, path);
+      }
+      return { ...cloneFile(input), path };
+    });
+    for (const path of [...this.base.keys()]) {
+      if (isSameOrDescendant(path, root)) this.base.delete(path);
+    }
+    for (const path of [...this.current.keys()]) {
+      if (isSameOrDescendant(path, root)) this.current.delete(path);
+    }
+    for (const input of files) {
+      this.base.set(input.path, cloneFile(input));
+      this.current.set(input.path, cloneFile(input));
+    }
+    for (const [path, from] of [...this.movedFrom]) {
+      if (isSameOrDescendant(path, root) || isSameOrDescendant(from, root)) this.movedFrom.delete(path);
+    }
+  }
+
+  /** 一次性建立一组Working Copy文件；整组共享同一个幂等工具调用。 */
+  async stageFiles(inputs: WorkspaceFile[], toolCallId: string): Promise<void> {
+    await this.once(toolCallId, () => {
+      const files = inputs.map(input => {
+        const path = normalizeWorkspacePath(input.path);
+        const existing = this.current.get(path);
+        this.assertWritable(path, existing);
+        if (existing) throw new WorkspaceError('ALREADY_EXISTS', `文件已经存在：${path}`, path);
+        return { ...cloneFile(input), path };
+      });
+      for (const input of files) this.current.set(input.path, input);
+    });
+  }
+
   changes(): WorkspaceChange[] {
     const changes: WorkspaceChange[] = [];
     for (const [path, before] of this.base) {

@@ -151,6 +151,10 @@ export class FakeTavernBridge implements TavernBridge {
     return this.loadedPresetName;
   }
 
+  getWorldbookNames(): string[] {
+    return [...this.books.keys()].sort((left, right) => left.localeCompare(right));
+  }
+
   listCharacters() {
     return this.characters.map((character, index) => ({ avatarId: character.avatar, index, name: character.name }));
   }

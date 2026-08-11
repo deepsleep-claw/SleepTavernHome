@@ -13,9 +13,11 @@ import { measureContext } from '../runner/context';
 import { recoverPendingRunnerStep } from '../runner/recovery';
 import type { ModelStepExecutor } from '../runner/step-executor';
 import { createWorkspaceRunnerTools, type ToolConfirmation } from '../runner/tools';
+import { createWorldbookRunnerTools } from '../runner/worldbook-tools';
 import { materializeUserSkills, projectSkills } from '../skills/skill-registry';
 import type { AgentSkill } from '../skills/types';
 import type { CardStateAdapter } from '../transaction/adapter';
+import type { TavernBridge } from '../tavern/bridge';
 import { canonicalEqual, canonicalStringify } from '../transaction/canonical';
 import { commitWorkingCopy } from '../transaction/commit';
 import { defaultApprovals, prepareThreeWayMerge, type ApprovalDecision } from '../transaction/merge';
@@ -65,6 +67,7 @@ type SessionServiceOptions = {
   sessionId?: string;
   skills?: AgentSkill[];
   snapshots: ContentAddressedSnapshotStore;
+  tavernBridge?: TavernBridge;
   attachmentStore?: SessionAttachmentStore;
   title?: string;
   workspaceFiles?: WorkspaceFile[];
@@ -241,6 +244,7 @@ export class CardAgentSessionService {
   private readonly requestToolApproval?: SessionServiceOptions['requestToolApproval'];
   private readonly scheduleStreamingUpdate: (callback: () => void) => () => void;
   private readonly snapshots: ContentAddressedSnapshotStore;
+  private readonly tavernBridge?: TavernBridge;
   private storageBaseFiles: WorkspaceFile[] = [];
   private storageFiles: WorkspaceFile[] = [];
   private readonly workspaceStore?: DreamCreatorWorkspaceFileStore;
@@ -309,6 +313,7 @@ export class CardAgentSessionService {
     this.sessionId = restored?.runtime.sessionId ?? options.sessionId ?? crypto.randomUUID();
     this.skills = klona(restored?.runtime.skills ?? options.skills ?? []);
     this.snapshots = options.snapshots;
+    this.tavernBridge = options.tavernBridge;
     this.workspaceStore = options.workspaceStore;
     this.storageFiles = klona(options.workspaceFiles ?? []);
     this.timeline = new HistoryTimeline({
@@ -952,11 +957,21 @@ export class CardAgentSessionService {
       prepareMessages: this.attachmentStore
         ? messages => this.attachmentStore!.prepareMessages(this.sessionId, messages)
         : undefined,
-      tools: createWorkspaceRunnerTools(
-        this.repository,
-        this.skills.map(skill => skill.id),
-        { canWriteNonCharacterResources: this.canWriteNonCharacterResources },
-      ),
+      tools: [
+        ...createWorkspaceRunnerTools(
+          this.repository,
+          this.skills.map(skill => skill.id),
+          { canWriteNonCharacterResources: this.canWriteNonCharacterResources },
+        ),
+        ...(this.tavernBridge
+          ? createWorldbookRunnerTools(this.repository, this.tavernBridge, {
+              getBaseState: () => {
+                if (!this.activeBase) throw new Error('当前没有正在运行的Working Copy。');
+                return this.activeBase;
+              },
+            })
+          : []),
+      ],
     });
   }
 

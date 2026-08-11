@@ -76,6 +76,7 @@ export interface TavernBridge {
   getGlobalWorldbooks(): string[];
   getGroupId(): string;
   getLoadedPresetName(): string;
+  getWorldbookNames(): string[];
   listCharacters(): TavernCharacterSummary[];
   getRawCharacter(): RawCharacterData | null;
   getRawRegexes(scope: TavernResourceScope): RawTavernRegex[];
@@ -168,6 +169,7 @@ export function createGlobalTavernBridge(): TavernBridge {
     getGlobalWorldbooks: () => getGlobalWorldbookNames(),
     getGroupId: () => (typeof SillyTavern === 'undefined' ? '' : SillyTavern.groupId),
     getLoadedPresetName: () => getLoadedPresetName(),
+    getWorldbookNames: () => getWorldbookNames(),
     listCharacters: () =>
       (typeof SillyTavern === 'undefined' ? [] : (SillyTavern.characters ?? [])).map((character, index) => ({
         avatarId: String(character.avatar ?? ''),
