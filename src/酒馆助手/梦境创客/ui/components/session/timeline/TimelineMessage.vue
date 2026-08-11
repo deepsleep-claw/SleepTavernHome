@@ -31,8 +31,14 @@
     <!-- eslint-enable vue/no-v-html -->
     <p v-else-if="!editing && item.content">{{ cleanGuidance(item.content) }}</p>
     <footer v-if="item.kind === 'user' && !editing && state.activeSessionAccess === 'live'" class="dca-message-actions">
-      <button type="button" @click="undoTo">回退本轮修改</button>
-      <button class="dca-icon-btn" type="button" title="编辑并可重新发送" @click="beginEdit">
+      <button type="button" :disabled="!canModifyHistory" @click="undoTo">回退本轮修改</button>
+      <button
+        class="dca-icon-btn"
+        type="button"
+        title="编辑并可重新发送"
+        :disabled="!canModifyHistory"
+        @click="beginEdit"
+      >
         <i class="fa-solid fa-pencil" aria-hidden="true"></i>
       </button>
       <button type="button" :disabled="!canSend" @click="resend">重新发送</button>
@@ -55,6 +61,15 @@ const { action, runtime, state } = useDreamCardAgent();
 
 const editing = ref(false);
 const editDraft = ref('');
+
+const canModifyHistory = computed(() =>
+  Boolean(
+    state.value.active &&
+    !state.value.busy &&
+    !state.value.active.approval &&
+    !['awaiting-approval', 'committing', 'running', 'waiting-approval'].includes(state.value.active.status),
+  ),
+);
 
 const canSend = computed(() =>
   Boolean(

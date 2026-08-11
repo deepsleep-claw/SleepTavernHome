@@ -712,18 +712,27 @@ export class CardAgentSessionService {
   }
 
   async undo(): Promise<SessionView> {
+    this.assertHistoryRestoreAllowed();
     await this.finalizeManualEdits();
     return this.restore('undo');
   }
 
   async undoToUserMessage(messageId: string): Promise<SessionView> {
+    this.assertHistoryRestoreAllowed();
     await this.finalizeManualEdits();
+    const previous = this.timeline.export();
     const restore = this.timeline.undoToUserMessage(messageId);
     if (!restore) throw new Error('该消息当前不能回退。');
-    return this.restoreSnapshot(restore);
+    try {
+      return await this.restoreSnapshot(restore);
+    } catch (error) {
+      this.timeline = new HistoryTimeline({ ...previous, now: this.now });
+      throw error;
+    }
   }
 
   async redo(): Promise<SessionView> {
+    this.assertHistoryRestoreAllowed();
     await this.finalizeManualEdits();
     return this.restore('redo');
   }
@@ -1398,12 +1407,27 @@ export class CardAgentSessionService {
   }
 
   private async restore(direction: 'redo' | 'undo'): Promise<SessionView> {
-    if (this.pending || ['running', 'waiting-approval', 'committing'].includes(this.status)) {
-      throw new Error('运行或审批期间不能回退历史。');
-    }
+    this.assertHistoryRestoreAllowed();
+    const previous = this.timeline.export();
     const restore = direction === 'undo' ? this.timeline.undo() : this.timeline.redo();
     if (!restore) throw new Error(direction === 'undo' ? '没有可回退的修改。' : '没有可重做的修改。');
-    return this.restoreSnapshot(restore);
+    try {
+      return await this.restoreSnapshot(restore);
+    } catch (error) {
+      this.timeline = new HistoryTimeline({ ...previous, now: this.now });
+      throw error;
+    }
+  }
+
+  private assertHistoryRestoreAllowed(): void {
+    const runnerActive = this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status);
+    if (
+      this.pending ||
+      runnerActive ||
+      ['awaiting-approval', 'committing', 'running', 'waiting-approval'].includes(this.status)
+    ) {
+      throw new Error('运行或审批期间不能回退历史。');
+    }
   }
 
   private async restoreSnapshot(restore: { checkpointId: string; snapshot: string }): Promise<SessionView> {

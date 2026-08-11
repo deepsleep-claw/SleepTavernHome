@@ -610,6 +610,40 @@ describe('card agent session service', () => {
     expect(onUpdate.mock.calls.length).toBeGreaterThan(updatesBeforeStreamingPublish + 1);
   });
 
+  it('运行中拒绝回退用户消息，并保留原Runner供停止操作', async () => {
+    let started!: () => void;
+    const startedPromise = new Promise<void>(resolve => {
+      started = resolve;
+    });
+    const executor = new QueueExecutor([
+      request =>
+        new Promise<ModelStepResult>((_resolve, reject) => {
+          request.abortSignal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          started();
+        }),
+    ]);
+    const service = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      executor,
+      lock: new GlobalAgentTaskLock(),
+      mode: 'yolo',
+      snapshots: snapshots(),
+    });
+
+    const running = service.send('保持运行直到停止', 'running-user');
+    await startedPromise;
+    await vi.waitFor(() => expect(service.view().status).toBe('running'));
+
+    await expect(service.undoToUserMessage('running-user')).rejects.toThrow('运行或审批期间不能回退历史');
+    expect(service.view().status).toBe('running');
+
+    service.stop();
+    const stopped = await running;
+    expect(stopped.status).toBe('completed');
+    expect(stopped.ui.every(item => item.status !== 'running')).toBe(true);
+    expect((await service.undoToUserMessage('running-user')).status).toBe('completed');
+  });
+
   it('构建一次视图只读取一次非角色资源写入权限', async () => {
     const canWriteNonCharacterResources = vi.fn(() => false);
     const service = await CardAgentSessionService.create({
