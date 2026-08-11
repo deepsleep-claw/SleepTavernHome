@@ -23,7 +23,7 @@ import {
   type FloatingButtonOffset,
   type SessionIndexEntry,
 } from '../core/persistence/settings';
-import { cloneStructuredPreset, compilePreset, type StructuredPreset } from '../core/preset/compiler';
+import { cloneStructuredPreset, compilePreset, DEFAULT_PRESET, type StructuredPreset } from '../core/preset/compiler';
 import { DEFAULT_CONTEXT_WINDOW } from '../core/provider/model-catalog';
 import {
   ApiProfileRegistry,
@@ -489,7 +489,18 @@ export class DreamCardAgentRuntime {
         throw new Error('当前API Profile明确标记为不支持视觉，无法发送图片附件。');
       }
       await this.reloadSkills();
-      await service.setSkills(this.state.skills);
+      const sessionConfiguration = this.settingsStore
+        .load()
+        .agentConfigurations.find(configuration => configuration.id === service.view().agentConfiguration.id);
+      if (sessionConfiguration) {
+        await service.syncAgentConfiguration(
+          klona(sessionConfiguration),
+          this.selectedPreset(sessionConfiguration.presetId),
+          this.state.skills,
+        );
+      } else {
+        await service.setSkills(this.state.skills);
+      }
       return service.send(message, undefined, attachments);
     });
   }
@@ -716,6 +727,10 @@ export class DreamCardAgentRuntime {
     return saved;
   }
 
+  async loadGlobalSkill(id: string): Promise<AgentSkill> {
+    return this.globalSkillStore.load(id);
+  }
+
   async removeGlobalSkill(id: string): Promise<void> {
     await this.run(async () => {
       await this.globalSkillStore.remove(id);
@@ -799,6 +814,7 @@ export class DreamCardAgentRuntime {
   }
 
   async savePresetProfile(input: StructuredPreset): Promise<StructuredPreset> {
+    if (input.id === DEFAULT_PRESET.id) throw new Error('内置预设不可编辑，请先另存为新的Profile。');
     const name = input.name.trim();
     if (!name) throw new Error('预设名称不能为空。');
     if (input.nodes.length === 0) throw new Error('预设至少需要一个节点。');
@@ -826,7 +842,15 @@ export class DreamCardAgentRuntime {
       name,
       version: existing ? Math.max(existing.version + 1, input.version) : Math.max(1, input.version),
     });
-    await compilePreset(preset, defaultPresetValues(this.state.skills));
+    const activeConfiguration = settings.agentConfigurations.find(
+      configuration => configuration.id === settings.activeAgentConfigurationId,
+    );
+    await compilePreset(
+      preset,
+      defaultPresetValues(
+        activeConfiguration ? this.skillsForConfiguration(activeConfiguration) : this.state.skills,
+      ),
+    );
     const index = settings.presetProfiles.findIndex(item => item.id === preset.id);
     if (index >= 0) settings.presetProfiles[index] = preset;
     else settings.presetProfiles.push(preset);
@@ -845,6 +869,7 @@ export class DreamCardAgentRuntime {
   }
 
   async removePresetProfile(id: string): Promise<void> {
+    if (id === DEFAULT_PRESET.id) throw new Error('内置预设不可删除。');
     const settings = this.settingsStore.load();
     const usedBy = settings.agentConfigurations.filter(configuration => configuration.presetId === id);
     if (usedBy.length) {
@@ -1245,7 +1270,14 @@ export class DreamCardAgentRuntime {
   private currentSkillIndexSignature(): string {
     return JSON.stringify(
       Object.values(this.settingsStore.load().globalSkills)
-        .map(skill => [skill.id, skill.revision, skill.url])
+        .map(skill => [
+          skill.id,
+          skill.revision,
+          skill.url,
+          Object.values(skill.files ?? {})
+            .map(file => [file.path, file.sha256, file.url])
+            .sort((left, right) => String(left[0]).localeCompare(String(right[0]))),
+        ])
         .sort((left, right) => String(left[0]).localeCompare(String(right[0]))),
     );
   }

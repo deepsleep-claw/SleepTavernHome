@@ -21,14 +21,14 @@ export function parseBuiltinSkillSource(source: string, path = BUILTIN_SKILL_PAT
     throw new WorkspaceError('INVALID_PATCH', `内置Skill正文不能为空：${path}`, path);
   }
   return {
-    assets: {},
     body,
     builtin: true,
     description: requiredString(metadata.description, 'description', path),
+    directories: [],
     id: requiredString(metadata.id, 'id', path),
     loading: metadata.loading,
     name: requiredString(metadata.name, 'name', path),
-    references: {},
+    resources: {},
   };
 }
 

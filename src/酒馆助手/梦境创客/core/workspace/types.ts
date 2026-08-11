@@ -21,6 +21,11 @@ export type WorkspaceFile = {
   path: string;
   readonly: boolean;
   resourceId: string;
+  /** Skill二进制资源只投影元信息；内容由全局Skill存储保管。 */
+  skillResource?: {
+    sha256: string;
+    size: number;
+  };
 };
 
 export type SearchQuery = {
@@ -72,7 +77,7 @@ export interface WorkspaceRepository {
 }
 
 export function isBinaryWorkspaceFile(file: WorkspaceFile): boolean {
-  return Boolean(file.external && !file.mediaType.startsWith('text/'));
+  return Boolean((file.external || file.skillResource) && !file.mediaType.startsWith('text/'));
 }
 
 export class WorkspaceError extends Error {

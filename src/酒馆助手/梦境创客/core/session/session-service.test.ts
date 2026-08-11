@@ -5,6 +5,8 @@ import { ContentAddressedSnapshotStore } from '../history/snapshot-store';
 import { MemoryTavernFileClient } from '../persistence/file-client';
 import { MemoryAgentSettingsStore } from '../persistence/settings';
 import { DreamCreatorWorkspaceFileStore } from '../persistence/workspace-file-store';
+import type { StructuredPreset } from '../preset/compiler';
+import type { AgentSkill } from '../skills/types';
 import { FakeTavernChatBridge } from '../tavern/chat-bridge';
 import type { PersistedSessionRuntime } from './types';
 import { MemoryCardStateAdapter } from '../transaction/adapter';
@@ -55,6 +57,65 @@ function snapshots(): ContentAddressedSnapshotStore {
 }
 
 describe('card agent session service', () => {
+  it('普通发送固定Skill头部，压缩时使用当前配置重新编译', async () => {
+    const oldSkill: AgentSkill = {
+      body: 'OLD_SKILL_BODY',
+      builtin: false,
+      description: '测试',
+      directories: [],
+      id: 'dynamic-skill',
+      loading: 'full',
+      name: '动态Skill',
+      resources: {},
+    };
+    const nextSkill = { ...oldSkill, body: 'NEW_SKILL_BODY' };
+    const preset: StructuredPreset = {
+      id: 'preset:dynamic-skill',
+      name: '动态Skill预设',
+      nodes: [
+        { content: '{{skill_instructions}}', enabled: true, id: 'skills', order: 10, role: 'system', title: 'Skill' },
+      ],
+      version: 1,
+    };
+    const compactCall = {
+      input: { summary: '保留目标' },
+      toolCallId: 'compact-current-header',
+      toolName: 'compact_context',
+    };
+    const executor = new QueueExecutor([
+      step([], 'x'.repeat(150_000)),
+      step([compactCall]),
+      step([], '压缩后完成'),
+    ]);
+    const service = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      agentConfiguration: { id: 'agent:test', name: '测试', presetId: preset.id, skillIds: [oldSkill.id] },
+      contextWindow: 50_000,
+      executor,
+      lock: new GlobalAgentTaskLock(),
+      preset,
+      skills: [oldSkill],
+      snapshots: snapshots(),
+    });
+
+    const first = await service.send('第一轮');
+    if (first.approval) {
+      const paths = [
+        ...first.approval.stateChanges.map(change => change.path),
+        ...first.approval.skillChanges.map(change => change.path),
+        ...first.approval.fileChanges.map(change => change.path),
+      ];
+      await service.approve(Object.fromEntries(paths.map(path => [path, 'current' as const])));
+    }
+    await service.setSkills([nextSkill]);
+    await service.send('第二轮');
+
+    expect(executor.requests[1].forceTool).toBe('compact_context');
+    expect(String(executor.requests[1].messages[0].content)).toContain('OLD_SKILL_BODY');
+    expect(String(executor.requests[2].messages[0].content)).toContain('NEW_SKILL_BODY');
+    expect(String(executor.requests[2].messages[0].content)).not.toContain('OLD_SKILL_BODY');
+  });
+
   it('把附件保存为规范化用户消息，并仅向界面暴露摘要', async () => {
     const executor = new QueueExecutor([step([], '看到了')]);
     const persisted = vi.fn(async (_runtime: PersistedSessionRuntime) => undefined);
@@ -567,6 +628,57 @@ describe('card agent session service', () => {
       durationMs: 2_400,
       status: 'completed',
     });
+  });
+
+  it('联网工具开始时切分流式思考，并避免在模型结束后重复追加完整思考', async () => {
+    let now = 1_000;
+    const providerCall = {
+      input: { query: '今日新闻' },
+      output: [{ title: '新闻来源', url: 'https://example.test/news' }],
+      providerExecuted: true as const,
+      toolCallId: 'web-search-1',
+      toolName: 'web_search',
+    };
+    const executor = new QueueExecutor([
+      async request => {
+        request.onReasoningDelta?.('先确定搜索范围。');
+        now = 2_000;
+        await request.onProviderToolStarted?.(providerCall);
+        await request.onProviderToolCompleted?.(providerCall);
+        now = 3_000;
+        request.onReasoningDelta?.('再核对搜索结果。');
+        return {
+          assistantMessages: [
+            {
+              content: [
+                { text: '先确定搜索范围。再核对搜索结果。', type: 'reasoning' as const },
+                { text: '这是最终回复。', type: 'text' as const },
+              ],
+              role: 'assistant' as const,
+            },
+          ],
+          finishReason: 'stop',
+          providerToolCalls: [providerCall],
+          text: '这是最终回复。',
+          toolCalls: [],
+        };
+      },
+    ]);
+    const service = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      executor,
+      lock: new GlobalAgentTaskLock(),
+      now: () => now,
+      snapshots: snapshots(),
+    });
+
+    const completed = await service.send('搜索新闻');
+    const processItems = completed.ui.filter(item => item.kind === 'reasoning' || item.kind === 'tool');
+    expect(processItems.map(item => item.kind)).toEqual(['reasoning', 'tool', 'reasoning']);
+    expect(processItems.filter(item => item.kind === 'reasoning').map(item => item.content)).toEqual([
+      '先确定搜索范围。',
+      '再核对搜索结果。',
+    ]);
   });
 
   it('把大量流式delta合并为单次定时界面发布，完成边界仍立即刷新', async () => {

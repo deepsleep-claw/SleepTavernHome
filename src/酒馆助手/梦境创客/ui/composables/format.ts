@@ -27,7 +27,14 @@ export function pretty(value: unknown): string {
 }
 
 export function downloadText(name: string, content: string, type: string): void {
-  const blob = new Blob([content], { type });
+  downloadBlob(name, new Blob([content], { type }));
+}
+
+export function downloadBytes(name: string, content: Uint8Array, type: string): void {
+  downloadBlob(name, new Blob([Uint8Array.from(content).buffer], { type }));
+}
+
+function downloadBlob(name: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;

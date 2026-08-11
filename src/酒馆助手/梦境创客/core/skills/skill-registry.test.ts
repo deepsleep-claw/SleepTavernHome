@@ -12,14 +12,17 @@ import type { AgentSkill } from './types';
 
 function userSkill(overrides: Partial<AgentSkill> = {}): AgentSkill {
   return {
-    assets: { 'template.txt': '模板' },
     body: '# 写作步骤\n\n先理解需求，再修改文件。',
     builtin: false,
     description: '辅助编写学院角色。',
+    directories: [],
     id: 'academy-writer',
     loading: 'on-demand',
     name: '学院写作',
-    references: { 'style.md': '保持轻快文风。' },
+    resources: {
+      'materials/template.txt': { content: '模板', mediaType: 'text/plain', size: 6 },
+      'notes/style.md': { content: '保持轻快文风。', mediaType: 'text/markdown', size: 21 },
+    },
     ...overrides,
   };
 }
@@ -45,7 +48,7 @@ describe('agent skills', () => {
     expect(files.find(file => file.path.endsWith('/builtin/card-workspace-io/SKILL.md'))).toMatchObject({
       readonly: true,
     });
-    expect(files.find(file => file.path === '/skills/user/academy-writer/references/style.md')?.content).toBe(
+    expect(files.find(file => file.path === '/skills/user/academy-writer/notes/style.md')?.content).toBe(
       '保持轻快文风。',
     );
     expect(files.find(file => file.path === '/skills/index.md')?.content).toContain(

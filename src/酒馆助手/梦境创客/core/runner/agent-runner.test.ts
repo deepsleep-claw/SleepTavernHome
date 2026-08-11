@@ -266,12 +266,14 @@ describe('AgentRunner', () => {
     const runner = new AgentRunner({
       contextWindow: 500,
       executor,
+      headerMessageCount: 1,
       initialMessages: [
         { content: 'head', role: 'system' },
         { content: 'x'.repeat(2500), role: 'assistant' },
         { content: 'latest', role: 'assistant' },
       ],
       journal: new MemoryRunnerJournal(),
+      refreshCompactionHeader: async () => [{ content: 'refreshed head', role: 'system' }],
       tools: [],
     });
     const state = await runner.start('small user');
@@ -281,6 +283,7 @@ describe('AgentRunner', () => {
       state.messages.some(message => message.role === 'system' && String(message.content).includes('保留目标与完成项')),
     ).toBe(true);
     expect(state.messages.some(message => String(message.content).includes('x'.repeat(100)))).toBe(false);
+    expect(state.messages[0]).toEqual({ content: 'refreshed head', role: 'system' });
     expect(state.status).toBe('completed');
   });
 

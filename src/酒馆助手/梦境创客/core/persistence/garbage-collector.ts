@@ -5,7 +5,10 @@ const DEFAULT_ORPHAN_AGE = 7 * 24 * 60 * 60 * 1000;
 
 function manifestReferences(settings: DreamCardAgentSettings): Set<string> {
   const references = new Set<string>();
-  Object.values(settings.globalSkills).forEach(skill => references.add(skill.url));
+  Object.values(settings.globalSkills).forEach(skill => {
+    references.add(skill.url);
+    Object.values(skill.files ?? {}).forEach(file => references.add(file.url));
+  });
   Object.values(settings.characterStores).forEach(store => references.add(store.url));
   return references;
 }

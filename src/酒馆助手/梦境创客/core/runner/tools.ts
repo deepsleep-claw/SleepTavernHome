@@ -207,6 +207,11 @@ export function createWorkspaceRunnerTools(
         const value = input as { limit?: number; offset?: number; path: string };
         const file = await repository.read(value.path);
         if (isBinaryWorkspaceFile(file)) {
+          if (file.skillResource) {
+            throw new Error(
+              `BINARY_SKILL_RESOURCE_NOT_READABLE：${file.path}是二进制Skill资源（${file.mediaType}，${file.skillResource.size} bytes），当前文件工具只能列出、移动或删除它，不能把内容发送给模型。`,
+            );
+          }
           return richToolOutput(
             {
               type: 'content',

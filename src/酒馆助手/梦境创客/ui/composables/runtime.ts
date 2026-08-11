@@ -13,7 +13,7 @@ export type WorkspaceView = 'home' | 'session' | 'settings';
 export type SettingsSection = 'agent' | 'api' | 'diagnostics' | 'general' | 'preset' | 'skills' | 'storage';
 export type SidebarTab = 'context' | 'diff' | 'files';
 
-export type SkillEditorRequest = { deleting: boolean; skill?: AgentSkill };
+export type SkillEditorRequest = { builtin?: boolean; deleting: boolean; skill?: AgentSkill };
 export type SidebarFocusRequest = { filePath?: string; tab: SidebarTab };
 export type MobileSurface = 'navigation' | 'workspace';
 export type CharacterSwitchRequest = {

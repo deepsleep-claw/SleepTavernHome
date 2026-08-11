@@ -44,6 +44,8 @@ nodes:
 
       {{tool_rules}}
 
+      {{skill_instructions}}
+
       {{safety_rules}}
 
       {{output_style}}

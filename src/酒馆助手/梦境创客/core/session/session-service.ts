@@ -261,6 +261,7 @@ export class CardAgentSessionService {
   private timeline: HistoryTimeline;
   private events: RunnerEvent[] = [];
   private headerMessageCount: number;
+  private hasStreamedReasoningInCurrentStep = false;
   private lastError?: string;
   private manualEditGroup?: ManualEditGroup;
   private mode: SessionMode;
@@ -528,6 +529,40 @@ export class CardAgentSessionService {
     await this.persist();
   }
 
+  /**
+   * 同步当前会话所绑定配置的最新版。首次发送前会重编译头部；会话已有消息后只更新
+   * 预设引用和/skills投影，等显式应用或下一次上下文压缩才替换固定头部。
+   */
+  async syncAgentConfiguration(
+    configuration: SessionAgentConfiguration,
+    preset: StructuredPreset,
+    availableSkills: AgentSkill[],
+  ): Promise<void> {
+    if (
+      this.pending ||
+      this.activeCheckpointId ||
+      ['running', 'waiting-approval', 'committing'].includes(this.status)
+    ) {
+      throw new Error('当前轮次结束前不能同步Agent配置。');
+    }
+    await this.finalizeManualEdits();
+    const mounted = availableSkills.filter(skill => configuration.skillIds.includes(skill.id));
+    const resourcesChanged = !canonicalEqual(this.skills, mounted);
+    const configurationChanged = !canonicalEqual(this.agentConfiguration, configuration);
+    const presetChanged = !canonicalEqual(this.preset, preset);
+    if (!resourcesChanged && !configurationChanged && !presetChanged) return;
+    this.agentConfiguration = klona(configuration);
+    this.preset = klona(preset);
+    this.skills = klona(mounted);
+    if (resourcesChanged) {
+      const current = await this.adapter.read();
+      this.assertBinding(current);
+      this.repository = this.createRepository(current);
+    }
+    if (!this.hasConversationMessages()) await this.refreshCompiledHeader();
+    this.notify();
+  }
+
   async setExecutor(executor: ModelStepExecutor, contextWindow = this.contextWindow): Promise<void> {
     if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status)) {
       throw new Error('Agent运行期间不能切换API Profile。');
@@ -555,7 +590,7 @@ export class CardAgentSessionService {
     this.assertBinding(current);
     this.skills = klona(mounted);
     this.repository = this.createRepository(current);
-    await this.refreshCompiledHeader();
+    if (!this.hasConversationMessages()) await this.refreshCompiledHeader();
     this.notify();
   }
 
@@ -641,7 +676,6 @@ export class CardAgentSessionService {
       this.repository = this.createRepository(base);
       this.tavernChatWorkspace?.resetRunAuthorization();
       await this.refreshTavernChatWorkspace();
-      await this.refreshCompiledHeader();
       this.buildRunner();
       const state = await this.runner!.start(userContentWithAttachments(text, attachments));
       this.modelMessages = klona(state.messages);
@@ -1003,6 +1037,7 @@ export class CardAgentSessionService {
     this.runner = new AgentRunner({
       contextWindow: this.contextWindow,
       executor: this.executor,
+      headerMessageCount: this.headerMessageCount,
       initialMessages: this.modelMessages,
       initialPending,
       initialStatus,
@@ -1014,7 +1049,8 @@ export class CardAgentSessionService {
       requestApproval: this.requestToolApproval,
       prepareMessages: this.attachmentStore
         ? messages => this.attachmentStore!.prepareMessages(this.sessionId, messages)
-        : undefined,
+          : undefined,
+      refreshCompactionHeader: () => this.compileCompactionHeader(),
       tools: [
         ...createWorkspaceRunnerTools(
           this.repository,
@@ -1165,7 +1201,7 @@ export class CardAgentSessionService {
     if (!this.pending || !this.repository) return;
     const previous = this.pending;
     const materialized = materializeCardWorkspace(previous.base, this.repository.snapshot());
-    const candidateSkills = materializeUserSkills(this.repository.snapshot());
+    const candidateSkills = materializeUserSkills(this.repository.snapshot(), this.skills);
     const current = await this.adapter.read();
     const preparation = prepareThreeWayMerge(previous.base, materialized.state, current);
     await markSecretRemovalRisks(preparation);
@@ -1201,6 +1237,17 @@ export class CardAgentSessionService {
     this.modelMessages.splice(0, this.headerMessageCount, ...klona(next.messages));
     this.headerMessageCount = next.messages.length;
     this.compiledPreset = next;
+  }
+
+  private async compileCompactionHeader(): Promise<ModelMessage[]> {
+    const next = await compilePreset(this.preset, defaultPresetValues(this.skills));
+    this.headerMessageCount = next.messages.length;
+    this.compiledPreset = next;
+    return klona(next.messages);
+  }
+
+  private hasConversationMessages(): boolean {
+    return this.modelMessages.length > this.headerMessageCount;
   }
 
   private async applyApproval(decisions: Record<string, ApprovalDecision>): Promise<void> {
@@ -1330,7 +1377,7 @@ export class CardAgentSessionService {
   private async freezeCandidate(base: CardWorkspaceState, stopped: boolean): Promise<void> {
     if (!this.repository || !this.activeCheckpointId) throw new Error('Working Copy或检查点不存在。');
     const materialized = materializeCardWorkspace(base, this.repository.snapshot());
-    const candidateSkills = materializeUserSkills(this.repository.snapshot());
+    const candidateSkills = materializeUserSkills(this.repository.snapshot(), this.skills);
     const current = await this.adapter.read();
     const preparation = prepareThreeWayMerge(base, materialized.state, current);
     await markSecretRemovalRisks(preparation);
@@ -1526,7 +1573,15 @@ export class CardAgentSessionService {
   }
 
   private appendStreamingReasoning(delta: string): void {
-    let item = [...this.ui].reverse().find(message => message.kind === 'reasoning' && message.status === 'running');
+    this.hasStreamedReasoningInCurrentStep = true;
+    let item = [...this.ui]
+      .reverse()
+      .find(
+        message =>
+          message.checkpointId === this.activeCheckpointId &&
+          message.kind === 'reasoning' &&
+          message.status === 'running',
+      );
     if (!item) {
       item = {
         at: this.now(),
@@ -1543,7 +1598,14 @@ export class CardAgentSessionService {
   }
 
   private completeStreamingReasoning(at: number, fallback = ''): void {
-    const item = [...this.ui].reverse().find(message => message.kind === 'reasoning' && message.status === 'running');
+    const item = [...this.ui]
+      .reverse()
+      .find(
+        message =>
+          message.checkpointId === this.activeCheckpointId &&
+          message.kind === 'reasoning' &&
+          message.status === 'running',
+      );
     if (item) {
       if (!item.content) item.content = fallback;
       item.durationMs = Math.max(0, at - item.at);
@@ -1564,10 +1626,15 @@ export class CardAgentSessionService {
   private consumeLatestEvent(event: RunnerEvent): void {
     if (event.type === 'model-completed') {
       const text = assistantText(event.messages);
-      this.completeStreamingReasoning(event.at, assistantReasoning(event.messages));
+      this.completeStreamingReasoning(
+        event.at,
+        this.hasStreamedReasoningInCurrentStep ? '' : assistantReasoning(event.messages),
+      );
+      this.hasStreamedReasoningInCurrentStep = false;
       this.completeStreamingText(event.at, text);
     } else if (event.type === 'tool-started') {
-      // 工具调用是可见时间线的硬边界；它之后的新文本必须创建新的助手消息。
+      // 工具调用是可见时间线的硬边界；它之后的新文本与思考必须创建新的过程片段。
+      this.completeStreamingReasoning(event.at);
       this.completeStreamingText(event.at);
       this.ui.push({
         at: event.at,
@@ -1599,6 +1666,7 @@ export class CardAgentSessionService {
       this.status = event.status;
       if (!['running', 'waiting-approval'].includes(event.status)) {
         this.completeStreamingReasoning(event.at);
+        this.hasStreamedReasoningInCurrentStep = false;
         this.completeStreamingText(event.at);
         if (['completed', 'context-exhausted', 'failed', 'stopped'].includes(event.status)) {
           this.completeRunUi(event.status as 'completed' | 'context-exhausted' | 'failed' | 'stopped', event.at);
@@ -1683,7 +1751,7 @@ export class CardAgentSessionService {
     if (this.midRunCheckpointResolve) throw new Error('已经存在一个等待处理的生成前检查点。');
 
     const materialized = materializeCardWorkspace(this.activeBase, this.repository.snapshot());
-    const candidateSkills = materializeUserSkills(this.repository.snapshot());
+    const candidateSkills = materializeUserSkills(this.repository.snapshot(), this.skills);
     const current = await this.adapter.read();
     this.assertBinding(current);
     const preparation = prepareThreeWayMerge(this.activeBase, materialized.state, current);

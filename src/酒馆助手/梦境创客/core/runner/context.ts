@@ -104,16 +104,22 @@ function isCompactResult(message: ModelMessage): boolean {
   );
 }
 
-export function compactModelMessages(messages: ModelMessage[], summary: string): ModelMessage[] {
-  const systems = messages.filter(
+export function compactModelMessages(
+  messages: ModelMessage[],
+  summary: string,
+  headerMessageCount = 0,
+  replacementHeader: ModelMessage[] = messages.slice(0, headerMessageCount),
+): ModelMessage[] {
+  const conversation = messages.slice(headerMessageCount);
+  const systems = conversation.filter(
     message =>
       message.role === 'system' &&
       !(typeof message.content === 'string' && message.content.startsWith('【上下文压缩摘要】')),
   );
-  const users = messages.filter(message => message.role === 'user');
+  const users = conversation.filter(message => message.role === 'user');
   let latestAssistant = -1;
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    if (messages[index].role === 'assistant' && !isCompactCall(messages[index])) {
+  for (let index = conversation.length - 1; index >= 0; index -= 1) {
+    if (conversation[index].role === 'assistant' && !isCompactCall(conversation[index])) {
       latestAssistant = index;
       break;
     }
@@ -121,10 +127,11 @@ export function compactModelMessages(messages: ModelMessage[], summary: string):
   const latestChain =
     latestAssistant < 0
       ? []
-      : messages
+      : conversation
           .slice(latestAssistant)
           .filter(message => message.role !== 'user' && !isCompactCall(message) && !isCompactResult(message));
   return [
+    ...replacementHeader,
     ...systems,
     { content: `【上下文压缩摘要】\n${summary}`, role: 'system' as const },
     ...users,

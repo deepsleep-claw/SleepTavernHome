@@ -82,7 +82,7 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
           name,
           path: childPath,
           readonly: file.readonly || this.isReadonly(childPath),
-          size: file.external?.size ?? new TextEncoder().encode(file.content).byteLength,
+          size: file.external?.size ?? file.skillResource?.size ?? new TextEncoder().encode(file.content).byteLength,
         });
       }
     }
@@ -118,6 +118,7 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
         path,
         readonly: false,
         resourceId: existing?.resourceId ?? crypto.randomUUID(),
+        skillResource: undefined,
       });
     });
   }
@@ -126,6 +127,9 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
     await this.once(toolCallId, async () => {
       const file = await this.read(inputPath);
       this.assertWritable(file.path, file);
+      if (file.skillResource && !file.mediaType.startsWith('text/')) {
+        throw new WorkspaceError('INVALID_PATCH', `二进制文件不能使用Patch：${file.path}`, file.path);
+      }
       this.current.set(file.path, { ...file, content: applyUnifiedPatch(file.content, patch) });
     });
   }
@@ -268,7 +272,8 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
       } else if (
         after.content !== before.content ||
         after.mediaType !== before.mediaType ||
-        JSON.stringify(after.external) !== JSON.stringify(before.external)
+        JSON.stringify(after.external) !== JSON.stringify(before.external) ||
+        JSON.stringify(after.skillResource) !== JSON.stringify(before.skillResource)
       ) {
         changes.push({ after: cloneFile(after), before: cloneFile(before), kind: 'modify', path });
       }

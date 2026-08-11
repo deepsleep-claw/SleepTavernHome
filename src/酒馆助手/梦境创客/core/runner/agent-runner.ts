@@ -50,6 +50,7 @@ export type AgentRunnerState = {
 export type AgentRunnerOptions = {
   contextWindow?: number;
   executor: ModelStepExecutor;
+  headerMessageCount?: number;
   initialMessages?: ModelMessage[];
   initialPending?: PendingRunnerStep;
   initialStatus?: RunnerStatus;
@@ -59,6 +60,7 @@ export type AgentRunnerOptions = {
   onReasoningDelta?: (delta: string) => void;
   onTextDelta?: (delta: string) => void;
   prepareMessages?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
+  refreshCompactionHeader?: () => Promise<ModelMessage[]>;
   requestApproval?: (request: ToolConfirmation) => Promise<boolean>;
   tools: RunnerTool[];
 };
@@ -108,6 +110,7 @@ export class AgentRunner {
   private controller?: AbortController;
   private compactionFresh = false;
   private readonly executor: ModelStepExecutor;
+  private headerMessageCount: number;
   private readonly journal: RunnerJournal;
   private readonly modelControls: ModelRequestControls;
   private providerWebSearchCount = 0;
@@ -115,6 +118,7 @@ export class AgentRunner {
   private readonly onReasoningDelta?: (delta: string) => void;
   private readonly onTextDelta?: (delta: string) => void;
   private readonly prepareMessages?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
+  private readonly refreshCompactionHeader?: () => Promise<ModelMessage[]>;
   private readonly requestApproval?: (request: ToolConfirmation) => Promise<boolean>;
   private stopRequested = false;
   private readonly toolMap: Map<string, RunnerTool>;
@@ -125,12 +129,14 @@ export class AgentRunner {
   constructor(options: AgentRunnerOptions) {
     this.contextWindow = options.contextWindow ?? 128_000;
     this.executor = options.executor;
+    this.headerMessageCount = options.headerMessageCount ?? 0;
     this.journal = options.journal;
     this.modelControls = options.modelControls ?? { reasoningEffort: 'auto', webSearch: false };
     this.now = options.now ?? Date.now;
     this.onReasoningDelta = options.onReasoningDelta;
     this.onTextDelta = options.onTextDelta;
     this.prepareMessages = options.prepareMessages;
+    this.refreshCompactionHeader = options.refreshCompactionHeader;
     this.requestApproval = options.requestApproval;
     this.tools = [...options.tools, COMPACT_CONTEXT_TOOL];
     this.toolMap = new Map(this.tools.map(item => [item.name, item]));
@@ -312,7 +318,17 @@ export class AgentRunner {
         await this.setStatus('failed');
         return false;
       }
-      this.state.messages = compactModelMessages(this.state.messages, summary);
+      const previousHeaderMessageCount = this.headerMessageCount;
+      const replacementHeader = this.refreshCompactionHeader
+        ? await this.refreshCompactionHeader()
+        : this.state.messages.slice(0, previousHeaderMessageCount);
+      this.headerMessageCount = replacementHeader.length;
+      this.state.messages = compactModelMessages(
+        this.state.messages,
+        summary,
+        previousHeaderMessageCount,
+        replacementHeader,
+      );
       this.apiUsageBaseline = undefined;
       this.compactionFresh = true;
       await this.journal.append({ at: this.now(), summary, type: 'context-compacted' });

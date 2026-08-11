@@ -2,7 +2,8 @@ import { parseFrontmatter, serializeFrontmatter, slugifyFileName } from '../mapp
 import { parentWorkspacePath, workspaceBasename } from '../workspace/path';
 import { WorkspaceError, type WorkspaceFile } from '../workspace/types';
 import { BUILTIN_CARD_WORKSPACE_SKILL } from './builtin-card-workspace';
-import type { AgentSkill, SkillLoadingMode, SkillMutationAssessment } from './types';
+import { isTextSkillResource, skillDirectories, skillResources } from './resources';
+import type { AgentSkill, SkillLoadingMode, SkillMutationAssessment, SkillResource } from './types';
 
 function skillRoot(skill: AgentSkill): string {
   return `/skills/${skill.builtin ? 'builtin' : 'user'}/${skill.id}`;
@@ -26,19 +27,25 @@ function skillFile(skill: AgentSkill): WorkspaceFile {
   };
 }
 
-function resourceFile(skill: AgentSkill, kind: 'assets' | 'references', name: string, content: string): WorkspaceFile {
+function resourceFile(skill: AgentSkill, name: string, resource: SkillResource): WorkspaceFile {
+  const binary = !isTextSkillResource(resource, name);
   return {
-    content,
-    mediaType: name.endsWith('.md') ? 'text/markdown' : 'text/plain',
-    path: `${skillRoot(skill)}/${kind}/${name}`,
+    content: binary ? '' : (resource.content ?? ''),
+    mediaType: resource.mediaType,
+    path: `${skillRoot(skill)}/${name}`,
     readonly: skill.builtin,
-    resourceId: `skill:${skill.id}:${kind}:${name}`,
+    resourceId: `skill:${skill.id}:resource:${name}`,
+    skillResource: binary
+      ? { sha256: resource.sha256 ?? `unresolved:${skill.id}:${name}`, size: resource.size }
+      : undefined,
   };
 }
 
 function buildIndex(skills: AgentSkill[]): string {
   return [
     '# 已启用 Skill',
+    '',
+    '这里列出当前Agent配置启用的全部Skill。full已进入本轮固定头部；on-demand不会自动注入，需要时请读取对应SKILL.md并按其说明探索资源文件。',
     '',
     ...skills.flatMap(skill => [
       `## ${skill.name}`,
@@ -55,8 +62,7 @@ export function projectSkills(skills: AgentSkill[]): WorkspaceFile[] {
   const all = [BUILTIN_CARD_WORKSPACE_SKILL, ...skills.filter(skill => skill.id !== BUILTIN_CARD_WORKSPACE_SKILL.id)];
   const files = all.flatMap(skill => [
     skillFile(skill),
-    ...Object.entries(skill.references).map(([name, content]) => resourceFile(skill, 'references', name, content)),
-    ...Object.entries(skill.assets).map(([name, content]) => resourceFile(skill, 'assets', name, content)),
+    ...Object.entries(skillResources(skill)).map(([name, resource]) => resourceFile(skill, name, resource)),
   ]);
   files.push({
     content: buildIndex(all),
@@ -75,57 +81,87 @@ function requiredString(value: unknown, label: string, path: string): string {
   return value;
 }
 
-function parseSkill(input: WorkspaceFile, allFiles: WorkspaceFile[]): AgentSkill {
+function parseSkill(input: WorkspaceFile, allFiles: WorkspaceFile[], previous?: AgentSkill): AgentSkill {
   const { body, metadata } = parseFrontmatter(input.content, input.path);
   const root = parentWorkspacePath(input.path);
   const loading = metadata.loading;
   if (loading !== 'full' && loading !== 'on-demand') {
     throw new WorkspaceError('INVALID_PATCH', `Skill loading必须是full或on-demand：${input.path}`, input.path);
   }
-  const collect = (kind: 'assets' | 'references') =>
-    Object.fromEntries(
-      allFiles
-        .filter(file => parentWorkspacePath(file.path).startsWith(`${root}/${kind}`))
-        .map(file => [file.path.slice(`${root}/${kind}/`.length), file.content]),
-    );
+  const previousResources = previous ? skillResources(previous) : {};
+  const resources = Object.fromEntries(
+    allFiles
+      .filter(file => file.path.startsWith(`${root}/`) && file.path !== input.path)
+      .map(file => {
+        const name = file.path.slice(root.length + 1);
+        const previousResource = previousResources[name];
+        if (file.skillResource) {
+          return [
+            name,
+            {
+              mediaType: file.mediaType,
+              sha256: file.skillResource.sha256,
+              size: file.skillResource.size,
+              ...(previousResource?.data ? { data: previousResource.data } : {}),
+            },
+          ];
+        }
+        return [
+          name,
+          {
+            content: file.content,
+            mediaType: file.mediaType,
+            size: new TextEncoder().encode(file.content).byteLength,
+          },
+        ];
+      }),
+  );
   return {
-    assets: collect('assets'),
     body,
     builtin: input.path.startsWith('/skills/builtin/'),
     description: requiredString(metadata.description, 'description', input.path),
+    directories: previous ? skillDirectories(previous) : [],
     id: workspaceBasename(root),
     loading,
     name: requiredString(metadata.name, 'name', input.path),
-    references: collect('references'),
+    resources,
   };
 }
 
-export function materializeUserSkills(files: Iterable<WorkspaceFile>): AgentSkill[] {
+export function materializeUserSkills(files: Iterable<WorkspaceFile>, previousSkills: AgentSkill[] = []): AgentSkill[] {
   const all = [...files];
+  const previous = new Map(previousSkills.map(skill => [skill.id, skill]));
   return all
     .filter(file => file.path.startsWith('/skills/user/') && file.path.endsWith('/SKILL.md'))
-    .map(file => parseSkill(file, all))
+    .map(file => parseSkill(file, all, previous.get(workspaceBasename(parentWorkspacePath(file.path)))))
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 
-export function compileFullSkillInstructions(skills: AgentSkill[]): string {
+export type FullSkillInstruction = { content: string; id: string; name: string };
+
+export function fullSkillInstructions(skills: AgentSkill[]): FullSkillInstruction[] {
   return [BUILTIN_CARD_WORKSPACE_SKILL, ...skills]
     .filter(skill => skill.loading === 'full')
-    .map(skill => `## Skill：${skill.name}\n\n${skill.body.trim()}`)
+    .map(skill => ({ content: `## Skill：${skill.name}\n\n${skill.body.trim()}`, id: skill.id, name: skill.name }));
+}
+
+export function compileFullSkillInstructions(skills: AgentSkill[]): string {
+  return fullSkillInstructions(skills)
+    .map(skill => skill.content)
     .join('\n\n');
 }
 
 export function createSkillTemplate(name: string, description: string, loading: SkillLoadingMode): AgentSkill {
   const id = slugifyFileName(name.toLowerCase(), `skill-${crypto.randomUUID().slice(0, 8)}`);
   return {
-    assets: {},
     body: '# 工作流程\n\n在这里写入简短、可执行的步骤。',
     builtin: false,
     description,
+    directories: [],
     id,
     loading,
     name,
-    references: {},
+    resources: {},
   };
 }
 

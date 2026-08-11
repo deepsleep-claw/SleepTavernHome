@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_DREAM_CARD_AGENT_SETTINGS, mergeSettingsChanges, type CharacterStoreReference } from './settings';
+import { DEFAULT_PRESET } from '../preset/compiler';
+import {
+  DEFAULT_DREAM_CARD_AGENT_SETTINGS,
+  mergeSettingsChanges,
+  normalizeSettings,
+  type CharacterStoreReference,
+} from './settings';
 
 function character(bindingId: string, revision: number): CharacterStoreReference {
   return {
@@ -66,5 +72,16 @@ describe('settings cross-window merge', () => {
     };
 
     expect(Object.keys(mergeSettingsChanges(base, first, latest).globalSkills).sort()).toEqual(['reviewer', 'writer']);
+  });
+
+  it('始终用当前脚本内置预设替换设置中的旧副本', () => {
+    const raw = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS);
+    raw.presetProfiles = [
+      { ...structuredClone(DEFAULT_PRESET), name: '旧内置副本', nodes: [{ ...DEFAULT_PRESET.nodes[0], content: '旧内容' }] },
+      { ...structuredClone(DEFAULT_PRESET), id: 'preset:user', name: '用户预设' },
+    ];
+    const normalized = normalizeSettings(raw);
+    expect(normalized.presetProfiles[0]).toEqual(DEFAULT_PRESET);
+    expect(normalized.presetProfiles[1].id).toBe('preset:user');
   });
 });

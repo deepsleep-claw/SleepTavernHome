@@ -6,14 +6,14 @@ import type { AgentSkill } from './types';
 
 function skill(overrides: Partial<AgentSkill> = {}): AgentSkill {
   return {
-    assets: {},
     body: '# 工作流程\n\n先阅读，再修改。',
     builtin: false,
     description: '跨角色复用的写作流程。',
+    directories: [],
     id: 'writer',
     loading: 'on-demand',
     name: '写作助手',
-    references: {},
+    resources: {},
     ...overrides,
   };
 }
@@ -31,17 +31,15 @@ describe('GlobalSkillStore', () => {
     expect(await new GlobalSkillStore(files, settings).list()).toEqual([skill()]);
   });
 
-  it('修改原子覆盖稳定Markdown文件，删除同时移除物理文件', async () => {
+  it('修改使用内容寻址物理文件，清单切换后删除旧文件', async () => {
     const files = new MemoryTavernFileClient();
     const settings = new MemoryAgentSettingsStore();
     const store = new GlobalSkillStore(files, settings);
     await store.save(skill());
     await store.save(skill({ body: '新版' }));
     expect(settings.load().globalSkills.writer.revision).toBe(2);
-    expect(files.uploadedNames).toEqual([
-      'DreamCreator--GlobalSkill--writer.md',
-      'DreamCreator--GlobalSkill--writer.md',
-    ]);
+    expect(files.uploadedNames).toHaveLength(2);
+    expect(files.uploadedNames[0]).not.toBe(files.uploadedNames[1]);
     expect(files.urls()).toHaveLength(1);
 
     await store.remove('writer');
@@ -50,13 +48,59 @@ describe('GlobalSkillStore', () => {
     expect(files.urls()).toEqual([]);
   });
 
-  it('中文Skill ID映射为稳定的ASCII物理文件名', async () => {
+  it('中文Skill ID映射为ASCII物理文件名', async () => {
     const files = new MemoryTavernFileClient();
     const settings = new MemoryAgentSettingsStore();
     const store = new GlobalSkillStore(files, settings);
     await store.save(skill({ id: '世界书写作' }));
     await store.save(skill({ body: '新版', id: '世界书写作' }));
     expect(files.uploadedNames[0]).toMatch(/^[a-zA-Z0-9_.-]+$/u);
-    expect(files.uploadedNames[1]).toBe(files.uploadedNames[0]);
+    expect(files.uploadedNames[1]).toMatch(/^[a-zA-Z0-9_.-]+$/u);
+  });
+
+  it('自由资源树分文件保存，列表延迟二进制正文而编辑载入完整内容', async () => {
+    const files = new MemoryTavernFileClient();
+    const settings = new MemoryAgentSettingsStore();
+    const store = new GlobalSkillStore(files, settings);
+    await store.save(
+      skill({
+        directories: ['empty', 'guides'],
+        resources: {
+          'guides/style.md': { content: '轻快文风', mediaType: 'text/markdown', size: 12 },
+          'images/avatar.png': { data: Uint8Array.of(1, 2, 3), mediaType: 'image/png', size: 3 },
+        },
+      }),
+    );
+
+    expect(files.urls()).toHaveLength(3);
+    expect(settings.load().globalSkills.writer.files).toMatchObject({
+      'guides/style.md': { mediaType: 'text/markdown' },
+      'images/avatar.png': { mediaType: 'image/png', size: 3 },
+    });
+    expect((await store.list())[0].resources?.['guides/style.md']?.content).toBe('轻快文风');
+    expect((await store.list())[0].resources?.['images/avatar.png']?.data).toBeUndefined();
+    expect((await store.load('writer')).resources?.['images/avatar.png']?.data).toEqual(Uint8Array.of(1, 2, 3));
+  });
+
+  it('资源上传中途失败不切换现有清单', async () => {
+    class FaultClient extends MemoryTavernFileClient {
+      failNext = false;
+      override async upload(name: string, bytes: Uint8Array): Promise<string> {
+        if (this.failNext) {
+          this.failNext = false;
+          throw new Error('fault');
+        }
+        return super.upload(name, bytes);
+      }
+    }
+    const files = new FaultClient();
+    const settings = new MemoryAgentSettingsStore();
+    const store = new GlobalSkillStore(files, settings);
+    await store.save(skill());
+    const before = settings.load().globalSkills.writer;
+    files.failNext = true;
+    await expect(store.save(skill({ body: '损坏的新版本' }))).rejects.toThrow('fault');
+    expect(settings.load().globalSkills.writer).toEqual(before);
+    expect((await store.list())[0].body).toContain('先阅读');
   });
 });

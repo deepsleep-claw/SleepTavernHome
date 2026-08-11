@@ -49,12 +49,24 @@ export type DreamCreatorWorkspaceFileReference = {
 };
 
 export type GlobalSkillIndexEntry = {
+  directories?: string[];
   description: string;
+  files?: Record<string, GlobalSkillFileIndexEntry>;
   id: string;
   loading: 'full' | 'on-demand';
   name: string;
   revision: number;
+  sha256?: string;
   updatedAt: number;
+  url: string;
+};
+
+export type GlobalSkillFileIndexEntry = {
+  mediaType: string;
+  name: string;
+  path: string;
+  sha256: string;
+  size: number;
   url: string;
 };
 
@@ -159,13 +171,13 @@ export class MemoryAgentSettingsStore implements AgentSettingsStore {
   private readonly listeners = new Set<() => void>();
   private value: DreamCardAgentSettings;
   constructor(initial: DreamCardAgentSettings = DEFAULT_DREAM_CARD_AGENT_SETTINGS) {
-    this.value = structuredClone(initial);
+    this.value = normalizeSettings(initial);
   }
   load(): DreamCardAgentSettings {
     return structuredClone(this.value);
   }
   async save(settings: DreamCardAgentSettings): Promise<void> {
-    this.value = structuredClone(settings);
+    this.value = normalizeSettings(settings);
     this.listeners.forEach(listener => listener());
   }
   subscribe(listener: () => void): () => void {
@@ -178,13 +190,15 @@ const SETTINGS_KEY = 'dream-card-agent';
 const SHARED_CACHE_KEY = 'dream-card-agent:settings:v3';
 const SETTINGS_CHANNEL = 'dream-card-agent:settings';
 
-function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamCardAgentSettings {
+export function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamCardAgentSettings {
   const anchor = raw?.floatingButtonAnchor ?? 'middle-right';
   const defaultOffset = defaultFloatingButtonOffset(anchor);
   const offset = raw?.floatingButtonOffset;
-  const presetProfiles = (raw?.presetProfiles?.length ? raw.presetProfiles : [DEFAULT_PRESET]).map(
-    cloneStructuredPreset,
-  );
+  const userPresetProfiles = (raw?.presetProfiles ?? [])
+    .filter(preset => preset.id !== DEFAULT_PRESET.id)
+    .map(cloneStructuredPreset);
+  // 内置预设始终来自当前脚本资源，不能被设置中的旧副本遮住。
+  const presetProfiles = [cloneStructuredPreset(DEFAULT_PRESET), ...userPresetProfiles];
   const activePresetId = presetProfiles.some(preset => preset.id === raw?.activePresetId)
     ? raw!.activePresetId!
     : presetProfiles[0].id;

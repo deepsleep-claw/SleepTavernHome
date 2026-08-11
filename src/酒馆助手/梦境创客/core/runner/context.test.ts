@@ -138,4 +138,25 @@ describe('runner context', () => {
       { content: 'only user', role: 'user' },
     ]);
   });
+
+  it('压缩时按头部边界整体替换预设节点，不把旧user/assistant头混入会话', () => {
+    const messages: ModelMessage[] = [
+      { content: '旧system头', role: 'system' },
+      { content: '旧user头', role: 'user' },
+      { content: '旧assistant头', role: 'assistant' },
+      { content: '真实用户', role: 'user' },
+      { content: '真实助手', role: 'assistant' },
+    ];
+    const replacement: ModelMessage[] = [
+      { content: '新system头', role: 'system' },
+      { content: '新user头', role: 'user' },
+      { content: '新assistant头', role: 'assistant' },
+    ];
+    expect(compactModelMessages(messages, '摘要', 3, replacement)).toEqual([
+      ...replacement,
+      { content: '【上下文压缩摘要】\n摘要', role: 'system' },
+      { content: '真实用户', role: 'user' },
+      { content: '真实助手', role: 'assistant' },
+    ]);
+  });
 });

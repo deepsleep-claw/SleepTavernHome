@@ -225,6 +225,7 @@ const mock = vi.hoisted(() => {
     saveAgentConfiguration: vi.fn(async (configuration: unknown) => configuration),
     saveGlobalSkill: vi.fn(async (skill: unknown) => skill),
     snapshot: () => structuredClone(state),
+    stop: vi.fn(),
     subscribe: (next: (value: unknown) => void) => {
       subscriber = next;
       next(structuredClone(state));
@@ -401,12 +402,21 @@ describe('WorkspaceWindow', () => {
     expect(root.querySelector('.dca-guidance-box')).toBeNull();
     const composer = root.querySelector<HTMLTextAreaElement>('.dca-composer textarea')!;
     expect(composer.disabled).toBe(false);
+    const stopButton = root.querySelector<HTMLButtonElement>('.dca-composer button[aria-label="停止当前任务"]')!;
+    expect(stopButton.classList).toContain('dca-send-button');
+    expect(root.querySelector('.dca-composer-icon.dca-stop-button')).toBeNull();
+    stopButton.click();
+    expect(mock.runtime.stop).toHaveBeenCalledOnce();
     composer.value = '请优先检查世界书';
     composer.dispatchEvent(new Event('input', { bubbles: true }));
     await nextTick();
     const guideButton = root.querySelector<HTMLButtonElement>('.dca-composer button[aria-label="发送中途引导"]')!;
+    expect(guideButton.classList).toContain('dca-guidance-button');
+    expect(root.querySelector('.dca-composer button[aria-label="停止当前任务"]')).toBeNull();
     guideButton.click();
     expect(mock.runtime.enqueueGuidance).toHaveBeenCalledWith('请优先检查世界书');
+    await nextTick();
+    expect(root.querySelector('.dca-composer button[aria-label="停止当前任务"]')).not.toBeNull();
     const tabButtons = root.querySelectorAll<HTMLButtonElement>('.dca-session-tab button');
     expect(tabButtons[0].disabled).toBe(false);
     expect(tabButtons[1].disabled).toBe(true);
