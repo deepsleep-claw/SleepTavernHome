@@ -20,8 +20,7 @@ export type RunTimelineBlock = {
 export type TimelineBlock = { id: string; item: SessionUiItem; type: 'item' } | RunTimelineBlock;
 
 export type RunContentBlock =
-  | { id: string; item: SessionUiItem; type: 'item' }
-  | { id: string; items: SessionUiItem[]; type: 'tools' };
+  { id: string; item: SessionUiItem; type: 'item' } | { id: string; items: SessionUiItem[]; type: 'tools' };
 
 function runDisplayStatus(
   user: SessionUiItem | undefined,
@@ -46,6 +45,7 @@ export function buildTimelineBlocks(
   ui: SessionUiItem[],
   activeStatus: string | undefined,
   limit: number,
+  now = Date.now(),
 ): TimelineBlock[] {
   const byCheckpoint = new Map<string, SessionUiItem[]>();
   for (const item of ui) {
@@ -78,7 +78,7 @@ export function buildTimelineBlocks(
       insertedRuns.add(checkpointId!);
       const user = byCheckpoint.get(checkpointId!)?.find(candidate => candidate.kind === 'user');
       blocks.push({
-        durationMs: user?.durationMs ?? Math.max(0, Date.now() - (user?.at ?? item.at)),
+        durationMs: user?.durationMs ?? Math.max(0, now - (user?.at ?? item.at)),
         id: `run:${checkpointId}`,
         items: runItems,
         status: runDisplayStatus(user, checkpointId === lastCheckpointId, activeStatus),
@@ -160,15 +160,6 @@ export function reasoningLabel(item: SessionUiItem): string {
   if (item.status === 'running') return '思考中';
   const seconds = (item.durationMs ?? 0) / 1_000;
   return seconds < 1 ? '已思考不到 1 秒' : `已思考 ${Math.round(seconds)} 秒`;
-}
-
-export function reasoningPreview(content: string): string {
-  const lines = content
-    .trimEnd()
-    .split(/\r?\n/u)
-    .filter(Boolean);
-  const preview = lines.slice(-3).join('\n');
-  return preview.length > 320 ? preview.slice(-320) : preview;
 }
 
 export function itemKindLabel(kind: SessionUiItem['kind']): string {

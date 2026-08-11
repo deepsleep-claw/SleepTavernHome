@@ -10,23 +10,20 @@
       <small>{{ toolGroupSummary(items) }}</small>
       <i class="fa-solid fa-chevron-down dca-details-chevron" aria-hidden="true"></i>
     </summary>
-    <div class="dca-tool-list">
-      <details v-for="tool in items" :key="tool.id" class="dca-tool-row" :open="tool.status === 'failed'">
-        <summary>
-          <i class="dca-tool-dot" :class="`dca-tool-dot-${tool.status ?? 'completed'}`" aria-hidden="true"></i>
-          <span><i v-if="tool.providerTool" class="fa-solid fa-globe" aria-hidden="true"></i>{{ tool.toolName }}</span>
-          <small :class="`dca-tool-${tool.status}`">{{ toolStatusLabel(tool.status) }}</small>
-          <i class="fa-solid fa-chevron-down dca-details-chevron" aria-hidden="true"></i>
-        </summary>
-        <div class="dca-tool-details">
-          <template v-if="tool.toolInput">
-            <small>输入</small>
-            <pre>{{ tool.toolInput }}</pre>
-          </template>
-          <small>结果</small>
-          <pre>{{ tool.content }}</pre>
-        </div>
-      </details>
+    <div class="dca-tool-expanded">
+      <div class="dca-tool-track" aria-label="工具执行轨迹">
+        <template v-for="(tool, index) in items" :key="`track:${tool.id}`">
+          <i v-if="index > 0" class="fa-solid fa-chevron-right dca-tool-track-arrow" aria-hidden="true"></i>
+          <span class="dca-tool-track-item" :class="`dca-tool-track-${tool.status ?? 'completed'}`">
+            <i :class="toolTrackIcon(tool)" aria-hidden="true"></i>
+            <span>{{ toolDisplayTitle(tool) }}</span>
+            <small>{{ toolStatusLabel(tool.status) }}</small>
+          </span>
+        </template>
+      </div>
+      <div class="dca-tool-list">
+        <ToolResultCard v-for="tool in items" :key="tool.id" :tool="tool" />
+      </div>
     </div>
   </details>
 </template>
@@ -34,11 +31,19 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { SessionUiItem } from '../../../../core/session/types';
+import { toolDisplayTitle } from '../../../composables/tool-presentation';
 import { toolGroupHasFailure, toolGroupLabel, toolGroupSummary, toolStatusLabel } from '../../../composables/timeline';
+import ToolResultCard from './ToolResultCard.vue';
 
 const props = defineProps<{ items: SessionUiItem[] }>();
 
 const hasRunning = computed(() => props.items.some(item => item.status === 'running'));
+
+function toolTrackIcon(tool: SessionUiItem): string {
+  if (tool.status === 'running') return 'fa-solid fa-spinner fa-spin';
+  if (tool.status === 'failed') return 'fa-solid fa-circle-xmark';
+  return 'fa-solid fa-circle-check';
+}
 </script>
 
 <style lang="scss">
@@ -65,93 +70,66 @@ const hasRunning = computed(() => props.items.some(item => item.status === 'runn
   white-space: nowrap;
 }
 
-.dca-tool-list {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
+.dca-tool-expanded {
   border-top: 1px solid var(--dca-border);
-  padding: 0.4rem 0.5rem 0.5rem;
+  padding: 0.45rem 0.5rem 0.5rem;
 }
 
-.dca-tool-row {
-  border: 1px solid var(--dca-border);
-  border-radius: 0;
-  background: var(--dca-surface);
-}
-
-.dca-tool-row > summary {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+.dca-tool-track {
+  display: flex;
+  min-width: 0;
   align-items: center;
-  gap: 0.45rem;
-  padding: 0.3rem 0.5rem;
+  gap: 0.3rem;
+  margin-bottom: 0.45rem;
+  padding-bottom: 0.12rem;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }
 
-.dca-tool-row > summary:hover {
-  background: var(--dca-raised);
-}
-
-.dca-tool-dot {
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 50%;
-  background: var(--dca-success);
-}
-
-.dca-tool-dot-failed {
-  background: var(--dca-danger);
-}
-
-.dca-tool-dot-running {
-  animation: dca-pulse 1.2s ease-in-out infinite;
-  background: var(--dca-info);
-}
-
-.dca-tool-row > summary span {
-  overflow: hidden;
-  color: var(--dca-text);
-  font-family: var(--dca-font-mono);
-  font-size: 0.82rem;
-  text-overflow: ellipsis;
+.dca-tool-track-item {
+  display: inline-flex;
+  min-height: 1.65rem;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid var(--dca-border);
+  border-radius: 999px;
+  padding: 0.15rem 0.45rem;
+  background: var(--dca-canvas);
+  color: var(--dca-text-secondary);
+  font-size: 0.7rem;
   white-space: nowrap;
 }
 
-.dca-tool-row > summary span > i {
-  margin-right: 0.35rem;
-  color: var(--dca-info);
+.dca-tool-track-item > i {
+  color: var(--dca-success);
+  font-size: 0.65rem;
 }
 
-.dca-tool-row > summary small {
-  font-size: 0.74rem;
-}
-
-.dca-tool-details {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  border-top: 1px solid var(--dca-border);
-  padding: 0.45rem 0.5rem;
-}
-
-.dca-tool-details > small {
+.dca-tool-track-item small {
   color: var(--dca-text-muted);
-  font-size: 0.7rem;
-  font-weight: 600;
-  text-transform: uppercase;
+  font-size: 0.62rem;
 }
 
-.dca-tool-row pre {
-  margin: 0;
-  padding: 0;
-  color: var(--dca-text-secondary);
-  font-size: 0.8rem;
+.dca-tool-track-arrow {
+  flex: 0 0 auto;
+  color: var(--dca-text-muted);
+  font-size: 0.55rem;
 }
 
-.dca-tool-failed {
-  color: #f2a3b3;
+.dca-tool-track-failed > i {
+  color: var(--dca-danger);
 }
 
-.dca-tool-running {
+.dca-tool-track-running > i {
   color: var(--dca-info);
+}
+
+.dca-tool-list {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 31rem), 1fr));
+  align-items: start;
+  gap: 0.45rem;
 }
 </style>

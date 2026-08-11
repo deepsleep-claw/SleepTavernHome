@@ -10,11 +10,12 @@
     <div class="dca-resource-toolbar">
       <label class="dca-field">
         <span>当前 Agent</span>
-        <select :value="state.activeAgentConfigurationId" @change="selectConfiguration">
-          <option v-for="configuration in state.agentConfigurations" :key="configuration.id" :value="configuration.id">
-            {{ configuration.name }}
-          </option>
-        </select>
+        <DcaSelect
+          aria-label="当前 Agent"
+          :model-value="state.activeAgentConfigurationId"
+          :options="configurationOptions"
+          @update:model-value="selectConfiguration"
+        />
       </label>
       <div class="dca-row-actions">
         <button type="button" @click="newConfiguration">新建</button>
@@ -38,11 +39,7 @@
         </label>
         <label class="dca-field">
           <span>结构化预设</span>
-          <select v-model="draft.presetId">
-            <option v-for="preset in state.presetProfiles" :key="preset.id" :value="preset.id">
-              {{ preset.name }} · v{{ preset.version }}
-            </option>
-          </select>
+          <DcaSelect v-model="draft.presetId" aria-label="结构化预设" :options="presetOptions" />
         </label>
       </div>
 
@@ -54,24 +51,24 @@
           </div>
           <span>{{ draft.skillIds.length }} / {{ state.skills.length }} 已开启</span>
         </header>
-        <label class="dca-agent-skill-row builtin">
-          <input type="checkbox" checked disabled />
+        <div class="dca-agent-skill-row builtin">
           <span>
             <strong>角色卡与世界书文件读写</strong>
             <small>内置 · full · 始终开启</small>
           </span>
-        </label>
-        <label v-for="skill in state.skills" :key="skill.id" class="dca-agent-skill-row">
-          <input
-            type="checkbox"
-            :checked="draft.skillIds.includes(skill.id)"
-            @change="toggleSkillFromEvent(skill.id, $event)"
-          />
+          <DcaSwitch model-value disabled label="角色卡与世界书文件读写始终开启" />
+        </div>
+        <div v-for="skill in state.skills" :key="skill.id" class="dca-agent-skill-row">
           <span>
             <strong>{{ skill.name }}</strong>
             <small>{{ skill.loading }} · {{ skill.description }}</small>
           </span>
-        </label>
+          <DcaSwitch
+            :label="`${skill.name} Skill`"
+            :model-value="draft.skillIds.includes(skill.id)"
+            @update:model-value="toggleSkill(skill.id, $event)"
+          />
+        </div>
         <div v-if="state.skills.length === 0" class="dca-empty">还没有用户Skill，可先到Skill页面创建。</div>
       </section>
 
@@ -91,17 +88,31 @@
 </template>
 
 <script setup lang="ts">
-import { ref, toRaw, watch } from 'vue';
+import { computed, ref, toRaw, watch } from 'vue';
 import type { AgentConfiguration } from '../../../core/persistence/settings';
 import { useDreamCardAgent } from '../../composables/runtime';
+import DcaSelect from '../DcaSelect.vue';
+import DcaSwitch from '../DcaSwitch.vue';
 
 const { action, runtime, state } = useDreamCardAgent();
 const draft = ref<AgentConfiguration>();
+const configurationOptions = computed(() =>
+  state.value.agentConfigurations.map(configuration => ({ label: configuration.name, value: configuration.id })),
+);
+const presetOptions = computed(() =>
+  state.value.presetProfiles.map(preset => ({
+    label: `${preset.name} · v${preset.version}`,
+    value: preset.id,
+  })),
+);
 
 watch(
   () =>
     `${state.value.activeAgentConfigurationId}:${state.value.agentConfigurations
-      .map(configuration => `${configuration.id}:${configuration.name}:${configuration.presetId}:${configuration.skillIds.join(',')}`)
+      .map(
+        configuration =>
+          `${configuration.id}:${configuration.name}:${configuration.presetId}:${configuration.skillIds.join(',')}`,
+      )
       .join('|')}`,
   () => {
     const selected =
@@ -113,8 +124,7 @@ watch(
   { immediate: true },
 );
 
-async function selectConfiguration(event: Event) {
-  const id = (event.target as HTMLSelectElement).value;
+async function selectConfiguration(id: string) {
   if (id) await action(() => runtime.selectAgentConfiguration(id));
 }
 
@@ -141,10 +151,6 @@ function toggleSkill(id: string, enabled: boolean) {
   draft.value.skillIds = enabled
     ? [...new Set([...draft.value.skillIds, id])]
     : draft.value.skillIds.filter(skillId => skillId !== id);
-}
-
-function toggleSkillFromEvent(id: string, event: Event) {
-  toggleSkill(id, (event.target as HTMLInputElement).checked);
 }
 
 async function saveConfiguration(): Promise<AgentConfiguration | undefined> {
@@ -205,7 +211,8 @@ async function removeConfiguration() {
 
 .dca-agent-skill-row {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: space-between;
   gap: 0.6rem;
   border-radius: var(--dca-radius-sm);
   padding: 0.55rem 0.6rem;
@@ -220,10 +227,5 @@ async function removeConfiguration() {
 .dca-agent-skill-row.builtin {
   border: 1px solid rgb(157 124 255 / 35%);
   cursor: default;
-}
-
-.dca-agent-skill-row input {
-  width: auto;
-  margin-top: 0.18rem;
 }
 </style>

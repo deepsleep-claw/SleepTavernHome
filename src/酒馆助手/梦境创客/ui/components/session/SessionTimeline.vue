@@ -22,7 +22,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useDreamCardAgent } from '../../composables/runtime';
 import { buildTimelineBlocks, defaultRunCollapsed, type RunTimelineBlock } from '../../composables/timeline';
 import ApprovalCard from './timeline/ApprovalCard.vue';
@@ -37,12 +37,33 @@ const { state } = useDreamCardAgent();
 
 const timelineLimit = ref(200);
 const runCollapseOverrides = reactive<Record<string, boolean>>({});
+const timelineNow = ref(Date.now());
+let timelineClock: ReturnType<typeof setInterval> | undefined;
+
+const runIsActive = computed(() => ['running', 'waiting-approval'].includes(state.value.active?.status ?? ''));
 
 const timelineBlocks = computed(() =>
-  buildTimelineBlocks(state.value.active?.ui ?? [], state.value.active?.status, timelineLimit.value),
+  buildTimelineBlocks(state.value.active?.ui ?? [], state.value.active?.status, timelineLimit.value, timelineNow.value),
 );
 const visibleTimelineCount = computed(() => Math.min(state.value.active?.ui.length ?? 0, timelineLimit.value));
 const hiddenTimelineCount = computed(() => Math.max(0, (state.value.active?.ui.length ?? 0) - timelineLimit.value));
+
+watch(
+  runIsActive,
+  active => {
+    timelineNow.value = Date.now();
+    if (timelineClock) {
+      clearInterval(timelineClock);
+      timelineClock = undefined;
+    }
+    if (active) timelineClock = setInterval(() => (timelineNow.value = Date.now()), 1_000);
+  },
+  { immediate: true },
+);
+
+onBeforeUnmount(() => {
+  if (timelineClock) clearInterval(timelineClock);
+});
 
 function isRunCollapsed(block: RunTimelineBlock): boolean {
   return runCollapseOverrides[block.id] ?? defaultRunCollapsed(block);

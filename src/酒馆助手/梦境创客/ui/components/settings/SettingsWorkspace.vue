@@ -13,13 +13,15 @@
       </button>
     </aside>
     <div class="dca-settings-content">
-      <GeneralSettings v-if="settingsSection === 'general'" />
-      <AgentSettings v-else-if="settingsSection === 'agent'" />
-      <PresetSettings v-else-if="settingsSection === 'preset'" />
-      <ApiSettings v-else-if="settingsSection === 'api'" />
-      <SkillSettings v-else-if="settingsSection === 'skills'" />
-      <StorageSettings v-else-if="settingsSection === 'storage'" />
-      <DiagnosticsSettings v-else />
+      <div class="dca-settings-content-inner">
+        <GeneralSettings v-if="settingsSection === 'general'" />
+        <AgentSettings v-else-if="settingsSection === 'agent'" />
+        <PresetSettings v-else-if="settingsSection === 'preset'" />
+        <ApiSettings v-else-if="settingsSection === 'api'" />
+        <SkillSettings v-else-if="settingsSection === 'skills'" />
+        <StorageSettings v-else-if="settingsSection === 'storage'" />
+        <DiagnosticsSettings v-else />
+      </div>
     </div>
   </section>
 </template>
@@ -104,6 +106,13 @@ const navItems: { icon: string; label: string; section: SettingsSection }[] = [
 .dca-settings-content {
   min-height: 0;
   overflow: auto;
+}
+
+.dca-settings-content-inner {
+  width: 100%;
+  max-width: 60rem;
+  min-height: 100%;
+  margin: 0 auto;
 }
 
 @media (max-width: 720px) {

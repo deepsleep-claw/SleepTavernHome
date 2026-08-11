@@ -9,12 +9,12 @@
     <div class="dca-resource-toolbar dca-api-profile-toolbar">
       <label class="dca-field">
         <span>已保存 Profile</span>
-        <select :value="profileForm.id" @change="selectProfile">
-          <option value="">请选择</option>
-          <option v-for="profile in state.profiles" :key="profile.id" :value="profile.id">
-            {{ profile.name }} · {{ profile.model }}
-          </option>
-        </select>
+        <DcaSelect
+          aria-label="已保存 API Profile"
+          :model-value="profileForm.id"
+          :options="profileOptions"
+          @update:model-value="selectProfile"
+        />
       </label>
       <div class="dca-row-actions">
         <button type="button" @click="resetProfileForm">新建</button>
@@ -28,18 +28,21 @@
       <label class="dca-field"><span>名称</span><input v-model="profileForm.name" type="text" /></label>
       <label class="dca-field">
         <span>接口格式</span>
-        <select v-model="profileForm.interfaceType">
-          <option value="openai-responses">OpenAI Responses</option>
-          <option value="openai-chat">OpenAI Chat</option>
-          <option value="anthropic">Anthropic Messages</option>
-        </select>
+        <DcaSelect
+          aria-label="接口格式"
+          :model-value="profileForm.interfaceType"
+          :options="interfaceTypeOptions"
+          @update:model-value="updateInterfaceType"
+        />
       </label>
       <label class="dca-field">
         <span>兼容模式</span>
-        <select v-model="profileForm.compatibilityMode">
-          <option value="standard">标准</option>
-          <option value="deepseek">DeepSeek</option>
-        </select>
+        <DcaSelect
+          aria-label="兼容模式"
+          :model-value="profileForm.compatibilityMode"
+          :options="compatibilityModeOptions"
+          @update:model-value="updateCompatibilityMode"
+        />
       </label>
       <label class="dca-field wide">
         <span>Base URL</span>
@@ -100,7 +103,9 @@
       <p v-if="selectedTemplate" class="dca-template-summary">
         {{ selectedTemplate.name }} · 上下文 {{ formatTokens(selectedTemplate.settings.contextWindow) }} · 输出
         {{ formatTokens(selectedTemplate.settings.maxOutputTokens) }}
-        <a v-if="selectedTemplate.sourceUrl" :href="selectedTemplate.sourceUrl" target="_blank" rel="noreferrer">来源</a>
+        <a v-if="selectedTemplate.sourceUrl" :href="selectedTemplate.sourceUrl" target="_blank" rel="noreferrer"
+          >来源</a
+        >
       </p>
       <div class="dca-config-divider"></div>
       <div class="dca-form-grid" @input.capture="markModelSettingsCustom" @change.capture="markModelSettingsCustom">
@@ -140,11 +145,12 @@
         </label>
         <label v-for="capability in capabilityFields" :key="capability.key" class="dca-field">
           <span>{{ capability.label }}</span>
-          <select v-model="profileForm.capabilities[capability.key]">
-            <option value="auto">自动</option>
-            <option value="enabled">支持</option>
-            <option value="disabled">不支持</option>
-          </select>
+          <DcaSelect
+            :aria-label="capability.label"
+            :model-value="profileForm.capabilities[capability.key]"
+            :options="capabilityOptions"
+            @update:model-value="updateCapability(capability.key, $event)"
+          />
         </label>
         <label class="dca-field wide">
           <span>自定义推理强度</span>
@@ -159,9 +165,7 @@
       </div>
     </section>
 
-    <p class="dca-security-note">
-      AES-GCM 与固定脚本密码只能避免明文展示，不是安全保险箱。建议只在本地酒馆使用。
-    </p>
+    <p class="dca-security-note">AES-GCM 与固定脚本密码只能避免明文展示，不是安全保险箱。建议只在本地酒馆使用。</p>
   </section>
 </template>
 
@@ -180,6 +184,7 @@ import {
 } from '../../../core/provider/model-catalog';
 import type { ApiProfileInput } from '../../../core/provider/profiles';
 import { useDreamCardAgent } from '../../composables/runtime';
+import DcaSelect, { type SelectOption } from '../DcaSelect.vue';
 import SearchableCombobox, { type ComboboxOption } from '../SearchableCombobox.vue';
 
 type ProfileForm = {
@@ -218,6 +223,27 @@ const capabilityFields: { key: ModelCapabilityKey; label: string }[] = [
   { key: 'webSearch', label: '内置联网工具' },
   { key: 'toolCalling', label: '工具调用' },
 ];
+const interfaceTypeOptions: SelectOption[] = [
+  { label: 'OpenAI Responses', value: 'openai-responses' },
+  { label: 'OpenAI Chat', value: 'openai-chat' },
+  { label: 'Anthropic Messages', value: 'anthropic' },
+];
+const compatibilityModeOptions: SelectOption[] = [
+  { label: '标准', value: 'standard' },
+  { label: 'DeepSeek', value: 'deepseek' },
+];
+const capabilityOptions: SelectOption[] = [
+  { description: '根据接口与模型自动判断', label: '自动', value: 'auto' },
+  { label: '支持', value: 'enabled' },
+  { label: '不支持', value: 'disabled' },
+];
+const profileOptions = computed<SelectOption[]>(() => [
+  { label: '请选择', value: '' },
+  ...state.value.profiles.map(profile => ({
+    label: `${profile.name} · ${profile.model}`,
+    value: profile.id,
+  })),
+]);
 
 const allTemplates = computed(() => {
   const result = new Map<string, ModelTemplate>();
@@ -242,7 +268,9 @@ const templateOptions = computed<ComboboxOption[]>(() => [
     value: template.id,
   })),
 ]);
-const selectedTemplate = computed(() => availableTemplates.value.find(template => template.id === selectedTemplateId.value));
+const selectedTemplate = computed(() =>
+  availableTemplates.value.find(template => template.id === selectedTemplateId.value),
+);
 const samplingIgnoredWhenReasoning = computed(() => profileForm.compatibilityMode === 'deepseek');
 const templateSourceLabel = computed(() => {
   if (selectedTemplateId.value === 'custom') return '自定义';
@@ -273,9 +301,7 @@ watch(
         topP: profile.modelSettings.topP ?? '',
       });
       selectedTemplateId.value = profile.appliedModelTemplate?.id ?? 'custom';
-      appliedTemplateReference.value = profile.appliedModelTemplate
-        ? { ...profile.appliedModelTemplate }
-        : undefined;
+      appliedTemplateReference.value = profile.appliedModelTemplate ? { ...profile.appliedModelTemplate } : undefined;
     }
     modelOptions.value = [];
     queueMicrotask(() => {
@@ -464,9 +490,22 @@ async function removeProfile() {
   if (await action(() => runtime.removeProfile(profileForm.id))) resetProfileForm();
 }
 
-async function selectProfile(event: Event) {
-  const id = (event.target as HTMLSelectElement).value;
+async function selectProfile(id: string) {
   if (id) await action(() => runtime.selectProfile(id));
+}
+
+function updateInterfaceType(value: string) {
+  if (value === 'openai-responses' || value === 'openai-chat' || value === 'anthropic') {
+    profileForm.interfaceType = value;
+  }
+}
+
+function updateCompatibilityMode(value: string) {
+  if (value === 'standard' || value === 'deepseek') profileForm.compatibilityMode = value;
+}
+
+function updateCapability(key: ModelCapabilityKey, value: string) {
+  if (value === 'auto' || value === 'enabled' || value === 'disabled') profileForm.capabilities[key] = value;
 }
 
 function sourceLabel(source: ModelTemplate['source']) {

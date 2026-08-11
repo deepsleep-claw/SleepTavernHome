@@ -3,11 +3,7 @@
     <div class="dca-composer-shell" @dragover.prevent @drop.prevent="handleDrop">
       <div v-if="attachments.length" class="dca-attachment-tray">
         <article v-for="attachment in attachments" :key="attachment.id" class="dca-attachment-chip">
-          <img
-            v-if="attachment.previewUrl"
-            :src="attachment.previewUrl"
-            :alt="attachment.file.name"
-          />
+          <img v-if="attachment.previewUrl" :src="attachment.previewUrl" :alt="attachment.file.name" />
           <i v-else class="fa-regular fa-file-lines" aria-hidden="true"></i>
           <div>
             <strong>{{ attachment.file.name }}</strong>
@@ -61,16 +57,15 @@
           >
             <i class="fa-regular fa-image" aria-hidden="true"></i>
           </button>
-          <select
+          <DcaSelect
             class="dca-composer-select dca-mode-select"
-            :value="state.active?.mode ?? 'normal'"
+            aria-label="审批模式"
+            :model-value="state.active?.mode ?? 'normal'"
+            :options="approvalModeOptions"
             :disabled="isRunning || state.busy || !state.active"
             title="修改审批模式"
-            @change="changeMode"
-          >
-            <option value="normal">审批：手动</option>
-            <option value="yolo">审批：YOLO</option>
-          </select>
+            @update:model-value="changeMode"
+          />
           <button
             v-if="supportsWebSearch"
             class="dca-web-toggle"
@@ -87,51 +82,38 @@
 
         <div class="dca-composer-right">
           <button v-if="canResume" type="button" :disabled="state.busy" @click="resume">从中断处继续</button>
-          <button
-            v-if="isRunning"
-            class="dca-composer-icon dca-stop-button"
-            type="button"
-            title="停止当前任务"
-            aria-label="停止当前任务"
-            @click="stop"
-          >
-            <i class="fa-solid fa-stop" aria-hidden="true"></i>
-          </button>
-          <select
+          <DcaSelect
             class="dca-composer-select dca-profile-select"
-            :value="state.activeProfileId ?? ''"
+            aria-label="API Profile"
+            :model-value="state.activeProfileId ?? ''"
+            :options="profileSelectOptions"
             :disabled="isRunning || state.busy || state.profiles.length === 0"
             title="切换API Profile"
-            @change="changeProfile"
-          >
-            <option value="" disabled>API Profile</option>
-            <option v-for="profile in state.profiles" :key="profile.id" :value="profile.id">
-              API：{{ profile.name }}
-            </option>
-          </select>
-          <select
+            @update:model-value="changeProfile"
+          />
+          <DcaSelect
             v-if="supportsReasoning"
             class="dca-composer-select dca-reasoning-select"
-            :value="state.active?.modelControls?.reasoningEffort ?? 'auto'"
+            aria-label="推理强度"
+            :model-value="state.active?.modelControls?.reasoningEffort ?? 'auto'"
+            :options="reasoningOptions"
             :disabled="isRunning || state.busy"
             title="本会话的推理强度"
-            @change="changeReasoning"
-          >
-            <option value="auto">推理：自动</option>
-            <option value="off">推理：关闭</option>
-            <option v-for="effort in reasoningEfforts" :key="effort.id" :value="effort.id">
-              推理：{{ effort.name }}
-            </option>
-          </select>
+            @update:model-value="changeReasoning"
+          />
           <button
             class="dca-send-button"
+            :class="{
+              'dca-guidance-button': primaryAction === 'guidance',
+              'dca-stop-button': primaryAction === 'stop',
+            }"
             type="button"
-            :disabled="!canSubmit"
-            :title="isRunning ? '发送中途引导' : '发送消息'"
-            :aria-label="isRunning ? '发送中途引导' : '发送消息'"
-            @click="submit"
+            :disabled="!canUsePrimaryAction"
+            :title="primaryActionLabel"
+            :aria-label="primaryActionLabel"
+            @click="handlePrimaryAction"
           >
-            <i class="fa-solid fa-arrow-up" aria-hidden="true"></i>
+            <i :class="primaryActionIcon" aria-hidden="true"></i>
           </button>
         </div>
       </div>
@@ -143,13 +125,10 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from 'vue';
 import { providerAdapterCapabilities } from '../../../core/provider-probe';
-import {
-  fileToSessionAttachment,
-  isImageAttachment,
-  validateAttachmentFiles,
-} from '../../../core/session/attachments';
+import { fileToSessionAttachment, isImageAttachment, validateAttachmentFiles } from '../../../core/session/attachments';
 import { formatBytes } from '../../composables/format';
 import { useDreamCardAgent } from '../../composables/runtime';
+import DcaSelect from '../DcaSelect.vue';
 
 type AttachmentDraft = {
   file: File;
@@ -169,10 +148,8 @@ const activeProfile = computed(() => state.value.profiles.find(profile => profil
 const supportsWebSearch = computed(
   () =>
     Boolean(activeProfile.value) &&
-    providerAdapterCapabilities(
-      activeProfile.value!.interfaceType,
-      activeProfile.value!.compatibilityMode,
-    ).nativeWebSearch &&
+    providerAdapterCapabilities(activeProfile.value!.interfaceType, activeProfile.value!.compatibilityMode)
+      .nativeWebSearch &&
     activeProfile.value?.modelSettings?.capabilities.webSearch === 'enabled',
 );
 const supportsReasoning = computed(
@@ -182,6 +159,19 @@ const supportsVision = computed(
   () => Boolean(activeProfile.value) && activeProfile.value?.modelSettings?.capabilities.vision !== 'disabled',
 );
 const reasoningEfforts = computed(() => activeProfile.value?.modelSettings?.reasoningEfforts ?? []);
+const approvalModeOptions = [
+  { label: '审批：手动', value: 'normal' },
+  { label: '审批：YOLO', value: 'yolo' },
+];
+const profileSelectOptions = computed(() => [
+  { disabled: true, label: 'API Profile', value: '' },
+  ...state.value.profiles.map(profile => ({ label: `API：${profile.name}`, value: profile.id })),
+]);
+const reasoningOptions = computed(() => [
+  { label: '推理：自动', value: 'auto' },
+  { label: '推理：关闭', value: 'off' },
+  ...reasoningEfforts.value.map(effort => ({ label: `推理：${effort.name}`, value: effort.id })),
+]);
 
 const isRunning = computed(() => ['running', 'waiting-approval'].includes(state.value.active?.status ?? ''));
 const canResume = computed(
@@ -203,6 +193,21 @@ const canSubmit = computed(
     !attachmentBusy.value &&
     (isRunning.value || (canSend.value && !state.value.busy)),
 );
+const primaryAction = computed<'guidance' | 'send' | 'stop'>(() => {
+  if (!isRunning.value) return 'send';
+  return message.value.trim() ? 'guidance' : 'stop';
+});
+const primaryActionLabel = computed(() => {
+  if (primaryAction.value === 'stop') return '停止当前任务';
+  if (primaryAction.value === 'guidance') return '发送中途引导';
+  return '发送消息';
+});
+const primaryActionIcon = computed(() => {
+  if (primaryAction.value === 'stop') return 'fa-solid fa-stop';
+  if (primaryAction.value === 'guidance') return 'fa-solid fa-paper-plane';
+  return 'fa-solid fa-arrow-up';
+});
+const canUsePrimaryAction = computed(() => primaryAction.value === 'stop' || canSubmit.value);
 const shortcutHint = computed(() => {
   if (isRunning.value) return '运行中：发送即中途引导';
   return state.value.sendWithCtrlEnter ? 'Ctrl + Enter 发送' : 'Enter 发送 · Shift + Enter 换行';
@@ -241,6 +246,14 @@ async function submit() {
     message.value = text;
     attachments.value = previousAttachments;
   }
+}
+
+function handlePrimaryAction() {
+  if (primaryAction.value === 'stop') {
+    stop();
+    return;
+  }
+  void submit();
 }
 
 function handleKeydown(event: KeyboardEvent) {
@@ -321,17 +334,16 @@ async function toggleWebSearch() {
   await action(() => runtime.setModelControls({ webSearch: !state.value.active?.modelControls?.webSearch }));
 }
 
-async function changeReasoning(event: Event) {
-  await action(() => runtime.setModelControls({ reasoningEffort: (event.target as HTMLSelectElement).value }));
+async function changeReasoning(reasoningEffort: string) {
+  await action(() => runtime.setModelControls({ reasoningEffort }));
 }
 
-async function changeProfile(event: Event) {
-  const id = (event.target as HTMLSelectElement).value;
+async function changeProfile(id: string) {
   if (id) await action(() => runtime.selectProfile(id));
 }
 
-async function changeMode(event: Event) {
-  await action(() => runtime.setMode((event.target as HTMLSelectElement).value === 'yolo' ? 'yolo' : 'normal'));
+async function changeMode(mode: string) {
+  await action(() => runtime.setMode(mode === 'yolo' ? 'yolo' : 'normal'));
 }
 
 function stop() {
@@ -363,7 +375,9 @@ onBeforeUnmount(() => attachments.value.forEach(revokePreview));
   padding: 0.45rem;
   background: var(--dca-canvas);
   box-shadow: var(--dca-shadow-1);
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition:
+    border-color 120ms ease,
+    box-shadow 120ms ease;
 }
 
 .dca-composer-shell:focus-within {
@@ -493,21 +507,44 @@ onBeforeUnmount(() => attachments.value.forEach(revokePreview));
   color: white;
 }
 
-.dca-app .dca-stop-button {
-  color: var(--dca-danger);
+.dca-app button.dca-send-button.dca-guidance-button {
+  background: var(--dca-accent);
+  color: #fff;
+  box-shadow: 0 0 0 3px var(--dca-accent-soft);
 }
 
-.dca-app .dca-composer-select {
+.dca-app button.dca-send-button.dca-guidance-button:hover:not(:disabled) {
+  background: var(--dca-accent-strong);
+  color: var(--dca-canvas);
+}
+
+.dca-app button.dca-send-button.dca-stop-button {
+  background: var(--dca-danger);
+  color: #fff;
+  box-shadow: 0 0 0 3px var(--dca-danger-soft);
+}
+
+.dca-app button.dca-send-button.dca-stop-button:hover:not(:disabled) {
+  background: #ef8095;
+  color: #fff;
+}
+
+.dca-composer-select {
   width: auto;
+  min-width: 6.6rem;
+}
+
+.dca-app .dca-composer-select .dca-select-trigger {
   min-height: 1.95rem;
   border-color: transparent;
-  padding: 0.15rem 1.45rem 0.15rem 0.42rem;
-  background-color: transparent;
+  padding: 0.15rem 0.42rem;
+  background: transparent;
   color: var(--dca-text-secondary);
   font-size: 0.72rem;
 }
 
-.dca-app .dca-profile-select {
+.dca-profile-select {
+  width: min(12rem, 24vw);
   max-width: 12rem;
 }
 
@@ -554,7 +591,8 @@ onBeforeUnmount(() => attachments.value.forEach(revokePreview));
     justify-content: flex-end;
   }
 
-  .dca-app .dca-profile-select {
+  .dca-profile-select {
+    width: min(8.5rem, 34vw);
     max-width: 8.5rem;
   }
 

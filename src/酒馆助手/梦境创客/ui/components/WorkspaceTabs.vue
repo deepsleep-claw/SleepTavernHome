@@ -194,25 +194,29 @@ const canCreateSession = computed(() => Boolean(state.value.currentCharacter && 
   background: transparent;
 }
 
-.dca-session-tab-open {
+.dca-app .dca-session-tab-open {
   display: flex;
   width: 100%;
   height: 100%;
   align-items: center;
   justify-content: flex-start;
   gap: 0.4rem;
+  overflow: hidden;
   border-radius: inherit;
-  padding: 0.35rem 2rem 0.35rem 0.7rem;
+  padding: 0.35rem 2.35rem 0.35rem 0.7rem;
   text-align: left;
 }
 
 .dca-session-tab-open span {
+  min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .dca-session-tab-open small {
+  flex: 0 0 auto;
   color: var(--dca-text-muted);
 }
 
