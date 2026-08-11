@@ -3,7 +3,9 @@ import { z } from 'zod';
 import { parseYamlObject } from '../mapping/serde';
 import { assessSkillMutation } from '../skills/skill-registry';
 import { dreamCreatorFileReference } from '../session/attachments';
+import type { TavernChatWorkspace } from '../tavern/chat-workspace';
 import { parentWorkspacePath } from '../workspace/path';
+import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
 import { applyUnifiedPatch } from '../workspace/unified-patch';
 import { maskSecretsForModel, restoreSecretsFromModel } from '../workspace/secret-protection';
 import { isBinaryWorkspaceFile, type WorkspaceRepository } from '../workspace/types';
@@ -92,6 +94,8 @@ function skillConfirmation(
 
 export type WorkspaceRunnerToolOptions = {
   canWriteNonCharacterResources?: () => boolean;
+  chatWorkspace?: TavernChatWorkspace;
+  isYolo?: () => boolean;
 };
 
 type MutationOperation = 'delete' | 'move' | 'patch' | 'write';
@@ -102,6 +106,26 @@ function nonCharacterResourcePath(path: string): boolean {
 
 function characterScriptPath(path: string): boolean {
   return path.startsWith('/tavern-helper-scripts/character/');
+}
+
+function chatPath(path: string): boolean {
+  return path.startsWith('/context/chats/');
+}
+
+function chatConfirmation(
+  path: string,
+  options: WorkspaceRunnerToolOptions,
+  toolCallId: string,
+  toolName: string,
+): ToolConfirmation | undefined {
+  if (!chatPath(path) || !options.chatWorkspace || options.isYolo?.() || !options.chatWorkspace.needsAuthorization()) {
+    return undefined;
+  }
+  return {
+    description: '本次运行将直接修改当前角色的酒馆聊天记录；聊天改动不进入角色卡Diff与快照。',
+    toolCallId,
+    toolName,
+  };
 }
 
 async function currentScriptEnabled(repository: WorkspaceRepository, path: string): Promise<boolean> {
@@ -223,6 +247,7 @@ export function createWorkspaceRunnerTools(
       confirmation: async (input, toolCallId) => {
         const path = (input as { path: string }).path;
         return (
+          chatConfirmation(path, options, toolCallId, 'write_file') ??
           skillConfirmation('write', path, existingSkillIds, toolCallId, 'write_file') ??
           (await resourceConfirmation('write', path, input, repository, options, toolCallId, 'write_file'))
         );
@@ -233,6 +258,13 @@ export function createWorkspaceRunnerTools(
       }),
       execute: async (input, toolCallId) => {
         const value = input as { content: string; path: string };
+        if (chatPath(value.path) && options.chatWorkspace) {
+          options.chatWorkspace.authorizeRun();
+          const result = await options.chatWorkspace.executeOnce(toolCallId, () =>
+            options.chatWorkspace!.writeFile(value.path, value.content, repository as MemoryWorkspaceRepository),
+          );
+          return { idempotent: !result.executed, path: value.path, written: true };
+        }
         let current = '';
         try {
           current = (await repository.read(value.path)).content;
@@ -250,6 +282,7 @@ export function createWorkspaceRunnerTools(
       confirmation: async (input, toolCallId) => {
         const path = (input as { path: string }).path;
         return (
+          chatConfirmation(path, options, toolCallId, 'apply_patch') ??
           skillConfirmation('patch', path, existingSkillIds, toolCallId, 'apply_patch') ??
           (await resourceConfirmation('patch', path, input, repository, options, toolCallId, 'apply_patch'))
         );
@@ -260,6 +293,13 @@ export function createWorkspaceRunnerTools(
       }),
       execute: async (input, toolCallId) => {
         const value = input as { patch: string; path: string };
+        if (chatPath(value.path) && options.chatWorkspace) {
+          options.chatWorkspace.authorizeRun();
+          const result = await options.chatWorkspace.executeOnce(toolCallId, () =>
+            options.chatWorkspace!.patchFile(value.path, value.patch, repository as MemoryWorkspaceRepository),
+          );
+          return { idempotent: !result.executed, patched: true, path: value.path };
+        }
         const current = await repository.read(value.path);
         if (isBinaryWorkspaceFile(current)) throw new Error(`二进制文件不能使用apply_patch：${current.path}`);
         const masked = await maskSecretsForModel(current.content, current.path);
@@ -287,6 +327,8 @@ export function createWorkspaceRunnerTools(
       }),
       execute: async (input, toolCallId) => {
         const value = input as { from: string; to: string };
+        options.chatWorkspace?.assertNoMoveOrDelete(value.from);
+        options.chatWorkspace?.assertNoMoveOrDelete(value.to);
         await repository.move(value.from, value.to, toolCallId);
         return { from: value.from, moved: true, to: value.to };
       },
@@ -307,6 +349,7 @@ export function createWorkspaceRunnerTools(
       }),
       execute: async (input, toolCallId) => {
         const value = input as { path: string };
+        options.chatWorkspace?.assertNoMoveOrDelete(value.path);
         await repository.remove(value.path, toolCallId);
         return { deleted: true, path: value.path };
       },

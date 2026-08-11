@@ -5,6 +5,7 @@ import { ContentAddressedSnapshotStore } from '../history/snapshot-store';
 import { MemoryTavernFileClient } from '../persistence/file-client';
 import { MemoryAgentSettingsStore } from '../persistence/settings';
 import { DreamCreatorWorkspaceFileStore } from '../persistence/workspace-file-store';
+import { FakeTavernChatBridge } from '../tavern/chat-bridge';
 import type { PersistedSessionRuntime } from './types';
 import { MemoryCardStateAdapter } from '../transaction/adapter';
 import type { ApprovalDecision } from '../transaction/merge';
@@ -381,6 +382,166 @@ describe('card agent session service', () => {
     finish(step([], '完成'));
     expect((await running).status).toBe('awaiting-approval');
     expect(persist).toHaveBeenCalledTimes(1);
+  });
+
+  it('调用酒馆生成前提交Working Copy，并在同一Agent运行中继续测试聊天', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const chatBridge = new FakeTavernChatBridge();
+    const requestToolApproval = vi.fn(async () => true);
+    const executor = new QueueExecutor([
+      step([writeDescription('生成前已经提交', 'before-chat-write')]),
+      step([
+        {
+          input: {
+            content: ['---', 'role: user', '---', '请测试角色回复'].join('\n'),
+            path: '/context/chats/c01/messages/0000-0099/000001.md',
+          },
+          toolCallId: 'append-chat-message',
+          toolName: 'write_file',
+        },
+      ]),
+      step([
+        {
+          input: { chatId: 'c01' },
+          toolCallId: 'generate-chat-reply',
+          toolName: 'generate_tavern_reply',
+        },
+      ]),
+      step([], '测试完成'),
+    ]);
+    const service = await CardAgentSessionService.create({
+      adapter,
+      executor,
+      lock: new GlobalAgentTaskLock(),
+      requestToolApproval,
+      snapshots: snapshots(),
+      tavernChatBridge: chatBridge,
+    });
+
+    const running = service.send('修改角色并测试');
+    await vi.waitFor(() => expect(service.view().status).toBe('awaiting-approval'));
+    expect((await adapter.read()).character.fields.description).toBe('base description');
+    expect(service.view().approval?.stateChanges).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: '/character/fields/description' })]),
+    );
+    await service.approve({ '/character/fields/description': 'agent' });
+
+    const completed = await running;
+    expect(completed.approval).toBeUndefined();
+    expect(completed.status).toBe('completed');
+    expect((await adapter.read()).character.fields.description).toBe('生成前已经提交');
+    expect(chatBridge.calls).toContain('generate-reply');
+    expect(requestToolApproval).toHaveBeenCalledOnce();
+  });
+
+  it('拒绝生成前全部改动时不执行酒馆生成，并把结果留给Agent继续决策', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const chatBridge = new FakeTavernChatBridge();
+    const executor = new QueueExecutor([
+      step([writeDescription('不应写入', 'rejected-before-chat')]),
+      step([
+        {
+          input: {
+            content: ['---', 'role: user', '---', '用于触发测试'].join('\n'),
+            path: '/context/chats/c01/messages/0000-0099/000001.md',
+          },
+          toolCallId: 'append-before-rejected-generate',
+          toolName: 'write_file',
+        },
+      ]),
+      step([
+        {
+          input: { chatId: 'c01' },
+          toolCallId: 'rejected-generate',
+          toolName: 'generate_tavern_reply',
+        },
+      ]),
+      step([], '已根据拒绝结果停止测试'),
+    ]);
+    const service = await CardAgentSessionService.create({
+      adapter,
+      executor,
+      lock: new GlobalAgentTaskLock(),
+      requestToolApproval: async () => true,
+      snapshots: snapshots(),
+      tavernChatBridge: chatBridge,
+    });
+
+    const running = service.send('修改后测试');
+    await vi.waitFor(() => expect(service.view().status).toBe('awaiting-approval'));
+    await service.approve({ '/character/fields/description': 'current' });
+
+    expect((await running).status).toBe('completed');
+    expect((await adapter.read()).character.fields.description).toBe('base description');
+    expect(chatBridge.calls).not.toContain('generate-reply');
+    expect(service.view().events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ error: expect.stringContaining('CHECKPOINT_REJECTED'), type: 'tool-failed' }),
+      ]),
+    );
+  });
+
+  it('页面中断后仍能恢复生成前检查点，拒绝结果会传回原工具步骤', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const chatBridge = new FakeTavernChatBridge();
+    let persistedRuntime!: PersistedSessionRuntime;
+    let persistedFiles!: WorkspaceFile[];
+    const interrupted = await CardAgentSessionService.create({
+      adapter,
+      executor: new QueueExecutor([
+        step([writeDescription('中断前候选', 'interrupted-write')]),
+        step([
+          {
+            input: {
+              content: ['---', 'role: user', '---', '准备测试'].join('\n'),
+              path: '/context/chats/c01/messages/0000-0099/000001.md',
+            },
+            toolCallId: 'interrupted-chat-append',
+            toolName: 'write_file',
+          },
+        ]),
+        step([
+          {
+            input: { chatId: 'c01' },
+            toolCallId: 'interrupted-generate',
+            toolName: 'generate_tavern_reply',
+          },
+        ]),
+      ]),
+      lock: new GlobalAgentTaskLock(),
+      onPersist: async (runtime, files) => {
+        persistedRuntime = structuredClone(runtime);
+        persistedFiles = structuredClone(files);
+      },
+      requestToolApproval: async () => true,
+      snapshots: snapshots(),
+      tavernChatBridge: chatBridge,
+    });
+
+    void interrupted.send('中断恢复测试');
+    await vi.waitFor(() => expect(interrupted.view().status).toBe('awaiting-approval'));
+    const restored = await CardAgentSessionService.restore(
+      {
+        adapter,
+        executor: new QueueExecutor([step([], '已从拒绝处恢复')]),
+        lock: new GlobalAgentTaskLock(),
+        requestToolApproval: async () => true,
+        snapshots: snapshots(),
+        tavernChatBridge: chatBridge,
+      },
+      persistedRuntime,
+      persistedFiles,
+    );
+
+    expect(restored.view().status).toBe('awaiting-approval');
+    expect((await restored.approve({ '/character/fields/description': 'current' })).status).toBe('failed');
+    expect((await restored.resume()).status).toBe('completed');
+    expect(chatBridge.calls).not.toContain('generate-reply');
+    expect(restored.view().events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ error: expect.stringContaining('CHECKPOINT_REJECTED'), type: 'tool-failed' }),
+      ]),
+    );
   });
 
   it('流式展示模型思考，并在模型步骤结束后记录耗时和折叠状态', async () => {

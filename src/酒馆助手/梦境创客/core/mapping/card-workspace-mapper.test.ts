@@ -106,12 +106,12 @@ function state(): CardWorkspaceState {
 }
 
 describe('card workspace mapper', () => {
-  it('投影固定角色文件、具名开场白、世界书和分页只读聊天', () => {
+  it('投影固定角色文件、具名开场白和世界书，聊天由独立实时工作区负责', () => {
     const files = projectCardWorkspace(state(), 2);
     const paths = files.map(item => item.path);
     expect(paths).toContain('/character/description.md');
     expect(paths).toContain('/greetings/001-初见.md');
-    expect(paths).toContain('/context/chat/messages-0002.md');
+    expect(paths.some(path => path.startsWith('/context/'))).toBe(false);
     expect(paths).toContain(`/worldbooks/${encodeWorkspaceSegment('学院')}/book.yaml`);
     expect(files.find(item => item.path.includes('worldbooks-global-readonly'))?.readonly).toBe(true);
     expect(files.find(item => item.path === '/character/identity.yaml')?.readonly).toBe(true);

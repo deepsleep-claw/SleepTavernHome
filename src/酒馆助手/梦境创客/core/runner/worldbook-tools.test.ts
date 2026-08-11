@@ -72,6 +72,11 @@ describe('世界书Runner工具', () => {
     const result = materializeCardWorkspace(base, repository.snapshot()).state;
     expect(result.bindings).toMatchObject({ additional: ['资料库'], primary: '资料库' });
     expect(result.worldbooks.find(book => book.name === '资料库')).toMatchObject({ writable: true });
+    expect(
+      repository
+        .changes()
+        .some(change => change.path.startsWith('/worldbooks/') && change.path !== '/worldbooks/bindings.yaml'),
+    ).toBe(false);
   });
 
   it('没有聊天控制器时拒绝聊天绑定且不留下部分修改', async () => {

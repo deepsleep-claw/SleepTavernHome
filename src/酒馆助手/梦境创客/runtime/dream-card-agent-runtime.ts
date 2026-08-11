@@ -52,6 +52,7 @@ import { ExternalSessionAttachmentStore } from '../core/session/attachment-store
 import { GlobalSkillStore } from '../core/skills/global-skill-store';
 import type { AgentSkill } from '../core/skills/types';
 import { createGlobalTavernBridge, type TavernBridge } from '../core/tavern/bridge';
+import { createGlobalTavernChatBridge, type TavernChatBridge } from '../core/tavern/chat-bridge';
 import { ProductionCardStateAdapter } from '../core/tavern/production-adapter';
 import type { CardStateAdapter } from '../core/transaction/adapter';
 import { commitWorkingCopy } from '../core/transaction/commit';
@@ -107,6 +108,7 @@ export type CharacterSessionGroup = {
 type RuntimeOptions = {
   adapterFactory?: () => CardStateAdapter;
   bridge?: TavernBridge;
+  chatBridge?: TavernChatBridge;
   executorFactory?: (profile: ApiProfile) => ModelStepExecutor;
   fileClient?: TavernFileClient;
   now?: () => number;
@@ -136,6 +138,7 @@ export class DreamCardAgentRuntime {
   private activeService?: CardAgentSessionService;
   private readonly adapterFactory: () => CardStateAdapter;
   private readonly bridge: TavernBridge;
+  private readonly chatBridge?: TavernChatBridge;
   private readonly characterStore: CharacterMetadataStore;
   private readonly executorFactory: (profile: ApiProfile) => ModelStepExecutor;
   private readonly fileClient: TavernFileClient;
@@ -158,6 +161,12 @@ export class DreamCardAgentRuntime {
   constructor(options: RuntimeOptions = {}) {
     const bridge = options.bridge ?? createGlobalTavernBridge();
     this.bridge = bridge;
+    const hasTavernChatGlobals =
+      typeof SillyTavern !== 'undefined' &&
+      typeof getChatMessages === 'function' &&
+      typeof createChatMessages === 'function';
+    this.chatBridge =
+      options.chatBridge ?? (!options.bridge && hasTavernChatGlobals ? createGlobalTavernChatBridge() : undefined);
     this.adapterFactory = options.adapterFactory ?? (() => new ProductionCardStateAdapter(bridge));
     this.executorFactory = options.executorFactory ?? (profile => new ProfileModelStepExecutor(profile));
     this.fileClient = options.fileClient ?? new GlobalTavernFileClient();
@@ -324,6 +333,7 @@ export class DreamCardAgentRuntime {
         preset: this.selectedPreset(agentConfiguration.presetId),
         snapshots: new ContentAddressedSnapshotStore(snapshotBlobs),
         tavernBridge: this.bridge,
+        tavernChatBridge: this.chatBridge,
         sessionId,
         skills: mountedSkills,
         title: input.title,
@@ -410,6 +420,7 @@ export class DreamCardAgentRuntime {
           requestToolApproval: request => this.requestToolConfirmation(request),
           snapshots: new ContentAddressedSnapshotStore(snapshotBlobs),
           tavernBridge: this.bridge,
+          tavernChatBridge: this.chatBridge,
           workspaceFiles: await this.workspaceFileStore.project(current.character.bindingId, sessionId),
           workspaceStore: this.workspaceFileStore,
         },

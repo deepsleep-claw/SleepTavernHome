@@ -8,6 +8,7 @@ import type { AgentSkill } from '../skills/types';
 import type { MergeConflict, MergePreparation } from '../transaction/merge';
 import type { StateOperation } from '../transaction/state-diff';
 import type { WorkspaceChange, WorkspaceFile } from '../workspace/types';
+import type { TavernChatWorkspaceRuntime } from '../tavern/chat-workspace';
 import type { SessionAttachmentSummary, StoredSessionAttachment } from './attachments';
 
 export type SessionMode = 'normal' | 'yolo';
@@ -115,9 +116,11 @@ export type PersistedSessionRuntime = {
   modelMessages: ModelMessage[];
   pending?: PendingCandidate;
   preset: StructuredPreset;
+  rejectNextTavernGeneration?: boolean;
   sessionId: string;
   skills: AgentSkill[];
   status: SessionLifecycleStatus;
+  tavernChats?: TavernChatWorkspaceRuntime;
   title: string;
   ui: SessionUiItem[];
   updatedAt: number;
@@ -139,6 +142,7 @@ export type SessionView = {
   sessionId: string;
   skills: AgentSkill[];
   status: SessionLifecycleStatus;
+  tavernChats?: TavernChatWorkspaceRuntime;
   title: string;
   ui: SessionUiItem[];
   warnings: string[];
@@ -156,5 +160,6 @@ export type PendingCandidate = {
   skills: AgentSkill[];
   state: CardWorkspaceState;
   stopped: boolean;
+  midRun?: boolean;
   warnings: string[];
 };

@@ -191,6 +191,24 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
   }
 
   /**
+   * 把已提交的数据设为新的Base，同时保留本会话已经完成的工具调用ID。
+   * Agent中途提交后仍有同一个Runner继续执行，因此不能替换Repository实例。
+   */
+  rebase(inputs: WorkspaceFile[]): void {
+    const files = inputs.map(input => {
+      const path = normalizeWorkspacePath(input.path);
+      return { ...cloneFile(input), path };
+    });
+    this.base.clear();
+    this.current.clear();
+    this.movedFrom.clear();
+    for (const input of files) {
+      this.base.set(input.path, cloneFile(input));
+      this.current.set(input.path, cloneFile(input));
+    }
+  }
+
+  /**
    * 用最新的外部投影替换一个目录，同时更新Base与Working Copy。
    * 适用于聊天、只读资料库等不应进入角色卡Diff的实时视图。
    */

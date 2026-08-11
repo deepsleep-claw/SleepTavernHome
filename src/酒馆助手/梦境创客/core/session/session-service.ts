@@ -13,11 +13,14 @@ import { measureContext } from '../runner/context';
 import { recoverPendingRunnerStep } from '../runner/recovery';
 import type { ModelStepExecutor } from '../runner/step-executor';
 import { createWorkspaceRunnerTools, type ToolConfirmation } from '../runner/tools';
+import { createTavernChatRunnerTools } from '../runner/tavern-chat-tools';
 import { createWorldbookRunnerTools } from '../runner/worldbook-tools';
 import { materializeUserSkills, projectSkills } from '../skills/skill-registry';
 import type { AgentSkill } from '../skills/types';
 import type { CardStateAdapter } from '../transaction/adapter';
 import type { TavernBridge } from '../tavern/bridge';
+import type { TavernChatBridge } from '../tavern/chat-bridge';
+import { TavernChatWorkspace } from '../tavern/chat-workspace';
 import { canonicalEqual, canonicalStringify } from '../transaction/canonical';
 import { commitWorkingCopy } from '../transaction/commit';
 import { defaultApprovals, prepareThreeWayMerge, type ApprovalDecision } from '../transaction/merge';
@@ -68,6 +71,7 @@ type SessionServiceOptions = {
   skills?: AgentSkill[];
   snapshots: ContentAddressedSnapshotStore;
   tavernBridge?: TavernBridge;
+  tavernChatBridge?: TavernChatBridge;
   attachmentStore?: SessionAttachmentStore;
   title?: string;
   workspaceFiles?: WorkspaceFile[];
@@ -87,6 +91,10 @@ function isStoragePath(path: string): boolean {
 
 function persistentStorageFiles(files: WorkspaceFile[]): WorkspaceFile[] {
   return files.filter(file => file.path.startsWith('/files/')).map(file => klona(file));
+}
+
+function persistedWorkingCopyFiles(files: WorkspaceFile[]): WorkspaceFile[] {
+  return files.filter(file => !file.path.startsWith('/context/chats/')).map(file => klona(file));
 }
 
 function workspaceApprovalChanges(changes: WorkspaceChange[]) {
@@ -242,9 +250,11 @@ export class CardAgentSessionService {
   private readonly onSkillsCommit?: SessionServiceOptions['onSkillsCommit'];
   private readonly onUpdate?: SessionServiceOptions['onUpdate'];
   private readonly requestToolApproval?: SessionServiceOptions['requestToolApproval'];
+  private rejectNextTavernGeneration = false;
   private readonly scheduleStreamingUpdate: (callback: () => void) => () => void;
   private readonly snapshots: ContentAddressedSnapshotStore;
   private readonly tavernBridge?: TavernBridge;
+  private readonly tavernChatWorkspace?: TavernChatWorkspace;
   private storageBaseFiles: WorkspaceFile[] = [];
   private storageFiles: WorkspaceFile[] = [];
   private readonly workspaceStore?: DreamCreatorWorkspaceFileStore;
@@ -266,6 +276,8 @@ export class CardAgentSessionService {
   private ui: SessionUiItem[] = [];
   private warnings: string[] = [];
   private cancelStreamingUpdate?: () => void;
+  private midRunCheckpointOutcome?: boolean;
+  private midRunCheckpointResolve?: (approved: boolean) => void;
 
   private constructor(
     options: SessionServiceOptions,
@@ -304,6 +316,7 @@ export class CardAgentSessionService {
     this.onUpdate = options.onUpdate;
     this.preset = klona(restored?.runtime.preset ?? options.preset ?? DEFAULT_PRESET);
     this.requestToolApproval = options.requestToolApproval;
+    this.rejectNextTavernGeneration = restored?.runtime.rejectNextTavernGeneration ?? false;
     this.scheduleStreamingUpdate =
       options.scheduleStreamingUpdate ??
       (callback => {
@@ -314,6 +327,9 @@ export class CardAgentSessionService {
     this.skills = klona(restored?.runtime.skills ?? options.skills ?? []);
     this.snapshots = options.snapshots;
     this.tavernBridge = options.tavernBridge;
+    this.tavernChatWorkspace = options.tavernChatBridge
+      ? new TavernChatWorkspace(options.tavernChatBridge, restored?.runtime.tavernChats)
+      : undefined;
     this.workspaceStore = options.workspaceStore;
     this.storageFiles = klona(options.workspaceFiles ?? []);
     this.timeline = new HistoryTimeline({
@@ -341,7 +357,9 @@ export class CardAgentSessionService {
     const initial = await options.adapter.read();
     const preset = options.preset ?? DEFAULT_PRESET;
     const compiled = await compilePreset(preset, defaultPresetValues(options.skills ?? []));
-    return new CardAgentSessionService(options, initial, compiled);
+    const service = new CardAgentSessionService(options, initial, compiled);
+    await service.refreshTavernChatWorkspace();
+    return service;
   }
 
   static async restore(
@@ -354,7 +372,10 @@ export class CardAgentSessionService {
       files: workingFiles,
       runtime,
     });
-    if (runtime.status === 'running' || runtime.status === 'waiting-approval' || runtime.status === 'abnormal') {
+    await service.refreshTavernChatWorkspace();
+    if (runtime.status === 'awaiting-approval' && runtime.pending?.midRun) {
+      service.buildRunner('failed', recoverPendingRunnerStep(service.modelMessages, service.events));
+    } else if (runtime.status === 'running' || runtime.status === 'waiting-approval' || runtime.status === 'abnormal') {
       service.status = 'abnormal';
       service.lastError = '上次页面在任务完成前关闭，已恢复到最后一个成功步骤。';
       service.completeRunUi('abnormal', service.now());
@@ -406,6 +427,7 @@ export class CardAgentSessionService {
       sessionId: this.sessionId,
       skills: klona(this.skills),
       status: this.status,
+      tavernChats: this.tavernChatWorkspace?.exportRuntime(),
       title: this.title,
       ui: klona(this.ui.filter(item => !item.hidden)).map(item => ({
         ...item,
@@ -608,14 +630,18 @@ export class CardAgentSessionService {
       this.syncUiVisibility();
       await this.reloadStorageFiles();
       this.repository = this.createRepository(base);
+      this.tavernChatWorkspace?.resetRunAuthorization();
+      await this.refreshTavernChatWorkspace();
       await this.refreshCompiledHeader();
       this.buildRunner();
       const state = await this.runner!.start(userContentWithAttachments(text, attachments));
       this.modelMessages = klona(state.messages);
       this.status = state.status;
       this.lastError = state.failure;
-      if (state.status === 'completed' || state.status === 'stopped')
-        await this.freezeCandidate(base, state.status === 'stopped');
+      if (state.status === 'completed' || state.status === 'stopped') {
+        if (!this.activeBase) throw new Error('本轮完成时缺少当前Base数据。');
+        await this.freezeCandidate(this.activeBase, state.status === 'stopped');
+      }
       await this.persist();
       return this.view();
     } finally {
@@ -627,6 +653,8 @@ export class CardAgentSessionService {
     if (!this.runner) throw new Error('当前会话没有可恢复的Runner。');
     this.lock.acquire(this.sessionId);
     try {
+      this.tavernChatWorkspace?.resetRunAuthorization();
+      await this.refreshTavernChatWorkspace();
       this.buildRunner(this.runner.state.status, this.runner.state.pending);
       const state = await this.runner.resume();
       this.modelMessages = klona(state.messages);
@@ -656,10 +684,18 @@ export class CardAgentSessionService {
 
   async approve(decisions: Record<string, ApprovalDecision>): Promise<SessionView> {
     if (!this.pending) throw new Error('当前没有待批准的修改。');
+    const midRun = this.pending.midRun === true;
     this.lock.acquire(this.sessionId);
     try {
       await this.applyApproval(decisions);
-      await this.persist();
+      try {
+        await this.persist();
+      } catch (error) {
+        if (midRun) this.midRunCheckpointOutcome = false;
+        throw error;
+      } finally {
+        if (midRun) this.flushMidRunCheckpoint();
+      }
       return this.view();
     } finally {
       this.lock.release(this.sessionId);
@@ -744,7 +780,7 @@ export class CardAgentSessionService {
     }
     const manualRepository = new MemoryWorkspaceRepository({
       files: actualFiles,
-      readonlyRoots: ['/context', '/worldbooks-global-readonly', '/skills/builtin'],
+      readonlyRoots: ['/context', '/library', '/worldbooks-global-readonly', '/skills/builtin'],
     });
     const toolCallId = `manual:${crypto.randomUUID()}`;
     if (input.kind === 'write') await manualRepository.write(input.path, input.content ?? '', toolCallId);
@@ -903,14 +939,16 @@ export class CardAgentSessionService {
 
   private createRepository(state: CardWorkspaceState): MemoryWorkspaceRepository {
     this.storageBaseFiles = klona(this.storageFiles);
-    return new MemoryWorkspaceRepository({
+    const repository = new MemoryWorkspaceRepository({
       files: [
         ...projectCardWorkspace(state, 100, { allowNonCharacterWrites: true }),
         ...projectSkills(this.skills),
         ...this.storageFiles,
       ],
-      readonlyRoots: ['/context', '/worldbooks-global-readonly', '/skills/builtin'],
+      readonlyRoots: ['/context', '/library', '/worldbooks-global-readonly', '/skills/builtin'],
     });
+    this.tavernChatWorkspace?.projectCached(repository);
+    return repository;
   }
 
   private createRestoredRepository(
@@ -920,7 +958,7 @@ export class CardAgentSessionService {
     this.storageBaseFiles = klona(this.storageFiles);
     const restoredStorage = currentFiles.filter(file => isStoragePath(file.path));
     const restoredNonStorage = currentFiles.filter(file => !isStoragePath(file.path));
-    return new MemoryWorkspaceRepository({
+    const repository = new MemoryWorkspaceRepository({
       completedToolCallIds: this.events
         .filter(event => event.type === 'tool-completed')
         .map(event => event.call.toolCallId),
@@ -932,6 +970,8 @@ export class CardAgentSessionService {
       ],
       readonlyRoots: ['/context', '/worldbooks-global-readonly', '/skills/builtin'],
     });
+    this.tavernChatWorkspace?.projectCached(repository);
+    return repository;
   }
 
   private buildRunner(initialStatus: RunnerStatus = 'idle', initialPending?: PendingRunnerStep): void {
@@ -961,7 +1001,11 @@ export class CardAgentSessionService {
         ...createWorkspaceRunnerTools(
           this.repository,
           this.skills.map(skill => skill.id),
-          { canWriteNonCharacterResources: this.canWriteNonCharacterResources },
+          {
+            canWriteNonCharacterResources: this.canWriteNonCharacterResources,
+            chatWorkspace: this.tavernChatWorkspace,
+            isYolo: () => this.mode === 'yolo',
+          },
         ),
         ...(this.tavernBridge
           ? createWorldbookRunnerTools(this.repository, this.tavernBridge, {
@@ -969,6 +1013,37 @@ export class CardAgentSessionService {
                 if (!this.activeBase) throw new Error('当前没有正在运行的Working Copy。');
                 return this.activeBase;
               },
+              chatBindingConfirmation: (input, toolCallId) => {
+                const changesChatBinding = Boolean((input as { chat?: unknown } | undefined)?.chat);
+                if (
+                  !changesChatBinding ||
+                  this.mode === 'yolo' ||
+                  !this.tavernChatWorkspace?.needsAuthorization()
+                ) {
+                  return undefined;
+                }
+                return {
+                  description:
+                    '本次运行将直接修改酒馆聊天绑定的世界书；这项聊天改动不进入角色卡快照，也不能用梦境创客Undo。',
+                  toolCallId,
+                  toolName: 'set_worldbook_binding',
+                };
+              },
+              setChatBinding: this.tavernChatWorkspace
+                ? async (chatId, worldbook, toolCallId) => {
+                    this.tavernChatWorkspace!.authorizeRun();
+                    await this.tavernChatWorkspace!.executeOnce(toolCallId, () =>
+                      this.tavernChatWorkspace!.setWorldbook(chatId, worldbook, this.repository!),
+                    );
+                  }
+                : undefined,
+            })
+          : []),
+        ...(this.tavernChatWorkspace
+          ? createTavernChatRunnerTools(this.repository, this.tavernChatWorkspace, {
+              beforeGeneration: () => this.checkpointBeforeTavernGeneration(),
+              isYolo: () => this.mode === 'yolo',
+              resolveFileUrl: fileId => this.workspaceStore?.getReference(fileId)?.url,
             })
           : []),
       ],
@@ -1113,6 +1188,7 @@ export class CardAgentSessionService {
   private async applyApproval(decisions: Record<string, ApprovalDecision>): Promise<void> {
     const pending = this.pending;
     if (!pending) throw new Error('当前没有待批准的修改。');
+    const midRun = pending.midRun === true;
     const current = await this.adapter.read();
     this.assertBinding(current);
     const latest = prepareThreeWayMerge(pending.base, pending.state, current);
@@ -1131,10 +1207,19 @@ export class CardAgentSessionService {
       working: pending.state,
     });
     if (result.status === 'rolled-back') {
-      this.status = 'failed';
       this.lastError = result.rollbackError
         ? `${result.error.message}；回滚也失败：${result.rollbackError.message}`
         : result.error.message;
+      if (midRun) {
+        const rebased = this.normalizeWorkspaceBase(result.state);
+        this.activeBase = rebased;
+        this.pending = undefined;
+        this.status = 'running';
+        this.rebaseActiveRepository(rebased);
+        this.finishMidRunCheckpoint(false);
+      } else {
+        this.status = 'failed';
+      }
       return;
     }
     if (this.workspaceStore && this.repository) {
@@ -1154,8 +1239,18 @@ export class CardAgentSessionService {
           decisions: Object.fromEntries(rollbackOperations.map(operation => [operation.path, 'agent'])),
           working: current,
         });
-        this.status = 'failed';
         this.lastError = error instanceof Error ? error.message : String(error);
+        if (midRun) {
+          const restored = await this.adapter.read();
+          const rebased = this.normalizeWorkspaceBase(restored);
+          this.activeBase = rebased;
+          this.pending = undefined;
+          this.status = 'running';
+          this.rebaseActiveRepository(rebased);
+          this.finishMidRunCheckpoint(false);
+        } else {
+          this.status = 'failed';
+        }
         return;
       }
     }
@@ -1173,6 +1268,24 @@ export class CardAgentSessionService {
     this.skills = this.onSkillsCommit
       ? await this.onSkillsCommit(approvedSkills, previouslyMountedSkillIds)
       : approvedSkills;
+    if (midRun) {
+      const effectiveStateChanges = pending.preparation.agentChanges.filter(
+        change => !pending.preparation.redundantPaths.includes(change.path),
+      );
+      const hadEffectiveChanges =
+        effectiveStateChanges.length > 0 || pending.skillChanges.length > 0 || pending.fileChanges.length > 0;
+      const approvedAny = [...effectiveStateChanges, ...pending.skillChanges, ...pending.fileChanges].some(
+        change => decisions[change.path] === 'agent',
+      );
+      const rebased = this.normalizeWorkspaceBase(result.state);
+      this.activeBase = rebased;
+      this.pending = undefined;
+      this.status = 'running';
+      this.lastError = undefined;
+      this.rebaseActiveRepository(rebased);
+      this.finishMidRunCheckpoint(!hadEffectiveChanges || approvedAny);
+      return;
+    }
     const afterSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
       card: result.state,
       events: this.events,
@@ -1492,6 +1605,7 @@ export class CardAgentSessionService {
       modelMessages: klona(this.modelMessages),
       pending: this.pending ? klona(this.pending) : undefined,
       preset: klona(this.preset),
+      rejectNextTavernGeneration: this.rejectNextTavernGeneration || undefined,
       sessionId: this.sessionId,
       skills: klona(this.skills),
       status: this.status,
@@ -1509,13 +1623,157 @@ export class CardAgentSessionService {
     Object.keys(this.attachments).forEach(id => {
       if (!referencedAttachments.has(id)) delete this.attachments[id];
     });
-    await this.onPersist?.(this.exportRuntime(), this.repository?.snapshot() ?? []);
+    await this.onPersist?.(
+      this.exportRuntime(),
+      persistedWorkingCopyFiles(this.repository?.snapshot() ?? []),
+    );
     this.notify();
   }
 
   private async reloadStorageFiles(): Promise<void> {
     if (!this.workspaceStore) return;
     this.storageFiles = await this.workspaceStore.project(this.bindingId, this.sessionId);
+  }
+
+  private async refreshTavernChatWorkspace(): Promise<void> {
+    if (!this.tavernChatWorkspace || !this.repository) return;
+    await this.tavernChatWorkspace.initialize(this.repository);
+  }
+
+  private async checkpointBeforeTavernGeneration(): Promise<boolean> {
+    if (this.rejectNextTavernGeneration) {
+      this.rejectNextTavernGeneration = false;
+      return false;
+    }
+    if (!this.repository || !this.activeBase || !this.activeCheckpointId) return true;
+    if (this.repository.changes().length === 0) return true;
+    if (this.midRunCheckpointResolve) throw new Error('已经存在一个等待处理的生成前检查点。');
+
+    const materialized = materializeCardWorkspace(this.activeBase, this.repository.snapshot());
+    const candidateSkills = materializeUserSkills(this.repository.snapshot());
+    const current = await this.adapter.read();
+    this.assertBinding(current);
+    const preparation = prepareThreeWayMerge(this.activeBase, materialized.state, current);
+    await markSecretRemovalRisks(preparation);
+    const skillChanges = diffSkills(this.skills, candidateSkills);
+    if (this.workspaceStore) {
+      const tempDecisions = Object.fromEntries(
+        this.repository
+          .changes()
+          .filter(change => change.path.startsWith('/temp/'))
+          .map(change => [change.path, 'agent' as const]),
+      );
+      if (Object.keys(tempDecisions).length > 0) {
+        this.storageFiles = await this.workspaceStore.applyWorkspace(
+          this.bindingId,
+          this.sessionId,
+          this.storageBaseFiles,
+          this.repository.snapshot(),
+          tempDecisions,
+        );
+      }
+    }
+    const fileChanges = workspaceApprovalChanges(this.repository.changes());
+    const candidateSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
+      card: materialized.state,
+      events: this.events,
+      modelMessages: this.modelMessages,
+      workspaceFiles: persistentStorageFiles(this.repository.snapshot()),
+    });
+    this.pending = {
+      base: klona(this.activeBase),
+      candidateSnapshot,
+      checkpointId: this.activeCheckpointId,
+      fileChanges,
+      midRun: true,
+      preparation,
+      skillChanges,
+      skills: candidateSkills,
+      state: materialized.state,
+      stopped: false,
+      warnings: materialized.warnings,
+    };
+    const decision = new Promise<boolean>(resolve => {
+      this.midRunCheckpointResolve = resolve;
+    });
+    const effectiveStateChanges = preparation.agentChanges.filter(
+      change => !preparation.redundantPaths.includes(change.path),
+    );
+    const hasChanges = effectiveStateChanges.length > 0 || skillChanges.length > 0 || fileChanges.length > 0;
+    if (!hasChanges) {
+      await this.applyApproval({});
+      this.flushMidRunCheckpoint();
+      return decision;
+    }
+
+    const decisions = defaultApprovals(preparation, this.mode);
+    if (this.mode === 'yolo') {
+      preparation.redundantPaths.forEach(path => {
+        decisions[path] = 'current';
+      });
+      skillChanges
+        .filter(change => !change.highRisk)
+        .forEach(change => {
+          decisions[change.path] = 'agent';
+        });
+      fileChanges
+        .filter(change => !change.highRisk)
+        .forEach(change => {
+          decisions[change.path] = 'agent';
+        });
+      const unresolvedState = effectiveStateChanges.some(change => decisions[change.path] === undefined);
+      const unresolvedSkills = skillChanges.some(change => decisions[change.path] === undefined);
+      const unresolvedFiles = fileChanges.some(change => decisions[change.path] === undefined);
+      if (!unresolvedState && !unresolvedSkills && !unresolvedFiles) {
+        await this.applyApproval(decisions);
+        this.flushMidRunCheckpoint();
+        return decision;
+      }
+    }
+    this.status = 'awaiting-approval';
+    this.warnings = materialized.warnings;
+    await this.persist();
+    return decision;
+  }
+
+  private rebaseActiveRepository(state: CardWorkspaceState): void {
+    if (!this.repository) return;
+    this.storageBaseFiles = klona(this.storageFiles);
+    const transientReferences = this.repository.snapshot().filter(file => file.path.startsWith('/library/'));
+    this.repository.rebase([
+      ...projectCardWorkspace(state, 100, { allowNonCharacterWrites: true }),
+      ...projectSkills(this.skills),
+      ...this.storageFiles,
+      ...transientReferences,
+    ]);
+    this.tavernChatWorkspace?.projectCached(this.repository);
+  }
+
+  private normalizeWorkspaceBase(state: CardWorkspaceState): CardWorkspaceState {
+    const files = projectCardWorkspace(state, 100, { allowNonCharacterWrites: true });
+    return materializeCardWorkspace(state, files).state;
+  }
+
+  private finishMidRunCheckpoint(approved: boolean): void {
+    const resolve = this.midRunCheckpointResolve;
+    if (resolve) {
+      this.midRunCheckpointOutcome = approved;
+      return;
+    }
+    // 页面刷新后，原Runner等待中的Promise已经不存在。把结果留给恢复执行：
+    // 批准时重新执行原聊天工具；拒绝时让它收到一次CHECKPOINT_REJECTED。
+    this.rejectNextTavernGeneration = !approved;
+    this.status = 'failed';
+    this.lastError = '生成前检查点已经处理，请从中断处继续本轮Agent任务。';
+  }
+
+  private flushMidRunCheckpoint(): void {
+    const resolve = this.midRunCheckpointResolve;
+    const outcome = this.midRunCheckpointOutcome;
+    if (!resolve || outcome === undefined) return;
+    this.midRunCheckpointResolve = undefined;
+    this.midRunCheckpointOutcome = undefined;
+    resolve(outcome);
   }
 
   private notify(): void {

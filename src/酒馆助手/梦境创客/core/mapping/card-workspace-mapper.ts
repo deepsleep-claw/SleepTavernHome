@@ -22,7 +22,6 @@ import type {
   CardWorkspaceState,
   CharacterWorkspaceData,
   CharacterTextField,
-  ReadonlyChatMessage,
   WorldbookData,
   WorldbookEntryData,
 } from './types';
@@ -114,35 +113,9 @@ export function projectWorldbookFiles(
   return files;
 }
 
-function projectChat(messages: ReadonlyChatMessage[], pageSize: number): WorkspaceFile[] {
-  const files: WorkspaceFile[] = [];
-  for (let offset = 0; offset < messages.length; offset += pageSize) {
-    const page = messages.slice(offset, offset + pageSize);
-    const first = page[0]!;
-    const last = page.at(-1)!;
-    const content = page
-      .map(message =>
-        serializeFrontmatter(
-          { hidden: message.hidden, id: message.id, name: message.name, role: message.role },
-          message.text,
-        ),
-      )
-      .join('\n');
-    files.push(
-      file(
-        `/context/chat/messages-${String(offset / pageSize + 1).padStart(4, '0')}.md`,
-        content,
-        `chat:${first.id}-${last.id}`,
-        true,
-      ),
-    );
-  }
-  return files;
-}
-
 export function projectCardWorkspace(
   state: CardWorkspaceState,
-  chatPageSize = 100,
+  _chatPageSize = 100,
   resourceOptions: TavernResourceProjectionOptions = {},
 ): WorkspaceFile[] {
   const files: WorkspaceFile[] = [];
@@ -199,7 +172,6 @@ export function projectCardWorkspace(
     files.push(...projectWorldbookFiles(book, { readonly }));
   }
   files.push(...projectTavernResources(state.resources, resourceOptions));
-  files.push(...projectChat(state.chat, chatPageSize));
   return files.sort((left, right) => left.path.localeCompare(right.path));
 }
 

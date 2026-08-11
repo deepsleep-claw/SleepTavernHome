@@ -7,10 +7,11 @@ import type { CardWorkspaceState, WorldbookData } from '../mapping/types';
 import type { TavernBridge } from '../tavern/bridge';
 import { readStandaloneWorldbook } from '../tavern/state-reader';
 import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
-import type { RunnerTool } from './tools';
+import type { RunnerTool, ToolConfirmation } from './tools';
 
 export type WorldbookRunnerToolOptions = {
   getBaseState: () => CardWorkspaceState;
+  chatBindingConfirmation?: (input: unknown, toolCallId: string) => ToolConfirmation | undefined;
   setChatBinding?: (chatId: string, worldbook: string | null, toolCallId: string) => Promise<void>;
 };
 
@@ -55,15 +56,16 @@ async function ensureEditableBook(
   bridge: TavernBridge,
   base: CardWorkspaceState,
   name: string,
-  toolCallId: string,
 ): Promise<void> {
   if (await hasFile(repository, editableBookPath(name))) return;
   const book = await loadBook(repository, bridge, base, name);
   if (!book.roundTripSafe) throw new Error(`世界书“${name}”无法无损读取，不能绑定为可编辑资源。`);
-  await repository.stageFiles(
-    projectWorldbookFiles({ ...klona(book), writable: true }, { readonly: false }),
-    toolCallId,
-  );
+  const editable = { ...klona(book), writable: true };
+  // 这是酒馆中已经存在、只是本会话刚发现的资源：把它同时加入Base和投影，
+  // 否则三方Diff会把“绑定现有世界书”误判成“新建同名世界书”。
+  base.worldbooks.push(klona(editable));
+  const root = `/worldbooks/${encodeWorkspaceSegment(name)}`;
+  repository.replaceProjection(root, projectWorldbookFiles(editable, { readonly: false }));
 }
 
 function cloneBook(source: WorldbookData, name: string): WorldbookData {
@@ -201,6 +203,7 @@ export function createWorldbookRunnerTools(
       readonly: false,
     },
     {
+      confirmation: (input, toolCallId) => options.chatBindingConfirmation?.(input, toolCallId),
       definition: tool({
         description:
           '修改世界书绑定。省略的字段保持不变；characterPrimary或chat.worldbook传null表示清除。绑定一本尚未进入工作区的现有世界书时，会先无损载入可编辑Working Copy。',
@@ -217,9 +220,9 @@ export function createWorldbookRunnerTools(
           ...(value.addCharacterAdditional ?? []),
           ...(typeof value.chat?.worldbook === 'string' ? [value.chat.worldbook] : []),
         ].map(name => normalizedName(name));
-        for (const [index, name] of [...new Set(names)].entries()) {
+        for (const name of new Set(names)) {
           if (!knownNames(repository, bridge, base).has(name)) throw new Error(`世界书不存在：${name}`);
-          await ensureEditableBook(repository, bridge, base, name, `${toolCallId}:load:${index}`);
+          await ensureEditableBook(repository, bridge, base, name);
         }
 
         const bindingFile = await repository.read('/worldbooks/bindings.yaml');
