@@ -221,6 +221,12 @@ export class ApiProfileRegistry {
     return profile ? structuredClone(profile) : undefined;
   }
 
+  getByName(name: string): ApiProfile | undefined {
+    const normalized = name.trim().normalize('NFC');
+    const profile = [...this.profiles.values()].find(item => item.name.normalize('NFC') === normalized);
+    return profile ? structuredClone(profile) : undefined;
+  }
+
   list(): ApiProfile[] {
     return [...this.profiles.values()].map(profile => structuredClone(profile));
   }

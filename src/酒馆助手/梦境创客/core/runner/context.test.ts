@@ -48,6 +48,24 @@ describe('runner context', () => {
     expect(after.toolTokens).toBeGreaterThan(0);
   });
 
+  it('附件按媒体语义估算，不把图片Base64字符数直接当作上下文', () => {
+    const usage = measureContext([
+      {
+        content: [
+          { text: '查看图片', type: 'text' },
+          {
+            data: { data: 'A'.repeat(4_000_000), type: 'data' },
+            filename: 'image.png',
+            mediaType: 'image/png',
+            type: 'file',
+          },
+        ],
+        role: 'user',
+      },
+    ], 128_000);
+    expect(usage.userTokens).toBeLessThan(2_000);
+  });
+
   it('优先识别用户消息耗尽，否则在70%或输出空间不足时压缩', () => {
     expect(
       decideContext({

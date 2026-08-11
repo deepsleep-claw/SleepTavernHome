@@ -1,4 +1,4 @@
-import type { ModelMessage } from 'ai';
+import type { ModelMessage, UserContent } from 'ai';
 import {
   decideContext,
   compactModelMessages,
@@ -146,7 +146,7 @@ export class AgentRunner {
     this.controller?.abort();
   }
 
-  async start(userMessage: string): Promise<AgentRunnerState> {
+  async start(userMessage: UserContent): Promise<AgentRunnerState> {
     if (this.state.status === 'running' || this.state.status === 'waiting-approval') {
       throw new Error('Agent已经在运行。');
     }

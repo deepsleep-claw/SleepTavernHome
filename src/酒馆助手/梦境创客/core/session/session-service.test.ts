@@ -50,6 +50,66 @@ function snapshots(): ContentAddressedSnapshotStore {
 }
 
 describe('card agent session service', () => {
+  it('把附件保存为规范化用户消息，并仅向界面暴露摘要', async () => {
+    const executor = new QueueExecutor([step([], '看到了')]);
+    const persisted = vi.fn(async (_runtime: PersistedSessionRuntime) => undefined);
+    const service = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      executor,
+      lock: new GlobalAgentTaskLock(),
+      onPersist: persisted,
+      snapshots: snapshots(),
+    });
+    const completed = await service.send('', 'attachment-user', [
+      { data: 'AQID', filename: 'reference.png', mediaType: 'image/png', size: 3 },
+    ]);
+    const userMessage = executor.requests[0].messages.at(-1);
+    expect(userMessage).toMatchObject({
+      content: [
+        {
+          data: { data: 'AQID', type: 'data' },
+          filename: 'reference.png',
+          mediaType: 'image/png',
+          type: 'file',
+        },
+      ],
+      role: 'user',
+    });
+    expect(completed.ui.find(item => item.id === 'attachment-user')?.attachments).toEqual([
+      expect.objectContaining({ filename: 'reference.png', mediaType: 'image/png', size: 3 }),
+    ]);
+    expect(completed.ui.find(item => item.id === 'attachment-user')?.attachments?.[0]).not.toHaveProperty('data');
+    expect(persisted.mock.calls.at(-1)?.[0].attachments).toEqual(
+      expect.objectContaining({
+        [completed.ui.find(item => item.id === 'attachment-user')!.attachments![0].id]: expect.objectContaining({
+          data: 'AQID',
+        }),
+      }),
+    );
+  });
+
+  it('附件消息回退后重新发送时仍保留文件内容', async () => {
+    const executor = new QueueExecutor([step([], '第一版'), step([], '第二版')]);
+    const service = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      executor,
+      lock: new GlobalAgentTaskLock(),
+      mode: 'yolo',
+      snapshots: snapshots(),
+    });
+    await service.send('检查参考', 'attachment-resend', [
+      { data: 'AQID', filename: 'reference.png', mediaType: 'image/png', size: 3 },
+    ]);
+    await service.undoToUserMessage('attachment-resend');
+    await service.resend('attachment-resend');
+    expect(executor.requests[1].messages.at(-1)).toMatchObject({
+      content: expect.arrayContaining([
+        expect.objectContaining({ filename: 'reference.png', mediaType: 'image/png', type: 'file' }),
+      ]),
+      role: 'user',
+    });
+  });
+
   it('保存会话级推理档位，并在一轮完成后保持联网开关', async () => {
     const executor = new QueueExecutor([step([], '完成')]);
     const service = await CardAgentSessionService.create({

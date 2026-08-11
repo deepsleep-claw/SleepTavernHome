@@ -6,10 +6,10 @@
         <p>接口格式决定请求结构，兼容模式处理渠道差异；模型模板只在你点击“应用”时复制参数。</p>
       </div>
     </header>
-    <div class="dca-resource-toolbar">
+    <div class="dca-resource-toolbar dca-api-profile-toolbar">
       <label class="dca-field">
         <span>已保存 Profile</span>
-        <select :value="state.activeProfileId" @change="selectProfile">
+        <select :value="profileForm.id" @change="selectProfile">
           <option value="">请选择</option>
           <option v-for="profile in state.profiles" :key="profile.id" :value="profile.id">
             {{ profile.name }} · {{ profile.model }}
@@ -18,8 +18,10 @@
       </label>
       <div class="dca-row-actions">
         <button type="button" @click="resetProfileForm">新建</button>
+        <button class="dca-btn-primary" type="button" @click="saveProfile">保存</button>
         <button v-if="profileForm.id" class="dca-btn-danger" type="button" @click="removeProfile">删除</button>
       </div>
+      <small>同名保存会覆盖；修改名称后保存会创建新 Profile。</small>
     </div>
 
     <div class="dca-form-grid">
@@ -160,10 +162,6 @@
     <p class="dca-security-note">
       AES-GCM 与固定脚本密码只能避免明文展示，不是安全保险箱。建议只在本地酒馆使用。
     </p>
-    <div class="dca-resource-savebar">
-      <span>{{ profileForm.id ? '正在编辑已保存 Profile' : '正在创建新 Profile' }}</span>
-      <button class="dca-btn-primary" type="button" @click="saveProfile">保存 Profile</button>
-    </div>
   </section>
 </template>
 
@@ -483,6 +481,29 @@ function formatTokens(value: number) {
 </script>
 
 <style lang="scss">
+.dca-api-profile-toolbar {
+  position: sticky;
+  z-index: 5;
+  top: 0;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-md);
+  padding: 0.55rem;
+  background: color-mix(in srgb, var(--dca-surface) 94%, transparent);
+  box-shadow: var(--dca-shadow-1);
+  backdrop-filter: blur(10px);
+}
+
+.dca-api-profile-toolbar > .dca-field {
+  min-width: min(22rem, 100%);
+  flex: 1 1 18rem;
+}
+
+.dca-api-profile-toolbar > small {
+  flex: 1 0 100%;
+  color: var(--dca-text-muted);
+  font-size: 0.72rem;
+}
+
 .dca-model-picker,
 .dca-template-picker {
   display: grid;

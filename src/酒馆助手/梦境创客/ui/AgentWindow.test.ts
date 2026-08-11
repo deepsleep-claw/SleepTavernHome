@@ -42,7 +42,8 @@ describe('AgentWindow', () => {
     expect(root.textContent).toContain('兼容模式');
     expect(root.textContent).toContain('获取模型');
     expect(root.textContent).not.toContain('保存（不测试连接）');
-    expect([...root.querySelectorAll('button')].some(button => button.textContent?.trim() === '保存 Profile')).toBe(true);
+    expect([...root.querySelectorAll('button')].some(button => button.textContent?.trim() === '保存')).toBe(true);
+    expect(root.querySelector('.dca-api-profile-toolbar')).not.toBeNull();
     expect((root.querySelector('textarea') as HTMLTextAreaElement).value).toBe('{}');
     app.unmount();
   });

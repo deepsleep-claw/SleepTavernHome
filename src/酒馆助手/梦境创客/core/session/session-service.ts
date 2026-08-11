@@ -22,6 +22,13 @@ import { diffCardStates } from '../transaction/state-diff';
 import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
 import { maskSecretsForModel, scanSecrets } from '../workspace/secret-protection';
 import type { WorkspaceFile } from '../workspace/types';
+import {
+  attachmentSummary,
+  storeSessionAttachments,
+  userContentWithAttachments,
+  type SessionAttachmentInput,
+  type StoredSessionAttachment,
+} from './attachments';
 import { defaultPresetValues } from './prompt';
 import { globalAgentTaskLock, type GlobalAgentTaskLock } from './task-lock';
 import type {
@@ -186,6 +193,7 @@ export class CardAgentSessionService {
   private activeBase?: CardWorkspaceState;
   private activeCheckpointId?: string;
   private agentConfiguration: SessionAgentConfiguration;
+  private attachments: Record<string, StoredSessionAttachment>;
   private readonly adapter: CardStateAdapter;
   private readonly canWriteNonCharacterResources: () => boolean;
   private compiledPreset: CompiledPreset;
@@ -235,6 +243,7 @@ export class CardAgentSessionService {
           skillIds: (restored?.runtime.skills ?? options.skills ?? []).map(skill => skill.id),
         },
     );
+    this.attachments = klona(restored?.runtime.attachments ?? {});
     this.bindingId = initial.character.bindingId;
     this.characterName = initial.character.name;
     this.compiledPreset = restored?.runtime.compiledPreset ?? compiled;
@@ -454,9 +463,14 @@ export class CardAgentSessionService {
     this.notify();
   }
 
-  async send(message: string, userMessageId: string = crypto.randomUUID()): Promise<SessionView> {
+  async send(
+    message: string,
+    userMessageId: string = crypto.randomUUID(),
+    attachmentInputs: SessionAttachmentInput[] = [],
+  ): Promise<SessionView> {
     const text = message.trim();
-    if (!text) throw new Error('请输入要交给Agent的要求。');
+    const attachments = storeSessionAttachments(attachmentInputs);
+    if (!text && attachments.length === 0) throw new Error('请输入要交给Agent的要求，或添加附件。');
     if (this.pending) throw new Error('请先处理当前待批准的修改。');
     if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status))
       throw new Error('Agent已经在运行。');
@@ -467,7 +481,7 @@ export class CardAgentSessionService {
     this.lock.acquire(this.sessionId);
     try {
       if (this.title === DEFAULT_SESSION_TITLE && !this.ui.some(item => item.kind === 'user')) {
-        this.title = sessionTitleFromMessage(text);
+        this.title = sessionTitleFromMessage(text || attachments[0]?.filename || '');
       }
       const base = await this.adapter.read();
       this.assertBinding(base);
@@ -483,19 +497,31 @@ export class CardAgentSessionService {
         userMessageId,
       });
       this.activeCheckpointId = checkpoint.id;
+      attachments.forEach(attachment => {
+        this.attachments[attachment.id] = attachment;
+      });
+      const attachmentSummaries = attachments.map(attachmentSummary);
       const existing = this.ui.find(item => item.id === userMessageId && item.kind === 'user');
       if (existing) {
         existing.content = text;
+        existing.attachments = attachmentSummaries;
         existing.checkpointId = checkpoint.id;
         existing.hidden = false;
       } else {
-        this.ui.push({ at: this.now(), checkpointId: checkpoint.id, content: text, id: userMessageId, kind: 'user' });
+        this.ui.push({
+          at: this.now(),
+          attachments: attachmentSummaries,
+          checkpointId: checkpoint.id,
+          content: text,
+          id: userMessageId,
+          kind: 'user',
+        });
       }
       this.syncUiVisibility();
       this.repository = this.createRepository(base);
       await this.refreshCompiledHeader();
       this.buildRunner();
-      const state = await this.runner!.start(text);
+      const state = await this.runner!.start(userContentWithAttachments(text, attachments));
       this.modelMessages = klona(state.messages);
       this.status = state.status;
       this.lastError = state.failure;
@@ -696,7 +722,13 @@ export class CardAgentSessionService {
   async resend(messageId: string): Promise<SessionView> {
     const item = this.ui.find(message => message.id === messageId && message.kind === 'user');
     if (!item) throw new Error(`用户消息不存在：${messageId}`);
-    return this.send(item.content, messageId);
+    const attachments = (item.attachments ?? []).map(summary => {
+      const attachment = this.attachments[summary.id];
+      if (!attachment) throw new Error(`附件内容已经丢失：${summary.filename}`);
+      const { id: _id, ...input } = attachment;
+      return input;
+    });
+    return this.send(item.content, messageId, attachments);
   }
 
   private createRepository(state: CardWorkspaceState): MemoryWorkspaceRepository {
@@ -1190,6 +1222,7 @@ export class CardAgentSessionService {
       activeBase: this.activeBase ? klona(this.activeBase) : undefined,
       activeCheckpointId: this.activeCheckpointId,
       agentConfiguration: klona(this.agentConfiguration),
+      attachments: klona(this.attachments),
       compiledPreset: klona(this.compiledPreset),
       createdAt: this.createdAt,
       events: klona(this.events),
@@ -1215,6 +1248,10 @@ export class CardAgentSessionService {
 
   private async persist(): Promise<void> {
     this.timeline.cleanupAbandoned();
+    const referencedAttachments = new Set(this.ui.flatMap(item => item.attachments?.map(attachment => attachment.id) ?? []));
+    Object.keys(this.attachments).forEach(id => {
+      if (!referencedAttachments.has(id)) delete this.attachments[id];
+    });
     await this.onPersist?.(this.exportRuntime(), this.repository?.snapshot() ?? []);
     this.notify();
   }

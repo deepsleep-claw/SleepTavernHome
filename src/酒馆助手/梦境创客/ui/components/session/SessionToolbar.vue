@@ -47,10 +47,6 @@
       >
         <i class="fa-regular fa-trash-can" aria-hidden="true"></i>
       </button>
-      <label class="dca-switch" title="YOLO 模式：低风险修改自动提交，高危操作仍需确认">
-        <input type="checkbox" :checked="state.active?.mode === 'yolo'" @change="setYolo" />
-        <span>YOLO</span>
-      </label>
       <button
         class="dca-sidebar-toggle"
         type="button"
@@ -105,10 +101,6 @@ async function confirmDelete() {
   if (sessionId && (await deleteSession(sessionId))) deletePending.value = false;
 }
 
-function setYolo(event: Event) {
-  if (state.value.active)
-    void action(() => runtime.setMode((event.target as HTMLInputElement).checked ? 'yolo' : 'normal'));
-}
 </script>
 
 <style lang="scss">
@@ -179,14 +171,6 @@ function setYolo(event: Event) {
   background: var(--dca-danger-soft);
   font-size: 0.8rem;
   white-space: nowrap;
-}
-
-.dca-switch {
-  display: flex;
-  align-items: center;
-  gap: 0.35rem;
-  color: var(--dca-text-secondary);
-  font-size: 0.82rem;
 }
 
 .dca-app .dca-sidebar-toggle span {

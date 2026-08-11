@@ -41,6 +41,7 @@ import type {
   SessionModelControls,
   SessionView,
 } from '../core/session/types';
+import { isImageAttachment, type SessionAttachmentInput } from '../core/session/attachments';
 import { GlobalSkillStore } from '../core/skills/global-skill-store';
 import type { AgentSkill } from '../core/skills/types';
 import { createGlobalTavernBridge, type TavernBridge } from '../core/tavern/bridge';
@@ -320,11 +321,18 @@ export class DreamCardAgentRuntime {
     this.emit();
   }
 
-  async send(message: string): Promise<SessionView> {
+  async send(message: string, attachments: SessionAttachmentInput[] = []): Promise<SessionView> {
     return this.runActiveView(async service => {
+      const profile = this.requireProfile();
+      if (
+        attachments.some(isImageAttachment) &&
+        profile.modelSettings.capabilities.vision === 'disabled'
+      ) {
+        throw new Error('当前API Profile明确标记为不支持视觉，无法发送图片附件。');
+      }
       await this.reloadSkills();
       await service.setSkills(this.state.skills);
-      return service.send(message);
+      return service.send(message, undefined, attachments);
     });
   }
 
@@ -631,11 +639,21 @@ export class DreamCardAgentRuntime {
   }
 
   async saveProfile(input: ApiProfileInput): Promise<ApiProfile> {
-    const registry = new ApiProfileRegistry(this.settingsStore.load().profiles);
-    const existing = input.id ? registry.get(input.id) : undefined;
-    const profile = existing ? await updateApiProfile(existing, input) : await createApiProfile(input);
-    registry.save(profile);
     this.assertProfileSwitchAllowed();
+    const name = input.name.trim().normalize('NFC');
+    if (!name) throw new Error('API Profile名称不能为空。');
+    const registry = new ApiProfileRegistry(this.settingsStore.load().profiles);
+    const source = input.id ? registry.get(input.id) : undefined;
+    const sameName = registry.getByName(name);
+    let profile: ApiProfile;
+    if (sameName) {
+      profile = await updateApiProfile(sameName, { ...input, id: sameName.id, name });
+    } else if (source) {
+      profile = { ...(await updateApiProfile(source, { ...input, name })), id: crypto.randomUUID() };
+    } else {
+      profile = await createApiProfile({ ...input, id: undefined, name });
+    }
+    registry.save(profile);
     const settings = this.settingsStore.load();
     settings.profiles = registry.list();
     settings.activeProfileId = profile.id;

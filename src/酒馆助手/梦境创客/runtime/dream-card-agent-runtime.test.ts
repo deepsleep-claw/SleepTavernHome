@@ -288,6 +288,65 @@ describe('DreamCardAgentRuntime', () => {
     runtime.destroy();
   });
 
+  it('API Profile按名称覆盖，修改名称保存时保留旧项并创建新项', async () => {
+    const runtime = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+      executorFactory: () => new QueueExecutor([]),
+      fileClient: new MemoryTavernFileClient(),
+      settingsStore: new MemoryAgentSettingsStore(),
+    });
+    await addProfile(runtime);
+    const original = runtime.snapshot().profiles[0];
+    const overwritten = await runtime.saveProfile({
+      apiKey: '',
+      baseURL: original.baseURL,
+      compatibilityMode: original.compatibilityMode,
+      id: original.id,
+      interfaceType: original.interfaceType,
+      model: 'model-v2',
+      name: original.name,
+    });
+    expect(overwritten.id).toBe(original.id);
+    expect(runtime.snapshot().profiles).toHaveLength(1);
+    const copied = await runtime.saveProfile({
+      apiKey: '',
+      baseURL: original.baseURL,
+      compatibilityMode: original.compatibilityMode,
+      id: original.id,
+      interfaceType: original.interfaceType,
+      model: 'model-v3',
+      name: '本地接口副本',
+    });
+    expect(copied.id).not.toBe(original.id);
+    expect(runtime.snapshot().profiles.map(profile => profile.name)).toEqual(['本地接口', '本地接口副本']);
+    runtime.destroy();
+  });
+
+  it('API Profile明确关闭视觉时拒绝图片附件', async () => {
+    const runtime = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+      executorFactory: () => new QueueExecutor([]),
+      fileClient: new MemoryTavernFileClient(),
+      settingsStore: new MemoryAgentSettingsStore(),
+    });
+    await runtime.saveProfile({
+      apiKey: 'secret',
+      baseURL: 'https://example.invalid/v1',
+      compatibilityMode: 'standard',
+      interfaceType: 'openai-chat',
+      model: 'text-only',
+      modelSettings: {
+        capabilities: { reasoning: 'auto', toolCalling: 'auto', vision: 'disabled', webSearch: 'auto' },
+      },
+      name: '纯文本接口',
+    });
+    await runtime.createSession();
+    await expect(runtime.send('', [
+      { data: 'AQID', filename: 'image.png', mediaType: 'image/png', size: 3 },
+    ])).rejects.toThrow('不支持视觉');
+    runtime.destroy();
+  });
+
   it('一个会话运行时仍可切换到其它已打开会话，后台完成不会抢回当前页签', async () => {
     const deferred = new DeferredExecutor();
     let executorIndex = 0;

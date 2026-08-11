@@ -8,6 +8,7 @@ import type { AgentSkill } from '../skills/types';
 import type { MergeConflict, MergePreparation } from '../transaction/merge';
 import type { StateOperation } from '../transaction/state-diff';
 import type { WorkspaceChange, WorkspaceFile } from '../workspace/types';
+import type { SessionAttachmentSummary, StoredSessionAttachment } from './attachments';
 
 export type SessionMode = 'normal' | 'yolo';
 
@@ -26,6 +27,7 @@ export type SessionAgentConfiguration = {
 export type SessionLifecycleStatus = RunnerStatus | 'abnormal' | 'awaiting-approval' | 'committing';
 
 export type SessionUiItem = {
+  attachments?: SessionAttachmentSummary[];
   at: number;
   checkpointId?: string;
   content: string;
@@ -89,6 +91,7 @@ export type PersistedSessionRuntime = {
   activeBase?: CardWorkspaceState;
   activeCheckpointId?: string;
   agentConfiguration?: SessionAgentConfiguration;
+  attachments?: Record<string, StoredSessionAttachment>;
   compiledPreset: CompiledPreset;
   createdAt: number;
   events: RunnerEvent[];

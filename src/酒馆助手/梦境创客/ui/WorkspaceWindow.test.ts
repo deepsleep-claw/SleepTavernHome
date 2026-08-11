@@ -43,6 +43,7 @@ const mock = vi.hoisted(() => {
           durationMs: 12_000,
           id: 'user-1',
           kind: 'user',
+          attachments: [{ filename: '参考图.png', id: 'attachment-1', mediaType: 'image/png', size: 1024 }],
           runStatus: 'completed',
         },
         { at: 2, checkpointId: 'checkpoint-1', content: '{}', id: 'tool-1', kind: 'tool', status: 'completed', toolName: 'list_directory' },
@@ -193,6 +194,7 @@ describe('WorkspaceWindow', () => {
     expect(root.textContent).toContain('read_file ×2');
     expect(root.textContent).toContain('已思考 3 秒');
     expect(root.querySelector('.dca-message-user strong')?.textContent).toBe('检查设定');
+    expect(root.querySelector('.dca-message-attachments')?.textContent).toContain('参考图.png');
     expect(root.querySelector<HTMLImageElement>('.dca-message-user img')?.src).toBe('https://example.com/preview.png');
     expect(root.querySelector('.dca-message-assistant h3')?.textContent).toBe('完成');
 
@@ -308,9 +310,7 @@ describe('WorkspaceWindow', () => {
     composer.value = '请优先检查世界书';
     composer.dispatchEvent(new Event('input', { bubbles: true }));
     await nextTick();
-    const guideButton = [...root.querySelectorAll<HTMLButtonElement>('.dca-composer button')].find(
-      button => button.textContent?.trim() === '引导',
-    )!;
+    const guideButton = root.querySelector<HTMLButtonElement>('.dca-composer button[aria-label="发送中途引导"]')!;
     guideButton.click();
     expect(mock.runtime.enqueueGuidance).toHaveBeenCalledWith('请优先检查世界书');
     const tabButtons = root.querySelectorAll<HTMLButtonElement>('.dca-session-tab button');

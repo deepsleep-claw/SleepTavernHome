@@ -1,4 +1,4 @@
-import type { ModelMessage } from 'ai';
+import type { FilePart, ModelMessage } from 'ai';
 import { canonicalStringify } from '../transaction/canonical';
 
 export type ContextUsage = {
@@ -29,13 +29,38 @@ export function estimateTokens(value: unknown): number {
   return Math.max(1, Math.ceil(canonicalStringify(value).length / 4));
 }
 
+function filePartTokens(part: FilePart): number {
+  if (part.mediaType.toLocaleLowerCase().startsWith('image/')) return 1_200;
+  if (typeof part.data === 'object' && 'type' in part.data && part.data.type === 'text') {
+    return estimateTokens(part.data.text);
+  }
+  const data = typeof part.data === 'object' && 'type' in part.data && part.data.type === 'data'
+    ? part.data.data
+    : part.data;
+  const encodedLength = typeof data === 'string' ? data.length : data instanceof Uint8Array ? data.byteLength * 4 / 3 : 0;
+  const bytes = Math.ceil(encodedLength * 0.75);
+  return part.mediaType.toLocaleLowerCase().startsWith('text/')
+    ? Math.max(1, Math.ceil(bytes / 4))
+    : 1_000 + Math.ceil(bytes / 1_024);
+}
+
+function messageTokens(message: ModelMessage): number {
+  if (message.role !== 'user' || typeof message.content === 'string') return estimateTokens(message);
+  return message.content.reduce((total, part) => {
+    if (part.type === 'text') return total + estimateTokens(part.text);
+    if (part.type === 'file') return total + filePartTokens(part);
+    if (part.type === 'image') return total + 1_200;
+    return total;
+  }, 1);
+}
+
 export function measureContext(
   messages: ModelMessage[],
   contextWindow: number,
   apiBaseline?: ApiUsageBaseline,
 ): ContextUsage {
   const totals = { assistant: 0, system: 0, tool: 0, user: 0 };
-  for (const message of messages) totals[message.role] += estimateTokens(message);
+  for (const message of messages) totals[message.role] += messageTokens(message);
   const estimatedTokens = totals.assistant + totals.system + totals.tool + totals.user;
   const estimatedDeltaTokens = apiBaseline ? estimatedTokens - apiBaseline.estimatedTokens : 0;
   const totalTokens = apiBaseline
