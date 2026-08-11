@@ -41,11 +41,14 @@ function contentText(value: unknown): string {
 
 function reasoningInput(item: JsonRecord): JsonRecord {
   const summary = Array.isArray(item.summary) ? contentText(item.summary) : '';
-  const content =
+  const text =
     typeof item.encrypted_content === 'string'
       ? item.encrypted_content
       : contentText(item.content) || summary;
-  return { content, type: 'reasoning' };
+  // DeepSeek Responses 接受明文 reasoning，但 content 的 wire schema 是内容块数组。
+  // AI SDK 会把完整思考暂存在 encrypted_content；不能直接把该字符串塞回 content，
+  // 否则工具调用后的下一轮会被服务端以“expected a sequence”拒绝。
+  return { content: [{ text, type: 'reasoning_text' }], type: 'reasoning' };
 }
 
 /** 把 OpenAI Provider 生成的请求缩减为 DeepSeek Responses 的无状态子集。 */

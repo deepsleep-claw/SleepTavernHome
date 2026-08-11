@@ -30,7 +30,7 @@ describe('DeepSeek Responses adapter', () => {
       top_p: 0.8,
     })).toEqual({
       input: [
-        { content: '完整思考', type: 'reasoning' },
+        { content: [{ text: '完整思考', type: 'reasoning_text' }], type: 'reasoning' },
         { content: '继续', role: 'user' },
       ],
       reasoning: { effort: 'high' },
@@ -235,7 +235,10 @@ describe('DeepSeek Responses adapter', () => {
         }],
       });
       const replayBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as { input: unknown[] };
-      expect(replayBody.input).toContainEqual({ content: '先读取文件', type: 'reasoning' });
+      expect(replayBody.input).toContainEqual({
+        content: [{ text: '先读取文件', type: 'reasoning_text' }],
+        type: 'reasoning',
+      });
     } finally {
       fetchMock.mockRestore();
     }

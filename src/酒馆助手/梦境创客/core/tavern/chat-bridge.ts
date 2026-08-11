@@ -216,7 +216,12 @@ export function createGlobalTavernChatBridge(): TavernChatBridge {
     switchChat: async ref => SillyTavern.openCharacterChat(normalizeChatRef(ref)),
     truncate: async fromMessageId => {
       const messages = getChatMessages('0-{{lastMessageId}}');
-      await deleteChatMessages(messages.filter(message => message.message_id >= fromMessageId).map(message => message.message_id));
+      const messageIds = messages
+        .filter(message => message.message_id >= fromMessageId)
+        .map(message => message.message_id);
+      // affected 模式只触发防抖保存，Promise 会早于聊天文件落盘完成。
+      // 截断后Agent可能立刻追加新楼层，因此这里必须等待酒馆保存并重载完毕。
+      await deleteChatMessages(messageIds, { refresh: 'all' });
     },
     updateMessage: async (messageId, message) => {
       await setChatMessages([
