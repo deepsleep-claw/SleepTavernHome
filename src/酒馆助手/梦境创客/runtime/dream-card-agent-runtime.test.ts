@@ -332,6 +332,36 @@ describe('DreamCardAgentRuntime', () => {
     runtime.destroy();
   });
 
+  it('会话模型选项即时生效且不进入全局忙碌，关闭前合并保存', async () => {
+    const files = new MemoryTavernFileClient();
+    const runtime = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+      executorFactory: () => new QueueExecutor([]),
+      fileClient: files,
+      settingsStore: new MemoryAgentSettingsStore(),
+    });
+    await addProfile(runtime);
+    const session = await runtime.createSession();
+    const busyStates: boolean[] = [];
+    const unsubscribe = runtime.subscribe(state => busyStates.push(state.busy));
+    busyStates.length = 0;
+    const uploadsBefore = files.uploadedNames.length;
+    const sessionUploadsBefore = files.uploadedNames.filter(name => name.includes('--Session--')).length;
+
+    await runtime.setModelControls({ reasoningEffort: 'high' });
+    await runtime.setModelControls({ webSearch: true });
+
+    expect(runtime.snapshot().active?.modelControls).toEqual({ reasoningEffort: 'high', webSearch: true });
+    expect(busyStates).toEqual([false, false]);
+    expect(files.uploadedNames).toHaveLength(uploadsBefore);
+    unsubscribe();
+
+    await runtime.closeSession(session.sessionId);
+    expect(files.uploadedNames.filter(name => name.includes('--Session--'))).toHaveLength(sessionUploadsBefore + 1);
+    expect((await runtime.openSession(session.sessionId)).modelControls).toEqual({ reasoningEffort: 'high', webSearch: true });
+    runtime.destroy();
+  });
+
   it('Profile与轻量设置保存到extension settings模型，不发测试请求', async () => {
     const settings = new MemoryAgentSettingsStore();
     const runtime = new DreamCardAgentRuntime({

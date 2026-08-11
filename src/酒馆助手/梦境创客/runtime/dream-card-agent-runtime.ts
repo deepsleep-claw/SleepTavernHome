@@ -117,6 +117,14 @@ type RuntimeOptions = {
 
 type Subscriber = (state: DreamCardAgentRuntimeState) => void;
 
+type DeferredSessionSave = {
+  dirty: boolean;
+  saving?: Promise<void>;
+  timer?: ReturnType<typeof setTimeout>;
+};
+
+const SESSION_OPTION_SAVE_DELAY_MS = 350;
+
 function isSessionOperationActive(status: SessionLifecycleStatus): boolean {
   return ['awaiting-approval', 'committing', 'running', 'waiting-approval'].includes(status);
 }
@@ -152,8 +160,10 @@ export class DreamCardAgentRuntime {
   private readonly historyViews = new Map<string, SessionView>();
   private readonly settingsUnsubscribe?: () => void;
   private readonly subscribers = new Set<Subscriber>();
+  private readonly deferredSessionSaves = new Map<string, DeferredSessionSave>();
   private toolConfirmationResolve?: (approved: boolean) => void;
   private busyCount = 0;
+  private localDeferredSaveDepth = 0;
   private skillIndexSignature = '';
   private skillLoadPromise?: Promise<void>;
   private state: DreamCardAgentRuntimeState;
@@ -205,6 +215,9 @@ export class DreamCardAgentRuntime {
     };
     this.settingsUnsubscribe = this.settingsStore.subscribe?.(() => {
       this.reloadSettingsState();
+      // 本页延迟保存模型选项时，角色索引内容已经由当前Runtime掌握；
+      // 不再为了更新时间和文件大小重新下载索引。其它页面的广播仍走完整刷新。
+      if (this.localDeferredSaveDepth > 0) return;
       void this.reloadCharacterSessions();
       void this.reloadCharacterGroups();
       void this.reloadSkills();
@@ -457,6 +470,7 @@ export class DreamCardAgentRuntime {
     if (isSessionOperationActive(loaded.view().status)) {
       throw new Error('运行中或等待处理的会话不能关闭，请先停止或完成当前操作。');
     }
+    await this.flushDeferredSessionSave(loaded);
     await loaded.finalizeManualEdits();
     this.services.delete(sessionId);
     delete this.state.sessionStatuses[sessionId];
@@ -485,10 +499,9 @@ export class DreamCardAgentRuntime {
   }
 
   async setModelControls(controls: Partial<SessionModelControls>): Promise<SessionView> {
-    return this.runActiveView(async service => {
-      await service.setModelControls(controls);
-      return service.view();
-    });
+    const service = this.requireService();
+    if (service.updateModelControls(controls)) this.scheduleDeferredSessionSave(service);
+    return service.view();
   }
 
   async approve(decisions: Record<string, 'agent' | 'current'>): Promise<SessionView> {
@@ -535,6 +548,7 @@ export class DreamCardAgentRuntime {
       if (loaded && isSessionOperationActive(loaded.view().status)) {
         throw new Error('运行中的会话不能删除，请先停止任务。');
       }
+      if (loaded) await this.discardDeferredSessionSave(loaded);
       const removed = await this.characterStore.removeSession(bindingId, sessionId);
       if (!removed) throw new Error(`会话不存在：${sessionId}`);
       await this.workspaceFileStore.releaseSession(bindingId, sessionId);
@@ -560,6 +574,11 @@ export class DreamCardAgentRuntime {
         service => service.view().bindingId === character.bindingId && isSessionOperationActive(service.view().status),
       );
       if (running) throw new Error('当前角色仍有运行中的会话，请先停止任务。');
+      await Promise.all(
+        [...this.services.values()]
+          .filter(service => service.view().bindingId === character.bindingId)
+          .map(service => this.discardDeferredSessionSave(service)),
+      );
       await this.characterStore.removeCharacter(character.bindingId);
       await this.workspaceFileStore.resetCharacter(character.bindingId);
       for (const [id, service] of this.services) {
@@ -659,7 +678,7 @@ export class DreamCardAgentRuntime {
       legacy.forEach(([key]) => delete settings.files[key]);
       await this.settingsStore.save(settings);
       for (const [, file] of legacy) await this.fileClient.delete(file.url).catch(() => undefined);
-      this.unloadCharacterServices(bindingId);
+      await this.unloadCharacterServices(bindingId);
     });
   }
 
@@ -675,7 +694,7 @@ export class DreamCardAgentRuntime {
       for (const bindingId of bindings) {
         await this.characterStore.removeCharacter(bindingId).catch(() => []);
         await this.workspaceFileStore.resetCharacter(bindingId);
-        this.unloadCharacterServices(bindingId);
+        await this.unloadCharacterServices(bindingId);
       }
       const latest = this.settingsStore.load();
       const legacy = Object.entries(latest.files).filter(([, file]) => file.bindingId !== 'global');
@@ -951,6 +970,16 @@ export class DreamCardAgentRuntime {
 
   destroy(): void {
     this.resolveToolConfirmation(false);
+    for (const service of this.services.values()) {
+      const pending = this.deferredSessionSaves.get(service.sessionId);
+      if (!pending) continue;
+      if (pending.timer) {
+        clearTimeout(pending.timer);
+        pending.timer = undefined;
+      }
+      // 页面卸载无法保证异步请求完成，但仍立即发起一次尽力保存，而不是主动丢弃。
+      void this.flushDeferredSessionSave(service).catch(() => undefined);
+    }
     this.subscribers.clear();
     this.settingsUnsubscribe?.();
     this.settingsStore.destroy?.();
@@ -1257,9 +1286,10 @@ export class DreamCardAgentRuntime {
     return result;
   }
 
-  private unloadCharacterServices(bindingId: string): void {
+  private async unloadCharacterServices(bindingId: string): Promise<void> {
     for (const [sessionId, service] of this.services) {
       if (service.view().bindingId !== bindingId) continue;
+      await this.discardDeferredSessionSave(service);
       this.services.delete(sessionId);
       delete this.state.sessionStatuses[sessionId];
     }
@@ -1278,6 +1308,7 @@ export class DreamCardAgentRuntime {
 
   private async updateActiveExecutor(profile: ApiProfile): Promise<void> {
     for (const service of this.services.values()) {
+      await this.flushDeferredSessionSave(service);
       const effort = service.view().modelControls.reasoningEffort;
       if (
         effort !== 'auto' &&
@@ -1375,7 +1406,69 @@ export class DreamCardAgentRuntime {
 
   private runActiveView(action: (service: CardAgentSessionService) => Promise<SessionView>): Promise<SessionView> {
     const service = this.requireService();
-    return this.runView(() => action(service));
+    return this.runView(async () => {
+      await this.flushDeferredSessionSave(service);
+      return action(service);
+    });
+  }
+
+  private scheduleDeferredSessionSave(service: CardAgentSessionService): void {
+    const sessionId = service.sessionId;
+    const pending = this.deferredSessionSaves.get(sessionId) ?? { dirty: false };
+    pending.dirty = true;
+    if (pending.timer) clearTimeout(pending.timer);
+    pending.timer = setTimeout(() => {
+      pending.timer = undefined;
+      void this.flushDeferredSessionSave(service).catch(error => {
+        this.state.error = `会话选项保存失败：${error instanceof Error ? error.message : String(error)}`;
+        this.addDebug('error', this.state.error, { sessionId });
+        this.emit();
+      });
+    }, SESSION_OPTION_SAVE_DELAY_MS);
+    this.deferredSessionSaves.set(sessionId, pending);
+  }
+
+  private async flushDeferredSessionSave(service: CardAgentSessionService): Promise<void> {
+    const sessionId = service.sessionId;
+    const pending = this.deferredSessionSaves.get(sessionId);
+    if (!pending) return;
+    while (pending.dirty || pending.saving) {
+      if (pending.timer) {
+        clearTimeout(pending.timer);
+        pending.timer = undefined;
+      }
+      if (pending.saving) {
+        await pending.saving;
+        continue;
+      }
+      pending.dirty = false;
+      this.localDeferredSaveDepth += 1;
+      const saving = service.save();
+      pending.saving = saving;
+      try {
+        await saving;
+      } catch (error) {
+        pending.dirty = true;
+        throw error;
+      } finally {
+        pending.saving = undefined;
+        this.localDeferredSaveDepth = Math.max(0, this.localDeferredSaveDepth - 1);
+      }
+    }
+    if (this.deferredSessionSaves.get(sessionId) === pending) this.deferredSessionSaves.delete(sessionId);
+  }
+
+  private async discardDeferredSessionSave(service: CardAgentSessionService): Promise<void> {
+    const pending = this.deferredSessionSaves.get(service.sessionId);
+    if (!pending) return;
+    if (pending.timer) clearTimeout(pending.timer);
+    pending.timer = undefined;
+    pending.dirty = false;
+    await pending.saving?.catch(() => undefined);
+    pending.dirty = false;
+    if (this.deferredSessionSaves.get(service.sessionId) === pending) {
+      this.deferredSessionSaves.delete(service.sessionId);
+    }
   }
 
   private async runView(action: () => Promise<SessionView>): Promise<SessionView> {

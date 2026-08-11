@@ -452,14 +452,23 @@ export class CardAgentSessionService {
   }
 
   async setModelControls(controls: Partial<SessionModelControls>): Promise<void> {
+    if (!this.updateModelControls(controls)) return;
+    await this.persist();
+  }
+
+  /** 只更新内存视图；由Runtime合并短时间内的连续切换并负责持久化。 */
+  updateModelControls(controls: Partial<SessionModelControls>): boolean {
     if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status)) {
       throw new Error('Agent运行期间不能修改本轮模型选项。');
     }
-    this.modelControls = {
+    const next = {
       reasoningEffort: controls.reasoningEffort ?? this.modelControls.reasoningEffort,
       webSearch: controls.webSearch ?? this.modelControls.webSearch,
     };
-    await this.persist();
+    if (canonicalEqual(next, this.modelControls)) return false;
+    this.modelControls = next;
+    this.notify();
+    return true;
   }
 
   async save(): Promise<void> {
