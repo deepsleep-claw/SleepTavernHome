@@ -20,12 +20,17 @@
         <strong>{{ change.label }}</strong>
         <code>{{ change.path }}</code>
       </div>
-      <label><input v-model="decisions[change.path]" type="radio" value="current" />保留当前</label>
-      <label><input v-model="decisions[change.path]" type="radio" value="agent" />采用修改</label>
+      <label v-if="state.activeSessionAccess === 'live'"
+        ><input v-model="decisions[change.path]" type="radio" value="current" />保留当前</label
+      >
+      <label v-if="state.activeSessionAccess === 'live'"
+        ><input v-model="decisions[change.path]" type="radio" value="agent" />采用修改</label
+      >
     </div>
-    <div class="dca-row-actions">
+    <div v-if="state.activeSessionAccess === 'live'" class="dca-row-actions">
       <button class="dca-btn-primary" type="button" :disabled="state.busy" @click="approve">提交已选修改</button>
     </div>
+    <div v-else class="dca-inline-warning">历史视图仅展示当时的待审批 Diff，不能重新提交。</div>
   </article>
 </template>
 

@@ -37,6 +37,7 @@ export class FakeTavernBridge implements TavernBridge {
   raw: RawCharacterData | null;
   readonly books = new Map<string, TavernWorldbookEntry[]>();
   readonly calls: string[] = [];
+  characters: RawCharacterData[] = [];
   readonly regexes = new Map<TavernResourceScope, RawTavernRegex[]>();
   readonly scripts = new Map<TavernResourceScope, RawTavernScriptTree[]>();
   loadedPresetName = '默认预设';
@@ -82,6 +83,7 @@ export class FakeTavernBridge implements TavernBridge {
       unknown_server_field: { keep: true },
     };
     this.books.set('主世界书', [tavernEntry('entry-1', 1), tavernEntry('entry-2', 2)]);
+    this.characters = [klona(this.raw)];
     this.regexes.set('character', []);
     this.regexes.set('global', []);
     this.regexes.set('preset-current', []);
@@ -96,7 +98,10 @@ export class FakeTavernBridge implements TavernBridge {
     this.books.set(name, []);
   }
 
-  async createWorldbookEntries(name: string, entries: Partial<TavernWorldbookEntry>[]): Promise<TavernWorldbookEntry[]> {
+  async createWorldbookEntries(
+    name: string,
+    entries: Partial<TavernWorldbookEntry>[],
+  ): Promise<TavernWorldbookEntry[]> {
     this.calls.push(`create-entries:${name}`);
     const book = this.books.get(name);
     if (!book) throw new Error('missing');
@@ -146,6 +151,10 @@ export class FakeTavernBridge implements TavernBridge {
     return this.loadedPresetName;
   }
 
+  listCharacters() {
+    return this.characters.map((character, index) => ({ avatarId: character.avatar, index, name: character.name }));
+  }
+
   getRawCharacter(): RawCharacterData | null {
     return this.raw ? klona(this.raw) : null;
   }
@@ -166,6 +175,13 @@ export class FakeTavernBridge implements TavernBridge {
 
   async saveRawCharacter(character: RawCharacterData): Promise<void> {
     this.calls.push('save-character');
+    this.raw = klona(character);
+  }
+
+  async selectCharacterById(index: number): Promise<void> {
+    this.calls.push(`select-character:${index}`);
+    const character = this.characters[index];
+    if (!character) throw new Error('missing character');
     this.raw = klona(character);
   }
 

@@ -53,7 +53,9 @@
             </div>
             <div class="dca-editor-actions">
               <div v-if="isMarkdownFile" class="dca-editor-view-switch" aria-label="Markdown查看方式">
-                <button type="button" :class="{ active: editorView === 'edit' }" @click="editorView = 'edit'">编辑</button>
+                <button type="button" :class="{ active: editorView === 'edit' }" @click="editorView = 'edit'">
+                  编辑
+                </button>
                 <button type="button" :class="{ active: editorView === 'preview' }" @click="editorView = 'preview'">
                   预览
                 </button>
@@ -106,7 +108,7 @@
           <strong>Working Diff</strong>
           <small>不重叠的酒馆手改会保留</small>
         </div>
-        <div class="dca-row-actions">
+        <div v-if="state.activeSessionAccess === 'live'" class="dca-row-actions">
           <button type="button" :disabled="state.busy" @click="undo">撤销</button>
           <button type="button" :disabled="state.busy" @click="redo">重做</button>
         </div>
@@ -220,7 +222,9 @@ const editorView = ref<'edit' | 'preview'>('edit');
 const largePreviewApproved = ref(false);
 const secretFindings = ref<Awaited<ReturnType<typeof maskSecretsForModel>>['findings']>([]);
 const secretWarning = ref('');
-const expandedDirectories = ref(new Set(['/character', '/files', '/greetings', '/skills', '/skills/user', '/temp', '/worldbooks']));
+const expandedDirectories = ref(
+  new Set(['/character', '/files', '/greetings', '/skills', '/skills/user', '/temp', '/worldbooks']),
+);
 let secretScanTimer: number | undefined;
 let secretScanRevision = 0;
 
@@ -277,10 +281,14 @@ const visibleFileTreeRows = computed<FileTreeRow[]>(() => {
   return rows;
 });
 const selectedFile = computed(() => files.value.find(file => file.path === selectedFilePath.value));
-const isBinaryFile = computed(() => Boolean(selectedFile.value?.external && !selectedFile.value.mediaType.startsWith('text/')));
+const isBinaryFile = computed(() =>
+  Boolean(selectedFile.value?.external && !selectedFile.value.mediaType.startsWith('text/')),
+);
 const isRunning = computed(() => ['committing', 'running'].includes(state.value.active?.status ?? ''));
 const canEditFile = computed(() =>
-  Boolean(selectedFile.value && !isBinaryFile.value && !selectedFile.value.readonly && state.value.active && !isRunning.value),
+  Boolean(
+    selectedFile.value && !isBinaryFile.value && !selectedFile.value.readonly && state.value.active && !isRunning.value,
+  ),
 );
 const isMarkdownFile = computed(() => /\.md$/iu.test(selectedFile.value?.path ?? ''));
 const largeMarkdownFile = computed(() => new Blob([fileDraft.value]).size > 1024 * 1024);
@@ -380,9 +388,7 @@ async function saveFile() {
       toastr.error(message, '梦境创客');
       return;
     }
-    const usePlayer = window.confirm(
-      '这个文件在你编辑期间又被修改了。\n\n确定：保存你的版本\n取消：保留酒馆当前版本',
-    );
+    const usePlayer = window.confirm('这个文件在你编辑期间又被修改了。\n\n确定：保存你的版本\n取消：保留酒馆当前版本');
     if (usePlayer) await action(() => runtime.writeWorkingFile(file.path, fileDraft.value, true));
     else await action(() => runtime.useCurrentWorkingFile(file.path));
   }

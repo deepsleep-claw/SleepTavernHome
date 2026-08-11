@@ -22,7 +22,7 @@
           <pre>{{ change.after }}</pre>
         </details>
       </article>
-      <div class="dca-row-actions">
+      <div v-if="state.activeSessionAccess === 'live'" class="dca-row-actions">
         <button v-if="item.manualStatus === 'undone'" type="button" @click="redo">重做玩家修改</button>
         <button v-else type="button" @click="undo">回退玩家修改</button>
       </div>
@@ -36,7 +36,7 @@ import type { ManualWorkspaceFileChange, SessionUiItem } from '../../../../core/
 import { useDreamCardAgent } from '../../../composables/runtime';
 
 const props = defineProps<{ item: SessionUiItem }>();
-const { action, runtime } = useDreamCardAgent();
+const { action, runtime, state } = useDreamCardAgent();
 
 const changes = computed<ManualWorkspaceFileChange[]>(() => {
   try {

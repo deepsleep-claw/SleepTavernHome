@@ -18,13 +18,25 @@
       </div>
       <div v-else class="dca-session-title">
         <strong>{{ state.active?.title }}</strong>
-        <button class="dca-icon-btn" type="button" title="重命名会话" @click="beginRename">
+        <button
+          v-if="state.activeSessionAccess === 'live'"
+          class="dca-icon-btn"
+          type="button"
+          title="重命名会话"
+          @click="beginRename"
+        >
           <i class="fa-solid fa-pencil" aria-hidden="true"></i>
         </button>
       </div>
       <small
         >{{ state.active?.agentConfiguration?.name ?? '旧版会话配置' }} ·
-        {{ state.active?.mode === 'yolo' ? 'YOLO：低风险自动写入' : '普通：批准后写入' }}</small
+        {{
+          state.activeSessionAccess === 'readonly-history'
+            ? '只读历史记录'
+            : state.active?.mode === 'yolo'
+              ? 'YOLO：低风险自动写入'
+              : '普通：批准后写入'
+        }}</small
       >
     </div>
     <div class="dca-session-controls">
@@ -67,7 +79,7 @@ import { useDreamCardAgent } from '../../composables/runtime';
 defineProps<{ sidebarCollapsed: boolean }>();
 const emit = defineEmits<{ 'toggle-sidebar': [] }>();
 
-const { action, deleteSession, isSessionTabRunning, runtime, state } = useDreamCardAgent();
+const { action, deleteCharacterSession, deleteSession, isSessionTabRunning, runtime, state } = useDreamCardAgent();
 
 const renaming = ref(false);
 const titleDraft = ref('');
@@ -98,9 +110,14 @@ async function saveTitle() {
 
 async function confirmDelete() {
   const sessionId = state.value.active?.sessionId;
-  if (sessionId && (await deleteSession(sessionId))) deletePending.value = false;
+  const bindingId = state.value.active?.bindingId;
+  if (!sessionId || !bindingId) return;
+  const deleted =
+    state.value.activeSessionAccess === 'readonly-history'
+      ? await deleteCharacterSession(bindingId, sessionId)
+      : await deleteSession(sessionId);
+  if (deleted) deletePending.value = false;
 }
-
 </script>
 
 <style lang="scss">

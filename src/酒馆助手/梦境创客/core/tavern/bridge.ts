@@ -57,6 +57,12 @@ export type RawTavernRegex = {
 
 export type RawTavernScriptTree = ScriptTree & Record<string, unknown>;
 
+export type TavernCharacterSummary = {
+  avatarId: string;
+  index: number;
+  name: string;
+};
+
 export interface TavernBridge {
   createWorldbook(name: string): Promise<void>;
   createWorldbookEntries(name: string, entries: Partial<TavernWorldbookEntry>[]): Promise<TavernWorldbookEntry[]>;
@@ -70,11 +76,13 @@ export interface TavernBridge {
   getGlobalWorldbooks(): string[];
   getGroupId(): string;
   getLoadedPresetName(): string;
+  listCharacters(): TavernCharacterSummary[];
   getRawCharacter(): RawCharacterData | null;
   getRawRegexes(scope: TavernResourceScope): RawTavernRegex[];
   getRawScriptTrees(scope: TavernResourceScope): RawTavernScriptTree[];
   getWorldbook(name: string): Promise<TavernWorldbookEntry[]>;
   saveRawCharacter(character: RawCharacterData): Promise<void>;
+  selectCharacterById(index: number): Promise<void>;
   replaceRawRegexes(scope: TavernResourceScope, regexes: RawTavernRegex[]): Promise<void>;
   replaceRawScriptTrees(scope: TavernResourceScope, trees: RawTavernScriptTree[]): Promise<void>;
   setCharacterBindings(bindings: CharWorldbooks): Promise<void>;
@@ -144,7 +152,8 @@ export function createGlobalTavernBridge(): TavernBridge {
       if (!(await createWorldbook(name))) throw new Error(`世界书已存在：${name}`);
     },
     createWorldbookEntries: async (name, entries) =>
-      (await createWorldbookEntries(name, entries as TypeFest.PartialDeep<WorldbookEntry>[])).new_entries as TavernWorldbookEntry[],
+      (await createWorldbookEntries(name, entries as TypeFest.PartialDeep<WorldbookEntry>[]))
+        .new_entries as TavernWorldbookEntry[],
     deleteWorldbook: async name => {
       if (!(await deleteWorldbook(name))) throw new Error(`世界书删除失败：${name}`);
     },
@@ -154,11 +163,17 @@ export function createGlobalTavernBridge(): TavernBridge {
     getCharacterBindings: () => getCharWorldbookNames('current'),
     getChatMessages: () => getChatMessages('0-{{lastMessageId}}'),
     getChatWorldbook: () => getChatWorldbookName('current'),
-    getCurrentCharacterId: () => getCurrentCharacterId(),
-    getCurrentCharacterName: () => getCurrentCharacterName(),
+    getCurrentCharacterId: () => (typeof getCurrentCharacterId === 'function' ? getCurrentCharacterId() : null),
+    getCurrentCharacterName: () => (typeof getCurrentCharacterName === 'function' ? getCurrentCharacterName() : null),
     getGlobalWorldbooks: () => getGlobalWorldbookNames(),
-    getGroupId: () => SillyTavern.groupId,
+    getGroupId: () => (typeof SillyTavern === 'undefined' ? '' : SillyTavern.groupId),
     getLoadedPresetName: () => getLoadedPresetName(),
+    listCharacters: () =>
+      (typeof SillyTavern === 'undefined' ? [] : (SillyTavern.characters ?? [])).map((character, index) => ({
+        avatarId: String(character.avatar ?? ''),
+        index,
+        name: String(character.name ?? ''),
+      })),
     getRawCharacter: () => getCharData('current') as RawCharacterData | null,
     getRawRegexes: scope => {
       const context = SillyTavern;
@@ -179,6 +194,9 @@ export function createGlobalTavernBridge(): TavernBridge {
     },
     getWorldbook: async name => (await getWorldbook(name)) as TavernWorldbookEntry[],
     saveRawCharacter,
+    selectCharacterById: async index => {
+      await SillyTavern.selectCharacterById(index, { switchMenu: false });
+    },
     replaceRawRegexes: async (scope, regexes) => {
       const context = SillyTavern;
       const value = klona(regexes);
@@ -204,6 +222,8 @@ export function createGlobalTavernBridge(): TavernBridge {
     setCharacterBindings: async bindings => rebindCharWorldbooks('current', bindings),
     setChatWorldbook: async name => setChatLorebook(name),
     updateWorldbook: async (name, updater) =>
-      (await updateWorldbookWith(name, entries => updater(entries as TavernWorldbookEntry[]))) as TavernWorldbookEntry[],
+      (await updateWorldbookWith(name, entries =>
+        updater(entries as TavernWorldbookEntry[]),
+      )) as TavernWorldbookEntry[],
   };
 }

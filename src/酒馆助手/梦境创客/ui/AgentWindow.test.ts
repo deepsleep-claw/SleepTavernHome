@@ -30,7 +30,7 @@ describe('AgentWindow', () => {
     skip?.click();
     await vi.waitFor(() => expect(root.textContent).not.toContain('快速引导 1 / 5'));
     expect(saveSettingsDebounced).toHaveBeenCalled();
-    await vi.waitFor(() => expect(root.textContent).toContain('请先打开一张角色卡'));
+    await vi.waitFor(() => expect(root.textContent).toContain('请先在酒馆中打开一张角色卡'));
 
     const settingsTab = [...root.querySelectorAll('button')].find(button => button.textContent?.trim() === '设置');
     settingsTab?.click();

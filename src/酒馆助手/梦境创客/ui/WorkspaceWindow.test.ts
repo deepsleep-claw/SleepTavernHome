@@ -46,9 +46,33 @@ const mock = vi.hoisted(() => {
           attachments: [{ filename: '参考图.png', id: 'attachment-1', mediaType: 'image/png', size: 1024 }],
           runStatus: 'completed',
         },
-        { at: 2, checkpointId: 'checkpoint-1', content: '{}', id: 'tool-1', kind: 'tool', status: 'completed', toolName: 'list_directory' },
-        { at: 3, checkpointId: 'checkpoint-1', content: '{}', id: 'tool-2', kind: 'tool', status: 'completed', toolName: 'read_file' },
-        { at: 4, checkpointId: 'checkpoint-1', content: '{}', id: 'tool-3', kind: 'tool', status: 'completed', toolName: 'read_file' },
+        {
+          at: 2,
+          checkpointId: 'checkpoint-1',
+          content: '{}',
+          id: 'tool-1',
+          kind: 'tool',
+          status: 'completed',
+          toolName: 'list_directory',
+        },
+        {
+          at: 3,
+          checkpointId: 'checkpoint-1',
+          content: '{}',
+          id: 'tool-2',
+          kind: 'tool',
+          status: 'completed',
+          toolName: 'read_file',
+        },
+        {
+          at: 4,
+          checkpointId: 'checkpoint-1',
+          content: '{}',
+          id: 'tool-3',
+          kind: 'tool',
+          status: 'completed',
+          toolName: 'read_file',
+        },
         {
           at: 5,
           checkpointId: 'checkpoint-1',
@@ -58,7 +82,14 @@ const mock = vi.hoisted(() => {
           kind: 'reasoning',
           status: 'completed',
         },
-        { at: 6, checkpointId: 'checkpoint-1', content: '### 完成', id: 'assistant-1', kind: 'assistant', status: 'completed' },
+        {
+          at: 6,
+          checkpointId: 'checkpoint-1',
+          content: '### 完成',
+          id: 'assistant-1',
+          kind: 'assistant',
+          status: 'completed',
+        },
       ],
       warnings: [],
       workingChanges: [],
@@ -73,10 +104,12 @@ const mock = vi.hoisted(() => {
       ],
     },
     activeAgentConfigurationId: 'agent:default',
+    activeSessionAccess: 'live',
     activeProfileId: 'profile',
     activePresetId: 'preset',
     agentConfigurations: [{ id: 'agent:default', name: '默认 Agent', presetId: 'preset', skillIds: [] }],
     busy: false,
+    characterGroups: [] as any[],
     currentCharacter: { avatarId: 'avatar', bindingId: 'binding-test', name: '测试角色' },
     debugLogs: [],
     developerMode: false,
@@ -119,7 +152,7 @@ const mock = vi.hoisted(() => {
         updatedAt: Date.now(),
         url: '/session-1.json',
       },
-      ...Array.from({ length: 9 }, (_, index) => ({
+      ...Array.from({ length: 10 }, (_, index) => ({
         bindingId: 'binding-test',
         characterName: '测试角色',
         createdAt: index + 2,
@@ -149,7 +182,43 @@ const mock = vi.hoisted(() => {
     storage: { currentCharacterBytes: 2048, globalSkillBytes: 0 },
     warnings: [],
   };
+  state.characterGroups = [
+    {
+      available: true,
+      avatarId: 'avatar',
+      bindingId: 'binding-test',
+      characterName: '测试角色',
+      current: true,
+      sessions: state.sessions,
+      updatedAt: Date.now(),
+    },
+    {
+      available: true,
+      avatarId: 'second.png',
+      bindingId: 'binding-second',
+      characterName: '第二角色',
+      current: false,
+      sessions: [
+        {
+          bindingId: 'binding-second',
+          characterName: '第二角色',
+          createdAt: 1,
+          revision: 1,
+          sessionId: 'second-session-1',
+          sha256: 'second-hash',
+          size: 100,
+          status: 'completed',
+          title: '第二角色的会话',
+          updatedAt: Date.now() - 10,
+          url: '/second-session-1.json',
+        },
+      ],
+      updatedAt: Date.now() - 10,
+    },
+  ];
   const runtime = {
+    closeSession: vi.fn(async () => undefined),
+    deleteSession: vi.fn(async () => undefined),
     enqueueGuidance: vi.fn(),
     refreshCharacter: vi.fn(async () => undefined),
     removeGlobalSkill: vi.fn(async () => undefined),
@@ -197,6 +266,11 @@ describe('WorkspaceWindow', () => {
     expect(root.querySelector('.dca-message-attachments')?.textContent).toContain('参考图.png');
     expect(root.querySelector<HTMLImageElement>('.dca-message-user img')?.src).toBe('https://example.com/preview.png');
     expect(root.querySelector('.dca-message-assistant h3')?.textContent).toBe('完成');
+    expect(root.querySelector('.dca-header')).toBeNull();
+    expect(root.querySelector('.dca-sidebar-brand strong')).toBeNull();
+    expect(root.querySelector<HTMLImageElement>('.dca-character-avatar img')?.getAttribute('src')).toBe(
+      '/thumbnail?type=avatar&file=avatar',
+    );
 
     (root.querySelector('button[title="打开侧栏"]') as HTMLButtonElement).click();
     await nextTick();
@@ -210,16 +284,36 @@ describe('WorkspaceWindow', () => {
 
     (root.querySelector('button[title="会话列表"]') as HTMLButtonElement).click();
     await nextTick();
-    expect(root.textContent).toContain('近期会话');
+    expect(root.textContent).toContain('最近会话');
     expect(root.querySelector('select')).toBeNull();
     expect(root.textContent).toContain('最近的创作');
-    expect(root.querySelectorAll('.dca-recent-item')).toHaveLength(8);
-    const allSessions = [...root.querySelectorAll<HTMLButtonElement>('.dca-text-link')].find(button =>
-      button.textContent?.includes('全部会话'),
-    )!;
-    allSessions.click();
+    expect(root.querySelectorAll('.dca-recent-item')).toHaveLength(5);
+    expect(root.querySelectorAll('.dca-character-sessions > button:not(.dca-all-sessions-button)')).toHaveLength(10);
+    (root.querySelector('.dca-all-sessions-button') as HTMLButtonElement).click();
     await nextTick();
-    expect(root.querySelectorAll('.dca-recent-item')).toHaveLength(10);
+    expect(root.querySelectorAll('.dca-all-list article')).toHaveLength(11);
+    (root.querySelector('.dca-all-dialog button[title="关闭"]') as HTMLButtonElement).click();
+    await nextTick();
+
+    const characterToggles = root.querySelectorAll<HTMLButtonElement>('.dca-character-toggle');
+    characterToggles[1].click();
+    await nextTick();
+    expect(root.querySelectorAll('.dca-character-sessions')).toHaveLength(2);
+    characterToggles[0].click();
+    await nextTick();
+    expect(root.querySelectorAll('.dca-character-sessions')).toHaveLength(1);
+    characterToggles[0].click();
+    await nextTick();
+
+    const secondRecentDelete = root.querySelector<HTMLButtonElement>(
+      '.dca-recent-item:nth-child(2) .dca-welcome-delete',
+    )!;
+    secondRecentDelete.click();
+    await nextTick();
+    expect(root.querySelector('.dca-welcome-delete-confirm')?.textContent).toContain('历史会话2');
+    (root.querySelector('.dca-welcome-delete-confirm button.danger') as HTMLButtonElement).click();
+    expect(mock.runtime.deleteSession).toHaveBeenCalledWith('session-2');
+    await nextTick();
 
     (root.querySelector('.dca-settings-tab') as HTMLButtonElement).click();
     await nextTick();
@@ -244,8 +338,8 @@ describe('WorkspaceWindow', () => {
     editSkill.click();
     await nextTick();
     expect(root.querySelector('#dca-skill-title')?.textContent).toContain('编辑 Skill');
-    const saveSkill = [...root.querySelectorAll<HTMLButtonElement>('.dca-skill-editor-footer button')].find(
-      button => button.textContent?.includes('保存 Skill'),
+    const saveSkill = [...root.querySelectorAll<HTMLButtonElement>('.dca-skill-editor-footer button')].find(button =>
+      button.textContent?.includes('保存 Skill'),
     )!;
     saveSkill.click();
     await nextTick();
@@ -316,6 +410,16 @@ describe('WorkspaceWindow', () => {
     const tabButtons = root.querySelectorAll<HTMLButtonElement>('.dca-session-tab button');
     expect(tabButtons[0].disabled).toBe(false);
     expect(tabButtons[1].disabled).toBe(true);
+
+    mock.state.active.status = 'completed';
+    mock.state.sessionStatuses['session-1'] = 'completed';
+    mock.state.characterGroups[0].sessions[0].status = 'running';
+    mock.subscriber()?.(structuredClone(mock.state));
+    await nextTick();
+    const closeButton = root.querySelector<HTMLButtonElement>('.dca-session-tab-close')!;
+    expect(closeButton.disabled).toBe(false);
+    closeButton.click();
+    expect(mock.runtime.closeSession).toHaveBeenCalledWith('session-1');
     app.unmount();
   });
 });

@@ -30,7 +30,7 @@
     ></div>
     <!-- eslint-enable vue/no-v-html -->
     <p v-else-if="!editing && item.content">{{ cleanGuidance(item.content) }}</p>
-    <footer v-if="item.kind === 'user' && !editing" class="dca-message-actions">
+    <footer v-if="item.kind === 'user' && !editing && state.activeSessionAccess === 'live'" class="dca-message-actions">
       <button type="button" @click="undoTo">回退本轮修改</button>
       <button class="dca-icon-btn" type="button" title="编辑并可重新发送" @click="beginEdit">
         <i class="fa-solid fa-pencil" aria-hidden="true"></i>
@@ -58,7 +58,10 @@ const editDraft = ref('');
 
 const canSend = computed(() =>
   Boolean(
-    state.value.active && ['completed', 'idle'].includes(state.value.active.status) && !state.value.active.approval,
+    state.value.activeSessionAccess === 'live' &&
+    state.value.active &&
+    ['completed', 'idle'].includes(state.value.active.status) &&
+    !state.value.active.approval,
   ),
 );
 

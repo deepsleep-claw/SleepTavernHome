@@ -7,6 +7,7 @@ import { MemoryCardStateAdapter } from '../core/transaction/adapter';
 import { transactionState } from '../core/transaction/test-fixture';
 import { DreamCardAgentRuntime } from './dream-card-agent-runtime';
 import type { AgentSkill } from '../core/skills/types';
+import { FakeTavernBridge } from '../core/tavern/test-bridge';
 
 class QueueExecutor implements ModelStepExecutor {
   constructor(private readonly results: ModelStepResult[]) {}
@@ -77,6 +78,68 @@ async function addProfile(runtime: DreamCardAgentRuntime): Promise<void> {
 }
 
 describe('DreamCardAgentRuntime', () => {
+  it('按稳定绑定切换角色，并可把已失效角色的会话作为只读历史打开', async () => {
+    const files = new MemoryTavernFileClient();
+    const settings = new MemoryAgentSettingsStore();
+    const bridge = new FakeTavernBridge();
+    const first = transactionState();
+    const second = structuredClone(first);
+    second.character.avatarId = 'second.png';
+    second.character.bindingId = 'binding-2';
+    second.character.name = '第二角色';
+    second.character.extensions.card_agent = { binding_id: 'binding-2' };
+    const firstRaw = structuredClone(bridge.raw!);
+    const secondRaw = structuredClone(firstRaw);
+    secondRaw.avatar = second.character.avatarId;
+    secondRaw.name = second.character.name;
+    secondRaw.data.name = second.character.name;
+    secondRaw.data.extensions!.card_agent = { binding_id: second.character.bindingId };
+    bridge.characters = [firstRaw, secondRaw];
+    let current = first;
+    bridge.selectCharacterById = async index => {
+      bridge.calls.push(`select-character:${index}`);
+      current = index === 0 ? first : second;
+      bridge.raw = structuredClone(index === 0 ? firstRaw : secondRaw);
+    };
+    const runtime = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(current),
+      bridge,
+      executorFactory: () => new QueueExecutor([]),
+      fileClient: files,
+      settingsStore: settings,
+    });
+    await addProfile(runtime);
+    await runtime.refreshCharacter();
+    await runtime.createSession({ title: '第一角色会话' });
+    current = second;
+    bridge.raw = structuredClone(secondRaw);
+    await runtime.refreshCharacter();
+    const secondSession = await runtime.createSession({ title: '第二角色会话' });
+    current = first;
+    bridge.raw = structuredClone(firstRaw);
+    await runtime.refreshCharacter();
+
+    expect(runtime.snapshot().characterGroups.map(group => group.bindingId)).toEqual(['binding-1', 'binding-2']);
+    await runtime.switchCharacterAndOpenSession('binding-2', secondSession.sessionId);
+    expect(bridge.calls).toContain('select-character:1');
+    expect(runtime.snapshot()).toMatchObject({
+      active: { bindingId: 'binding-2', sessionId: secondSession.sessionId },
+      activeSessionAccess: 'live',
+      currentCharacter: { bindingId: 'binding-2' },
+    });
+
+    current = first;
+    bridge.raw = structuredClone(firstRaw);
+    bridge.characters = [firstRaw];
+    await runtime.refreshCharacter();
+    const unavailable = runtime.snapshot().characterGroups.find(group => group.bindingId === 'binding-2');
+    expect(unavailable).toMatchObject({ available: false, characterName: '第二角色' });
+    const history = await runtime.openHistorySession('binding-2', secondSession.sessionId);
+    expect(runtime.snapshot().activeSessionAccess).toBe('readonly-history');
+    expect(history.workingFiles.every(file => file.readonly)).toBe(true);
+    runtime.destroy();
+  });
+
   it('每套Agent配置独立组合预设与Skill开关，并可明确应用到已有会话', async () => {
     const runtime = new DreamCardAgentRuntime({
       adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
@@ -341,9 +404,9 @@ describe('DreamCardAgentRuntime', () => {
       name: '纯文本接口',
     });
     await runtime.createSession();
-    await expect(runtime.send('', [
-      { data: 'AQID', filename: 'image.png', mediaType: 'image/png', size: 3 },
-    ])).rejects.toThrow('不支持视觉');
+    await expect(
+      runtime.send('', [{ data: 'AQID', filename: 'image.png', mediaType: 'image/png', size: 3 }]),
+    ).rejects.toThrow('不支持视觉');
     runtime.destroy();
   });
 

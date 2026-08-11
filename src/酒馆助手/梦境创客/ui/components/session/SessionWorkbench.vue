@@ -7,7 +7,14 @@
     <div class="dca-session-panel">
       <SessionToolbar :sidebar-collapsed="sidebarCollapsed" @toggle-sidebar="toggleSidebar" />
       <SessionTimeline @open-diff="openSidebar('diff')" />
-      <SessionComposer />
+      <div v-if="state.activeSessionAccess === 'readonly-history'" class="dca-readonly-composer">
+        <i class="fa-solid fa-lock" aria-hidden="true"></i>
+        <div>
+          <strong>历史记录只读</strong
+          ><span>对应角色卡已不可用。你仍可查看消息、工具过程、文件快照与 Diff，但不能发送或修改内容。</span>
+        </div>
+      </div>
+      <SessionComposer v-else />
     </div>
     <div
       v-if="!sidebarCollapsed"
@@ -85,6 +92,33 @@ watch(
   min-width: 0;
   min-height: 0;
   flex-direction: column;
+}
+
+.dca-readonly-composer {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.75rem;
+  margin: 0.7rem;
+  border: 1px solid rgba(110, 129, 181, 0.28);
+  border-radius: 0.75rem;
+  padding: 0.75rem 0.9rem;
+  background: rgba(34, 47, 77, 0.55);
+  color: var(--dca-text-muted);
+}
+.dca-readonly-composer > i {
+  color: #8da7e8;
+}
+.dca-readonly-composer > div {
+  display: flex;
+  flex-direction: column;
+}
+.dca-readonly-composer strong {
+  color: var(--dca-text);
+  font-size: 0.82rem;
+}
+.dca-readonly-composer span {
+  font-size: 0.72rem;
 }
 
 .dca-sidebar-resizer {

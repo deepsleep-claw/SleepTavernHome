@@ -1,13 +1,16 @@
 import { teleportStyle } from '@util/script';
 import { createApp } from 'vue';
+import { getDreamCardAgentRuntime } from '../runtime/dream-card-agent-runtime';
 import WorkspaceWindow from './WorkspaceWindow.vue';
 
 type Frame = { height: number; width: number; x: number; y: number };
 type Popup = { connected: () => boolean; destroy: () => void; focus: () => void };
+type WindowPreferences = { desktopMode: 'fullscreen' | 'windowed'; windowedFrame?: Frame };
 
 let popup: Popup | undefined;
 const MARGIN = 10;
 const WINDOW_ID = 'dream-card-agent-window';
+const WINDOW_PREFERENCES_KEY = 'dream-card-agent:window-layout:v1';
 
 function viewport() {
   const host = window.parent;
@@ -15,16 +18,23 @@ function viewport() {
   const inset = (name: string) => Math.max(0, Number.parseFloat(style.getPropertyValue(name)) || 0);
   return {
     height: host.innerHeight,
-    insets: { bottom: inset('--tt-inset-bottom'), left: inset('--tt-inset-left'), right: inset('--tt-inset-right'), top: inset('--tt-inset-top') },
+    insets: {
+      bottom: inset('--tt-inset-bottom'),
+      left: inset('--tt-inset-left'),
+      right: inset('--tt-inset-right'),
+      top: inset('--tt-inset-top'),
+    },
     mobile: host.innerWidth <= 720,
+    scrollX: host.scrollX,
+    scrollY: host.scrollY,
     width: host.innerWidth,
   };
 }
 
 function clamp(frame: Frame): Frame {
   const view = viewport();
-  const left = view.insets.left + MARGIN;
-  const top = view.insets.top + MARGIN;
+  const left = view.insets.left + view.scrollX + MARGIN;
+  const top = view.insets.top + view.scrollY + MARGIN;
   const availableWidth = Math.max(1, view.width - view.insets.left - view.insets.right - MARGIN * 2);
   const availableHeight = Math.max(1, view.height - view.insets.top - view.insets.bottom - MARGIN * 2);
   if (view.mobile) return { height: availableHeight, width: availableWidth, x: left, y: top };
@@ -42,22 +52,56 @@ function defaultFrame(): Frame {
   const view = viewport();
   const width = Math.min(980, Math.max(520, view.width * 0.72));
   const height = Math.min(780, Math.max(440, view.height * 0.82));
-  return clamp({ height, width, x: (view.width - width) / 2, y: (view.height - height) / 2 });
+  return clamp({
+    height,
+    width,
+    x: view.scrollX + (view.width - width) / 2,
+    y: view.scrollY + (view.height - height) / 2,
+  });
 }
 
-function readFrame($window: JQuery<HTMLElement>): Frame {
+function fullscreenFrame(): Frame {
+  const view = viewport();
   return {
-    height: $window.outerHeight() ?? 500,
-    width: $window.outerWidth() ?? 700,
-    x: Number.parseFloat($window.css('left')) || MARGIN,
-    y: Number.parseFloat($window.css('top')) || MARGIN,
+    height: Math.max(1, view.height - view.insets.top - view.insets.bottom),
+    width: Math.max(1, view.width - view.insets.left - view.insets.right),
+    x: view.insets.left + view.scrollX,
+    y: view.insets.top + view.scrollY,
   };
 }
 
-function applyFrame($window: JQuery<HTMLElement>, frame: Frame): void {
-  const value = clamp(frame);
+function readPreferences(): WindowPreferences {
+  try {
+    const value = JSON.parse(localStorage.getItem(WINDOW_PREFERENCES_KEY) ?? '') as Partial<WindowPreferences>;
+    return {
+      desktopMode: value.desktopMode === 'windowed' ? 'windowed' : 'fullscreen',
+      windowedFrame: value.windowedFrame,
+    };
+  } catch {
+    return { desktopMode: 'fullscreen' };
+  }
+}
+
+function savePreferences(value: WindowPreferences): void {
+  localStorage.setItem(WINDOW_PREFERENCES_KEY, JSON.stringify(value));
+}
+
+function readFrame($window: JQuery<HTMLElement>): Frame {
+  const x = Number.parseFloat($window.css('left'));
+  const y = Number.parseFloat($window.css('top'));
+  return {
+    height: $window.outerHeight() ?? 500,
+    width: $window.outerWidth() ?? 700,
+    x: Number.isFinite(x) ? x : MARGIN,
+    y: Number.isFinite(y) ? y : MARGIN,
+  };
+}
+
+function applyFrame($window: JQuery<HTMLElement>, frame: Frame, fullscreen: boolean): void {
+  const value = fullscreen ? fullscreenFrame() : clamp(frame);
   $window.css({ height: `${value.height}px`, left: `${value.x}px`, top: `${value.y}px`, width: `${value.width}px` });
   $window.toggleClass('dca-floating-window-mobile', viewport().mobile);
+  $window.toggleClass('dca-floating-window-fullscreen', fullscreen);
 }
 
 export function openDreamCardAgentWindow(): void {
@@ -70,12 +114,31 @@ export function openDreamCardAgentWindow(): void {
   $(`#${WINDOW_ID}`).remove();
   const host = window.parent;
   const $window = $('<section>')
-    .attr({ 'aria-label': '梦境创客', 'data-tt-mobile-surface': 'free-window', id: WINDOW_ID, role: 'dialog', script_id: getScriptId() })
+    .attr({
+      'aria-label': '梦境创客',
+      'data-tt-mobile-surface': 'free-window',
+      id: WINDOW_ID,
+      role: 'dialog',
+      script_id: getScriptId(),
+    })
     .addClass('dca-floating-window')
     .appendTo('body');
   const $title = $('<header>').addClass('dca-floating-titlebar').appendTo($window);
-  $('<span>').append($('<i>').addClass('fa-solid fa-wand-magic-sparkles')).append(' 梦境创客').appendTo($title);
-  const $close = $('<button>').attr({ 'aria-label': '关闭窗口', title: '关闭窗口（Agent继续运行）', type: 'button' }).append($('<i>').addClass('fa-solid fa-xmark')).appendTo($title);
+  const $titleIdentity = $('<span>').addClass('dca-floating-title-identity').appendTo($title);
+  $('<i>').addClass('fa-solid fa-wand-magic-sparkles').appendTo($titleIdentity);
+  $('<strong>').text('梦境创客').appendTo($titleIdentity);
+  const $titleCharacter = $('<small>').appendTo($titleIdentity);
+  const $titleActions = $('<div>').addClass('dca-floating-title-actions').appendTo($title);
+  const $mode = $('<button>')
+    .addClass('dca-floating-mode')
+    .attr({ 'aria-label': '切换窗口模式', type: 'button' })
+    .append($('<i>'))
+    .appendTo($titleActions);
+  const $close = $('<button>')
+    .addClass('dca-floating-close')
+    .attr({ 'aria-label': '关闭窗口', title: '关闭窗口（Agent继续运行）', type: 'button' })
+    .append($('<i>').addClass('fa-solid fa-xmark'))
+    .appendTo($titleActions);
   let destroyed = false;
   const frameElement = window.frameElement;
   if (!frameElement || frameElement.tagName !== 'IFRAME') {
@@ -122,11 +185,26 @@ export function openDreamCardAgentWindow(): void {
   document.body.append(mountPoint);
   const app = createApp(WorkspaceWindow);
   app.mount(mountPoint);
+  const unsubscribeTitle = getDreamCardAgentRuntime().subscribe(state => {
+    const characterName = state.currentCharacter?.name ?? '未打开角色卡';
+    $titleCharacter.text(`· ${characterName}`);
+    $title.attr('title', `梦境创客 · ${characterName}`);
+  });
   const $resize = $('<div>').addClass('dca-floating-resize').attr('title', '拖拽调整大小').appendTo($window);
   $resize.css('pointer-events', 'auto');
   const style = teleportStyle();
-  const placeFrame = (value: Frame) => {
-    applyFrame($window, value);
+  let preferences = readPreferences();
+  let fullscreen = viewport().mobile || preferences.desktopMode === 'fullscreen';
+  const updateModeButton = () => {
+    const mobile = viewport().mobile;
+    $mode.toggle(!mobile);
+    $mode.attr('title', fullscreen ? '切换到窗口模式' : '填满酒馆可用区域');
+    $mode.find('i').attr('class', fullscreen ? 'fa-regular fa-window-restore' : 'fa-solid fa-expand');
+    $resize.toggle(!fullscreen && !mobile);
+  };
+  const placeFrame = (value: Frame, nextFullscreen = fullscreen) => {
+    fullscreen = viewport().mobile || nextFullscreen;
+    applyFrame($window, value, fullscreen);
     const actual = readFrame($window);
     const titleHeight = $title.outerHeight() ?? 43;
     $(frame).css({
@@ -135,15 +213,22 @@ export function openDreamCardAgentWindow(): void {
       top: `${actual.y + titleHeight}px`,
       width: `${actual.width}px`,
     });
+    updateModeButton();
   };
-  placeFrame(defaultFrame());
+  const placePreferredFrame = () => {
+    const mobile = viewport().mobile;
+    const useFullscreen = mobile || preferences.desktopMode === 'fullscreen';
+    placeFrame(useFullscreen ? fullscreenFrame() : (preferences.windowedFrame ?? defaultFrame()), useFullscreen);
+  };
+  placePreferredFrame();
 
   let removePointer = () => {};
-  const keepVisible = () => placeFrame(readFrame($window));
+  const keepVisible = () => placePreferredFrame();
   const destroy = () => {
     if (destroyed) return;
     destroyed = true;
     removePointer();
+    unsubscribeTitle();
     app.unmount();
     mountPoint.remove();
     if (originalClass === null) frame.removeAttribute('class');
@@ -160,19 +245,24 @@ export function openDreamCardAgentWindow(): void {
     popup = undefined;
   };
   const track = (event: PointerEvent, resize: boolean) => {
-    if (event.button !== 0 || viewport().mobile) return;
+    if (event.button !== 0 || viewport().mobile || fullscreen) return;
     event.preventDefault();
     const start = readFrame($window);
     const startX = event.clientX;
     const startY = event.clientY;
-    const move = (next: PointerEvent) => placeFrame(resize
-      ? { ...start, height: start.height + next.clientY - startY, width: start.width + next.clientX - startX }
-      : { ...start, x: start.x + next.clientX - startX, y: start.y + next.clientY - startY });
+    const move = (next: PointerEvent) =>
+      placeFrame(
+        resize
+          ? { ...start, height: start.height + next.clientY - startY, width: start.width + next.clientX - startX }
+          : { ...start, x: start.x + next.clientX - startX, y: start.y + next.clientY - startY },
+      );
     const end = () => {
       host.document.removeEventListener('pointermove', move);
       host.document.removeEventListener('pointerup', end);
       host.document.removeEventListener('pointercancel', end);
       removePointer = () => {};
+      preferences = { ...preferences, windowedFrame: clamp(readFrame($window)) };
+      savePreferences(preferences);
     };
     removePointer();
     removePointer = end;
@@ -182,6 +272,18 @@ export function openDreamCardAgentWindow(): void {
   };
   $title.on('pointerdown', event => track(event.originalEvent as PointerEvent, false));
   $resize.on('pointerdown', event => track(event.originalEvent as PointerEvent, true));
+  $mode
+    .on('pointerdown', event => event.stopPropagation())
+    .on('click', () => {
+      if (viewport().mobile) return;
+      if (fullscreen) {
+        preferences = { ...preferences, desktopMode: 'windowed' };
+      } else {
+        preferences = { desktopMode: 'fullscreen', windowedFrame: clamp(readFrame($window)) };
+      }
+      savePreferences(preferences);
+      placePreferredFrame();
+    });
   $close.on('pointerdown', event => event.stopPropagation()).on('click', destroy);
   host.addEventListener('resize', keepVisible);
   popup = {

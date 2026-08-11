@@ -18,6 +18,7 @@ import {
   TavernAgentSettingsStore,
   type AgentConfiguration,
   type AgentSettingsStore,
+  type CharacterStoreReference,
   type FloatingButtonAnchor,
   type FloatingButtonOffset,
   type SessionIndexEntry,
@@ -34,6 +35,7 @@ import {
   type ApiProfileInput,
 } from '../core/provider/profiles';
 import { ProfileModelStepExecutor, type ModelStepExecutor } from '../core/runner/step-executor';
+import { measureContext } from '../core/runner/context';
 import type { ToolConfirmation } from '../core/runner/tools';
 import { CardAgentSessionService } from '../core/session/session-service';
 import { defaultPresetValues } from '../core/session/prompt';
@@ -54,15 +56,18 @@ import { ProductionCardStateAdapter } from '../core/tavern/production-adapter';
 import type { CardStateAdapter } from '../core/transaction/adapter';
 import { commitWorkingCopy } from '../core/transaction/commit';
 import { diffCardStates } from '../core/transaction/state-diff';
+import type { WorkspaceFile } from '../core/workspace/types';
 
 export type DreamCardAgentRuntimeState = {
   active?: SessionView;
+  activeSessionAccess: 'live' | 'readonly-history';
   activeAgentConfigurationId: string;
   activeProfileId?: string;
   activePresetId: string;
   agentConfigurations: AgentConfiguration[];
   busy: boolean;
   compressImages: boolean;
+  characterGroups: CharacterSessionGroup[];
   currentCharacter?: { avatarId: string; bindingId: string; name: string };
   debugLogs: DebugLogEntry[];
   developerMode: boolean;
@@ -86,6 +91,17 @@ export type DreamCardAgentRuntimeState = {
   sessionStatuses: Record<string, SessionLifecycleStatus>;
   toolConfirmation?: ToolConfirmation;
   warnings: string[];
+};
+
+export type CharacterSessionGroup = {
+  available: boolean;
+  avatarId?: string;
+  bindingId: string;
+  characterName: string;
+  current: boolean;
+  error?: string;
+  sessions: SessionIndexEntry[];
+  updatedAt: number;
 };
 
 type RuntimeOptions = {
@@ -119,6 +135,7 @@ function retainedSnapshotBlobs(
 export class DreamCardAgentRuntime {
   private activeService?: CardAgentSessionService;
   private readonly adapterFactory: () => CardStateAdapter;
+  private readonly bridge: TavernBridge;
   private readonly characterStore: CharacterMetadataStore;
   private readonly executorFactory: (profile: ApiProfile) => ModelStepExecutor;
   private readonly fileClient: TavernFileClient;
@@ -129,6 +146,7 @@ export class DreamCardAgentRuntime {
   private readonly now: () => number;
   private readonly settingsStore: AgentSettingsStore;
   private readonly services = new Map<string, CardAgentSessionService>();
+  private readonly historyViews = new Map<string, SessionView>();
   private readonly settingsUnsubscribe?: () => void;
   private readonly subscribers = new Set<Subscriber>();
   private toolConfirmationResolve?: (approved: boolean) => void;
@@ -139,6 +157,7 @@ export class DreamCardAgentRuntime {
 
   constructor(options: RuntimeOptions = {}) {
     const bridge = options.bridge ?? createGlobalTavernBridge();
+    this.bridge = bridge;
     this.adapterFactory = options.adapterFactory ?? (() => new ProductionCardStateAdapter(bridge));
     this.executorFactory = options.executorFactory ?? (profile => new ProfileModelStepExecutor(profile));
     this.fileClient = options.fileClient ?? new GlobalTavernFileClient();
@@ -150,12 +169,14 @@ export class DreamCardAgentRuntime {
     this.globalSkillStore = new GlobalSkillStore(this.fileClient, this.settingsStore, this.now);
     const settings = this.settingsStore.load();
     this.state = {
+      activeSessionAccess: 'live',
       activeAgentConfigurationId: settings.activeAgentConfigurationId,
       activeProfileId: settings.activeProfileId,
       activePresetId: settings.activePresetId,
       agentConfigurations: settings.agentConfigurations,
       busy: false,
       compressImages: settings.compressImages,
+      characterGroups: [],
       debugLogs: [],
       developerMode: settings.developerMode,
       dangerousNonCharacterResourceWrites: settings.dangerousNonCharacterResourceWrites,
@@ -176,6 +197,7 @@ export class DreamCardAgentRuntime {
     this.settingsUnsubscribe = this.settingsStore.subscribe?.(() => {
       this.reloadSettingsState();
       void this.reloadCharacterSessions();
+      void this.reloadCharacterGroups();
       void this.reloadSkills();
     });
   }
@@ -194,14 +216,70 @@ export class DreamCardAgentRuntime {
     return this.run(async () => {
       await this.activeService?.finalizeManualEdits();
       await this.reloadSkills();
-      const current = await this.adapterFactory().read();
+      let current: CardWorkspaceState;
+      try {
+        current = await this.adapterFactory().read();
+      } catch (error) {
+        if (this.bridge.getCurrentCharacterId() && !this.bridge.getGroupId()) throw error;
+        this.state.currentCharacter = undefined;
+        this.state.sessions = [];
+        await this.reloadCharacterGroups();
+        return;
+      }
+      if (
+        this.state.currentCharacter?.bindingId !== current.character.bindingId &&
+        this.state.activeSessionAccess === 'live'
+      ) {
+        this.activeService = undefined;
+        this.state.active = undefined;
+      }
       this.state.currentCharacter = {
         avatarId: current.character.avatarId,
         bindingId: current.character.bindingId,
         name: current.character.name,
       };
       await this.refreshSessionIndex(current);
+      await this.reloadCharacterGroups();
     });
+  }
+
+  async switchCharacter(bindingId: string): Promise<void> {
+    await this.run(async () => {
+      await this.switchCharacterInternal(bindingId);
+      await this.reloadCharacterGroups();
+    });
+  }
+
+  async switchCharacterAndOpenSession(bindingId: string, sessionId: string): Promise<SessionView> {
+    await this.switchCharacter(bindingId);
+    this.historyViews.delete(sessionId);
+    this.updateLoadedSessionIds();
+    return this.openSession(sessionId);
+  }
+
+  async switchCharacterAndCreateSession(bindingId: string): Promise<SessionView> {
+    await this.switchCharacter(bindingId);
+    return this.createSession();
+  }
+
+  async openHistorySession(bindingId: string, sessionId: string): Promise<SessionView> {
+    let result!: SessionView;
+    await this.run(async () => {
+      const group = this.state.characterGroups.find(item => item.bindingId === bindingId);
+      if (group?.available) throw new Error('该角色卡仍然可用，请切换角色卡后打开会话。');
+      const revision = await new SessionRevisionStore(this.fileClient, this.settingsStore, this.now).load(
+        bindingId,
+        sessionId,
+      );
+      result = this.createHistoryView(revision.entry, revision.runtime, revision.workingCopy);
+      this.historyViews.set(sessionId, result);
+      this.activeService = undefined;
+      this.state.active = result;
+      this.state.activeSessionAccess = 'readonly-history';
+      this.updateLoadedSessionIds();
+      this.emit();
+    });
+    return result;
   }
 
   async createSession(input: { mode?: SessionMode; profileId?: string; title?: string } = {}): Promise<SessionView> {
@@ -253,7 +331,9 @@ export class DreamCardAgentRuntime {
       });
       await service.save();
       this.services.set(service.sessionId, service);
+      this.historyViews.delete(service.sessionId);
       this.activeService = service;
+      this.state.activeSessionAccess = 'live';
       this.updateService(service.view());
       this.state.currentCharacter = {
         avatarId: current.character.avatarId,
@@ -267,11 +347,24 @@ export class DreamCardAgentRuntime {
   }
 
   async openSession(sessionId: string): Promise<SessionView> {
+    const historyView = this.historyViews.get(sessionId);
+    if (historyView && historyView.bindingId !== this.state.currentCharacter?.bindingId) {
+      this.activeService = undefined;
+      this.state.active = historyView;
+      this.state.activeSessionAccess = 'readonly-history';
+      this.emit();
+      return klona(historyView);
+    }
+    if (historyView) this.historyViews.delete(sessionId);
     await this.run(async () => {
       if (this.activeService?.sessionId !== sessionId) await this.activeService?.finalizeManualEdits();
       const loaded = this.services.get(sessionId);
       if (loaded) {
+        if (loaded.view().bindingId !== this.state.currentCharacter?.bindingId) {
+          throw new Error('该会话不属于当前打开的角色卡。');
+        }
         this.activeService = loaded;
+        this.state.activeSessionAccess = 'live';
         this.updateService(loaded.view());
         return;
       }
@@ -323,6 +416,7 @@ export class DreamCardAgentRuntime {
       );
       this.services.set(service.sessionId, service);
       this.activeService = service;
+      this.state.activeSessionAccess = 'live';
       this.state.currentCharacter = {
         avatarId: current.character.avatarId,
         bindingId: current.character.bindingId,
@@ -336,6 +430,15 @@ export class DreamCardAgentRuntime {
 
   /** 关闭页签只卸载前端运行实例，持久化的会话与快照仍保留，可从历史重新打开。 */
   async closeSession(sessionId: string): Promise<void> {
+    if (this.historyViews.delete(sessionId)) {
+      if (this.state.active?.sessionId === sessionId) {
+        this.state.active = undefined;
+        this.state.activeSessionAccess = 'live';
+      }
+      this.updateLoadedSessionIds();
+      this.emit();
+      return;
+    }
     const loaded = this.services.get(sessionId);
     if (!loaded) return;
     if (isSessionOperationActive(loaded.view().status)) {
@@ -348,17 +451,14 @@ export class DreamCardAgentRuntime {
       this.activeService = undefined;
       this.state.active = undefined;
     }
-    this.state.loadedSessionIds = [...this.services.keys()];
+    this.updateLoadedSessionIds();
     this.emit();
   }
 
   async send(message: string, attachments: SessionAttachmentInput[] = []): Promise<SessionView> {
     return this.runActiveView(async service => {
       const profile = this.requireProfile();
-      if (
-        attachments.some(isImageAttachment) &&
-        profile.modelSettings.capabilities.vision === 'disabled'
-      ) {
+      if (attachments.some(isImageAttachment) && profile.modelSettings.capabilities.vision === 'disabled') {
         throw new Error('当前API Profile明确标记为不支持视觉，无法发送图片附件。');
       }
       await this.reloadSkills();
@@ -411,23 +511,31 @@ export class DreamCardAgentRuntime {
   }
 
   async deleteSession(sessionId: string): Promise<void> {
+    const character = this.state.currentCharacter;
+    if (!character) throw new Error('请先打开角色卡。');
+    await this.deleteCharacterSession(character.bindingId, sessionId);
+  }
+
+  async deleteCharacterSession(bindingId: string, sessionId: string): Promise<void> {
     await this.run(async () => {
-      const character = this.state.currentCharacter;
-      if (!character) throw new Error('请先打开角色卡。');
       const loaded = this.services.get(sessionId);
       if (loaded && isSessionOperationActive(loaded.view().status)) {
         throw new Error('运行中的会话不能删除，请先停止任务。');
       }
-      const removed = await this.characterStore.removeSession(character.bindingId, sessionId);
+      const removed = await this.characterStore.removeSession(bindingId, sessionId);
       if (!removed) throw new Error(`会话不存在：${sessionId}`);
-      await this.workspaceFileStore.releaseSession(character.bindingId, sessionId);
+      await this.workspaceFileStore.releaseSession(bindingId, sessionId);
       this.services.delete(sessionId);
+      this.historyViews.delete(sessionId);
       delete this.state.sessionStatuses[sessionId];
-      if (this.activeService?.sessionId === sessionId) {
+      if (this.activeService?.sessionId === sessionId || this.state.active?.sessionId === sessionId) {
         this.activeService = undefined;
         this.state.active = undefined;
+        this.state.activeSessionAccess = 'live';
       }
-      await this.reloadCharacterSessions();
+      this.updateLoadedSessionIds();
+      if (bindingId === this.state.currentCharacter?.bindingId) await this.reloadCharacterSessions();
+      await this.reloadCharacterGroups();
     });
   }
 
@@ -475,7 +583,10 @@ export class DreamCardAgentRuntime {
         const removedCheckpoints = timeline.cleanupAbandoned();
         revision.runtime.history = timeline.export();
         const blobs = retainedSnapshotBlobs(revision.runtime, revision.snapshotBlobs);
-        if (removedCheckpoints.length === 0 && Object.keys(blobs).length === Object.keys(revision.snapshotBlobs).length) {
+        if (
+          removedCheckpoints.length === 0 &&
+          Object.keys(blobs).length === Object.keys(revision.snapshotBlobs).length
+        ) {
           continue;
         }
         await store.commit({
@@ -541,10 +652,12 @@ export class DreamCardAgentRuntime {
 
   async resetAllData(): Promise<void> {
     const settings = this.settingsStore.load();
-    const bindings = [...new Set([
-      ...Object.keys(settings.characterStores),
-      ...this.workspaceFileStore.listReferences().map(file => file.bindingId),
-    ])];
+    const bindings = [
+      ...new Set([
+        ...Object.keys(settings.characterStores),
+        ...this.workspaceFileStore.listReferences().map(file => file.bindingId),
+      ]),
+    ];
     await this.runStorageAction(undefined, async () => {
       for (const bindingId of bindings) {
         await this.characterStore.removeCharacter(bindingId).catch(() => []);
@@ -838,9 +951,7 @@ export class DreamCardAgentRuntime {
     const current = await adapter.read();
     const settings = this.settingsStore.load();
     const storedCharacter = settings.characterStores[current.character.bindingId];
-    const collision = Boolean(
-      storedCharacter?.avatarId && storedCharacter.avatarId !== current.character.avatarId,
-    );
+    const collision = Boolean(storedCharacter?.avatarId && storedCharacter.avatarId !== current.character.avatarId);
     const target = klona(current);
     if (collision) target.character.bindingId = `binding:${crypto.randomUUID()}`;
     const materialized = materializeCardWorkspace(target, projectCardWorkspace(target)).state;
@@ -856,17 +967,90 @@ export class DreamCardAgentRuntime {
     return result.state;
   }
 
+  private async switchCharacterInternal(bindingId: string): Promise<void> {
+    if (this.state.currentCharacter?.bindingId === bindingId) return;
+    if (
+      this.state.toolConfirmation ||
+      [...this.services.values()].some(service => isSessionOperationActive(service.view().status))
+    ) {
+      throw new Error('仍有会话正在运行或等待处理，暂时不能切换角色卡。');
+    }
+    await this.activeService?.finalizeManualEdits();
+    const reference = this.settingsStore.load().characterStores[bindingId];
+    if (!reference?.avatarId) throw new Error('角色卡已不可用，只能查看其历史记录。');
+    const target = this.bridge.listCharacters().find(character => character.avatarId === reference.avatarId);
+    if (!target) throw new Error('角色卡已不可用，只能查看其历史记录。');
+    await this.bridge.selectCharacterById(target.index);
+    const current = await this.adapterFactory().read();
+    if (current.character.bindingId !== bindingId) {
+      throw new Error('角色卡切换后的绑定校验失败，已停止打开会话。');
+    }
+    this.state.currentCharacter = {
+      avatarId: current.character.avatarId,
+      bindingId: current.character.bindingId,
+      name: current.character.name,
+    };
+    this.activeService = undefined;
+    this.state.active = undefined;
+    this.state.activeSessionAccess = 'live';
+    await this.refreshSessionIndex(current);
+  }
+
+  private createHistoryView(
+    entry: SessionIndexEntry,
+    runtime: PersistedSessionRuntime,
+    workingFiles: WorkspaceFile[],
+  ): SessionView {
+    const configuration = runtime.agentConfiguration ?? this.selectedAgentConfiguration();
+    const pending = runtime.pending;
+    return {
+      agentConfiguration: klona(configuration),
+      approval: pending
+        ? {
+            candidateSnapshot: pending.candidateSnapshot,
+            conflicts: klona(pending.preparation.conflicts),
+            fileChanges: klona(pending.fileChanges ?? []),
+            skillChanges: klona(pending.skillChanges ?? []),
+            stateChanges: klona(
+              pending.preparation.agentChanges.filter(
+                change => !pending.preparation.redundantPaths.includes(change.path),
+              ),
+            ),
+            warnings: [...pending.warnings],
+          }
+        : undefined,
+      bindingId: entry.bindingId,
+      characterName: entry.characterName,
+      contextUsage: measureContext(runtime.modelMessages, DEFAULT_CONTEXT_WINDOW),
+      error: runtime.lastError,
+      events: klona(runtime.events),
+      mode: runtime.mode,
+      modelControls: klona(runtime.modelControls ?? { reasoningEffort: 'auto', webSearch: false }),
+      preset: cloneStructuredPreset(runtime.preset),
+      sessionId: runtime.sessionId,
+      skills: klona(runtime.skills),
+      status: runtime.status,
+      title: runtime.title,
+      ui: klona(runtime.ui.filter(item => !item.hidden)),
+      warnings: [...(runtime.warnings ?? [])],
+      workingChanges: [],
+      workingFiles: workingFiles.map(file => ({ ...klona(file), readonly: true })),
+    };
+  }
+
   private async refreshSessionIndex(current: CardWorkspaceState): Promise<void> {
     const metadata = await this.characterStore.load(current.character.bindingId, {
       avatarId: current.character.avatarId,
       characterName: current.character.name,
     });
-    let changed = metadata.revision > 0 &&
+    let changed =
+      metadata.revision > 0 &&
       (metadata.characterName !== current.character.name || metadata.avatarId !== current.character.avatarId);
     metadata.avatarId = current.character.avatarId;
     metadata.characterName = current.character.name;
     for (const session of Object.values(metadata.sessions)) {
-      if (session.characterName !== current.character.name || session.avatarId !== current.character.avatarId) changed = true;
+      if (session.characterName !== current.character.name || session.avatarId !== current.character.avatarId)
+        changed = true;
       session.characterName = current.character.name;
       session.avatarId = current.character.avatarId;
     }
@@ -883,7 +1067,10 @@ export class DreamCardAgentRuntime {
 
   private async reloadCharacterSessions(): Promise<void> {
     const character = this.state.currentCharacter;
-    if (!character) return;
+    if (!character) {
+      this.state.sessions = [];
+      return;
+    }
     try {
       const metadata = await this.characterStore.load(character.bindingId, {
         avatarId: character.avatarId,
@@ -895,11 +1082,79 @@ export class DreamCardAgentRuntime {
         .listReferences(character.bindingId)
         .reduce((total, file) => total + file.size, 0);
       this.state.storage.currentCharacterBytes =
-        (reference?.size ?? 0) + this.state.sessions.reduce((total, session) => total + session.size, 0) + workspaceBytes;
+        (reference?.size ?? 0) +
+        this.state.sessions.reduce((total, session) => total + session.size, 0) +
+        workspaceBytes;
       this.emit();
     } catch (error) {
       this.addDebug('warn', '读取角色会话索引失败', { error: error instanceof Error ? error.message : String(error) });
     }
+  }
+
+  private async reloadCharacterGroups(): Promise<void> {
+    const settings = this.settingsStore.load();
+    const availableByAvatar = new Map(this.bridge.listCharacters().map(character => [character.avatarId, character]));
+    const current = this.state.currentCharacter;
+    const references = new Map<string, CharacterStoreReference>(
+      Object.values(settings.characterStores).map(reference => [reference.bindingId, reference]),
+    );
+    if (current && !references.has(current.bindingId)) {
+      references.set(current.bindingId, {
+        avatarId: current.avatarId,
+        bindingId: current.bindingId,
+        characterName: current.name,
+        revision: 0,
+        sha256: '',
+        size: 0,
+        updatedAt: this.now(),
+        url: '',
+      });
+    }
+    const groups = await Promise.all(
+      [...references.values()].map(async reference => {
+        try {
+          const metadata = reference.url
+            ? await this.characterStore.load(reference.bindingId)
+            : {
+                avatarId: reference.avatarId,
+                bindingId: reference.bindingId,
+                characterName: reference.characterName,
+                sessions: {},
+                updatedAt: reference.updatedAt,
+              };
+          const sessions = Object.values(metadata.sessions).sort((left, right) => right.updatedAt - left.updatedAt);
+          const isCurrent = current?.bindingId === reference.bindingId;
+          return {
+            available: Boolean(isCurrent || (reference.avatarId && availableByAvatar.has(reference.avatarId))),
+            avatarId: current && isCurrent ? current.avatarId : reference.avatarId,
+            bindingId: reference.bindingId,
+            characterName: current && isCurrent ? current.name : metadata.characterName || reference.characterName,
+            current: isCurrent,
+            sessions,
+            updatedAt: sessions[0]?.updatedAt ?? metadata.updatedAt ?? reference.updatedAt,
+          } satisfies CharacterSessionGroup;
+        } catch (error) {
+          return {
+            available: false,
+            avatarId: reference.avatarId,
+            bindingId: reference.bindingId,
+            characterName: reference.characterName,
+            current: current?.bindingId === reference.bindingId,
+            error: error instanceof Error ? error.message : String(error),
+            sessions: [],
+            updatedAt: reference.updatedAt,
+          } satisfies CharacterSessionGroup;
+        }
+      }),
+    );
+    this.state.characterGroups = groups
+      .filter(group => group.current || group.sessions.length > 0)
+      .sort((left, right) => {
+        if (left.current !== right.current) return left.current ? -1 : 1;
+        if (left.available !== right.available) return left.available ? -1 : 1;
+        return right.updatedAt - left.updatedAt;
+      });
+    this.emit();
   }
 
   private requireProfile(id = this.settingsStore.load().activeProfileId): ApiProfile {
@@ -999,7 +1254,7 @@ export class DreamCardAgentRuntime {
       this.activeService = undefined;
       this.state.active = undefined;
     }
-    this.state.loadedSessionIds = [...this.services.keys()];
+    this.updateLoadedSessionIds();
   }
 
   private assertProfileSwitchAllowed(): void {
@@ -1042,9 +1297,16 @@ export class DreamCardAgentRuntime {
 
   private updateService(view: SessionView): void {
     this.state.sessionStatuses[view.sessionId] = view.status;
-    this.state.loadedSessionIds = [...this.services.keys()];
-    if (!this.activeService || this.activeService.sessionId === view.sessionId) this.state.active = view;
+    this.updateLoadedSessionIds();
+    if (this.activeService?.sessionId === view.sessionId) {
+      this.state.active = view;
+      this.state.activeSessionAccess = 'live';
+    }
     this.emit();
+  }
+
+  private updateLoadedSessionIds(): void {
+    this.state.loadedSessionIds = [...new Set([...this.services.keys(), ...this.historyViews.keys()])];
   }
 
   private reloadSettingsState(): void {

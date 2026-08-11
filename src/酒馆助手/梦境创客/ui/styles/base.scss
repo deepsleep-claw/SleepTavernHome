@@ -2,10 +2,10 @@
 // 全部限制在 .dca-app 下，避免污染酒馆与其它插件；窗口外壳样式见 shell.scss。
 
 .dca-app {
-  display: flex;
+  display: grid;
   height: 100%;
   min-height: 0;
-  flex-direction: column;
+  grid-template-columns: 17.5rem minmax(0, 1fr);
   overflow: hidden;
   background: var(--dca-canvas);
   color: var(--dca-text);
@@ -14,6 +14,20 @@
     -apple-system,
     'Segoe UI',
     sans-serif;
+}
+
+.dca-app.sidebar-collapsed {
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+}
+
+.dca-app.mobile {
+  display: block;
+}
+
+.dca-app.mobile > .dca-primary-sidebar,
+.dca-app.mobile > .dca-workspace-surface {
+  width: 100%;
+  height: 100%;
 }
 
 .dca-app * {
