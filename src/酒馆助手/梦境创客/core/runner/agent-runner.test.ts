@@ -195,6 +195,100 @@ describe('AgentRunner', () => {
     ]);
   });
 
+  it('Schema校验失败只返回一次工具错误，不执行无效调用并允许模型继续', async () => {
+    const invalidCall = { input: { value: 8 }, toolCallId: 'invalid-search', toolName: 'search_files' };
+    const invalidStep: ModelStepResult = {
+      assistantMessages: [
+        {
+          content: [{ ...invalidCall, type: 'tool-call' }],
+          role: 'assistant',
+        },
+        {
+          content: [
+            {
+              output: { type: 'error-text', value: 'contextBefore必须小于等于5' },
+              toolCallId: invalidCall.toolCallId,
+              toolName: invalidCall.toolName,
+              type: 'tool-result',
+            },
+          ],
+          role: 'tool',
+        },
+      ],
+      finishReason: 'tool-calls',
+      invalidToolCalls: [{ ...invalidCall, error: 'contextBefore必须小于等于5' }],
+      text: '',
+      toolCalls: [],
+    };
+    const executor = new QueueExecutor([invalidStep, modelStep([], '已修正参数并继续完成')]);
+    const execute = vi.fn(async () => ({ matchedFiles: 0 }));
+    const journal = new MemoryRunnerJournal();
+    const runner = new AgentRunner({
+      executor,
+      journal,
+      tools: [runnerTool('search_files', true, execute)],
+    });
+
+    const state = await runner.start('检查世界书');
+    expect(state.status).toBe('completed');
+    expect(state.failure).toBeUndefined();
+    expect(execute).not.toHaveBeenCalled();
+    expect(executor.requests).toHaveLength(2);
+    const returnedResults = executor.requests[1].messages.flatMap(message =>
+      message.role === 'tool' && Array.isArray(message.content)
+        ? message.content.filter(part => part.type === 'tool-result' && part.toolCallId === invalidCall.toolCallId)
+        : [],
+    );
+    expect(returnedResults).toHaveLength(1);
+    expect(journal.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ call: expect.objectContaining({ toolCallId: invalidCall.toolCallId }), type: 'tool-failed' }),
+      ]),
+    );
+    expect(
+      journal.events.some(event => event.type === 'tool-completed' && event.call.toolCallId === invalidCall.toolCallId),
+    ).toBe(false);
+  });
+
+  it('恢复旧会话时移除已经持久化的重复工具结果', async () => {
+    const duplicate = (value: string): ModelMessage => ({
+      content: [
+        {
+          output: { type: 'error-text', value },
+          toolCallId: 'legacy-duplicate',
+          toolName: 'search_files',
+          type: 'tool-result',
+        },
+      ],
+      role: 'tool',
+    });
+    const executor = new QueueExecutor([modelStep([], '已从旧中断点继续')]);
+    const runner = new AgentRunner({
+      executor,
+      initialMessages: [
+        {
+          content: [
+            { input: { value: 8 }, toolCallId: 'legacy-duplicate', toolName: 'search_files', type: 'tool-call' },
+          ],
+          role: 'assistant',
+        },
+        duplicate('SDK参数校验失败'),
+        duplicate('旧Runner误执行成功'),
+      ],
+      journal: new MemoryRunnerJournal(),
+      tools: [],
+    });
+
+    expect((await runner.start('继续')).status).toBe('completed');
+    const results = executor.requests[0].messages.flatMap(message =>
+      message.role === 'tool' && Array.isArray(message.content)
+        ? message.content.filter(part => part.type === 'tool-result' && part.toolCallId === 'legacy-duplicate')
+        : [],
+    );
+    expect(results).toHaveLength(1);
+    expect(JSON.stringify(results[0])).toContain('SDK参数校验失败');
+  });
+
   it('中途引导在工具结果后注入；已完成时作为下一条用户消息', async () => {
     const call = { input: {}, toolCallId: 'read', toolName: 'read' };
     const executor = new QueueExecutor([modelStep([call]), modelStep()]);

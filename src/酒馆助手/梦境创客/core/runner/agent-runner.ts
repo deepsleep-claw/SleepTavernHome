@@ -100,6 +100,24 @@ function toolFailureOutput(error: unknown, skipped = false): Record<string, unkn
   };
 }
 
+/**
+ * 旧版Runner可能把AI SDK生成的参数校验错误与本地误执行结果同时保存。
+ * 请求前只保留每个call_id的第一份结果，使已有失败会话也能安全恢复。
+ */
+function deduplicateToolResults(messages: ModelMessage[]): ModelMessage[] {
+  const seen = new Set<string>();
+  return messages.flatMap(message => {
+    if (message.role !== 'tool' || !Array.isArray(message.content)) return [message];
+    const content = message.content.filter(part => {
+      if (part.type !== 'tool-result') return true;
+      if (seen.has(part.toolCallId)) return false;
+      seen.add(part.toolCallId);
+      return true;
+    });
+    return content.length > 0 ? [{ ...message, content }] : [];
+  });
+}
+
 function guidanceMessage(messages: string[]): string {
   return `<mid_turn_guidance>\n这是对当前未完成目标的中途补充，不是替换旧目标的新任务。\n${messages.join('\n')}\n</mid_turn_guidance>`;
 }
@@ -200,7 +218,7 @@ export class AgentRunner {
       const liveProviderStarted = new Set<string>();
       const liveProviderCompleted = new Set<string>();
       try {
-        const persistedMessages = structuredClone(this.state.messages);
+        const persistedMessages = deduplicateToolResults(structuredClone(this.state.messages));
         const requestMessages = this.prepareMessages
           ? await this.prepareMessages(persistedMessages)
           : persistedMessages;
@@ -243,6 +261,11 @@ export class AgentRunner {
         };
       }
       await this.journal.append({ at: this.now(), messages: result.assistantMessages, type: 'model-completed' });
+      for (const call of result.invalidToolCalls ?? []) {
+        // responseMessages中已经带有AI SDK生成的唯一tool-result；这里只补UI事件，绝不能再次执行或追加结果。
+        await this.journal.append({ at: this.now(), call, type: 'tool-started' });
+        await this.journal.append({ at: this.now(), call, error: call.error, type: 'tool-failed' });
+      }
       for (const call of result.providerToolCalls ?? []) {
         if (!liveProviderStarted.has(call.toolCallId)) {
           if (call.toolName === 'web_search') this.providerWebSearchCount += 1;
@@ -252,13 +275,19 @@ export class AgentRunner {
           await this.journal.append({ at: this.now(), call, output: call.output ?? { ok: true }, type: 'tool-completed' });
         }
       }
-      if (compacting && !result.toolCalls.some(call => call.toolName === 'compact_context')) {
+      const attemptedCalls = [...result.toolCalls, ...(result.invalidToolCalls ?? [])];
+      if (compacting && !attemptedCalls.some(call => call.toolName === 'compact_context')) {
         this.state.failure = '模型没有按要求调用compact_context。';
         await this.setStatus('failed');
         return this.state;
       }
       if (result.toolCalls.length > 0) {
         this.state.pending = { calls: result.toolCalls, compacting, nextCall: 0 };
+        continue;
+      }
+      if ((result.invalidToolCalls?.length ?? 0) > 0) {
+        // 参数校验错误属于可恢复的工具失败：把SDK生成的错误结果送回模型，让它修正参数。
+        await this.injectGuidance();
         continue;
       }
       if (this.guidance.length > 0) {

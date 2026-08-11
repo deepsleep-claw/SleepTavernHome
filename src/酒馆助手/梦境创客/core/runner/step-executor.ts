@@ -15,6 +15,11 @@ export type RunnerToolCall = {
   toolName: string;
 };
 
+export type InvalidRunnerToolCall = RunnerToolCall & {
+  /** AI SDK已经为这个无效调用写入工具错误；Runner只能记录，不能再次执行。 */
+  error: string;
+};
+
 export type ProviderToolCall = RunnerToolCall & {
   output?: unknown;
   providerExecuted: true;
@@ -50,6 +55,7 @@ export type ModelStepResult = {
   assistantMessages: ModelMessage[];
   finishReason: string;
   inputTokens?: number;
+  invalidToolCalls?: InvalidRunnerToolCall[];
   outputTokens?: number;
   providerToolCalls?: ProviderToolCall[];
   text: string;
@@ -140,6 +146,10 @@ function sanitizeProviderOutput(value: unknown): unknown {
       .filter(([key]) => key !== 'encryptedContent')
       .map(([key, item]) => [key, sanitizeProviderOutput(item)]),
   );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export class AiSdkModelStepExecutor implements ModelStepExecutor {
@@ -236,11 +246,19 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
     }
     const resultByCallId = new Map(toolResults.map(result => [result.toolCallId, result]));
     const localCalls = toolCalls.filter(call => !call.providerExecuted);
+    const invalidLocalCalls = localCalls.filter(call => call.dynamic === true && call.invalid === true);
+    const executableLocalCalls = localCalls.filter(call => !(call.dynamic === true && call.invalid === true));
     const providerCalls = toolCalls.filter(call => call.providerExecuted);
     return {
       assistantMessages: assistantMessages as ModelMessage[],
       finishReason,
       inputTokens: usage.inputTokens,
+      invalidToolCalls: invalidLocalCalls.map(call => ({
+        error: errorMessage(call.error),
+        input: call.input,
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+      })),
       outputTokens: usage.outputTokens,
       providerToolCalls: providerCalls.map(call => ({
         input: call.input,
@@ -250,7 +268,11 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
         toolName: call.toolName,
       })),
       text,
-      toolCalls: localCalls.map(call => ({ input: call.input, toolCallId: call.toolCallId, toolName: call.toolName })),
+      toolCalls: executableLocalCalls.map(call => ({
+        input: call.input,
+        toolCallId: call.toolCallId,
+        toolName: call.toolName,
+      })),
     };
   }
 }

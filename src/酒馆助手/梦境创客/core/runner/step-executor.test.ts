@@ -74,6 +74,31 @@ describe('AiSdkModelStepExecutor', () => {
     expect(model.doStreamCalls[0].tools?.map(item => item.name)).toEqual(['read_file', 'search_files']);
   });
 
+  it('把Schema校验失败的工具调用单独标记，且不再交给本地执行队列', async () => {
+    const model = new MockLanguageModelV3({
+      doStream: {
+        stream: simulateReadableStream({
+          chunks: [
+            { input: '{"value":8}', toolCallId: 'invalid-1', toolName: 'read_file', type: 'tool-call' },
+            { finishReason: { raw: 'tool_calls', unified: 'tool-calls' }, type: 'finish', usage },
+          ],
+        }),
+      },
+    });
+    const result = await new AiSdkModelStepExecutor(async () => model).execute({
+      abortSignal: new AbortController().signal,
+      messages: [{ content: 'go', role: 'user' }],
+      tools: [runnerTool('read_file')],
+    });
+
+    expect(result.toolCalls).toEqual([]);
+    expect(result.invalidToolCalls).toEqual([
+      expect.objectContaining({ input: { value: 8 }, toolCallId: 'invalid-1', toolName: 'read_file' }),
+    ]);
+    expect(result.invalidToolCalls?.[0].error).toContain('Invalid input for tool read_file');
+    expect(result.assistantMessages.some(message => message.role === 'tool')).toBe(true);
+  });
+
   it('按六种适配组合映射推理参数，自动档不额外指定强度', () => {
     expect(requestProviderOptions({ interfaceType: 'openai-responses', reasoningEffort: 'xhigh', webSearch: true }))
       .toMatchObject({ openai: { maxToolCalls: 10, reasoningEffort: 'xhigh' } });
