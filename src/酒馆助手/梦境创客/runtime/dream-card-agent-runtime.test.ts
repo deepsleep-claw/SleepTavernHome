@@ -214,7 +214,7 @@ describe('DreamCardAgentRuntime', () => {
     const sessionId = runtime.snapshot().active!.sessionId;
     expect(settings.load().characterStores['binding-1']).toMatchObject({ avatarId: 'avatar.png' });
     expect(runtime.snapshot().sessions.find(item => item.sessionId === sessionId)).toMatchObject({ title: '塑造角色' });
-    expect(files.urls().some(url => url.includes('--session--'))).toBe(true);
+    expect(files.urls().some(url => url.includes('--Session--'))).toBe(true);
     expect(files.urls().some(url => url.includes('manifest') || url.includes('--blob--'))).toBe(false);
     runtime.destroy();
 

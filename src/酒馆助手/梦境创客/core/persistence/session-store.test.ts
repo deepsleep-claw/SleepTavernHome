@@ -48,8 +48,8 @@ describe('single-file session store', () => {
     expect(entry.revision).toBe(1);
     expect(client.urls()).toHaveLength(2);
     expect(client.uploadedNames).toEqual([
-      'dream-card-agent--role--session--session.json',
-      'dream-card-agent--role--meta.json',
+      'DreamCreator--Session--role--session.json',
+      'DreamCreator--Meta--role.json',
     ]);
     const loaded = await store.load('role', 'session');
     expect(loaded.runtime.title).toBe('第一次创作');
@@ -71,9 +71,9 @@ describe('single-file session store', () => {
     });
     expect(entry.revision).toBe(2);
     expect(client.urls()).toHaveLength(2);
-    expect(client.uploadedNames.filter(name => name.includes('--session--'))).toEqual([
-      'dream-card-agent--role--session--same.json',
-      'dream-card-agent--role--session--same.json',
+    expect(client.uploadedNames.filter(name => name.includes('--Session--'))).toEqual([
+      'DreamCreator--Session--role--same.json',
+      'DreamCreator--Session--role--same.json',
     ]);
     expect((await store.load('role', 'same')).runtime.title).toBe('新版');
   });

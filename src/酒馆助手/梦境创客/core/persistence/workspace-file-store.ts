@@ -1,0 +1,495 @@
+import { canonicalEqual, sha256 } from '../transaction/canonical';
+import { normalizeWorkspacePath } from '../workspace/path';
+import type { WorkspaceFile } from '../workspace/types';
+import type { TavernFileClient } from './file-client';
+import type {
+  AgentSettingsStore,
+  DreamCreatorWorkspaceFileReference,
+} from './settings';
+
+export const MAX_DREAMCREATOR_FILE_BYTES = 20 * 1024 * 1024;
+export const DREAMCREATOR_ORPHAN_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+export type ManagedFileSummary = DreamCreatorWorkspaceFileReference & {
+  characterName: string;
+};
+
+export type CharacterFileStorageSummary = {
+  attachmentBytes: number;
+  bindingId: string;
+  cacheBytes: number;
+  characterName: string;
+  files: ManagedFileSummary[];
+  orphanBytes: number;
+  persistentBytes: number;
+  totalBytes: number;
+};
+
+function safe(value: string, limit = 80): string {
+  return value.replace(/[^a-zA-Z\d_-]/gu, '_').slice(0, limit) || 'unknown';
+}
+
+function extension(name: string): string {
+  const matched = /(?:^|\/)(?:[^/]*?)(\.[a-zA-Z\d]{1,12})$/u.exec(name);
+  return matched?.[1]?.toLocaleLowerCase() ?? '.bin';
+}
+
+function normalizedRelativePath(value: string): string {
+  const normalized = normalizeWorkspacePath(`/${value.replace(/^\/+/, '')}`);
+  if (normalized === '/') throw new Error('文件路径不能为空。');
+  return normalized.slice(1);
+}
+
+function bytesForBase64(value: string): Uint8Array {
+  const binary = atob(value);
+  const result = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) result[index] = binary.charCodeAt(index);
+  return result;
+}
+
+export function base64ForBytes(bytes: Uint8Array): string {
+  let binary = '';
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
+}
+
+function isTextMediaType(mediaType: string): boolean {
+  return mediaType.startsWith('text/') || /(?:json|javascript|typescript|yaml|xml)$/iu.test(mediaType);
+}
+
+function rootFor(scope: DreamCreatorWorkspaceFileReference['scope']): '/files' | '/temp' {
+  return scope === 'persistent' ? '/files' : '/temp';
+}
+
+function workspacePath(file: DreamCreatorWorkspaceFileReference): string {
+  return `${rootFor(file.scope)}/${file.logicalPath}`;
+}
+
+function logicalPathFromWorkspace(path: string): {
+  logicalPath: string;
+  scope: DreamCreatorWorkspaceFileReference['scope'];
+} {
+  const normalized = normalizeWorkspacePath(path);
+  if (normalized.startsWith('/files/')) {
+    return { logicalPath: normalizedRelativePath(normalized.slice('/files/'.length)), scope: 'persistent' };
+  }
+  if (normalized.startsWith('/temp/')) {
+    return { logicalPath: normalizedRelativePath(normalized.slice('/temp/'.length)), scope: 'temp' };
+  }
+  throw new Error(`不是梦境创客存储路径：${path}`);
+}
+
+function cloneReference(value: DreamCreatorWorkspaceFileReference): DreamCreatorWorkspaceFileReference {
+  return structuredClone(value);
+}
+
+export class DreamCreatorWorkspaceFileStore {
+  private readonly memory = new Map<string, Uint8Array>();
+
+  constructor(
+    private readonly client: TavernFileClient,
+    private readonly settingsStore: AgentSettingsStore,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  listReferences(bindingId?: string): DreamCreatorWorkspaceFileReference[] {
+    return Object.values(this.settingsStore.load().workspaceFiles)
+      .filter(file => !bindingId || file.bindingId === bindingId)
+      .map(cloneReference)
+      .sort((left, right) => left.logicalPath.localeCompare(right.logicalPath, 'zh-CN'));
+  }
+
+  getReference(fileId: string): DreamCreatorWorkspaceFileReference | undefined {
+    const value = this.settingsStore.load().workspaceFiles[fileId];
+    return value ? cloneReference(value) : undefined;
+  }
+
+  async read(fileId: string): Promise<Uint8Array> {
+    const cached = this.memory.get(fileId);
+    if (cached) return Uint8Array.from(cached);
+    const reference = this.getReference(fileId);
+    if (!reference) throw new Error(`文件已被清理：${fileId}`);
+    const bytes = await this.client.download(reference.url);
+    if ((await sha256(bytes)) !== reference.sha256) throw new Error(`文件校验失败：${reference.name}`);
+    this.memory.set(fileId, Uint8Array.from(bytes));
+    return bytes;
+  }
+
+  async project(bindingId: string, sessionId: string): Promise<WorkspaceFile[]> {
+    await this.collectExpiredOrphans(bindingId);
+    let references = this.listReferences(bindingId).filter(
+      file =>
+        !file.orphanedAt &&
+        (file.scope === 'persistent' || (file.scope === 'temp' && file.sessionId === sessionId)),
+    );
+    if (references.some(file => file.scope === 'persistent' && !file.referencedSessionIds.includes(sessionId))) {
+      const settings = this.settingsStore.load();
+      for (const file of references) {
+        const stored = settings.workspaceFiles[file.fileId];
+        if (!stored || stored.scope !== 'persistent' || stored.referencedSessionIds.includes(sessionId)) continue;
+        stored.referencedSessionIds.push(sessionId);
+        stored.updatedAt = this.now();
+      }
+      await this.settingsStore.save(settings);
+      references = this.listReferences(bindingId).filter(
+        file =>
+          !file.orphanedAt &&
+          (file.scope === 'persistent' || (file.scope === 'temp' && file.sessionId === sessionId)),
+      );
+    }
+    return Promise.all(
+      references.map(async file => ({
+        content: isTextMediaType(file.mediaType) ? new TextDecoder().decode(await this.read(file.fileId)) : '',
+        external: {
+          fileId: file.fileId,
+          mediaType: file.mediaType,
+          scope: file.scope,
+          sha256: file.sha256,
+          size: file.size,
+        },
+        mediaType: file.mediaType,
+        path: workspacePath(file),
+        readonly: false,
+        resourceId: file.fileId,
+      })),
+    );
+  }
+
+  async putPersistent(input: {
+    bindingId: string;
+    bytes?: Uint8Array;
+    data?: string;
+    logicalPath: string;
+    mediaType: string;
+    referencedSessionId?: string;
+    overwrite?: boolean;
+  }): Promise<DreamCreatorWorkspaceFileReference> {
+    return this.put({ ...input, scope: 'persistent' });
+  }
+
+  async putTemp(input: {
+    bindingId: string;
+    bytes: Uint8Array;
+    logicalPath: string;
+    mediaType: string;
+    sessionId: string;
+    sourceFileId?: string;
+  }): Promise<DreamCreatorWorkspaceFileReference> {
+    return this.put({ ...input, overwrite: true, referencedSessionId: input.sessionId, scope: 'temp' });
+  }
+
+  async addSessionReference(fileId: string, sessionId: string): Promise<void> {
+    const settings = this.settingsStore.load();
+    const file = settings.workspaceFiles[fileId];
+    if (!file) throw new Error(`附件已被清理：${fileId}`);
+    file.referencedSessionIds = [...new Set([...file.referencedSessionIds, sessionId])];
+    file.orphanedAt = undefined;
+    file.updatedAt = this.now();
+    await this.settingsStore.save(settings);
+  }
+
+  async applyWorkspace(
+    bindingId: string,
+    sessionId: string,
+    baseFiles: WorkspaceFile[],
+    workingFiles: WorkspaceFile[],
+    decisions: Record<string, 'agent' | 'current'>,
+  ): Promise<WorkspaceFile[]> {
+    const settingsBefore = this.settingsStore.load();
+    const urlsBefore = new Set(Object.values(settingsBefore.workspaceFiles).map(file => file.url));
+    const base = new Map(baseFiles.filter(file => /^\/(?:files|temp)(?:\/|$)/u.test(file.path)).map(file => [file.path, file]));
+    const working = new Map(
+      workingFiles.filter(file => /^\/(?:files|temp)(?:\/|$)/u.test(file.path)).map(file => [file.path, file]),
+    );
+    const currentFiles = await this.project(bindingId, sessionId);
+    const current = new Map(currentFiles.map(file => [file.path, file]));
+    const paths = new Set([...base.keys(), ...working.keys()]);
+    try {
+      for (const path of paths) {
+        const before = base.get(path);
+        const after = working.get(path);
+        if (canonicalEqual(before, after)) continue;
+        const { logicalPath, scope } = logicalPathFromWorkspace(path);
+        const choice = scope === 'temp' ? 'agent' : decisions[path];
+        if (choice !== 'agent') continue;
+        const nowValue = current.get(path);
+        if (!canonicalEqual(nowValue, before) && !canonicalEqual(nowValue, after)) {
+          throw new Error(`FILE_CONFLICT：${path} 已被其他会话修改，请重新读取后再提交。`);
+        }
+        if (!after) {
+          if (nowValue?.external?.fileId) await this.orphan(nowValue.external.fileId);
+          continue;
+        }
+        if (after.external && after.content === (before?.content ?? after.content)) {
+          await this.activateExisting(after.external.fileId, logicalPath, sessionId, scope);
+          continue;
+        }
+        const bytes = new TextEncoder().encode(after.content);
+        await this.put({
+          bindingId,
+          bytes,
+          logicalPath,
+          mediaType: after.mediaType || 'text/plain',
+          overwrite: true,
+          referencedSessionId: sessionId,
+          scope,
+          sessionId: scope === 'temp' ? sessionId : undefined,
+        });
+      }
+    } catch (error) {
+      let rollbackError: unknown;
+      try {
+        const afterFailure = this.settingsStore.load();
+        const uploadedUrls = [...new Set(Object.values(afterFailure.workspaceFiles).map(file => file.url))].filter(
+          url => !urlsBefore.has(url),
+        );
+        afterFailure.workspaceFiles = structuredClone(settingsBefore.workspaceFiles);
+        await this.settingsStore.save(afterFailure);
+        this.memory.clear();
+        for (const url of uploadedUrls) await this.client.delete(url).catch(() => undefined);
+      } catch (rollback) {
+        rollbackError = rollback;
+      }
+      if (rollbackError) {
+        const message = error instanceof Error ? error.message : String(error);
+        const rollbackMessage = rollbackError instanceof Error ? rollbackError.message : String(rollbackError);
+        throw new Error(`${message}；文件事务回滚失败：${rollbackMessage}`, { cause: error });
+      }
+      throw error;
+    }
+    return this.project(bindingId, sessionId);
+  }
+
+  async restorePersistentSnapshot(
+    bindingId: string,
+    sessionId: string,
+    desiredFiles: WorkspaceFile[],
+  ): Promise<WorkspaceFile[]> {
+    const current = await this.project(bindingId, sessionId);
+    const desired = desiredFiles.filter(file => file.path.startsWith('/files/'));
+    const decisions = Object.fromEntries(
+      new Set([...current.map(file => file.path), ...desired.map(file => file.path)]).values().map(path => [path, 'agent']),
+    ) as Record<string, 'agent'>;
+    return this.applyWorkspace(bindingId, sessionId, current.filter(file => file.path.startsWith('/files/')), desired, decisions);
+  }
+
+  async releaseSession(bindingId: string, sessionId: string): Promise<void> {
+    const settings = this.settingsStore.load();
+    const tempIds: string[] = [];
+    for (const file of Object.values(settings.workspaceFiles)) {
+      if (file.bindingId !== bindingId) continue;
+      if (file.scope === 'temp' && file.sessionId === sessionId) tempIds.push(file.fileId);
+      if (file.scope === 'persistent' && file.referencedSessionIds.includes(sessionId)) {
+        file.referencedSessionIds = file.referencedSessionIds.filter(id => id !== sessionId);
+        if (file.referencedSessionIds.length === 0) file.orphanedAt ??= this.now();
+      }
+    }
+    await this.settingsStore.save(settings);
+    for (const id of tempIds) await this.removeImmediately(id);
+  }
+
+  async clearCache(bindingId?: string): Promise<number> {
+    const targets = this.listReferences(bindingId).filter(
+      file => file.scope === 'temp' || (file.orphanedAt !== undefined && this.now() - file.orphanedAt >= 0),
+    );
+    for (const file of targets) await this.removeImmediately(file.fileId);
+    return targets.length;
+  }
+
+  async clearAttachments(bindingId?: string): Promise<number> {
+    const targets = this.listReferences(bindingId).filter(file => file.scope === 'persistent');
+    for (const file of targets) await this.removeImmediately(file.fileId);
+    await this.clearCache(bindingId);
+    return targets.length;
+  }
+
+  async resetCharacter(bindingId: string): Promise<number> {
+    const targets = this.listReferences(bindingId);
+    for (const file of targets) await this.removeImmediately(file.fileId);
+    return targets.length;
+  }
+
+  async removeImmediately(fileId: string): Promise<void> {
+    const settings = this.settingsStore.load();
+    const file = settings.workspaceFiles[fileId];
+    if (!file) return;
+    delete settings.workspaceFiles[fileId];
+    await this.settingsStore.save(settings);
+    this.memory.delete(fileId);
+    const shared = Object.values(settings.workspaceFiles).some(item => item.url === file.url);
+    if (!shared) await this.client.delete(file.url).catch(() => undefined);
+  }
+
+  summaries(): CharacterFileStorageSummary[] {
+    const settings = this.settingsStore.load();
+    const names = new Map(
+      Object.values(settings.characterStores).map(character => [character.bindingId, character.characterName]),
+    );
+    const groups = new Map<string, DreamCreatorWorkspaceFileReference[]>();
+    for (const file of Object.values(settings.workspaceFiles)) {
+      const group = groups.get(file.bindingId) ?? [];
+      group.push(cloneReference(file));
+      groups.set(file.bindingId, group);
+    }
+    return [...new Set([...names.keys(), ...groups.keys()])]
+      .map(bindingId => {
+        const files = groups.get(bindingId) ?? [];
+        const characterName = names.get(bindingId) ?? '未知角色';
+        const managed = files.map(file => ({ ...file, characterName }));
+        const cacheBytes = files.filter(file => file.scope === 'temp').reduce((total, file) => total + file.size, 0);
+        const orphanBytes = files.filter(file => file.orphanedAt !== undefined).reduce((total, file) => total + file.size, 0);
+        const persistentBytes = files
+          .filter(file => file.scope === 'persistent' && file.orphanedAt === undefined)
+          .reduce((total, file) => total + file.size, 0);
+        return {
+          attachmentBytes: persistentBytes,
+          bindingId,
+          cacheBytes,
+          characterName,
+          files: managed.sort((left, right) => right.updatedAt - left.updatedAt),
+          orphanBytes,
+          persistentBytes,
+          totalBytes: files.reduce((total, file) => total + file.size, 0),
+        };
+      })
+      .sort((left, right) => left.characterName.localeCompare(right.characterName, 'zh-CN'));
+  }
+
+  private async put(input: {
+    bindingId: string;
+    bytes?: Uint8Array;
+    data?: string;
+    logicalPath: string;
+    mediaType: string;
+    overwrite?: boolean;
+    referencedSessionId?: string;
+    scope: DreamCreatorWorkspaceFileReference['scope'];
+    sessionId?: string;
+    sourceFileId?: string;
+  }): Promise<DreamCreatorWorkspaceFileReference> {
+    const bytes = input.bytes ?? (input.data === undefined ? undefined : bytesForBase64(input.data));
+    if (!bytes) throw new Error('缺少文件内容。');
+    if (bytes.byteLength > MAX_DREAMCREATOR_FILE_BYTES) throw new Error('单个文件不能超过20MB。');
+    if (bytes.byteLength === 0) throw new Error('不能上传空文件。');
+    const logicalPath = normalizedRelativePath(input.logicalPath);
+    const settings = this.settingsStore.load();
+    const active = Object.values(settings.workspaceFiles).filter(
+      file =>
+        file.bindingId === input.bindingId &&
+        file.scope === input.scope &&
+        file.sessionId === input.sessionId &&
+        file.orphanedAt === undefined,
+    );
+    const hash = await sha256(bytes);
+    let targetPath = logicalPath;
+    const occupied = active.find(file => file.logicalPath === targetPath);
+    if (occupied && occupied.sha256 === hash) {
+      if (input.referencedSessionId) {
+        occupied.referencedSessionIds = [...new Set([...occupied.referencedSessionIds, input.referencedSessionId])];
+        occupied.updatedAt = this.now();
+        settings.workspaceFiles[occupied.fileId] = occupied;
+        await this.settingsStore.save(settings);
+      }
+      return cloneReference(occupied);
+    }
+    if (occupied && !input.overwrite) targetPath = this.uniquePath(logicalPath, active);
+    if (occupied && input.overwrite) {
+      occupied.orphanedAt = this.now();
+      occupied.updatedAt = this.now();
+    }
+    const identical = active.find(file => file.sha256 === hash && file.size === bytes.byteLength);
+    const fileId = crypto.randomUUID();
+    const at = this.now();
+    const name = targetPath.split('/').at(-1) ?? 'file';
+    const physicalName = `DreamCreator--${input.scope === 'persistent' ? 'File' : 'Temp'}--${safe(
+      input.scope === 'persistent' ? input.bindingId : input.sessionId ?? 'session',
+    )}--${safe(fileId)}${extension(targetPath)}`;
+    let uploadedUrl: string | undefined;
+    const url = identical?.url ?? (uploadedUrl = await this.client.upload(physicalName, bytes));
+    const reference: DreamCreatorWorkspaceFileReference = {
+      bindingId: input.bindingId,
+      createdAt: at,
+      fileId,
+      logicalPath: targetPath,
+      mediaType: input.mediaType || 'application/octet-stream',
+      name,
+      referencedSessionIds: input.referencedSessionId ? [input.referencedSessionId] : [],
+      scope: input.scope,
+      sessionId: input.sessionId,
+      sha256: hash,
+      size: bytes.byteLength,
+      sourceFileId: input.sourceFileId,
+      updatedAt: at,
+      url,
+    };
+    settings.workspaceFiles[fileId] = reference;
+    try {
+      await this.settingsStore.save(settings);
+    } catch (error) {
+      if (uploadedUrl) await this.client.delete(uploadedUrl).catch(() => undefined);
+      throw error;
+    }
+    this.memory.set(fileId, Uint8Array.from(bytes));
+    return cloneReference(reference);
+  }
+
+  private uniquePath(path: string, entries: DreamCreatorWorkspaceFileReference[]): string {
+    const slash = path.lastIndexOf('/');
+    const folder = slash >= 0 ? path.slice(0, slash + 1) : '';
+    const filename = slash >= 0 ? path.slice(slash + 1) : path;
+    const dot = filename.lastIndexOf('.');
+    const stem = dot > 0 ? filename.slice(0, dot) : filename;
+    const suffix = dot > 0 ? filename.slice(dot) : '';
+    for (let index = 2; ; index += 1) {
+      const candidate = `${folder}${stem} (${index})${suffix}`;
+      if (!entries.some(file => file.logicalPath === candidate)) return candidate;
+    }
+  }
+
+  private async orphan(fileId: string): Promise<void> {
+    const settings = this.settingsStore.load();
+    const file = settings.workspaceFiles[fileId];
+    if (!file) return;
+    file.orphanedAt ??= this.now();
+    file.updatedAt = this.now();
+    await this.settingsStore.save(settings);
+  }
+
+  private async activateExisting(
+    fileId: string,
+    logicalPath: string,
+    sessionId: string,
+    scope: DreamCreatorWorkspaceFileReference['scope'],
+  ): Promise<void> {
+    const settings = this.settingsStore.load();
+    const file = settings.workspaceFiles[fileId];
+    if (!file) throw new Error(`历史文件已经被清理：${fileId}`);
+    for (const other of Object.values(settings.workspaceFiles)) {
+      if (
+        other.fileId !== fileId &&
+        other.bindingId === file.bindingId &&
+        other.scope === scope &&
+        other.logicalPath === logicalPath &&
+        other.orphanedAt === undefined
+      ) {
+        other.orphanedAt = this.now();
+      }
+    }
+    file.logicalPath = logicalPath;
+    file.scope = scope;
+    file.sessionId = scope === 'temp' ? sessionId : undefined;
+    file.orphanedAt = undefined;
+    file.referencedSessionIds = [...new Set([...file.referencedSessionIds, sessionId])];
+    file.updatedAt = this.now();
+    await this.settingsStore.save(settings);
+  }
+
+  private async collectExpiredOrphans(bindingId?: string): Promise<void> {
+    const expired = this.listReferences(bindingId).filter(
+      file => file.orphanedAt !== undefined && this.now() - file.orphanedAt >= DREAMCREATOR_ORPHAN_RETENTION_MS,
+    );
+    for (const file of expired) await this.removeImmediately(file.fileId);
+  }
+}

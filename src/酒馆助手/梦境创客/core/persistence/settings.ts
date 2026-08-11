@@ -30,6 +30,24 @@ export type StoredFileReference = {
   url: string;
 };
 
+export type DreamCreatorWorkspaceFileReference = {
+  bindingId: string;
+  createdAt: number;
+  fileId: string;
+  logicalPath: string;
+  mediaType: string;
+  name: string;
+  orphanedAt?: number;
+  referencedSessionIds: string[];
+  scope: 'persistent' | 'temp';
+  sessionId?: string;
+  sha256: string;
+  size: number;
+  sourceFileId?: string;
+  updatedAt: number;
+  url: string;
+};
+
 export type GlobalSkillIndexEntry = {
   description: string;
   id: string;
@@ -80,6 +98,7 @@ export type DreamCardAgentSettings = {
   activePresetId: string;
   agentConfigurations: AgentConfiguration[];
   characterStores: Record<string, CharacterStoreReference>;
+  compressImages: boolean;
   developerMode: boolean;
   dangerousNonCharacterResourceWrites: boolean;
   files: Record<string, StoredFileReference>;
@@ -93,6 +112,7 @@ export type DreamCardAgentSettings = {
   sendWithCtrlEnter: boolean;
   syncRevision: number;
   version: 3;
+  workspaceFiles: Record<string, DreamCreatorWorkspaceFileReference>;
 };
 
 export const DEFAULT_AGENT_CONFIGURATION_ID = 'agent:default';
@@ -111,6 +131,7 @@ export const DEFAULT_DREAM_CARD_AGENT_SETTINGS: DreamCardAgentSettings = {
   activePresetId: DEFAULT_PRESET.id,
   agentConfigurations: [defaultAgentConfiguration(DEFAULT_PRESET.id)],
   characterStores: {},
+  compressImages: true,
   developerMode: false,
   dangerousNonCharacterResourceWrites: false,
   files: {},
@@ -124,6 +145,7 @@ export const DEFAULT_DREAM_CARD_AGENT_SETTINGS: DreamCardAgentSettings = {
   sendWithCtrlEnter: false,
   syncRevision: 0,
   version: 3,
+  workspaceFiles: {},
 };
 
 export interface AgentSettingsStore {
@@ -197,6 +219,7 @@ function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamCardAgen
     ...structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS),
     ...structuredClone(raw ?? {}),
     characterStores: structuredClone(raw?.characterStores ?? {}),
+    compressImages: raw?.compressImages !== false,
     dangerousNonCharacterResourceWrites: raw?.dangerousNonCharacterResourceWrites === true,
     files: structuredClone(raw?.files ?? {}),
     activeAgentConfigurationId,
@@ -213,6 +236,7 @@ function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamCardAgen
     sendWithCtrlEnter: raw?.sendWithCtrlEnter === true,
     syncRevision: Number.isFinite(raw?.syncRevision) ? Math.max(0, raw!.syncRevision!) : 0,
     version: 3,
+    workspaceFiles: structuredClone(raw?.workspaceFiles ?? {}),
   };
 }
 
@@ -244,6 +268,7 @@ export function mergeSettingsChanges(
     activePresetId: choose('activePresetId'),
     agentConfigurations: choose('agentConfigurations'),
     characterStores: applyRecordChanges(base.characterStores, incoming.characterStores, latest.characterStores),
+    compressImages: choose('compressImages'),
     developerMode: choose('developerMode'),
     dangerousNonCharacterResourceWrites: choose('dangerousNonCharacterResourceWrites'),
     files: applyRecordChanges(base.files, incoming.files, latest.files),
@@ -257,6 +282,7 @@ export function mergeSettingsChanges(
     sendWithCtrlEnter: choose('sendWithCtrlEnter'),
     syncRevision: Math.max(base.syncRevision, incoming.syncRevision, latest.syncRevision) + 1,
     version: 3,
+    workspaceFiles: applyRecordChanges(base.workspaceFiles, incoming.workspaceFiles, latest.workspaceFiles),
   };
 }
 

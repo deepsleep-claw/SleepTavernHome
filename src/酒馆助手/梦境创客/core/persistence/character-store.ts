@@ -61,7 +61,7 @@ export class CharacterMetadataStore {
     };
     const bytes = encode(value);
     const hash = await sha256(bytes);
-    const name = `dream-card-agent--${safe(value.bindingId)}--meta.json`;
+    const name = `DreamCreator--Meta--${safe(value.bindingId)}.json`;
     const url = await this.client.upload(name, bytes);
     const reference: CharacterStoreReference = {
       avatarId: value.avatarId,

@@ -8,6 +8,7 @@ import {
 } from './context';
 import type { ModelRequestControls, ModelStepExecutor, RunnerToolCall } from './step-executor';
 import { COMPACT_CONTEXT_TOOL, type RunnerTool, type ToolConfirmation } from './tools';
+import { isRichToolOutput, type ToolResultOutput } from './tool-output';
 
 export type RunnerStatus =
   'completed' | 'context-exhausted' | 'failed' | 'idle' | 'running' | 'stopped' | 'waiting-approval';
@@ -57,15 +58,19 @@ export type AgentRunnerOptions = {
   now?: () => number;
   onReasoningDelta?: (delta: string) => void;
   onTextDelta?: (delta: string) => void;
+  prepareMessages?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
   requestApproval?: (request: ToolConfirmation) => Promise<boolean>;
   tools: RunnerTool[];
 };
 
 function toolResultMessage(call: RunnerToolCall, output: unknown): ModelMessage {
+  const modelOutput: ToolResultOutput = isRichToolOutput(output)
+    ? output.modelOutput
+    : { type: 'json', value: output as never };
   return {
     content: [
       {
-        output: { type: 'json', value: output as never },
+        output: modelOutput,
         toolCallId: call.toolCallId,
         toolName: call.toolName,
         type: 'tool-result',
@@ -109,6 +114,7 @@ export class AgentRunner {
   private readonly now: () => number;
   private readonly onReasoningDelta?: (delta: string) => void;
   private readonly onTextDelta?: (delta: string) => void;
+  private readonly prepareMessages?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
   private readonly requestApproval?: (request: ToolConfirmation) => Promise<boolean>;
   private stopRequested = false;
   private readonly toolMap: Map<string, RunnerTool>;
@@ -124,6 +130,7 @@ export class AgentRunner {
     this.now = options.now ?? Date.now;
     this.onReasoningDelta = options.onReasoningDelta;
     this.onTextDelta = options.onTextDelta;
+    this.prepareMessages = options.prepareMessages;
     this.requestApproval = options.requestApproval;
     this.tools = [...options.tools, COMPACT_CONTEXT_TOOL];
     this.toolMap = new Map(this.tools.map(item => [item.name, item]));
@@ -187,10 +194,14 @@ export class AgentRunner {
       const liveProviderStarted = new Set<string>();
       const liveProviderCompleted = new Set<string>();
       try {
+        const persistedMessages = structuredClone(this.state.messages);
+        const requestMessages = this.prepareMessages
+          ? await this.prepareMessages(persistedMessages)
+          : persistedMessages;
         result = await this.executor.execute({
           abortSignal: this.controller.signal,
           forceTool: compacting ? 'compact_context' : undefined,
-          messages: structuredClone(this.state.messages),
+          messages: requestMessages,
           modelSettings: {
             ...this.modelControls,
             webSearch: this.modelControls.webSearch && this.providerWebSearchCount < 10,
@@ -327,7 +338,12 @@ export class AgentRunner {
 
   private async completeTool(call: RunnerToolCall, output: unknown): Promise<void> {
     this.state.messages.push(toolResultMessage(call, output));
-    await this.journal.append({ at: this.now(), call, output, type: 'tool-completed' });
+    await this.journal.append({
+      at: this.now(),
+      call,
+      output: isRichToolOutput(output) ? output.display : output,
+      type: 'tool-completed',
+    });
   }
 
   private async failTool(call: RunnerToolCall, error: unknown): Promise<void> {

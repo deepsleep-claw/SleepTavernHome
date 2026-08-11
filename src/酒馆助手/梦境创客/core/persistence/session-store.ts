@@ -123,7 +123,7 @@ export class SessionRevisionStore {
       revision,
     );
     const bytes = new TextEncoder().encode(canonicalStringify(packed));
-    const name = `dream-card-agent--${safe(input.bindingId)}--session--${safe(input.runtime.sessionId)}.json`;
+    const name = `DreamCreator--Session--${safe(input.bindingId)}--${safe(input.runtime.sessionId)}.json`;
     const url = await this.client.upload(name, bytes);
     const timestamp = this.now();
     const entry: SessionIndexEntry = {

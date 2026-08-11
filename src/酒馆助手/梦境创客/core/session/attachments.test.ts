@@ -36,10 +36,10 @@ describe('session attachments', () => {
     ]);
   });
 
-  it('限制单项、总大小与附件数量', () => {
-    expect(() => validateAttachmentFiles(Array.from({ length: 11 }, (_, index) => ({ name: `${index}`, size: 1 })))).toThrow(
-      '最多添加 10 个附件',
-    );
+  it('仅限制单文件大小，不限制数量与合计大小', () => {
+    expect(() =>
+      validateAttachmentFiles(Array.from({ length: 100 }, (_, index) => ({ name: `${index}`, size: 1024 * 1024 }))),
+    ).not.toThrow();
     expect(() => validateAttachmentFiles([{ name: 'huge.bin', size: 21 * 1024 * 1024 }])).toThrow('超过 20MB');
     expect(() =>
       validateAttachmentFiles([
@@ -47,6 +47,22 @@ describe('session attachments', () => {
         { name: 'b.bin', size: 20 * 1024 * 1024 },
         { name: 'c.bin', size: 20 * 1024 * 1024 },
       ]),
-    ).toThrow('总大小不能超过 50MB');
+    ).not.toThrow();
+  });
+
+  it('外部附件引用可安全结构化复制，并在请求前被替换', async () => {
+    const content = userContentWithAttachments('检查', [
+      { fileId: 'file-1', filename: 'a.png', id: 'a', mediaType: 'image/png', size: 3 },
+    ]);
+    expect(() => structuredClone(content)).not.toThrow();
+    expect(content).toEqual([
+      { text: '检查', type: 'text' },
+      {
+        data: { text: 'dreamcreator-file://file-1', type: 'text' },
+        filename: 'a.png',
+        mediaType: 'image/png',
+        type: 'file',
+      },
+    ]);
   });
 });

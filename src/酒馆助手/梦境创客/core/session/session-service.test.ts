@@ -2,6 +2,9 @@ import type { ModelMessage } from 'ai';
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryBinaryBlobStore } from '../history/blob-store';
 import { ContentAddressedSnapshotStore } from '../history/snapshot-store';
+import { MemoryTavernFileClient } from '../persistence/file-client';
+import { MemoryAgentSettingsStore } from '../persistence/settings';
+import { DreamCreatorWorkspaceFileStore } from '../persistence/workspace-file-store';
 import type { PersistedSessionRuntime } from './types';
 import { MemoryCardStateAdapter } from '../transaction/adapter';
 import type { ApprovalDecision } from '../transaction/merge';
@@ -9,6 +12,7 @@ import { transactionState } from '../transaction/test-fixture';
 import type { WorkspaceFile } from '../workspace/types';
 import type { ModelStepExecutor, ModelStepRequest, ModelStepResult, RunnerToolCall } from '../runner/step-executor';
 import { CardAgentSessionService } from './session-service';
+import { ExternalSessionAttachmentStore } from './attachment-store';
 import { GlobalAgentTaskLock } from './task-lock';
 
 function step(toolCalls: RunnerToolCall[] = [], text = '完成啦'): ModelStepResult {
@@ -108,6 +112,50 @@ describe('card agent session service', () => {
       ]),
       role: 'user',
     });
+  });
+
+  it('外部附件显示为玩家文件操作，并跟随消息检查点回退与重做', async () => {
+    const settings = new MemoryAgentSettingsStore();
+    const fileStore = new DreamCreatorWorkspaceFileStore(new MemoryTavernFileClient(), settings, () => 100);
+    const executor = new QueueExecutor([step([], '第一版')]);
+    const persisted = vi.fn(async (_runtime: PersistedSessionRuntime) => undefined);
+    const service = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      attachmentStore: new ExternalSessionAttachmentStore('binding-1', fileStore, settings),
+      executor,
+      lock: new GlobalAgentTaskLock(),
+      mode: 'yolo',
+      onPersist: persisted,
+      sessionId: 'session-with-file',
+      snapshots: snapshots(),
+      workspaceFiles: [],
+      workspaceStore: fileStore,
+    });
+    const completed = await service.send('检查参考', 'external-attachment', [
+      { data: 'AQID', filename: 'reference.png', mediaType: 'image/png', size: 3 },
+    ]);
+    expect(completed.ui).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'manual', toolName: '玩家添加文件' }),
+      ]),
+    );
+    expect(executor.requests[0].messages.at(-1)).toMatchObject({
+      content: expect.arrayContaining([
+        expect.objectContaining({ data: { data: 'AQID', type: 'data' }, filename: 'reference.png' }),
+      ]),
+    });
+    expect(persisted.mock.calls.at(-1)?.[0].attachments).toEqual(
+      expect.objectContaining({
+        [completed.ui.find(item => item.kind === 'user')!.attachments![0].id]: expect.not.objectContaining({ data: expect.anything() }),
+      }),
+    );
+    const [reference] = fileStore.listReferences('binding-1');
+    expect(reference).toMatchObject({ logicalPath: 'reference.png', scope: 'persistent' });
+
+    await service.undoToUserMessage('external-attachment');
+    expect(fileStore.getReference(reference.fileId)?.orphanedAt).toBe(100);
+    await service.redo();
+    expect(fileStore.getReference(reference.fileId)?.orphanedAt).toBeUndefined();
   });
 
   it('保存会话级推理档位，并在一轮完成后保持联网开关', async () => {

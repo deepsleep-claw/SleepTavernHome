@@ -41,6 +41,7 @@ const decisions = reactive<Record<string, 'agent' | 'current' | undefined>>({});
 
 const approvalChanges = computed(() => [
   ...(state.value.active?.approval?.stateChanges ?? []),
+  ...(state.value.active?.approval?.fileChanges ?? []),
   ...(state.value.active?.approval?.skillChanges ?? []),
 ]);
 const changeCount = computed(() => approvalChanges.value.length);

@@ -39,8 +39,8 @@ describe('GlobalSkillStore', () => {
     await store.save(skill({ body: '新版' }));
     expect(settings.load().globalSkills.writer.revision).toBe(2);
     expect(files.uploadedNames).toEqual([
-      'dream-card-agent--global-skill--writer.md',
-      'dream-card-agent--global-skill--writer.md',
+      'DreamCreator--GlobalSkill--writer.md',
+      'DreamCreator--GlobalSkill--writer.md',
     ]);
     expect(files.urls()).toHaveLength(1);
 

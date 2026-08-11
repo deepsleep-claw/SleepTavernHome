@@ -13,13 +13,13 @@
       </div>
     </template>
     <div v-else-if="item.attachments?.length" class="dca-message-attachments">
-      <span v-for="attachment in item.attachments" :key="attachment.id">
+      <span v-for="attachment in item.attachments" :key="attachment.id" :class="{ missing: attachment.missing }">
         <i
           :class="attachment.mediaType.startsWith('image/') ? 'fa-regular fa-image' : 'fa-regular fa-file-lines'"
           aria-hidden="true"
         ></i>
         <span>{{ attachment.filename }}</span>
-        <small>{{ formatBytes(attachment.size) }}</small>
+        <small>{{ attachment.missing ? '已清理' : formatBytes(attachment.size) }}</small>
       </span>
     </div>
     <!-- eslint-disable vue/no-v-html -- 内容已由 ui/markdown.ts 的默认安全 Schema 清洗。 -->
@@ -155,6 +155,11 @@ async function resend() {
   padding: 0.25rem 0.4rem;
   background: var(--dca-raised);
   font-size: 0.74rem;
+}
+
+.dca-message-attachments > span.missing {
+  border-color: rgb(224 108 130 / 45%);
+  color: var(--dca-danger);
 }
 
 .dca-message-attachments > span > span {

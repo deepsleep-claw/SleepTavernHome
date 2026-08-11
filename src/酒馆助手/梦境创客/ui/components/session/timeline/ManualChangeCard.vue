@@ -2,7 +2,7 @@
   <details class="dca-manual-card" :open="item.manualStatus === 'failed'">
     <summary>
       <i class="fa-solid fa-user-pen" aria-hidden="true"></i>
-      <span>玩家修改工作区</span>
+      <span>{{ item.toolName || '玩家修改工作区' }}</span>
       <small :class="`dca-manual-${item.manualStatus ?? 'active'}`">{{ statusLabel }}</small>
       <i class="fa-solid fa-chevron-down dca-details-chevron" aria-hidden="true"></i>
     </summary>
@@ -124,4 +124,3 @@ async function redo() {
   color: var(--dca-danger);
 }
 </style>
-

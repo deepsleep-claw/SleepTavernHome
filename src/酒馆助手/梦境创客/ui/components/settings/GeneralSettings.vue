@@ -12,6 +12,13 @@
     </label>
     <label class="dca-toggle-row">
       <span>
+        <strong>发送图片时低损压缩</strong>
+        <small>保留原始分辨率和原图；仅压缩发送给LLM的JPEG、PNG与WebP，默认开启</small>
+      </span>
+      <input type="checkbox" :checked="state.compressImages" @change="toggleImageCompression" />
+    </label>
+    <label class="dca-toggle-row">
+      <span>
         <strong>Ctrl + Enter 发送</strong>
         <small>关闭时按 Enter 发送，Shift + Enter 换行；开启后按 Enter 换行</small>
       </span>
@@ -46,6 +53,10 @@ async function toggleFloating(event: Event) {
 
 async function toggleSendShortcut(event: Event) {
   await action(() => runtime.updateSettings({ sendWithCtrlEnter: (event.target as HTMLInputElement).checked }));
+}
+
+async function toggleImageCompression(event: Event) {
+  await action(() => runtime.updateSettings({ compressImages: (event.target as HTMLInputElement).checked }));
 }
 
 async function toggleDeveloper(event: Event) {

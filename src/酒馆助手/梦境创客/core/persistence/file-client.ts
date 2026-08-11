@@ -75,7 +75,6 @@ export class FileBackedBlobStore implements BinaryBlobStore {
     private readonly bindingId: string,
     private readonly client: TavernFileClient,
     private readonly settingsStore: AgentSettingsStore,
-    private readonly quotaBytes = 500 * 1024 * 1024,
     private readonly now: () => number = Date.now,
   ) {}
 
@@ -103,12 +102,8 @@ export class FileBackedBlobStore implements BinaryBlobStore {
   async put(key: string, value: Uint8Array): Promise<void> {
     const settings = this.settingsStore.load();
     if (settings.files[key]) return;
-    const used = Object.values(settings.files)
-      .filter(item => item.bindingId === this.bindingId)
-      .reduce((total, item) => total + item.size, 0);
-    if (used + value.byteLength > this.quotaBytes) throw new Error('该角色的梦境创客存储已超过500MB配额。');
     const safeBindingId = this.bindingId.replace(/[^a-zA-Z\d_-]/gu, '_').slice(0, 80);
-    const name = `dream-card-agent--${safeBindingId}--blob--${key}.bin`;
+    const name = `DreamCreator--Blob--${safeBindingId}--${key}.bin`;
     const url = await this.client.upload(name, value);
     const reference: StoredFileReference = {
       bindingId: this.bindingId,

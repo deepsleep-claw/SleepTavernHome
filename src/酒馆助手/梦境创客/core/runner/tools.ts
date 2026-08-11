@@ -2,10 +2,12 @@ import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import { parseYamlObject } from '../mapping/serde';
 import { assessSkillMutation } from '../skills/skill-registry';
+import { dreamCreatorFileReference } from '../session/attachments';
 import { parentWorkspacePath } from '../workspace/path';
 import { applyUnifiedPatch } from '../workspace/unified-patch';
 import { maskSecretsForModel, restoreSecretsFromModel } from '../workspace/secret-protection';
-import type { WorkspaceRepository } from '../workspace/types';
+import { isBinaryWorkspaceFile, type WorkspaceRepository } from '../workspace/types';
+import { richToolOutput } from './tool-output';
 
 export type ToolConfirmation = {
   description: string;
@@ -170,7 +172,7 @@ export function createWorkspaceRunnerTools(
     {
       definition: tool({
         description:
-          '读取文本文件的带行号视图。返回的“行号 | ”前缀只是定位元数据，不属于文件正文，写入或Patch时禁止复制。默认最多1000行和100000字符；用1基offset与limit继续分段读取。',
+          '读取文件。文本返回带行号视图；图片、PDF等二进制文件直接作为多模态工具结果交给模型。行号前缀不是正文。',
         inputSchema: z.object({
           limit: z.number().int().min(1).max(DEFAULT_READ_LIMIT).optional().describe('最多读取多少行，默认1000'),
           offset: z.number().int().min(1).optional().describe('从第几行开始，1基，默认1'),
@@ -180,6 +182,31 @@ export function createWorkspaceRunnerTools(
       execute: async input => {
         const value = input as { limit?: number; offset?: number; path: string };
         const file = await repository.read(value.path);
+        if (isBinaryWorkspaceFile(file)) {
+          return richToolOutput(
+            {
+              type: 'content',
+              value: [
+                {
+                  text: `已读取二进制文件：${file.path}（${file.mediaType}，${file.external!.size} bytes）。`,
+                  type: 'text',
+                },
+                {
+                  data: dreamCreatorFileReference(file.external!.fileId),
+                  filename: file.path.split('/').at(-1),
+                  mediaType: file.mediaType,
+                  type: 'file',
+                },
+              ],
+            },
+            {
+              binary: true,
+              mediaType: file.mediaType,
+              path: file.path,
+              size: file.external!.size,
+            },
+          );
+        }
         const protectedView = await maskSecretsForModel(file.content, file.path);
         return {
           ...lineNumberedView({ ...file, content: protectedView.maskedContent }, value),
@@ -234,6 +261,7 @@ export function createWorkspaceRunnerTools(
       execute: async (input, toolCallId) => {
         const value = input as { patch: string; path: string };
         const current = await repository.read(value.path);
+        if (isBinaryWorkspaceFile(current)) throw new Error(`二进制文件不能使用apply_patch：${current.path}`);
         const masked = await maskSecretsForModel(current.content, current.path);
         const patched = applyUnifiedPatch(masked.maskedContent, value.patch);
         const restored = await restoreSecretsFromModel(current.content, patched, current.path);

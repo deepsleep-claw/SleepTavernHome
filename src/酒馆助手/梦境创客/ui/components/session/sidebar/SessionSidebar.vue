@@ -71,7 +71,12 @@
             <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
             <span>检测到 {{ secretFindings.length }} 处敏感内容；界面显示原文，Agent读取时自动遮罩。</span>
           </div>
-          <template v-if="editorView === 'preview' && isMarkdownFile">
+          <div v-if="isBinaryFile" class="dca-binary-file-note">
+            <i class="fa-regular fa-file" aria-hidden="true"></i>
+            <strong>二进制文件</strong>
+            <span>Agent可通过 read_file 读取；此处不提供文本编辑。</span>
+          </div>
+          <template v-else-if="editorView === 'preview' && isMarkdownFile">
             <div v-if="largeMarkdownFile && !largePreviewApproved" class="dca-large-preview">
               <i class="fa-regular fa-file-lines" aria-hidden="true"></i>
               <strong>这个Markdown文件超过1MB</strong>
@@ -215,7 +220,7 @@ const editorView = ref<'edit' | 'preview'>('edit');
 const largePreviewApproved = ref(false);
 const secretFindings = ref<Awaited<ReturnType<typeof maskSecretsForModel>>['findings']>([]);
 const secretWarning = ref('');
-const expandedDirectories = ref(new Set(['/character', '/greetings', '/skills', '/skills/user', '/worldbooks']));
+const expandedDirectories = ref(new Set(['/character', '/files', '/greetings', '/skills', '/skills/user', '/temp', '/worldbooks']));
 let secretScanTimer: number | undefined;
 let secretScanRevision = 0;
 
@@ -272,9 +277,10 @@ const visibleFileTreeRows = computed<FileTreeRow[]>(() => {
   return rows;
 });
 const selectedFile = computed(() => files.value.find(file => file.path === selectedFilePath.value));
+const isBinaryFile = computed(() => Boolean(selectedFile.value?.external && !selectedFile.value.mediaType.startsWith('text/')));
 const isRunning = computed(() => ['committing', 'running'].includes(state.value.active?.status ?? ''));
 const canEditFile = computed(() =>
-  Boolean(selectedFile.value && !selectedFile.value.readonly && state.value.active && !isRunning.value),
+  Boolean(selectedFile.value && !isBinaryFile.value && !selectedFile.value.readonly && state.value.active && !isRunning.value),
 );
 const isMarkdownFile = computed(() => /\.md$/iu.test(selectedFile.value?.path ?? ''));
 const largeMarkdownFile = computed(() => new Blob([fileDraft.value]).size > 1024 * 1024);
@@ -289,6 +295,7 @@ const secretMarkers = computed<VfsEditorMarker[]>(() =>
 );
 const approvalChanges = computed(() => [
   ...(state.value.active?.approval?.stateChanges ?? []),
+  ...(state.value.active?.approval?.fileChanges ?? []),
   ...(state.value.active?.approval?.skillChanges ?? []),
 ]);
 const changeCount = computed(() => approvalChanges.value.length);

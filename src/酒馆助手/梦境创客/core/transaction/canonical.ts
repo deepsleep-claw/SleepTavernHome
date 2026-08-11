@@ -1,6 +1,9 @@
 const TYPE_KEY = '$dream_card_agent_type';
 
 function canonicalize(value: unknown): unknown {
+  if (value instanceof URL) {
+    return { [TYPE_KEY]: 'url', value: value.toString() };
+  }
   if (value instanceof RegExp) {
     return { [TYPE_KEY]: 'regexp', flags: value.flags, source: value.source };
   }
@@ -24,6 +27,14 @@ export function canonicalStringify(value: unknown): string {
 
 export function canonicalParse<T>(value: string): T {
   return JSON.parse(value, (_key, item: unknown) => {
+    if (
+      typeof item === 'object' &&
+      item !== null &&
+      (item as Record<string, unknown>)[TYPE_KEY] === 'url' &&
+      typeof (item as Record<string, unknown>).value === 'string'
+    ) {
+      return new URL((item as Record<string, unknown>).value as string);
+    }
     if (
       typeof item === 'object' &&
       item !== null &&

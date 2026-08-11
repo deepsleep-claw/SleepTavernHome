@@ -7,6 +7,7 @@ import { serializeYaml } from '../mapping/serde';
 import type { CardWorkspaceState } from '../mapping/types';
 import { compilePreset, DEFAULT_PRESET, type CompiledPreset, type StructuredPreset } from '../preset/compiler';
 import { PersistentRunnerJournal } from '../persistence/journal';
+import { DreamCreatorWorkspaceFileStore } from '../persistence/workspace-file-store';
 import { AgentRunner, type PendingRunnerStep, type RunnerEvent, type RunnerStatus } from '../runner/agent-runner';
 import { measureContext } from '../runner/context';
 import { recoverPendingRunnerStep } from '../runner/recovery';
@@ -21,7 +22,8 @@ import { defaultApprovals, prepareThreeWayMerge, type ApprovalDecision } from '.
 import { diffCardStates } from '../transaction/state-diff';
 import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
 import { maskSecretsForModel, scanSecrets } from '../workspace/secret-protection';
-import type { WorkspaceFile } from '../workspace/types';
+import type { WorkspaceChange, WorkspaceFile } from '../workspace/types';
+import type { SessionAttachmentStore } from './attachment-store';
 import {
   attachmentSummary,
   storeSessionAttachments,
@@ -63,7 +65,10 @@ type SessionServiceOptions = {
   sessionId?: string;
   skills?: AgentSkill[];
   snapshots: ContentAddressedSnapshotStore;
+  attachmentStore?: SessionAttachmentStore;
   title?: string;
+  workspaceFiles?: WorkspaceFile[];
+  workspaceStore?: DreamCreatorWorkspaceFileStore;
 };
 
 const DEFAULT_SESSION_TITLE = '新的创作会话';
@@ -71,6 +76,34 @@ const STREAMING_UPDATE_INTERVAL_MS = 80;
 
 function isNonCharacterResourcePath(path: string): boolean {
   return /^\/(?:regexes|tavern-helper-scripts)\/(?:global|preset-current)(?:\/|$)/u.test(path);
+}
+
+function isStoragePath(path: string): boolean {
+  return /^\/(?:files|temp)(?:\/|$)/u.test(path);
+}
+
+function persistentStorageFiles(files: WorkspaceFile[]): WorkspaceFile[] {
+  return files.filter(file => file.path.startsWith('/files/')).map(file => klona(file));
+}
+
+function workspaceApprovalChanges(changes: WorkspaceChange[]) {
+  return changes
+    .filter(change => change.path.startsWith('/files/'))
+    .map(change => ({
+      after: 'after' in change ? klona(change.after) : undefined,
+      before: 'before' in change ? klona(change.before) : undefined,
+      highRisk: change.kind === 'delete',
+      kind: change.kind,
+      label:
+        change.kind === 'create'
+          ? `新增持久文件 ${change.path}`
+          : change.kind === 'delete'
+            ? `删除持久文件 ${change.path}`
+            : change.kind === 'move'
+              ? `移动持久文件 ${change.path}`
+              : `修改持久文件 ${change.path}`,
+      path: change.path,
+    }));
 }
 
 function sessionTitleFromMessage(message: string): string {
@@ -195,6 +228,7 @@ export class CardAgentSessionService {
   private agentConfiguration: SessionAgentConfiguration;
   private attachments: Record<string, StoredSessionAttachment>;
   private readonly adapter: CardStateAdapter;
+  private readonly attachmentStore?: SessionAttachmentStore;
   private readonly canWriteNonCharacterResources: () => boolean;
   private compiledPreset: CompiledPreset;
   private contextWindow: number;
@@ -207,6 +241,9 @@ export class CardAgentSessionService {
   private readonly requestToolApproval?: SessionServiceOptions['requestToolApproval'];
   private readonly scheduleStreamingUpdate: (callback: () => void) => () => void;
   private readonly snapshots: ContentAddressedSnapshotStore;
+  private storageBaseFiles: WorkspaceFile[] = [];
+  private storageFiles: WorkspaceFile[] = [];
+  private readonly workspaceStore?: DreamCreatorWorkspaceFileStore;
   private timeline: HistoryTimeline;
   private events: RunnerEvent[] = [];
   private headerMessageCount: number;
@@ -233,6 +270,7 @@ export class CardAgentSessionService {
     restored?: { files: WorkspaceFile[]; runtime: PersistedSessionRuntime },
   ) {
     this.adapter = options.adapter;
+    this.attachmentStore = options.attachmentStore;
     this.canWriteNonCharacterResources = options.canWriteNonCharacterResources ?? (() => false);
     this.agentConfiguration = klona(
       restored?.runtime.agentConfiguration ??
@@ -271,6 +309,8 @@ export class CardAgentSessionService {
     this.sessionId = restored?.runtime.sessionId ?? options.sessionId ?? crypto.randomUUID();
     this.skills = klona(restored?.runtime.skills ?? options.skills ?? []);
     this.snapshots = options.snapshots;
+    this.workspaceStore = options.workspaceStore;
+    this.storageFiles = klona(options.workspaceFiles ?? []);
     this.timeline = new HistoryTimeline({
       checkpoints: restored?.runtime.history.checkpoints,
       now: this.now,
@@ -281,7 +321,9 @@ export class CardAgentSessionService {
     this.activeCheckpointId = restored?.runtime.activeCheckpointId;
     this.events = klona(restored?.runtime.events ?? []);
     this.lastError = restored?.runtime.lastError;
-    this.pending = klona(restored?.runtime.pending);
+    this.pending = restored?.runtime.pending
+      ? { ...klona(restored.runtime.pending), fileChanges: klona(restored.runtime.pending.fileChanges ?? []) }
+      : undefined;
     this.status = restored?.runtime.status ?? 'idle';
     this.ui = klona(restored?.runtime.ui ?? []);
     this.warnings = [...(restored?.runtime.warnings ?? [])];
@@ -335,6 +377,7 @@ export class CardAgentSessionService {
       ? {
           candidateSnapshot: this.pending.candidateSnapshot,
           conflicts: klona(this.pending.preparation.conflicts),
+          fileChanges: klona(this.pending.fileChanges),
           skillChanges: klona(this.pending.skillChanges),
           stateChanges: klona(
             this.pending.preparation.agentChanges.filter(
@@ -359,7 +402,13 @@ export class CardAgentSessionService {
       skills: klona(this.skills),
       status: this.status,
       title: this.title,
-      ui: klona(this.ui.filter(item => !item.hidden)),
+      ui: klona(this.ui.filter(item => !item.hidden)).map(item => ({
+        ...item,
+        attachments: item.attachments?.map(attachment => ({
+          ...attachment,
+          missing: Boolean(attachment.fileId && this.workspaceStore && !this.workspaceStore.getReference(attachment.fileId)),
+        })),
+      })),
       warnings: [...this.warnings],
       workingChanges: this.repository?.changes() ?? [],
       workingFiles: (this.repository?.snapshot() ?? []).map(file => ({
@@ -388,6 +437,17 @@ export class CardAgentSessionService {
 
   async save(): Promise<void> {
     await this.persist();
+  }
+
+  async refreshManagedFiles(): Promise<SessionView> {
+    // 已中断或待审批的会话必须保留原Working Copy；它们在真正继续时会得到明确的文件缺失错误。
+    if (this.pending || this.activeCheckpointId || !['completed', 'idle'].includes(this.status)) return this.view();
+    const current = await this.adapter.read();
+    this.assertBinding(current);
+    await this.reloadStorageFiles();
+    this.repository = this.createRepository(current);
+    this.notify();
+    return this.view();
   }
 
   async rename(title: string): Promise<SessionView> {
@@ -469,14 +529,18 @@ export class CardAgentSessionService {
     attachmentInputs: SessionAttachmentInput[] = [],
   ): Promise<SessionView> {
     const text = message.trim();
-    const attachments = storeSessionAttachments(attachmentInputs);
-    if (!text && attachments.length === 0) throw new Error('请输入要交给Agent的要求，或添加附件。');
+    if (!text && attachmentInputs.length === 0) throw new Error('请输入要交给Agent的要求，或添加附件。');
     if (this.pending) throw new Error('请先处理当前待批准的修改。');
     if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status))
       throw new Error('Agent已经在运行。');
     if (this.activeCheckpointId || this.activeBase) {
       throw new Error('当前轮次尚未结束，请从中断处继续，或回退这条用户消息后再发送新要求。');
     }
+    await this.reloadStorageFiles();
+    const beforeWorkspaceFiles = persistentStorageFiles(this.storageFiles);
+    const attachments = this.attachmentStore
+      ? await this.attachmentStore.save(this.sessionId, attachmentInputs)
+      : storeSessionAttachments(attachmentInputs);
     await this.finalizeManualEdits();
     this.lock.acquire(this.sessionId);
     try {
@@ -490,6 +554,7 @@ export class CardAgentSessionService {
         card: base,
         events: this.events,
         modelMessages: this.modelMessages,
+        workspaceFiles: beforeWorkspaceFiles,
       });
       const checkpoint = this.timeline.beginTurn({
         beforeAgentCursor: this.modelMessages.length,
@@ -517,7 +582,26 @@ export class CardAgentSessionService {
           kind: 'user',
         });
       }
+      if (attachments.length > 0) {
+        this.ui.push({
+          at: this.now(),
+          checkpointId: checkpoint.id,
+          content: JSON.stringify({
+            changes: attachments.map(attachment => ({
+              after: `<${attachment.mediaType}，${attachment.size} bytes>`,
+              kind: 'write',
+              path: attachment.logicalPath ?? `/files/${attachment.filename}`,
+            })),
+          }),
+          id: `attachment:${crypto.randomUUID()}`,
+          kind: 'manual',
+          manualStatus: 'active',
+          status: 'completed',
+          toolName: '玩家添加文件',
+        });
+      }
       this.syncUiVisibility();
+      await this.reloadStorageFiles();
       this.repository = this.createRepository(base);
       await this.refreshCompiledHeader();
       this.buildRunner();
@@ -602,6 +686,13 @@ export class CardAgentSessionService {
   async useCurrentWorkingFile(path: string): Promise<SessionView> {
     const current = await this.adapter.read();
     this.assertBinding(current);
+    if (isStoragePath(path)) {
+      await this.reloadStorageFiles();
+      if (!this.storageFiles.some(file => file.path === path)) throw new Error(`当前文件存储中不存在文件：${path}`);
+      this.repository = this.createRepository(current);
+      this.notify();
+      return this.view();
+    }
     const file = projectCardWorkspace(current, 100, { allowNonCharacterWrites: true }).find(item => item.path === path);
     if (!file) throw new Error(`当前实际数据中不存在文件：${path}`);
     this.repository = this.createRepository(current);
@@ -633,6 +724,7 @@ export class CardAgentSessionService {
     if (['running', 'waiting-approval', 'committing'].includes(this.status)) {
       throw new Error('Agent运行或工具确认期间不能手动编辑Working Copy。');
     }
+    if (isStoragePath(input.path)) return this.applyManualStorageChange(input);
     const current = await this.adapter.read();
     this.assertBinding(current);
     const actualFiles = projectCardWorkspace(current, 100, { allowNonCharacterWrites: true });
@@ -712,6 +804,73 @@ export class CardAgentSessionService {
     return this.view();
   }
 
+  private async applyManualStorageChange(input: {
+    content?: string;
+    kind: 'delete' | 'write';
+    overwriteConflict?: boolean;
+    path: string;
+  }): Promise<SessionView> {
+    if (!this.workspaceStore) throw new Error('当前环境没有可用的梦境创客文件存储。');
+    if (this.pending) throw new Error('请先处理当前Agent候选修改，再编辑 /files 或 /temp。');
+    const currentCard = await this.adapter.read();
+    this.assertBinding(currentCard);
+    await this.reloadStorageFiles();
+    const currentFile = this.storageFiles.find(file => file.path === input.path);
+    const group = await this.ensureManualEditGroup(currentCard);
+    const repository = new MemoryWorkspaceRepository({ files: this.storageFiles });
+    const toolCallId = `manual-storage:${crypto.randomUUID()}`;
+    if (input.kind === 'write') await repository.write(input.path, input.content ?? '', toolCallId);
+    else await repository.remove(input.path, toolCallId);
+    const previous = group.files[input.path];
+    group.files[input.path] = {
+      after: input.kind === 'write' ? input.content ?? '' : undefined,
+      before: previous?.before ?? (currentFile?.external && !currentFile.mediaType.startsWith('text/') ? '<二进制文件>' : currentFile?.content),
+      kind: input.kind,
+      path: input.path,
+    };
+    this.updateManualUi(group, 'active');
+    try {
+      this.storageFiles = await this.workspaceStore.applyWorkspace(
+        this.bindingId,
+        this.sessionId,
+        this.storageFiles,
+        repository.snapshot(),
+        { [input.path]: 'agent' },
+      );
+    } catch (error) {
+      group.files[input.path].error = error instanceof Error ? error.message : String(error);
+      this.updateManualUi(group, 'failed');
+      await this.persist();
+      return this.view();
+    }
+    delete group.files[input.path].error;
+    await this.updateManualModelMessage(group);
+    const afterSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
+      card: currentCard,
+      events: this.events,
+      modelMessages: this.modelMessages,
+      workspaceFiles: persistentStorageFiles(this.storageFiles),
+    });
+    if (group.completed) {
+      this.timeline.updateCompletedTurn(group.checkpointId, {
+        afterAgentCursor: this.modelMessages.length,
+        afterSnapshot,
+      });
+    } else {
+      this.timeline.completeTurn(group.checkpointId, {
+        afterAgentCursor: this.modelMessages.length,
+        afterSnapshot,
+      });
+      group.completed = true;
+    }
+    this.repository = this.createRepository(currentCard);
+    this.status = 'completed';
+    this.updateManualUi(group, 'active');
+    this.syncUiVisibility();
+    await this.persist();
+    return this.view();
+  }
+
   editUserMessage(messageId: string, content: string): void {
     const item = this.ui.find(message => message.id === messageId && message.kind === 'user');
     if (!item) throw new Error(`用户消息不存在：${messageId}`);
@@ -722,18 +881,29 @@ export class CardAgentSessionService {
   async resend(messageId: string): Promise<SessionView> {
     const item = this.ui.find(message => message.id === messageId && message.kind === 'user');
     if (!item) throw new Error(`用户消息不存在：${messageId}`);
-    const attachments = (item.attachments ?? []).map(summary => {
+    const attachments = await Promise.all((item.attachments ?? []).map(async summary => {
       const attachment = this.attachments[summary.id];
       if (!attachment) throw new Error(`附件内容已经丢失：${summary.filename}`);
-      const { id: _id, ...input } = attachment;
-      return input;
-    });
+      if (this.attachmentStore) return this.attachmentStore.loadInput(attachment);
+      if (!attachment.data) throw new Error(`附件内容已经丢失：${summary.filename}`);
+      return {
+        data: attachment.data,
+        filename: attachment.filename,
+        mediaType: attachment.mediaType,
+        size: attachment.size,
+      };
+    }));
     return this.send(item.content, messageId, attachments);
   }
 
   private createRepository(state: CardWorkspaceState): MemoryWorkspaceRepository {
+    this.storageBaseFiles = klona(this.storageFiles);
     return new MemoryWorkspaceRepository({
-      files: [...projectCardWorkspace(state, 100, { allowNonCharacterWrites: true }), ...projectSkills(this.skills)],
+      files: [
+        ...projectCardWorkspace(state, 100, { allowNonCharacterWrites: true }),
+        ...projectSkills(this.skills),
+        ...this.storageFiles,
+      ],
       readonlyRoots: ['/context', '/worldbooks-global-readonly', '/skills/builtin'],
     });
   }
@@ -742,12 +912,19 @@ export class CardAgentSessionService {
     state: CardWorkspaceState,
     currentFiles: WorkspaceFile[],
   ): MemoryWorkspaceRepository {
+    this.storageBaseFiles = klona(this.storageFiles);
+    const restoredStorage = currentFiles.filter(file => isStoragePath(file.path));
+    const restoredNonStorage = currentFiles.filter(file => !isStoragePath(file.path));
     return new MemoryWorkspaceRepository({
       completedToolCallIds: this.events
         .filter(event => event.type === 'tool-completed')
         .map(event => event.call.toolCallId),
-      currentFiles,
-      files: [...projectCardWorkspace(state, 100, { allowNonCharacterWrites: true }), ...projectSkills(this.skills)],
+      currentFiles: [...restoredNonStorage, ...(restoredStorage.length ? restoredStorage : this.storageFiles)],
+      files: [
+        ...projectCardWorkspace(state, 100, { allowNonCharacterWrites: true }),
+        ...projectSkills(this.skills),
+        ...this.storageFiles,
+      ],
       readonlyRoots: ['/context', '/worldbooks-global-readonly', '/skills/builtin'],
     });
   }
@@ -772,6 +949,9 @@ export class CardAgentSessionService {
       onReasoningDelta: delta => this.appendStreamingReasoning(delta),
       onTextDelta: delta => this.appendStreamingText(delta),
       requestApproval: this.requestToolApproval,
+      prepareMessages: this.attachmentStore
+        ? messages => this.attachmentStore!.prepareMessages(this.sessionId, messages)
+        : undefined,
       tools: createWorkspaceRunnerTools(
         this.repository,
         this.skills.map(skill => skill.id),
@@ -796,6 +976,7 @@ export class CardAgentSessionService {
         card: current,
         events: this.events,
         modelMessages: this.modelMessages,
+        workspaceFiles: persistentStorageFiles(this.storageFiles),
       });
       checkpointId = this.timeline.beginTurn({
         beforeAgentCursor: this.modelMessages.length,
@@ -881,14 +1062,17 @@ export class CardAgentSessionService {
     const preparation = prepareThreeWayMerge(previous.base, materialized.state, current);
     await markSecretRemovalRisks(preparation);
     const skillChanges = diffSkills(this.skills, candidateSkills);
+    const fileChanges = workspaceApprovalChanges(this.repository.changes());
     const candidateSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
       card: materialized.state,
       events: this.events,
       modelMessages: this.modelMessages,
+      workspaceFiles: persistentStorageFiles(this.repository.snapshot()),
     });
     this.pending = {
       ...previous,
       candidateSnapshot,
+      fileChanges,
       preparation,
       skillChanges,
       skills: candidateSkills,
@@ -896,7 +1080,7 @@ export class CardAgentSessionService {
       warnings: materialized.warnings,
     };
     const effective = preparation.agentChanges.filter(change => !preparation.redundantPaths.includes(change.path));
-    if (effective.length === 0 && skillChanges.length === 0) {
+    if (effective.length === 0 && skillChanges.length === 0 && fileChanges.length === 0) {
       await this.applyApproval({});
       this.manualEditGroup = undefined;
     } else {
@@ -938,6 +1122,28 @@ export class CardAgentSessionService {
         : result.error.message;
       return;
     }
+    if (this.workspaceStore && this.repository) {
+      try {
+        this.storageFiles = await this.workspaceStore.applyWorkspace(
+          this.bindingId,
+          this.sessionId,
+          this.storageBaseFiles,
+          this.repository.snapshot(),
+          decisions,
+        );
+      } catch (error) {
+        const rollbackOperations = diffCardStates(result.state, current);
+        await commitWorkingCopy({
+          adapter: this.adapter,
+          base: result.state,
+          decisions: Object.fromEntries(rollbackOperations.map(operation => [operation.path, 'agent'])),
+          working: current,
+        });
+        this.status = 'failed';
+        this.lastError = error instanceof Error ? error.message : String(error);
+        return;
+      }
+    }
     const previouslyMountedSkillIds = this.skills.map(skill => skill.id);
     const approvedSkills = applySkillDecisions(this.skills, pending.skillChanges, decisions);
     const approvedIds = new Set(approvedSkills.map(skill => skill.id));
@@ -956,6 +1162,7 @@ export class CardAgentSessionService {
       card: result.state,
       events: this.events,
       modelMessages: this.modelMessages,
+      workspaceFiles: persistentStorageFiles(this.storageFiles),
     });
     this.timeline.completeTurn(pending.checkpointId, {
       afterAgentCursor: this.modelMessages.length,
@@ -982,15 +1189,35 @@ export class CardAgentSessionService {
     const preparation = prepareThreeWayMerge(base, materialized.state, current);
     await markSecretRemovalRisks(preparation);
     const skillChanges = diffSkills(this.skills, candidateSkills);
+    if (this.workspaceStore) {
+      const tempDecisions = Object.fromEntries(
+        this.repository
+          .changes()
+          .filter(change => change.path.startsWith('/temp/'))
+          .map(change => [change.path, 'agent' as const]),
+      );
+      if (Object.keys(tempDecisions).length > 0) {
+        this.storageFiles = await this.workspaceStore.applyWorkspace(
+          this.bindingId,
+          this.sessionId,
+          this.storageBaseFiles,
+          this.repository.snapshot(),
+          tempDecisions,
+        );
+      }
+    }
+    const fileChanges = workspaceApprovalChanges(this.repository.changes());
     const candidateSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
       card: materialized.state,
       events: this.events,
       modelMessages: this.modelMessages,
+      workspaceFiles: persistentStorageFiles(this.repository.snapshot()),
     });
     this.pending = {
       base,
       candidateSnapshot,
       checkpointId: this.activeCheckpointId,
+      fileChanges,
       preparation,
       skillChanges,
       skills: candidateSkills,
@@ -1001,7 +1228,7 @@ export class CardAgentSessionService {
     const effectiveStateChanges = preparation.agentChanges.filter(
       change => !preparation.redundantPaths.includes(change.path),
     );
-    const hasChanges = effectiveStateChanges.length > 0 || skillChanges.length > 0;
+    const hasChanges = effectiveStateChanges.length > 0 || skillChanges.length > 0 || fileChanges.length > 0;
     if (!hasChanges) {
       await this.applyApproval({});
       return;
@@ -1016,9 +1243,15 @@ export class CardAgentSessionService {
         .forEach(change => {
           decisions[change.path] = 'agent';
         });
+      fileChanges
+        .filter(change => !change.highRisk)
+        .forEach(change => {
+          decisions[change.path] = 'agent';
+        });
       const unresolvedState = effectiveStateChanges.some(change => decisions[change.path] === undefined);
       const unresolvedSkills = skillChanges.some(change => decisions[change.path] === undefined);
-      if (!unresolvedState && !unresolvedSkills) {
+      const unresolvedFiles = fileChanges.some(change => decisions[change.path] === undefined);
+      if (!unresolvedState && !unresolvedSkills && !unresolvedFiles) {
         await this.applyApproval(decisions);
         return;
       }
@@ -1050,6 +1283,15 @@ export class CardAgentSessionService {
         working: payload.card,
       });
       if (result.status === 'rolled-back') throw result.error;
+      if (this.workspaceStore && payload.workspaceFiles) {
+        this.storageFiles = await this.workspaceStore.restorePersistentSnapshot(
+          this.bindingId,
+          this.sessionId,
+          payload.workspaceFiles,
+        );
+      } else {
+        await this.reloadStorageFiles();
+      }
       this.modelMessages = payload.modelMessages;
       this.events = payload.events;
       this.repository = this.createRepository(result.state);
@@ -1254,6 +1496,11 @@ export class CardAgentSessionService {
     });
     await this.onPersist?.(this.exportRuntime(), this.repository?.snapshot() ?? []);
     this.notify();
+  }
+
+  private async reloadStorageFiles(): Promise<void> {
+    if (!this.workspaceStore) return;
+    this.storageFiles = await this.workspaceStore.project(this.bindingId, this.sessionId);
   }
 
   private notify(): void {

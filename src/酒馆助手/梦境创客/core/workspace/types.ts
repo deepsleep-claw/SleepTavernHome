@@ -10,7 +10,14 @@ export type WorkspaceEntry = {
 
 export type WorkspaceFile = {
   content: string;
-  mediaType: 'text/markdown' | 'text/plain' | 'text/yaml';
+  external?: {
+    fileId: string;
+    mediaType: string;
+    sha256: string;
+    size: number;
+    scope: 'persistent' | 'temp';
+  };
+  mediaType: string;
   path: string;
   readonly: boolean;
   resourceId: string;
@@ -62,6 +69,10 @@ export interface WorkspaceRepository {
   move(from: string, to: string, toolCallId: string): Promise<void>;
   remove(path: string, toolCallId: string): Promise<void>;
   search(query: SearchQuery): Promise<SearchResult>;
+}
+
+export function isBinaryWorkspaceFile(file: WorkspaceFile): boolean {
+  return Boolean(file.external && !file.mediaType.startsWith('text/'));
 }
 
 export class WorkspaceError extends Error {

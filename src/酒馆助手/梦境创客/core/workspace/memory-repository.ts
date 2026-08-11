@@ -82,7 +82,7 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
           name,
           path: childPath,
           readonly: file.readonly || this.isReadonly(childPath),
-          size: new TextEncoder().encode(file.content).byteLength,
+          size: file.external?.size ?? new TextEncoder().encode(file.content).byteLength,
         });
       }
     }
@@ -113,6 +113,7 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
       this.assertWritable(path, existing);
       this.current.set(path, {
         content,
+        external: undefined,
         mediaType: existing?.mediaType ?? inferMediaType(path),
         path,
         readonly: false,
@@ -203,7 +204,11 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
           }
         }
         changes.push({ before: cloneFile(before), kind: 'delete', path });
-      } else if (after.content !== before.content || after.mediaType !== before.mediaType) {
+      } else if (
+        after.content !== before.content ||
+        after.mediaType !== before.mediaType ||
+        JSON.stringify(after.external) !== JSON.stringify(before.external)
+      ) {
         changes.push({ after: cloneFile(after), before: cloneFile(before), kind: 'modify', path });
       }
     }

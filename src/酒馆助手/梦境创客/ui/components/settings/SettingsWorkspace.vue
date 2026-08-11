@@ -42,7 +42,7 @@ const navItems: { icon: string; label: string; section: SettingsSection }[] = [
   { icon: 'fa-solid fa-layer-group', label: '预设', section: 'preset' },
   { icon: 'fa-solid fa-plug', label: 'API', section: 'api' },
   { icon: 'fa-solid fa-wand-magic-sparkles', label: 'Skill', section: 'skills' },
-  { icon: 'fa-solid fa-hard-drive', label: '存储与清理', section: 'storage' },
+  { icon: 'fa-solid fa-hard-drive', label: '文件与存储', section: 'storage' },
   { icon: 'fa-solid fa-stethoscope', label: '诊断', section: 'diagnostics' },
 ];
 </script>

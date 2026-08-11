@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
+import { isRichToolOutput } from './tool-output';
 import { createWorkspaceRunnerTools } from './tools';
 
 describe('workspace runner tools', () => {
@@ -57,6 +58,39 @@ describe('workspace runner tools', () => {
       await tools.get('move_path')!.confirmation?.({ from: '/skills/user/new', to: '/skills/user/old' }, 'call'),
     ).toBeDefined();
     expect(await tools.get('delete_path')!.confirmation?.({ path: '/character/description.md' }, 'call')).toBeUndefined();
+  });
+
+  it('把外部二进制文件作为不泄露物理地址的多模态工具结果返回', async () => {
+    const repository = new MemoryWorkspaceRepository({
+      files: [
+        {
+          content: '',
+          external: {
+            fileId: 'file-1',
+            mediaType: 'image/png',
+            scope: 'persistent',
+            sha256: 'hash',
+            size: 123,
+          },
+          mediaType: 'image/png',
+          path: '/files/card.png',
+          readonly: false,
+          resourceId: 'file-1',
+        },
+      ],
+    });
+    const read = new Map(createWorkspaceRunnerTools(repository).map(item => [item.name, item])).get('read_file')!;
+    const result = await read.execute({ path: '/files/card.png' }, 'read-binary');
+    expect(isRichToolOutput(result)).toBe(true);
+    if (!isRichToolOutput(result)) throw new Error('expected rich output');
+    expect(result.display).toEqual({ binary: true, mediaType: 'image/png', path: '/files/card.png', size: 123 });
+    expect(result.modelOutput).toMatchObject({
+      type: 'content',
+      value: [
+        { type: 'text' },
+        { data: { text: 'dreamcreator-file://file-1', type: 'text' }, mediaType: 'image/png', type: 'file' },
+      ],
+    });
   });
 
   it('遮罩 data.yaml 的读取、搜索和Patch视图，底层始终保留真实值', async () => {

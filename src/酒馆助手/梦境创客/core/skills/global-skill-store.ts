@@ -88,7 +88,7 @@ export class GlobalSkillStore {
       .join('-')
       .slice(0, 56);
     const safeId = normalizedId || `skill-${unicodeId || 'unnamed'}`;
-    const name = `dream-card-agent--global-skill--${safeId}.md`;
+    const name = `DreamCreator--GlobalSkill--${safeId}.md`;
     const bytes = encoder.encode(skillSource({ ...klona(skill), assets: {}, builtin: false, references: {} }));
     const url = await this.client.upload(name, bytes);
     const at = this.now();

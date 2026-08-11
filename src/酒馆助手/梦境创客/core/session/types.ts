@@ -74,15 +74,26 @@ export type SkillChange = {
 export type SessionApproval = {
   candidateSnapshot: string;
   conflicts: MergeConflict[];
+  fileChanges: WorkspaceApprovalChange[];
   skillChanges: SkillChange[];
   stateChanges: StateOperation[];
   warnings: string[];
+};
+
+export type WorkspaceApprovalChange = {
+  after?: WorkspaceFile;
+  before?: WorkspaceFile;
+  highRisk: boolean;
+  kind: WorkspaceChange['kind'];
+  label: string;
+  path: string;
 };
 
 export type SessionSnapshotPayload = {
   card: CardWorkspaceState;
   events: RunnerEvent[];
   modelMessages: ModelMessage[];
+  workspaceFiles?: WorkspaceFile[];
   /** @deprecated 旧快照兼容字段；全局Skill不参与角色卡Undo/Redo。 */
   skills?: AgentSkill[];
 };
@@ -140,6 +151,7 @@ export type PendingCandidate = {
   candidateSnapshot: string;
   checkpointId: string;
   preparation: MergePreparation;
+  fileChanges: WorkspaceApprovalChange[];
   skillChanges: SkillChange[];
   skills: AgentSkill[];
   state: CardWorkspaceState;

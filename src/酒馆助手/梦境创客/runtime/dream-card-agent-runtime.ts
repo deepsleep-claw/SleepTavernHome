@@ -5,6 +5,10 @@ import { HistoryTimeline } from '../core/history/timeline';
 import { materializeCardWorkspace, projectCardWorkspace } from '../core/mapping/card-workspace-mapper';
 import type { CardWorkspaceState } from '../core/mapping/types';
 import { GlobalTavernFileClient, type TavernFileClient } from '../core/persistence/file-client';
+import {
+  DreamCreatorWorkspaceFileStore,
+  type CharacterFileStorageSummary,
+} from '../core/persistence/workspace-file-store';
 import { CharacterMetadataStore } from '../core/persistence/character-store';
 import { PageDebugLog, type DebugLogEntry } from '../core/persistence/debug-log';
 import { FileRegistryGarbageCollector } from '../core/persistence/garbage-collector';
@@ -42,6 +46,7 @@ import type {
   SessionView,
 } from '../core/session/types';
 import { isImageAttachment, type SessionAttachmentInput } from '../core/session/attachments';
+import { ExternalSessionAttachmentStore } from '../core/session/attachment-store';
 import { GlobalSkillStore } from '../core/skills/global-skill-store';
 import type { AgentSkill } from '../core/skills/types';
 import { createGlobalTavernBridge, type TavernBridge } from '../core/tavern/bridge';
@@ -57,6 +62,7 @@ export type DreamCardAgentRuntimeState = {
   activePresetId: string;
   agentConfigurations: AgentConfiguration[];
   busy: boolean;
+  compressImages: boolean;
   currentCharacter?: { avatarId: string; bindingId: string; name: string };
   debugLogs: DebugLogEntry[];
   developerMode: boolean;
@@ -71,7 +77,11 @@ export type DreamCardAgentRuntimeState = {
   presetProfiles: StructuredPreset[];
   sendWithCtrlEnter: boolean;
   skills: AgentSkill[];
-  storage: { currentCharacterBytes: number; globalSkillBytes: number };
+  storage: {
+    characters: CharacterFileStorageSummary[];
+    currentCharacterBytes: number;
+    globalSkillBytes: number;
+  };
   sessions: SessionIndexEntry[];
   sessionStatuses: Record<string, SessionLifecycleStatus>;
   toolConfirmation?: ToolConfirmation;
@@ -112,6 +122,7 @@ export class DreamCardAgentRuntime {
   private readonly characterStore: CharacterMetadataStore;
   private readonly executorFactory: (profile: ApiProfile) => ModelStepExecutor;
   private readonly fileClient: TavernFileClient;
+  private readonly workspaceFileStore: DreamCreatorWorkspaceFileStore;
   private readonly globalSkillStore: GlobalSkillStore;
   private readonly lock = new GlobalAgentTaskLock();
   private readonly log: PageDebugLog;
@@ -134,6 +145,7 @@ export class DreamCardAgentRuntime {
     this.now = options.now ?? Date.now;
     this.log = new PageDebugLog(this.now);
     this.settingsStore = options.settingsStore ?? new TavernAgentSettingsStore();
+    this.workspaceFileStore = new DreamCreatorWorkspaceFileStore(this.fileClient, this.settingsStore, this.now);
     this.characterStore = new CharacterMetadataStore(this.fileClient, this.settingsStore, this.now);
     this.globalSkillStore = new GlobalSkillStore(this.fileClient, this.settingsStore, this.now);
     const settings = this.settingsStore.load();
@@ -143,6 +155,7 @@ export class DreamCardAgentRuntime {
       activePresetId: settings.activePresetId,
       agentConfigurations: settings.agentConfigurations,
       busy: false,
+      compressImages: settings.compressImages,
       debugLogs: [],
       developerMode: settings.developerMode,
       dangerousNonCharacterResourceWrites: settings.dangerousNonCharacterResourceWrites,
@@ -155,7 +168,7 @@ export class DreamCardAgentRuntime {
       presetProfiles: settings.presetProfiles,
       sendWithCtrlEnter: settings.sendWithCtrlEnter,
       skills: [],
-      storage: { currentCharacterBytes: 0, globalSkillBytes: 0 },
+      storage: { characters: this.workspaceFileStore.summaries(), currentCharacterBytes: 0, globalSkillBytes: 0 },
       sessions: [],
       sessionStatuses: {},
       warnings: [],
@@ -208,8 +221,15 @@ export class DreamCardAgentRuntime {
         store: revisionStore,
       });
       const snapshotBlobs = new MemoryBinaryBlobStore();
+      const sessionId = crypto.randomUUID();
+      const attachmentStore = new ExternalSessionAttachmentStore(
+        current.character.bindingId,
+        this.workspaceFileStore,
+        this.settingsStore,
+      );
       const service = await CardAgentSessionService.create({
         adapter,
+        attachmentStore,
         agentConfiguration,
         executor: this.executorFactory(profile),
         contextWindow: this.profileContextWindow(profile),
@@ -225,8 +245,11 @@ export class DreamCardAgentRuntime {
         requestToolApproval: request => this.requestToolConfirmation(request),
         preset: this.selectedPreset(agentConfiguration.presetId),
         snapshots: new ContentAddressedSnapshotStore(snapshotBlobs),
+        sessionId,
         skills: mountedSkills,
         title: input.title,
+        workspaceFiles: await this.workspaceFileStore.project(current.character.bindingId, sessionId),
+        workspaceStore: this.workspaceFileStore,
       });
       await service.save();
       this.services.set(service.sessionId, service);
@@ -271,9 +294,15 @@ export class DreamCardAgentRuntime {
       });
       const revision = await persistence.load(sessionId);
       const snapshotBlobs = new MemoryBinaryBlobStore(revision.snapshotBlobs);
+      const attachmentStore = new ExternalSessionAttachmentStore(
+        current.character.bindingId,
+        this.workspaceFileStore,
+        this.settingsStore,
+      );
       const service = await CardAgentSessionService.restore(
         {
           adapter,
+          attachmentStore,
           executor: this.executorFactory(profile),
           contextWindow: this.profileContextWindow(profile),
           lock: this.lock,
@@ -286,6 +315,8 @@ export class DreamCardAgentRuntime {
           onUpdate: view => this.updateService(view),
           requestToolApproval: request => this.requestToolConfirmation(request),
           snapshots: new ContentAddressedSnapshotStore(snapshotBlobs),
+          workspaceFiles: await this.workspaceFileStore.project(current.character.bindingId, sessionId),
+          workspaceStore: this.workspaceFileStore,
         },
         revision.runtime,
         revision.workingCopy,
@@ -389,6 +420,7 @@ export class DreamCardAgentRuntime {
       }
       const removed = await this.characterStore.removeSession(character.bindingId, sessionId);
       if (!removed) throw new Error(`会话不存在：${sessionId}`);
+      await this.workspaceFileStore.releaseSession(character.bindingId, sessionId);
       this.services.delete(sessionId);
       delete this.state.sessionStatuses[sessionId];
       if (this.activeService?.sessionId === sessionId) {
@@ -408,6 +440,7 @@ export class DreamCardAgentRuntime {
       );
       if (running) throw new Error('当前角色仍有运行中的会话，请先停止任务。');
       await this.characterStore.removeCharacter(character.bindingId);
+      await this.workspaceFileStore.resetCharacter(character.bindingId);
       for (const [id, service] of this.services) {
         if (service.view().bindingId === character.bindingId) this.services.delete(id);
       }
@@ -456,12 +489,76 @@ export class DreamCardAgentRuntime {
         });
         cleanedSessions += 1;
       }
-      removedFiles = (
+      removedFiles = await this.workspaceFileStore.clearCache(character.bindingId);
+      removedFiles += (
         await new FileRegistryGarbageCollector(this.fileClient, this.settingsStore, this.now).collect([], 0)
       ).length;
       await this.reloadCharacterSessions();
     });
     return { cleanedSessions, removedFiles };
+  }
+
+  storageOverview(): CharacterFileStorageSummary[] {
+    return this.workspaceFileStore.summaries();
+  }
+
+  async clearCharacterCache(bindingId: string): Promise<number> {
+    return this.runStorageAction([bindingId], async () => this.workspaceFileStore.clearCache(bindingId));
+  }
+
+  async clearAllCache(): Promise<number> {
+    return this.runStorageAction(undefined, async () => this.workspaceFileStore.clearCache());
+  }
+
+  async clearCharacterAttachments(bindingId: string): Promise<number> {
+    return this.runStorageAction([bindingId], async () => this.workspaceFileStore.clearAttachments(bindingId));
+  }
+
+  async clearAllAttachments(): Promise<number> {
+    return this.runStorageAction(undefined, async () => this.workspaceFileStore.clearAttachments());
+  }
+
+  async removeManagedFile(fileId: string): Promise<void> {
+    const file = this.workspaceFileStore.getReference(fileId);
+    if (!file) return;
+    await this.runStorageAction([file.bindingId], async () => {
+      await this.workspaceFileStore.removeImmediately(fileId);
+    });
+  }
+
+  async resetCharacterData(bindingId: string): Promise<void> {
+    await this.runStorageAction([bindingId], async () => {
+      await this.characterStore.removeCharacter(bindingId).catch(() => []);
+      await this.workspaceFileStore.resetCharacter(bindingId);
+      const settings = this.settingsStore.load();
+      const legacy = Object.entries(settings.files).filter(([, file]) => file.bindingId === bindingId);
+      legacy.forEach(([key]) => delete settings.files[key]);
+      await this.settingsStore.save(settings);
+      for (const [, file] of legacy) await this.fileClient.delete(file.url).catch(() => undefined);
+      this.unloadCharacterServices(bindingId);
+    });
+  }
+
+  async resetAllData(): Promise<void> {
+    const settings = this.settingsStore.load();
+    const bindings = [...new Set([
+      ...Object.keys(settings.characterStores),
+      ...this.workspaceFileStore.listReferences().map(file => file.bindingId),
+    ])];
+    await this.runStorageAction(undefined, async () => {
+      for (const bindingId of bindings) {
+        await this.characterStore.removeCharacter(bindingId).catch(() => []);
+        await this.workspaceFileStore.resetCharacter(bindingId);
+        this.unloadCharacterServices(bindingId);
+      }
+      const latest = this.settingsStore.load();
+      const legacy = Object.entries(latest.files).filter(([, file]) => file.bindingId !== 'global');
+      legacy.forEach(([key]) => delete latest.files[key]);
+      await this.settingsStore.save(latest);
+      for (const [, file] of legacy) await this.fileClient.delete(file.url).catch(() => undefined);
+      this.state.sessions = [];
+      this.state.storage.currentCharacterBytes = 0;
+    });
   }
 
   async saveGlobalSkill(skill: AgentSkill): Promise<AgentSkill> {
@@ -699,6 +796,7 @@ export class DreamCardAgentRuntime {
   }
 
   async updateSettings(input: {
+    compressImages?: boolean;
     dangerousNonCharacterResourceWrites?: boolean;
     developerMode?: boolean;
     floatingButton?: boolean;
@@ -708,6 +806,7 @@ export class DreamCardAgentRuntime {
     sendWithCtrlEnter?: boolean;
   }): Promise<void> {
     const settings = this.settingsStore.load();
+    if (input.compressImages !== undefined) settings.compressImages = input.compressImages;
     if (input.dangerousNonCharacterResourceWrites !== undefined) {
       if (!settings.developerMode && input.dangerousNonCharacterResourceWrites) {
         throw new Error('请先开启开发者模式，再启用非角色正则与脚本写入权限。');
@@ -774,8 +873,11 @@ export class DreamCardAgentRuntime {
     if (changed) await this.characterStore.save(metadata);
     this.state.sessions = Object.values(metadata.sessions).sort((left, right) => right.updatedAt - left.updatedAt);
     const reference = this.settingsStore.load().characterStores[current.character.bindingId];
+    const workspaceBytes = this.workspaceFileStore
+      .listReferences(current.character.bindingId)
+      .reduce((total, file) => total + file.size, 0);
     this.state.storage.currentCharacterBytes =
-      (reference?.size ?? 0) + this.state.sessions.reduce((total, session) => total + session.size, 0);
+      (reference?.size ?? 0) + this.state.sessions.reduce((total, session) => total + session.size, 0) + workspaceBytes;
     this.reloadSettingsState();
   }
 
@@ -789,8 +891,11 @@ export class DreamCardAgentRuntime {
       });
       this.state.sessions = Object.values(metadata.sessions).sort((left, right) => right.updatedAt - left.updatedAt);
       const reference = this.settingsStore.load().characterStores[character.bindingId];
+      const workspaceBytes = this.workspaceFileStore
+        .listReferences(character.bindingId)
+        .reduce((total, file) => total + file.size, 0);
       this.state.storage.currentCharacterBytes =
-        (reference?.size ?? 0) + this.state.sessions.reduce((total, session) => total + session.size, 0);
+        (reference?.size ?? 0) + this.state.sessions.reduce((total, session) => total + session.size, 0) + workspaceBytes;
       this.emit();
     } catch (error) {
       this.addDebug('warn', '读取角色会话索引失败', { error: error instanceof Error ? error.message : String(error) });
@@ -864,6 +969,39 @@ export class DreamCardAgentRuntime {
     }
   }
 
+  private async runStorageAction<T>(bindingIds: string[] | undefined, action: () => Promise<T>): Promise<T> {
+    let result!: T;
+    await this.run(async () => {
+      const affected = bindingIds ? new Set(bindingIds) : undefined;
+      const running = [...this.services.values()].some(service => {
+        const view = service.view();
+        return (!affected || affected.has(view.bindingId)) && isSessionOperationActive(view.status);
+      });
+      if (running) throw new Error('受影响的角色仍有运行中的会话，请先停止Agent。');
+      result = await action();
+      for (const service of this.services.values()) {
+        if (!affected || affected.has(service.view().bindingId)) await service.refreshManagedFiles();
+      }
+      this.reloadSettingsState();
+      await this.reloadCharacterSessions();
+      this.emit();
+    });
+    return result;
+  }
+
+  private unloadCharacterServices(bindingId: string): void {
+    for (const [sessionId, service] of this.services) {
+      if (service.view().bindingId !== bindingId) continue;
+      this.services.delete(sessionId);
+      delete this.state.sessionStatuses[sessionId];
+    }
+    if (this.activeService?.view().bindingId === bindingId) {
+      this.activeService = undefined;
+      this.state.active = undefined;
+    }
+    this.state.loadedSessionIds = [...this.services.keys()];
+  }
+
   private assertProfileSwitchAllowed(): void {
     if ([...this.services.values()].some(service => ['running', 'waiting-approval'].includes(service.view().status))) {
       throw new Error('Agent运行期间不能切换API Profile。');
@@ -915,6 +1053,7 @@ export class DreamCardAgentRuntime {
     this.state.activeProfileId = settings.activeProfileId;
     this.state.activePresetId = settings.activePresetId;
     this.state.agentConfigurations = settings.agentConfigurations;
+    this.state.compressImages = settings.compressImages;
     this.state.developerMode = settings.developerMode;
     this.state.dangerousNonCharacterResourceWrites = settings.dangerousNonCharacterResourceWrites;
     this.state.floatingButton = settings.floatingButton;
@@ -927,6 +1066,7 @@ export class DreamCardAgentRuntime {
     this.state.storage.globalSkillBytes = Object.values(settings.files)
       .filter(file => file.bindingId === 'global')
       .reduce((total, file) => total + file.size, 0);
+    this.state.storage.characters = this.workspaceFileStore.summaries();
     this.emit();
   }
 

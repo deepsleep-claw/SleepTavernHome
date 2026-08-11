@@ -32,16 +32,16 @@ describe('Tavern file clients', () => {
     await expect(client.upload('a', Uint8Array.of())).rejects.toThrow('缺少path');
   });
 
-  it('内容Blob去重、计量角色配额并维护文件索引', async () => {
+  it('内容Blob去重且不设置角色级配额，并维护文件索引', async () => {
     const client = new MemoryTavernFileClient();
     const settings = new MemoryAgentSettingsStore();
-    const store = new FileBackedBlobStore('role/one', client, settings, 5, () => 12);
+    const store = new FileBackedBlobStore('role/one', client, settings, () => 12);
     await store.put('hash-a', Uint8Array.of(1, 2, 3));
     await store.put('hash-a', Uint8Array.of(9));
     expect(client.uploadedNames).toHaveLength(1);
     expect(await store.get('hash-a')).toEqual(Uint8Array.of(1, 2, 3));
     expect(await store.keys()).toEqual(['hash-a']);
-    await expect(store.put('hash-b', Uint8Array.of(4, 5, 6))).rejects.toThrow('配额');
+    await expect(store.put('hash-b', Uint8Array.of(4, 5, 6))).resolves.toBeUndefined();
     await store.delete('hash-a');
     expect(await store.get('hash-a')).toBeUndefined();
     await expect(store.delete('missing')).resolves.toBeUndefined();
