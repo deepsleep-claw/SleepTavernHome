@@ -728,13 +728,36 @@ export class CardAgentSessionService {
   async approve(decisions: Record<string, ApprovalDecision>): Promise<SessionView> {
     if (!this.pending) throw new Error('当前没有待批准的修改。');
     const midRun = this.pending.midRun === true;
+    const retryState = midRun
+      ? undefined
+      : {
+          activeBase: this.activeBase ? klona(this.activeBase) : undefined,
+          activeCheckpointId: this.activeCheckpointId,
+          history: this.timeline.export(),
+          pending: klona(this.pending),
+          warnings: [...this.warnings],
+          workingFiles: this.repository?.snapshot() ?? [],
+        };
     this.lock.acquire(this.sessionId);
     try {
-      await this.applyApproval(decisions);
       try {
+        await this.applyApproval(decisions);
         await this.persist();
       } catch (error) {
-        if (midRun) this.midRunCheckpointOutcome = false;
+        if (midRun) {
+          this.midRunCheckpointOutcome = false;
+        } else if (retryState) {
+          this.timeline = new HistoryTimeline({ ...retryState.history, now: this.now });
+          this.pending = retryState.pending;
+          this.activeBase = retryState.activeBase;
+          this.activeCheckpointId = retryState.activeCheckpointId;
+          this.repository = this.createRestoredRepository(retryState.pending.base, retryState.workingFiles);
+          this.status = 'failed';
+          this.lastError = `应用结果未能完整保存：${error instanceof Error ? error.message : String(error)}`;
+          this.warnings = retryState.warnings;
+          this.syncUiVisibility();
+          this.notify();
+        }
         throw error;
       } finally {
         if (midRun) this.flushMidRunCheckpoint();

@@ -75,6 +75,7 @@ const canSend = computed(() =>
   Boolean(
     state.value.activeSessionAccess === 'live' &&
     state.value.active &&
+    !state.value.busy &&
     ['completed', 'idle'].includes(state.value.active.status) &&
     !state.value.active.approval,
   ),

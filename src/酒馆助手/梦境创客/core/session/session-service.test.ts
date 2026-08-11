@@ -821,6 +821,38 @@ describe('card agent session service', () => {
     expect(result.approval).toBeDefined();
     expect((await adapter.read()).character.fields.description).toBe('base description');
     expect(waiting.status).toBe('awaiting-approval');
+
+    const retried = await service.approve({ '/character/fields/description': 'agent' });
+    expect(retried).toMatchObject({ approval: undefined, error: undefined, status: 'completed' });
+    expect((await adapter.read()).character.fields.description).toBe('不会落地');
+  });
+
+  it('应用已写回但会话保存失败时保留候选并允许再次应用', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    let persistCount = 0;
+    const service = await CardAgentSessionService.create({
+      adapter,
+      executor: new QueueExecutor([step([writeDescription('重试后保留')]), step()]),
+      lock: new GlobalAgentTaskLock(),
+      onPersist: async () => {
+        persistCount += 1;
+        if (persistCount === 2) throw new Error('upload failed');
+      },
+      snapshots: snapshots(),
+    });
+    expect((await service.send('修改')).status).toBe('awaiting-approval');
+
+    await expect(service.approve({ '/character/fields/description': 'agent' })).rejects.toThrow('upload failed');
+    expect(service.view()).toMatchObject({
+      approval: expect.any(Object),
+      error: expect.stringContaining('应用结果未能完整保存'),
+      status: 'failed',
+    });
+    expect((await adapter.read()).character.fields.description).toBe('重试后保留');
+
+    const retried = await service.approve({ '/character/fields/description': 'agent' });
+    expect(retried).toMatchObject({ approval: undefined, error: undefined, status: 'completed' });
+    expect(persistCount).toBe(3);
   });
 
   it('玩家编辑立即写入实际数据，连续保存合并为单一可回退检查点与内部消息', async () => {
@@ -937,9 +969,10 @@ describe('card agent session service', () => {
   });
 
   it('失败原因可以持久化，失败轮次禁止叠加消息且回退后可重新发送', async () => {
-    let persisted:
-      Parameters<NonNullable<Parameters<typeof CardAgentSessionService.create>[0]['onPersist']>>[0] | undefined;
+    let persistedRuntime: PersistedSessionRuntime | undefined;
+    let persistedFiles: WorkspaceFile[] = [];
     const adapter = new MemoryCardStateAdapter(transactionState());
+    const snapshotStore = snapshots();
     const service = await CardAgentSessionService.create({
       adapter,
       executor: new QueueExecutor([
@@ -948,16 +981,40 @@ describe('card agent session service', () => {
         },
       ]),
       lock: new GlobalAgentTaskLock(),
-      onPersist: async runtime => {
-        persisted = structuredClone(runtime);
+      mode: 'yolo',
+      onPersist: async (runtime, files) => {
+        persistedRuntime = structuredClone(runtime);
+        persistedFiles = structuredClone(files);
       },
-      snapshots: snapshots(),
+      snapshots: snapshotStore,
     });
     const failed = await service.send('触发失败', 'failed-user');
     expect(failed).toMatchObject({ error: 'provider failed', status: 'failed' });
-    expect(persisted).toMatchObject({ lastError: 'provider failed', status: 'failed' });
+    expect(persistedRuntime).toMatchObject({ lastError: 'provider failed', status: 'failed' });
     await expect(service.send('不应叠加')).rejects.toThrow('当前轮次尚未结束');
-    await service.undoToUserMessage('failed-user');
-    expect(service.view()).toMatchObject({ error: undefined, status: 'completed' });
+
+    const restored = await CardAgentSessionService.restore(
+      {
+        adapter,
+        executor: new QueueExecutor([step([], '重新发送成功')]),
+        lock: new GlobalAgentTaskLock(),
+        onPersist: async (runtime, files) => {
+          persistedRuntime = structuredClone(runtime);
+          persistedFiles = structuredClone(files);
+        },
+        snapshots: snapshotStore,
+      },
+      persistedRuntime!,
+      persistedFiles,
+    );
+    await restored.undoToUserMessage('failed-user');
+    expect(restored.view()).toMatchObject({ error: undefined, status: 'completed' });
+    expect(persistedRuntime).toMatchObject({
+      activeBase: undefined,
+      activeCheckpointId: undefined,
+      lastError: undefined,
+      status: 'completed',
+    });
+    expect((await restored.resend('failed-user')).status).toBe('completed');
   });
 });

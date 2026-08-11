@@ -48,6 +48,30 @@ describe('history timeline', () => {
     expect(timeline.cleanupAbandoned()).toEqual(['c2']);
   });
 
+  it('回退未完成检查点后允许从该消息重新建立分支', () => {
+    const timeline = new HistoryTimeline({ now: () => 100 });
+    timeline.beginTurn({
+      beforeAgentCursor: 0,
+      beforeSnapshot: 'before-failed',
+      id: 'failed-turn',
+      userMessageId: 'failed-user',
+    });
+
+    expect(timeline.undoToUserMessage('failed-user')).toMatchObject({ snapshot: 'before-failed' });
+    expect(() =>
+      timeline.beginTurn({
+        beforeAgentCursor: 0,
+        beforeSnapshot: 'before-retry',
+        id: 'retry-turn',
+        userMessageId: 'failed-user',
+      }),
+    ).not.toThrow();
+    expect(timeline.export().checkpoints).toEqual([
+      expect.objectContaining({ active: false, id: 'failed-turn', status: 'running' }),
+      expect.objectContaining({ active: true, id: 'retry-turn', status: 'running' }),
+    ]);
+  });
+
   it('异常中断回到执行前状态，且不允许同时创建两个运行点', () => {
     const timeline = new HistoryTimeline();
     const running = timeline.beginTurn({ beforeAgentCursor: 4, beforeSnapshot: 'base', id: 'running', userMessageId: 'u' });

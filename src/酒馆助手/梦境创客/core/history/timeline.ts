@@ -49,10 +49,12 @@ export class HistoryTimeline {
     id?: string;
     userMessageId: string;
   }): HistoryCheckpoint {
+    // 从旧检查点回退后发送新消息会覆盖其后的分支。必须先废弃未来分支，
+    // 否则其中尚未完成的检查点会被误判成“当前仍有任务在运行”。
+    this.abandonFuture();
     if (this.checkpoints.some(item => item.active && item.status === 'running')) {
       throw new Error('已有正在执行的历史检查点。');
     }
-    this.abandonFuture();
     const checkpoint: HistoryCheckpoint = {
       active: true,
       beforeAgentCursor: input.beforeAgentCursor,
