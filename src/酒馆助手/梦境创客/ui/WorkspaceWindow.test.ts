@@ -7,7 +7,7 @@ const mock = vi.hoisted(() => {
   let subscriber: ((state: unknown) => void) | undefined;
   const state = {
     active: {
-      agentConfiguration: { id: 'agent:default', name: '默认 Agent', presetId: 'preset', skillIds: [] },
+      agentConfiguration: { id: 'agent:default', name: '梦境创客默认 Agent', presetId: 'preset', skillIds: [] },
       bindingId: 'binding-test',
       characterName: '测试角色',
       contextUsage: {
@@ -107,7 +107,7 @@ const mock = vi.hoisted(() => {
     activeSessionAccess: 'live',
     activeProfileId: 'profile',
     activePresetId: 'preset',
-    agentConfigurations: [{ id: 'agent:default', name: '默认 Agent', presetId: 'preset', skillIds: [] }],
+    agentConfigurations: [{ id: 'agent:default', name: '梦境创客默认 Agent', presetId: 'preset', skillIds: [] }],
     busy: false,
     characterGroups: [] as any[],
     currentCharacter: { avatarId: 'avatar', bindingId: 'binding-test', name: '测试角色' },
@@ -371,15 +371,21 @@ describe('WorkspaceWindow', () => {
     )!;
     agentSection.click();
     await nextTick();
-    expect(root.querySelector<HTMLInputElement>('input[maxlength="80"]')?.value).toBe('默认 Agent');
+    expect(root.querySelector<HTMLInputElement>('input[maxlength="80"]')?.value).toBe('梦境创客默认 Agent');
+    expect(root.querySelector<HTMLInputElement>('input[maxlength="80"]')?.disabled).toBe(true);
     expect(root.querySelector('.dca-agent-skill-panel')).not.toBeNull();
     const skillSaveCalls = mock.runtime.saveGlobalSkill.mock.calls.length;
+    const saveAsBuiltin = [...root.querySelectorAll<HTMLButtonElement>('.dca-resource-savebar button')].find(button =>
+      button.textContent?.includes('另存为自定义Agent'),
+    )!;
+    saveAsBuiltin.click();
+    await nextTick();
     const saveConfiguration = [...root.querySelectorAll<HTMLButtonElement>('.dca-resource-savebar button')].find(
       button => button.textContent?.trim() === '保存配置',
     )!;
     saveConfiguration.click();
     expect(mock.runtime.saveAgentConfiguration).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'agent:default', skillIds: [] }),
+      expect.objectContaining({ id: expect.stringMatching(/^agent:/u), name: '梦境创客默认 Agent 副本', skillIds: [] }),
     );
     expect(mock.runtime.saveGlobalSkill).toHaveBeenCalledTimes(skillSaveCalls);
 

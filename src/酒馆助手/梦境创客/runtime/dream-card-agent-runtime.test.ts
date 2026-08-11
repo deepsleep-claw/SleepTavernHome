@@ -177,6 +177,20 @@ describe('DreamCardAgentRuntime', () => {
     runtime.destroy();
   });
 
+  it('内置Agent随脚本提供且不可编辑或删除', async () => {
+    const runtime = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+      executorFactory: () => new QueueExecutor([]),
+      fileClient: new MemoryTavernFileClient(),
+      settingsStore: new MemoryAgentSettingsStore(),
+    });
+    const builtin = runtime.snapshot().agentConfigurations[0];
+    expect(builtin).toMatchObject({ id: 'agent:default', name: '梦境创客默认 Agent' });
+    await expect(runtime.saveAgentConfiguration({ ...builtin, name: '被修改' })).rejects.toThrow('内置Agent不可编辑');
+    await expect(runtime.removeAgentConfiguration(builtin.id)).rejects.toThrow('内置Agent不可删除');
+    runtime.destroy();
+  });
+
   it('全局Skill跨运行时复用，已打开会话从下一条消息开始挂载新版', async () => {
     const settings = new MemoryAgentSettingsStore();
     const files = new MemoryTavernFileClient();

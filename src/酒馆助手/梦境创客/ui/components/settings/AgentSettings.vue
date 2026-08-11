@@ -19,11 +19,13 @@
       </label>
       <div class="dca-row-actions">
         <button type="button" @click="newConfiguration">新建</button>
-        <button type="button" :disabled="!draft" @click="copyConfiguration">复制</button>
+        <button type="button" :disabled="!draft" @click="copyConfiguration">
+          {{ isBuiltinConfiguration ? '另存为' : '复制' }}
+        </button>
         <button
           class="dca-btn-danger"
           type="button"
-          :disabled="state.agentConfigurations.length <= 1"
+          :disabled="isBuiltinConfiguration || state.agentConfigurations.length <= 1"
           @click="removeConfiguration"
         >
           删除配置
@@ -34,12 +36,17 @@
     <template v-if="draft">
       <div class="dca-form-grid">
         <label class="dca-field">
-          <span>配置名称</span>
-          <input v-model="draft.name" type="text" maxlength="80" />
+          <span>配置名称 <small v-if="isBuiltinConfiguration">内置 · 随脚本更新 · 只读</small></span>
+          <input v-model="draft.name" type="text" maxlength="80" :disabled="isBuiltinConfiguration" />
         </label>
         <label class="dca-field">
           <span>结构化预设</span>
-          <DcaSelect v-model="draft.presetId" aria-label="结构化预设" :options="presetOptions" />
+          <DcaSelect
+            v-model="draft.presetId"
+            aria-label="结构化预设"
+            :disabled="isBuiltinConfiguration"
+            :options="presetOptions"
+          />
         </label>
       </div>
 
@@ -66,6 +73,7 @@
           <DcaSwitch
             :label="`${skill.name} Skill`"
             :model-value="draft.skillIds.includes(skill.id)"
+            :disabled="isBuiltinConfiguration"
             @update:model-value="toggleSkill(skill.id, $event)"
           />
         </div>
@@ -73,11 +81,19 @@
       </section>
 
       <div class="dca-resource-savebar">
-        <span>保存后用于之后创建的新会话；不会暗中改写已有会话。</span>
-        <button type="button" @click="saveConfiguration">保存配置</button>
-        <button class="dca-btn-primary" type="button" :disabled="!state.active" @click="saveAndApply">
+        <span v-if="isBuiltinConfiguration">内置Agent由源码文件定义；需要调整时请先另存为自定义配置。</span>
+        <span v-else>保存后用于之后创建的新会话；不会暗中改写已有会话。</span>
+        <button v-if="!isBuiltinConfiguration" type="button" @click="saveConfiguration">保存配置</button>
+        <button
+          v-if="!isBuiltinConfiguration"
+          class="dca-btn-primary"
+          type="button"
+          :disabled="!state.active"
+          @click="saveAndApply"
+        >
           保存并应用到当前会话
         </button>
+        <button v-else class="dca-btn-primary" type="button" @click="copyConfiguration">另存为自定义Agent</button>
       </div>
       <p v-if="state.active" class="dca-muted-note">
         当前会话固定使用“{{ state.active.agentConfiguration?.name ?? '旧版会话配置' }}”，挂载
@@ -89,15 +105,19 @@
 
 <script setup lang="ts">
 import { computed, ref, toRaw, watch } from 'vue';
-import type { AgentConfiguration } from '../../../core/persistence/settings';
+import { DEFAULT_AGENT_CONFIGURATION_ID, type AgentConfiguration } from '../../../core/persistence/settings';
 import { useDreamCardAgent } from '../../composables/runtime';
 import DcaSelect from '../DcaSelect.vue';
 import DcaSwitch from '../DcaSwitch.vue';
 
 const { action, runtime, state } = useDreamCardAgent();
 const draft = ref<AgentConfiguration>();
+const isBuiltinConfiguration = computed(() => draft.value?.id === DEFAULT_AGENT_CONFIGURATION_ID);
 const configurationOptions = computed(() =>
-  state.value.agentConfigurations.map(configuration => ({ label: configuration.name, value: configuration.id })),
+  state.value.agentConfigurations.map(configuration => ({
+    label: `${configuration.name}${configuration.id === DEFAULT_AGENT_CONFIGURATION_ID ? ' · 内置' : ''}`,
+    value: configuration.id,
+  })),
 );
 const presetOptions = computed(() =>
   state.value.presetProfiles.map(preset => ({
@@ -129,10 +149,11 @@ async function selectConfiguration(id: string) {
 }
 
 function newConfiguration() {
+  const selectedPresetId = draft.value?.presetId ?? state.value.activePresetId;
   draft.value = {
     id: `agent:${crypto.randomUUID()}`,
     name: '新 Agent',
-    presetId: state.value.activePresetId,
+    presetId: selectedPresetId,
     skillIds: [],
   };
 }
@@ -147,7 +168,7 @@ function copyConfiguration() {
 }
 
 function toggleSkill(id: string, enabled: boolean) {
-  if (!draft.value) return;
+  if (!draft.value || isBuiltinConfiguration.value) return;
   draft.value.skillIds = enabled
     ? [...new Set([...draft.value.skillIds, id])]
     : draft.value.skillIds.filter(skillId => skillId !== id);

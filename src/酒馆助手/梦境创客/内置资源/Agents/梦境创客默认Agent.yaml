@@ -1,0 +1,5 @@
+id: agent:default
+name: 梦境创客默认 Agent
+version: 1
+preset: dream-card-agent-default
+skills: []

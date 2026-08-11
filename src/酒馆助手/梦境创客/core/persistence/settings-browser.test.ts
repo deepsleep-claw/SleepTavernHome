@@ -79,9 +79,12 @@ describe('tavern settings cross-window cache', () => {
     };
     SillyTavern.extensionSettings['dream-card-agent'] = legacy;
     const store = new TavernAgentSettingsStore();
-    expect(store.load().agentConfigurations).toEqual([
-      expect.objectContaining({ name: '默认 Agent', skillIds: ['writer'] }),
+    const settings = store.load();
+    expect(settings.agentConfigurations).toEqual([
+      expect.objectContaining({ id: 'agent:default', name: '梦境创客默认 Agent', skillIds: [] }),
+      expect.objectContaining({ id: 'agent:migrated', name: '迁移的 Agent 配置', skillIds: ['writer'] }),
     ]);
+    expect(settings.activeAgentConfigurationId).toBe('agent:migrated');
     store.destroy();
   });
 });

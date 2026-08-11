@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PRESET } from '../preset/compiler';
+import { DEFAULT_BUILTIN_AGENT } from './builtin-agent';
 import {
   DEFAULT_DREAM_CARD_AGENT_SETTINGS,
   mergeSettingsChanges,
@@ -83,5 +84,36 @@ describe('settings cross-window merge', () => {
     const normalized = normalizeSettings(raw);
     expect(normalized.presetProfiles[0]).toEqual(DEFAULT_PRESET);
     expect(normalized.presetProfiles[1].id).toBe('preset:user');
+  });
+
+  it('始终用当前脚本内置Agent替换设置中的旧默认副本', () => {
+    const raw = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS);
+    raw.agentConfigurations = [
+      { id: DEFAULT_BUILTIN_AGENT.id, name: '旧默认名称', presetId: DEFAULT_PRESET.id, skillIds: [] },
+      { id: 'agent:user', name: '用户 Agent', presetId: DEFAULT_PRESET.id, skillIds: [] },
+    ];
+    const normalized = normalizeSettings(raw);
+    expect(normalized.agentConfigurations[0]).toEqual({
+      id: DEFAULT_BUILTIN_AGENT.id,
+      name: DEFAULT_BUILTIN_AGENT.name,
+      presetId: DEFAULT_BUILTIN_AGENT.presetId,
+      skillIds: DEFAULT_BUILTIN_AGENT.skillIds,
+    });
+    expect(normalized.agentConfigurations[1].id).toBe('agent:user');
+  });
+
+  it('把用户改过的旧默认Agent另存保留，同时恢复只读内置Agent', () => {
+    const raw = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS);
+    raw.agentConfigurations = [
+      { id: DEFAULT_BUILTIN_AGENT.id, name: '我的默认Agent', presetId: DEFAULT_PRESET.id, skillIds: ['writer'] },
+    ];
+    raw.activeAgentConfigurationId = DEFAULT_BUILTIN_AGENT.id;
+    const normalized = normalizeSettings(raw);
+    expect(normalized.agentConfigurations.map(configuration => configuration.id)).toEqual([
+      DEFAULT_BUILTIN_AGENT.id,
+      'agent:preserved-default',
+    ]);
+    expect(normalized.activeAgentConfigurationId).toBe('agent:preserved-default');
+    expect(normalized.agentConfigurations[1]).toMatchObject({ name: '我的默认Agent（已保留）', skillIds: ['writer'] });
   });
 });

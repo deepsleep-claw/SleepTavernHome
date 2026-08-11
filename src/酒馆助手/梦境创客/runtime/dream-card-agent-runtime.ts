@@ -15,6 +15,7 @@ import { FileRegistryGarbageCollector } from '../core/persistence/garbage-collec
 import { SessionPersistenceCoordinator } from '../core/persistence/session-persistence';
 import { SessionRevisionStore } from '../core/persistence/session-store';
 import {
+  DEFAULT_AGENT_CONFIGURATION_ID,
   TavernAgentSettingsStore,
   type AgentConfiguration,
   type AgentSettingsStore,
@@ -746,6 +747,9 @@ export class DreamCardAgentRuntime {
   }
 
   async saveAgentConfiguration(input: AgentConfiguration): Promise<AgentConfiguration> {
+    if (input.id === DEFAULT_AGENT_CONFIGURATION_ID) {
+      throw new Error('内置Agent不可编辑，请先另存为新的Agent配置。');
+    }
     const settings = this.settingsStore.load();
     const name = input.name.trim();
     if (!name) throw new Error('Agent配置名称不能为空。');
@@ -779,6 +783,7 @@ export class DreamCardAgentRuntime {
   }
 
   async removeAgentConfiguration(id: string): Promise<void> {
+    if (id === DEFAULT_AGENT_CONFIGURATION_ID) throw new Error('内置Agent不可删除。');
     const settings = this.settingsStore.load();
     if (settings.agentConfigurations.length <= 1) throw new Error('至少需要保留一套Agent配置。');
     const next = settings.agentConfigurations.filter(configuration => configuration.id !== id);

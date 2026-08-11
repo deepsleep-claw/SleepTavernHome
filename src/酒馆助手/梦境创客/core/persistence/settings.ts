@@ -1,5 +1,12 @@
 import { normalizeApiProfile, type ApiProfile } from '../provider/profiles';
 import { cloneStructuredPreset, DEFAULT_PRESET, type StructuredPreset } from '../preset/compiler';
+import {
+  DEFAULT_BUILTIN_AGENT,
+  defaultBuiltinAgentConfiguration,
+  type AgentConfiguration,
+} from './builtin-agent';
+
+export type { AgentConfiguration } from './builtin-agent';
 
 export type FloatingButtonAnchor =
   | 'bottom-center'
@@ -70,14 +77,6 @@ export type GlobalSkillFileIndexEntry = {
   url: string;
 };
 
-export type AgentConfiguration = {
-  id: string;
-  name: string;
-  presetId: string;
-  /** 这套配置中开启的用户Skill；内置Skill始终挂载。 */
-  skillIds: string[];
-};
-
 export type SessionIndexEntry = {
   avatarId?: string;
   bindingId: string;
@@ -127,21 +126,12 @@ export type DreamCardAgentSettings = {
   workspaceFiles: Record<string, DreamCreatorWorkspaceFileReference>;
 };
 
-export const DEFAULT_AGENT_CONFIGURATION_ID = 'agent:default';
-
-function defaultAgentConfiguration(presetId: string, skillIds: string[] = []): AgentConfiguration {
-  return {
-    id: DEFAULT_AGENT_CONFIGURATION_ID,
-    name: '默认 Agent',
-    presetId,
-    skillIds: [...new Set(skillIds)],
-  };
-}
+export const DEFAULT_AGENT_CONFIGURATION_ID = DEFAULT_BUILTIN_AGENT.id;
 
 export const DEFAULT_DREAM_CARD_AGENT_SETTINGS: DreamCardAgentSettings = {
   activeAgentConfigurationId: DEFAULT_AGENT_CONFIGURATION_ID,
   activePresetId: DEFAULT_PRESET.id,
-  agentConfigurations: [defaultAgentConfiguration(DEFAULT_PRESET.id)],
+  agentConfigurations: [defaultBuiltinAgentConfiguration()],
   characterStores: {},
   compressImages: true,
   developerMode: false,
@@ -205,9 +195,34 @@ export function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamC
   const legacyEnabledSkillIds = Object.values(raw?.globalSkills ?? {})
     .filter(entry => (entry as GlobalSkillIndexEntry & { enabled?: boolean }).enabled !== false)
     .map(entry => entry.id);
-  const sourceConfigurations = raw?.agentConfigurations?.length
-    ? raw.agentConfigurations
-    : [defaultAgentConfiguration(activePresetId, legacyEnabledSkillIds)];
+  const storedConfigurations = raw?.agentConfigurations ?? [];
+  const storedBuiltin = storedConfigurations.find(configuration => configuration.id === DEFAULT_AGENT_CONFIGURATION_ID);
+  const storedBuiltinSkillIds = Array.isArray(storedBuiltin?.skillIds) ? storedBuiltin.skillIds : [];
+  const legacyBuiltinWasCustomized =
+    storedBuiltin !== undefined &&
+    (storedBuiltin.presetId !== DEFAULT_PRESET.id || storedBuiltinSkillIds.length > 0);
+  const migratedLegacyConfiguration: AgentConfiguration | undefined =
+    storedConfigurations.length === 0 && (activePresetId !== DEFAULT_PRESET.id || legacyEnabledSkillIds.length > 0)
+      ? {
+          id: 'agent:migrated',
+          name: '迁移的 Agent 配置',
+          presetId: activePresetId,
+          skillIds: legacyEnabledSkillIds,
+        }
+      : legacyBuiltinWasCustomized
+        ? {
+            ...storedBuiltin,
+            id: 'agent:preserved-default',
+            name: `${storedBuiltin.name || '旧默认 Agent'}（已保留）`,
+            skillIds: storedBuiltinSkillIds,
+          }
+        : undefined;
+  const sourceConfigurations = [
+    defaultBuiltinAgentConfiguration(),
+    ...storedConfigurations.filter(configuration => configuration.id !== DEFAULT_AGENT_CONFIGURATION_ID),
+    ...(migratedLegacyConfiguration ? [migratedLegacyConfiguration] : []),
+  ];
+  const seenConfigurationIds = new Set<string>();
   const agentConfigurations = sourceConfigurations.map((configuration, index) => ({
     id:
       typeof configuration.id === 'string' && configuration.id.trim()
@@ -223,12 +238,18 @@ export function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamC
     skillIds: [
       ...new Set((Array.isArray(configuration.skillIds) ? configuration.skillIds : []).filter(id => typeof id === 'string')),
     ],
-  }));
-  const activeAgentConfigurationId = agentConfigurations.some(
-    configuration => configuration.id === raw?.activeAgentConfigurationId,
-  )
-    ? raw!.activeAgentConfigurationId!
-    : agentConfigurations[0].id;
+  })).filter(configuration => {
+    if (seenConfigurationIds.has(configuration.id)) return false;
+    seenConfigurationIds.add(configuration.id);
+    return true;
+  });
+  const requestedActiveId =
+    raw?.activeAgentConfigurationId === DEFAULT_AGENT_CONFIGURATION_ID && legacyBuiltinWasCustomized
+      ? migratedLegacyConfiguration?.id
+      : raw?.activeAgentConfigurationId ?? migratedLegacyConfiguration?.id;
+  const activeAgentConfigurationId = agentConfigurations.some(configuration => configuration.id === requestedActiveId)
+    ? requestedActiveId!
+    : DEFAULT_AGENT_CONFIGURATION_ID;
   return {
     ...structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS),
     ...structuredClone(raw ?? {}),
