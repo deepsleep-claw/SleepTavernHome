@@ -416,6 +416,30 @@ describe('card workspace mapper', () => {
     );
   });
 
+  it('拒绝修改既有世界书book.yaml的内部元数据，但允许通过移动目录重命名', async () => {
+    const base = state();
+    const files = projectCardWorkspace(base);
+    const bookFile = files.find(item => item.resourceId === 'worldbook:book-academy:metadata')!;
+    const metadata = parseYamlObject(bookFile.content, bookFile.path);
+    metadata.unknown_fields = { injected: true };
+    bookFile.content = serializeYaml(metadata);
+    expect(() => materializeCardWorkspace(base, files)).toThrowError(
+      expect.objectContaining({ code: 'READ_ONLY_PATH', path: bookFile.path }),
+    );
+
+    const repository = new MemoryWorkspaceRepository({ files: projectCardWorkspace(base) });
+    await repository.move(
+      `/worldbooks/${encodeWorkspaceSegment('学院')}`,
+      `/worldbooks/${encodeWorkspaceSegment('学院新版')}`,
+      'rename-book',
+    );
+    expect(
+      materializeCardWorkspace(base, repository.snapshot()).state.worldbooks.find(
+        book => book.resourceId === 'book-academy',
+      )?.name,
+    ).toBe('学院新版');
+  });
+
   it('拒绝缺少绑定文件和非字符串绑定', async () => {
     const base = state();
     const workspace = new MemoryWorkspaceRepository({ files: projectCardWorkspace(base) });

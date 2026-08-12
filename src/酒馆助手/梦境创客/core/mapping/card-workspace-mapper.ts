@@ -1,6 +1,7 @@
 import { klona } from 'klona';
 import { normalizeWorkspacePath, parentWorkspacePath, workspaceBasename } from '../workspace/path';
 import { WorkspaceError, type WorkspaceFile } from '../workspace/types';
+import { canonicalEqual } from '../transaction/canonical';
 import {
   materializeTavernResources,
   projectTavernResources,
@@ -462,7 +463,22 @@ function materializeBooks(base: CardWorkspaceState, files: Map<string, Workspace
     const metadata = parseYamlObject(metadataFile.content, metadataFile.path);
     const directory = parentWorkspacePath(metadataFile.path);
     const resourceId = requiredString(metadata.resource_id, 'resource_id', metadataFile.path);
-    const baseBook = base.worldbooks.find(book => book.resourceId === resourceId);
+    const projectedResourceId = metadataFile.resourceId.match(/^worldbook:(.*):metadata$/u)?.[1];
+    const baseBook = base.worldbooks.find(book => book.resourceId === (projectedResourceId ?? resourceId));
+    if (baseBook) {
+      const changedInternalMetadata =
+        resourceId !== baseBook.resourceId ||
+        (metadata.name !== undefined && metadata.name !== baseBook.name) ||
+        (metadata.round_trip_safe !== undefined && metadata.round_trip_safe !== baseBook.roundTripSafe) ||
+        (metadata.unknown_fields !== undefined && !canonicalEqual(metadata.unknown_fields, baseBook.unknownFields));
+      if (changedInternalMetadata) {
+        throw new WorkspaceError(
+          'READ_ONLY_PATH',
+          `book.yaml中的resource_id、name、round_trip_safe和unknown_fields是只读元数据；重命名世界书请移动整个目录：${metadataFile.path}`,
+          metadataFile.path,
+        );
+      }
+    }
     const name = decodeWorkspaceSegment(workspaceBasename(directory));
     const entries = [...files.values()]
       .filter(item => parentWorkspacePath(item.path) === `${directory}/entries` && item.path.endsWith('.md'))
@@ -472,8 +488,10 @@ function materializeBooks(base: CardWorkspaceState, files: Map<string, Workspace
       entries,
       name,
       resourceId,
-      roundTripSafe: requiredBoolean(metadata.round_trip_safe ?? true, 'round_trip_safe', metadataFile.path),
-      unknownFields: asRecord(metadata.unknown_fields ?? baseBook?.unknownFields ?? {}, 'unknown_fields', metadataFile.path),
+      roundTripSafe: baseBook?.roundTripSafe ?? requiredBoolean(metadata.round_trip_safe ?? true, 'round_trip_safe', metadataFile.path),
+      unknownFields: klona(
+        baseBook?.unknownFields ?? asRecord(metadata.unknown_fields ?? {}, 'unknown_fields', metadataFile.path),
+      ),
       writable: true,
     });
   }

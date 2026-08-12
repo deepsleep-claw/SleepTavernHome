@@ -292,13 +292,15 @@ describe('ProductionCardStateAdapter', () => {
 
     const refreshed = await adapter.read();
     const book = refreshed.worldbooks[0];
-    await adapter.apply(
-      operation(`/worldbooks/${book.resourceId.replace('/', '~1')}/metadata`, {}, {
-        roundTripSafe: true,
-        unknownFields: { local: true },
-        writable: true,
-      }),
-    );
+    await expect(
+      adapter.apply(
+        operation(`/worldbooks/${book.resourceId.replace('/', '~1')}/metadata`, {}, {
+          roundTripSafe: true,
+          unknownFields: { local: true },
+          writable: true,
+        }),
+      ),
+    ).rejects.toThrow('内部元数据只读');
     await adapter.apply(
       operation(
         `/worldbooks/${book.resourceId.replace('/', '~1')}/entries-order`,

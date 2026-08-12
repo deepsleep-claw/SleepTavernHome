@@ -199,7 +199,9 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
       afterBook.unknownFields = normalizedBook.unknownFields;
       return undefined;
     }
-    if (segments[2] === 'metadata') return undefined;
+    if (segments[2] === 'metadata') {
+      throw new Error('世界书book.yaml的内部元数据只读；重命名世界书请移动整个目录。');
+    }
     if (segments[2] === 'entries-order') {
       const order = new Map(afterBook.entries.map((entry, index) => [entry.resourceId, index]));
       await this.bridge.updateWorldbook(afterBook.name, entries =>
