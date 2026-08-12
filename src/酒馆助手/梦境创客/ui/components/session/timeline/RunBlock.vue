@@ -12,7 +12,12 @@
     </button>
     <div v-show="!collapsed" class="dca-run-content">
       <template v-for="inner in contentBlocks" :key="inner.id">
-        <ToolGroup v-if="inner.type === 'tools'" :items="inner.items" />
+        <ToolGroup
+          v-if="inner.type === 'tools'"
+          :confirmation="confirmation"
+          :items="inner.items"
+          @resolve-confirmation="emit('resolve-confirmation', $event)"
+        />
         <ManualChangeCard v-else-if="inner.item.kind === 'manual'" :item="inner.item" />
         <ReasoningBlock v-else-if="inner.item.kind === 'reasoning'" :item="inner.item" />
         <div v-else class="dca-step-text" :class="{ 'dca-step-text-assistant': inner.item.kind === 'assistant' }">
@@ -35,6 +40,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import type { ToolConfirmation } from '../../../../core/runner/tools';
 import {
   cleanGuidance,
   isMarkdownMessage,
@@ -50,8 +56,8 @@ import ReasoningBlock from './ReasoningBlock.vue';
 import ManualChangeCard from './ManualChangeCard.vue';
 import ToolGroup from './ToolGroup.vue';
 
-const props = defineProps<{ block: RunTimelineBlock; collapsed: boolean }>();
-const emit = defineEmits<{ toggle: [] }>();
+const props = defineProps<{ block: RunTimelineBlock; collapsed: boolean; confirmation?: ToolConfirmation }>();
+const emit = defineEmits<{ 'resolve-confirmation': [approved: boolean]; toggle: [] }>();
 
 const contentBlocks = computed(() => runContentBlocks(props.block.items));
 

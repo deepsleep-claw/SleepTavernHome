@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { createApp, nextTick, reactive } from 'vue';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { SessionUiItem } from '../../../../core/session/types';
 import ReasoningBlock from './ReasoningBlock.vue';
 import RunBlock from './RunBlock.vue';
@@ -109,6 +109,46 @@ describe('timeline cards', () => {
     outputTab?.click();
     await nextTick();
     expect(root.querySelector('.dca-tool-raw-panel pre')?.textContent).toContain('"view": "1 | title');
+  });
+
+  it('把工具审批嵌入对应工具卡并自动展开，决定通过事件上送', async () => {
+    const resolveConfirmation = vi.fn();
+    const items: SessionUiItem[] = [
+      {
+        at: 1,
+        content: '',
+        id: 'tool:create-worldbook',
+        kind: 'tool',
+        status: 'running',
+        toolCallId: 'call:create-worldbook',
+        toolInput: JSON.stringify({ name: '斗破苍穹' }),
+        toolName: 'create_worldbook',
+      },
+    ];
+    const root = mount(ToolGroup, {
+      confirmation: {
+        description: '创建新的可编辑世界书。',
+        intent: { name: '斗破苍穹' },
+        risk: 'ordinary',
+        sessionId: 'session:1',
+        toolCallId: 'call:create-worldbook',
+        toolName: 'create_worldbook',
+      },
+      items,
+      onResolveConfirmation: resolveConfirmation,
+    });
+
+    expect(root.querySelector<HTMLDetailsElement>('.dca-tool-group')?.open).toBe(true);
+    expect(root.querySelector('.dca-tool-confirmation-panel')?.textContent).toContain('Agent 请求执行此工具');
+    expect(root.querySelector('.dca-tool-confirmation-panel')?.textContent).toContain('斗破苍穹');
+    expect(root.querySelector('.dca-tool-confirmation')).toBeNull();
+
+    const approve = [...root.querySelectorAll<HTMLButtonElement>('button')].find(button =>
+      button.textContent?.includes('批准并执行'),
+    );
+    approve?.click();
+    await nextTick();
+    expect(resolveConfirmation).toHaveBeenCalledWith(true);
   });
 
   it('运行块的中途文本不显示梦境创客署名', () => {

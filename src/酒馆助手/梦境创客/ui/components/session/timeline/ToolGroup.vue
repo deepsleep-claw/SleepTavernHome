@@ -1,8 +1,8 @@
 <template>
   <details
     class="dca-step dca-step-tools dca-step-card dca-tool-group"
-    :class="{ 'has-failure': toolGroupHasFailure(items), running: hasRunning }"
-    :open="toolGroupHasFailure(items)"
+    :class="{ 'awaiting-confirmation': hasPendingConfirmation, 'has-failure': toolGroupHasFailure(items), running: hasRunning }"
+    :open="hasPendingConfirmation || toolGroupHasFailure(items)"
   >
     <summary>
       <i class="fa-solid fa-terminal" aria-hidden="true"></i>
@@ -22,7 +22,13 @@
         </template>
       </div>
       <div class="dca-tool-list">
-        <ToolResultCard v-for="tool in items" :key="tool.id" :tool="tool" />
+        <ToolResultCard
+          v-for="tool in items"
+          :key="tool.id"
+          :confirmation="confirmationFor(tool)"
+          :tool="tool"
+          @resolve-confirmation="emit('resolve-confirmation', $event)"
+        />
       </div>
     </div>
   </details>
@@ -30,14 +36,23 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import type { ToolConfirmation } from '../../../../core/runner/tools';
 import type { SessionUiItem } from '../../../../core/session/types';
 import { toolDisplayTitle } from '../../../composables/tool-presentation';
 import { toolGroupHasFailure, toolGroupLabel, toolGroupSummary, toolStatusLabel } from '../../../composables/timeline';
 import ToolResultCard from './ToolResultCard.vue';
 
-const props = defineProps<{ items: SessionUiItem[] }>();
+const props = defineProps<{ confirmation?: ToolConfirmation; items: SessionUiItem[] }>();
+const emit = defineEmits<{ 'resolve-confirmation': [approved: boolean] }>();
 
 const hasRunning = computed(() => props.items.some(item => item.status === 'running'));
+const hasPendingConfirmation = computed(() =>
+  props.items.some(item => item.toolCallId === props.confirmation?.toolCallId),
+);
+
+function confirmationFor(tool: SessionUiItem): ToolConfirmation | undefined {
+  return tool.toolCallId === props.confirmation?.toolCallId ? props.confirmation : undefined;
+}
 
 function toolTrackIcon(tool: SessionUiItem): string {
   if (tool.status === 'running') return 'fa-solid fa-spinner fa-spin';
@@ -60,6 +75,10 @@ function toolTrackIcon(tool: SessionUiItem): string {
 
 .dca-step-tools.has-failure > summary > span {
   color: var(--dca-danger);
+}
+
+.dca-step-tools.awaiting-confirmation > summary > span {
+  color: var(--dca-warning);
 }
 
 .dca-tool-group > summary > small {

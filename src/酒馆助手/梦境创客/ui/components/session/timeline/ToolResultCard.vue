@@ -111,16 +111,44 @@
       </header>
       <pre class="dca-tool-content-scroll" tabindex="0">{{ activeRaw }}</pre>
     </section>
+
+    <section
+      v-if="confirmation"
+      class="dca-tool-confirmation-panel"
+      :class="{ 'dca-tool-confirmation-high-risk': confirmation.risk === 'high' }"
+    >
+      <header>
+        <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+        <div>
+          <strong>{{ confirmation.risk === 'high' ? '需要批准高风险操作' : 'Agent 请求执行此工具' }}</strong>
+          <span>Agent 已暂停，等待你的决定</span>
+        </div>
+      </header>
+      <p>{{ confirmation.description }}</p>
+      <pre v-if="formattedIntent" class="dca-tool-confirmation-intent">{{ formattedIntent }}</pre>
+      <footer>
+        <button type="button" @click="emit('resolve-confirmation', false)">拒绝</button>
+        <button
+          :class="confirmation.risk === 'high' ? 'danger' : 'primary'"
+          type="button"
+          @click="emit('resolve-confirmation', true)"
+        >
+          批准并执行
+        </button>
+      </footer>
+    </section>
   </article>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import type { ToolConfirmation } from '../../../../core/runner/tools';
 import type { SessionUiItem } from '../../../../core/session/types';
 import { buildToolPresentation } from '../../../composables/tool-presentation';
 import { toolStatusLabel } from '../../../composables/timeline';
 
-const props = defineProps<{ tool: SessionUiItem }>();
+const props = defineProps<{ confirmation?: ToolConfirmation; tool: SessionUiItem }>();
+const emit = defineEmits<{ 'resolve-confirmation': [approved: boolean] }>();
 
 const copied = ref(false);
 const expanded = ref(false);
@@ -128,6 +156,14 @@ const rawOpen = ref(false);
 const rawTab = ref<'input' | 'output'>(props.tool.toolInput ? 'input' : 'output');
 const presentation = computed(() => buildToolPresentation(props.tool));
 const previewLines = computed(() => presentation.value.preview?.content.split(/\r?\n/u) ?? []);
+const formattedIntent = computed(() => {
+  if (props.confirmation?.intent === undefined) return '';
+  try {
+    return JSON.stringify(props.confirmation.intent, null, 2);
+  } catch {
+    return String(props.confirmation.intent);
+  }
+});
 const activeRaw = computed(() =>
   rawTab.value === 'input' ? presentation.value.rawInput || '没有输入参数' : presentation.value.rawOutput,
 );
@@ -458,6 +494,72 @@ async function copyRaw(): Promise<void> {
   background: var(--dca-canvas);
 }
 
+.dca-tool-confirmation-panel {
+  margin: 0.6rem -0.65rem -0.65rem;
+  border-top: 1px solid color-mix(in srgb, var(--dca-warning) 42%, var(--dca-border));
+  padding: 0.65rem;
+  background: var(--dca-warning-soft);
+}
+
+.dca-tool-confirmation-panel > header {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.dca-tool-confirmation-panel > header > i {
+  color: var(--dca-warning);
+}
+
+.dca-tool-confirmation-panel > header > div {
+  display: grid;
+  gap: 0.1rem;
+}
+
+.dca-tool-confirmation-panel > header strong {
+  color: var(--dca-text);
+  font-size: 0.78rem;
+}
+
+.dca-tool-confirmation-panel > header span,
+.dca-tool-confirmation-panel > p {
+  color: var(--dca-text-muted);
+  font-size: 0.7rem;
+}
+
+.dca-tool-confirmation-panel > p {
+  margin: 0.5rem 0 0;
+}
+
+.dca-app details .dca-tool-confirmation-intent {
+  max-height: 8rem;
+  margin: 0.5rem 0 0;
+  padding: 0.45rem 0.55rem;
+  overflow: auto;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-sm);
+  background: color-mix(in srgb, var(--dca-canvas) 82%, transparent);
+  color: var(--dca-text-secondary);
+  font: 11px/1.5 var(--dca-font-mono);
+  white-space: pre-wrap;
+}
+
+.dca-tool-confirmation-panel > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  margin-top: 0.6rem;
+}
+
+.dca-tool-confirmation-high-risk {
+  border-top-color: color-mix(in srgb, var(--dca-danger) 48%, var(--dca-border));
+  background: var(--dca-danger-soft);
+}
+
+.dca-tool-confirmation-high-risk > header > i {
+  color: var(--dca-danger);
+}
+
 .dca-tool-raw-panel > header {
   display: flex;
   min-height: 1.8rem;
@@ -516,6 +618,10 @@ async function copyRaw(): Promise<void> {
 @media (max-width: 640px) {
   .dca-tool-result-card {
     padding: 0.55rem;
+  }
+
+  .dca-tool-confirmation-panel {
+    margin: 0.55rem -0.55rem -0.55rem;
   }
 
   .dca-tool-result-header {

@@ -8,14 +8,15 @@
         <RunBlock
           v-if="block.type === 'run'"
           :block="block"
+          :confirmation="activeToolConfirmation"
           :collapsed="isRunCollapsed(block)"
+          @resolve-confirmation="resolveConfirmation"
           @toggle="toggleRunBlock(block)"
         />
         <TimelineMessage v-else :item="block.item" />
       </template>
       <div v-if="visibleTimelineCount === 0" class="dca-empty">告诉 Agent 你想怎样完善这张角色卡吧。</div>
       <FailureCard />
-      <ToolConfirmationCard />
       <OperationDiffCard @open-diff="emit('open-diff')" />
     </div>
   </div>
@@ -23,17 +24,17 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import type { ToolConfirmation } from '../../../core/runner/tools';
 import { useDreamCardAgent } from '../../composables/runtime';
 import { buildTimelineBlocks, defaultRunCollapsed, type RunTimelineBlock } from '../../composables/timeline';
 import FailureCard from './timeline/FailureCard.vue';
 import OperationDiffCard from './timeline/OperationDiffCard.vue';
 import RunBlock from './timeline/RunBlock.vue';
 import TimelineMessage from './timeline/TimelineMessage.vue';
-import ToolConfirmationCard from './timeline/ToolConfirmationCard.vue';
 
 const emit = defineEmits<{ 'open-diff': [] }>();
 
-const { state } = useDreamCardAgent();
+const { runtime, state } = useDreamCardAgent();
 
 const timelineLimit = ref(200);
 const runCollapseOverrides = reactive<Record<string, boolean>>({});
@@ -49,6 +50,10 @@ let followTimelineTail = true;
 const TIMELINE_TAIL_THRESHOLD = 32;
 
 const runIsActive = computed(() => ['running', 'waiting-approval'].includes(state.value.active?.status ?? ''));
+const activeToolConfirmation = computed<ToolConfirmation | undefined>(() => {
+  const confirmation = state.value.toolConfirmation;
+  return confirmation?.sessionId === state.value.active?.sessionId ? confirmation : undefined;
+});
 
 const timelineBlocks = computed(() =>
   buildTimelineBlocks(state.value.active?.ui ?? [], state.value.active?.status, timelineLimit.value, timelineNow.value),
@@ -129,7 +134,12 @@ function scheduleTimelineTail() {
 }
 
 function isRunCollapsed(block: RunTimelineBlock): boolean {
+  if (block.items.some(item => item.toolCallId === activeToolConfirmation.value?.toolCallId)) return false;
   return runCollapseOverrides[block.id] ?? defaultRunCollapsed(block);
+}
+
+function resolveConfirmation(approved: boolean) {
+  runtime.resolveToolConfirmation(approved, activeToolConfirmation.value?.sessionId);
 }
 
 function toggleRunBlock(block: RunTimelineBlock) {
