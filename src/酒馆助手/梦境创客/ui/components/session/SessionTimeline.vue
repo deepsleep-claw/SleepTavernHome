@@ -17,7 +17,7 @@
       </template>
       <div v-if="visibleTimelineCount === 0" class="dca-empty">告诉 Agent 你想怎样完善这张角色卡吧。</div>
       <FailureCard />
-      <OperationDiffCard @open-diff="emit('open-diff')" />
+      <OperationDiffCard @open-diff="emit('open-diff', $event)" />
     </div>
   </div>
 </template>
@@ -26,13 +26,14 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import type { ToolConfirmation } from '../../../core/runner/tools';
 import { useDreamCardAgent } from '../../composables/runtime';
+import type { OperationDiffFocus } from '../../composables/operation-diff';
 import { buildTimelineBlocks, defaultRunCollapsed, type RunTimelineBlock } from '../../composables/timeline';
 import FailureCard from './timeline/FailureCard.vue';
 import OperationDiffCard from './timeline/OperationDiffCard.vue';
 import RunBlock from './timeline/RunBlock.vue';
 import TimelineMessage from './timeline/TimelineMessage.vue';
 
-const emit = defineEmits<{ 'open-diff': [] }>();
+const emit = defineEmits<{ 'open-diff': [focus: OperationDiffFocus] }>();
 
 const { runtime, state } = useDreamCardAgent();
 

@@ -6,7 +6,7 @@
   >
     <div class="dca-session-panel">
       <SessionToolbar :sidebar-collapsed="sidebarCollapsed" @toggle-sidebar="toggleSidebar" />
-      <SessionTimeline @open-diff="openSidebar('diff')" />
+      <SessionTimeline @open-diff="openDiff" />
       <div v-if="state.activeSessionAccess === 'readonly-history'" class="dca-readonly-composer">
         <i class="fa-solid fa-lock" aria-hidden="true"></i>
         <div>
@@ -25,6 +25,7 @@
     <SessionSidebar
       v-if="!sidebarCollapsed"
       v-model:tab="sidebarTab"
+      :diff-focus="diffFocus"
       :focus-file-path="focusFilePath"
       @close="sidebarCollapsed = true"
     />
@@ -35,6 +36,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
 import { useDreamCardAgent, type SidebarTab } from '../../composables/runtime';
+import type { OperationDiffFocus } from '../../composables/operation-diff';
 import { useSidebarResize } from '../../composables/sidebar-resize';
 import SessionComposer from './SessionComposer.vue';
 import OperationReplayDialog from './OperationReplayDialog.vue';
@@ -48,6 +50,7 @@ const sidebarCollapsed = ref(true);
 const sidebarWidth = ref(390);
 const sidebarTab = ref<SidebarTab>('files');
 const focusFilePath = ref('');
+const diffFocus = ref<(OperationDiffFocus & { requestId: number }) | undefined>();
 const { beginSidebarResize } = useSidebarResize(sidebarWidth);
 
 function toggleSidebar() {
@@ -57,6 +60,14 @@ function toggleSidebar() {
 function openSidebar(tab: SidebarTab) {
   sidebarTab.value = tab;
   sidebarCollapsed.value = false;
+}
+
+function openDiff(focus: OperationDiffFocus) {
+  diffFocus.value = { ...focus, requestId: Date.now() };
+  if (window.innerWidth > 720) {
+    sidebarWidth.value = Math.max(sidebarWidth.value, Math.min(680, window.innerWidth * (2 / 3)));
+  }
+  openSidebar('diff');
 }
 
 // 其它区域（如 Skill 设置页）请求在侧栏中定位文件。

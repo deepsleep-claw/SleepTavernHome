@@ -102,18 +102,15 @@
       </div>
     </section>
 
-    <section v-else-if="tab === 'diff'" class="dca-side-scroll">
-      <header class="dca-side-heading">
+    <section v-else-if="tab === 'diff'" class="dca-side-diff">
+      <header class="dca-diff-toolbar">
         <div>
           <strong>文件修改记录</strong>
-          <small>按用户消息查看，或汇总整个会话</small>
+          <small v-if="diffSummary">
+            {{ diffSummary.files }} 个文件 · <b>+{{ diffSummary.addedLines }}</b>
+            <em>-{{ diffSummary.removedLines }}</em>
+          </small>
         </div>
-        <div v-if="state.activeSessionAccess === 'live'" class="dca-row-actions">
-          <button type="button" :disabled="state.busy" @click="undo">撤销</button>
-          <button type="button" :disabled="state.busy" @click="redo">重做</button>
-        </div>
-      </header>
-      <div class="dca-diff-scope">
         <select v-model="diffScope" aria-label="Diff范围">
           <option value="latest">最新一轮</option>
           <option v-for="(turn, index) in operationTurns" :key="turn.turnId" :value="turn.turnId">
@@ -121,27 +118,53 @@
           </option>
           <option value="all">整个会话</option>
         </select>
-      </div>
-      <div v-if="selectedOperationRecords.length === 0" class="dca-empty">这个范围没有文件修改。</div>
-      <article v-for="record in selectedOperationRecords" v-else :key="record.operationId" class="dca-diff-item">
-        <header>
-          <div>
-            <strong>{{ operationLabel(record) }}</strong>
-            <code>{{ record.forward.path }}</code>
-          </div>
-          <span class="dca-diff-risk" :class="record.state">{{ operationStateLabel(record.state) }}</span>
-        </header>
-        <div class="dca-change-stack">
-          <details v-if="operationBefore(record) !== undefined" open>
-            <summary>{{ record.forward.kind === 'delete' ? '删除的内容' : '修改前' }}</summary>
-            <pre>{{ operationBefore(record) }}</pre>
-          </details>
-          <details v-if="operationAfter(record) !== undefined" open>
-            <summary>{{ record.forward.kind === 'create' ? '新建内容' : '修改后' }}</summary>
-            <pre>{{ operationAfter(record) }}</pre>
-          </details>
+        <div v-if="state.activeSessionAccess === 'live'" class="dca-row-actions">
+          <button type="button" :disabled="state.busy || !canUndoLatest" title="撤销最新一轮文件修改" @click="undo">
+            撤销
+          </button>
+          <button type="button" :disabled="state.busy || !canRedoLatest" title="重做最新一轮文件修改" @click="redo">
+            重做
+          </button>
         </div>
-      </article>
+      </header>
+      <div v-if="diffFiles.length === 0" class="dca-empty">这个范围没有文件修改。</div>
+      <div v-else class="dca-diff-workspace">
+        <main ref="diffViewport" class="dca-diff-document">
+          <label class="dca-diff-mobile-file">
+            <span>定位文件</span>
+            <select v-model="selectedDiffPath" @change="focusDiffFile(selectedDiffPath)">
+              <option v-for="file in diffFiles" :key="file.id" :value="file.path">{{ file.path }}</option>
+            </select>
+          </label>
+          <OperationDiffFile
+            v-for="file in diffFiles"
+            :key="file.id"
+            :file="file"
+            :openable="files.some(item => item.path === file.path)"
+            @open-file="openFileFromDiff"
+          />
+        </main>
+        <aside class="dca-diff-index">
+          <label>
+            <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+            <input v-model="diffFilter" type="search" placeholder="筛选文件…" />
+          </label>
+          <div>
+            <button
+              v-for="file in filteredDiffFiles"
+              :key="file.id"
+              type="button"
+              :class="{ active: selectedDiffPath === file.path }"
+              :title="file.path"
+              @click="focusDiffFile(file.path)"
+            >
+              <i :class="diffFileIcon(file.path)" aria-hidden="true"></i>
+              <span>{{ file.path }}</span>
+              <small><b>+{{ file.addedLines }}</b><em>-{{ file.removedLines }}</em></small>
+            </button>
+          </div>
+        </aside>
+      </div>
     </section>
 
     <section v-else class="dca-side-scroll">
@@ -195,13 +218,18 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import type { WorkspaceOperationRecord } from '../../../../core/operations/types';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { maskSecretsForModel } from '../../../../core/workspace/secret-protection';
 import { pretty } from '../../../composables/format';
+import {
+  buildOperationDiffFiles,
+  summarizeOperationDiffFiles,
+  type OperationDiffFocus,
+} from '../../../composables/operation-diff';
 import { useDreamCardAgent, type SidebarTab } from '../../../composables/runtime';
 import { renderMarkdown } from '../../../markdown';
 import VfsTextEditor, { type VfsEditorMarker } from '../../../editor/VfsTextEditor.vue';
+import OperationDiffFile from './OperationDiffFile.vue';
 
 type FileTreeRow = {
   depth: number;
@@ -211,7 +239,11 @@ type FileTreeRow = {
   readonly: boolean;
 };
 
-const props = defineProps<{ focusFilePath: string; tab: SidebarTab }>();
+const props = defineProps<{
+  diffFocus?: OperationDiffFocus & { requestId: number };
+  focusFilePath: string;
+  tab: SidebarTab;
+}>();
 const emit = defineEmits<{ close: []; 'update:tab': [value: SidebarTab] }>();
 
 const { action, runtime, state } = useDreamCardAgent();
@@ -221,6 +253,9 @@ const fileDraft = ref('');
 const editorView = ref<'edit' | 'preview'>('edit');
 const largePreviewApproved = ref(false);
 const diffScope = ref('latest');
+const diffFilter = ref('');
+const selectedDiffPath = ref('');
+const diffViewport = ref<HTMLElement>();
 const secretFindings = ref<Awaited<ReturnType<typeof maskSecretsForModel>>['findings']>([]);
 const secretWarning = ref('');
 const expandedDirectories = ref(
@@ -312,30 +347,23 @@ const selectedOperationRecords = computed(() => {
   const ids = new Set(log.turns.find(turn => turn.turnId === turnId)?.operationIds ?? []);
   return log.records.filter(record => ids.has(record.operationId));
 });
-const changeCount = computed(() => state.value.active?.operationLog?.records.length ?? 0);
-
-function operationLabel(record: WorkspaceOperationRecord): string {
-  if (record.forward.kind === 'create') return '新建文件';
-  if (record.forward.kind === 'delete') return '删除文件';
-  if (record.forward.kind === 'move') return `移动文件（${record.forward.from}）`;
-  return '修改文件';
-}
-
-function operationStateLabel(state: WorkspaceOperationRecord['state']): string {
-  return ({ applied: '已应用', uncertain: '恢复不可用', undone: '已撤销' } as const)[state];
-}
-
-function operationBefore(record: WorkspaceOperationRecord): string | undefined {
-  if (record.forward.kind === 'create') return undefined;
-  if (record.forward.kind === 'delete') return record.forward.file.content;
-  return record.forward.before.content;
-}
-
-function operationAfter(record: WorkspaceOperationRecord): string | undefined {
-  if (record.forward.kind === 'delete') return undefined;
-  if (record.forward.kind === 'create') return record.forward.file.content;
-  return record.forward.after.content;
-}
+const diffFiles = computed(() => buildOperationDiffFiles(selectedOperationRecords.value));
+const diffSummary = computed(() => (diffFiles.value.length ? summarizeOperationDiffFiles(diffFiles.value) : undefined));
+const filteredDiffFiles = computed(() => {
+  const query = diffFilter.value.trim().toLocaleLowerCase();
+  return query ? diffFiles.value.filter(file => file.path.toLocaleLowerCase().includes(query)) : diffFiles.value;
+});
+const changeCount = computed(() => buildOperationDiffFiles(state.value.active?.operationLog?.records ?? []).length);
+const latestTurn = computed(() => operationTurns.value.at(-1));
+const latestTurnRecords = computed(() => {
+  const ids = new Set(latestTurn.value?.operationIds ?? []);
+  return state.value.active?.operationLog?.records.filter(record => ids.has(record.operationId)) ?? [];
+});
+const canUndoLatest = computed(() => latestTurnRecords.value.some(record => record.state === 'applied' && record.undoable));
+const canRedoLatest = computed(() => {
+  const redoIds = new Set(latestTurn.value?.redoOperationIds ?? []);
+  return latestTurnRecords.value.some(record => redoIds.has(record.operationId) && record.state === 'undone' && record.undoable);
+});
 
 watch(selectedFile, file => {
   fileDraft.value = file?.content ?? '';
@@ -376,8 +404,49 @@ watch(
   { immediate: true },
 );
 
+watch(
+  () => props.diffFocus,
+  focus => {
+    if (!focus) return;
+    diffScope.value = operationTurns.value.some(turn => turn.turnId === focus.turnId) ? focus.turnId : 'latest';
+    selectedDiffPath.value = focus.filePath ?? '';
+    void nextTick(() => focusDiffFile(selectedDiffPath.value || diffFiles.value[0]?.path || ''));
+  },
+  { immediate: true },
+);
+
+watch(diffScope, () => {
+  const requested = selectedDiffPath.value;
+  const path = diffFiles.value.some(file => file.path === requested) ? requested : (diffFiles.value[0]?.path ?? '');
+  selectedDiffPath.value = path;
+  void nextTick(() => focusDiffFile(path));
+});
+
 function selectFile(path: string) {
   selectedFilePath.value = path;
+}
+
+function diffAnchorId(path: string): string {
+  return `dca-diff-file-${encodeURIComponent(path).replace(/%/gu, '_')}`;
+}
+
+function focusDiffFile(path: string) {
+  if (!path) return;
+  selectedDiffPath.value = path;
+  const target = diffViewport.value?.querySelector<HTMLElement>(`#${diffAnchorId(path)}`);
+  target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function openFileFromDiff(path: string) {
+  if (!files.value.some(file => file.path === path)) return;
+  selectedFilePath.value = path;
+  tab.value = 'files';
+}
+
+function diffFileIcon(path: string): string {
+  if (/\.ya?ml$/iu.test(path)) return 'fa-solid fa-code';
+  if (/\.md$/iu.test(path)) return 'fa-brands fa-markdown';
+  return 'fa-regular fa-file-lines';
 }
 
 // 树形缩进：每级 0.95rem，并为每个父级深度画一条 1px 竖向引导线。
@@ -440,6 +509,8 @@ async function redo() {
   flex-direction: column;
   border-left: 1px solid var(--dca-border);
   background: var(--dca-surface);
+  container-name: dca-session-sidebar;
+  container-type: inline-size;
 }
 
 .dca-session-sidebar > nav {
@@ -472,7 +543,7 @@ async function redo() {
   color: var(--dca-text);
 }
 
-.dca-session-sidebar em {
+.dca-session-sidebar > nav em {
   min-width: 1.2rem;
   border-radius: var(--dca-radius-sm);
   padding: 0 0.25rem;
@@ -727,87 +798,171 @@ async function redo() {
   font-size: 0.76rem;
 }
 
-.dca-diff-item {
+.dca-side-diff {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.dca-side-diff > .dca-empty {
+  margin: auto;
+}
+
+.dca-diff-toolbar {
+  display: flex;
+  min-height: 3rem;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.55rem;
+  border-bottom: 1px solid var(--dca-border);
+  padding: 0.42rem 0.55rem;
+}
+
+.dca-diff-toolbar > div:first-child {
+  display: grid;
+  min-width: 9rem;
+  margin-right: auto;
+  gap: 0.08rem;
+}
+
+.dca-diff-toolbar > div:first-child strong {
+  color: var(--dca-text);
+  font-size: 0.8rem;
+}
+
+.dca-diff-toolbar > div:first-child small {
+  display: inline-flex;
+  gap: 0.25rem;
+  color: var(--dca-text-muted);
+  font: 0.66rem/1 var(--dca-font-mono);
+}
+
+.dca-diff-toolbar b,
+.dca-diff-index b { color: var(--dca-success); }
+.dca-diff-toolbar em,
+.dca-diff-index em { color: var(--dca-danger); font-style: normal; }
+
+.dca-diff-toolbar > select {
+  max-width: 10.5rem;
+}
+
+.dca-diff-workspace {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  grid-template-columns: minmax(0, 1fr) minmax(10rem, 27%);
+}
+
+.dca-diff-document {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  gap: 0.55rem;
+  overflow: auto;
+  padding: 0.55rem;
+  scrollbar-color: color-mix(in srgb, var(--dca-text-muted) 45%, transparent) transparent;
+}
+
+.dca-diff-index {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-left: 1px solid var(--dca-border);
+  background: color-mix(in srgb, var(--dca-surface) 90%, var(--dca-canvas));
+}
+
+.dca-diff-index > label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.5rem;
   border: 1px solid var(--dca-border);
-  border-radius: var(--dca-radius-md);
-  padding: 0.6rem;
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  background: var(--dca-canvas);
+  color: var(--dca-text-muted);
+}
+
+.dca-diff-index input {
+  min-width: 0;
+  min-height: 1.8rem;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--dca-text);
+}
+
+.dca-diff-index > div {
+  min-height: 0;
+  overflow: auto;
+  padding: 0 0.3rem 0.4rem;
+}
+
+.dca-app .dca-diff-index button {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  min-height: 2rem;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.38rem;
+  border-color: transparent;
+  padding: 0.25rem 0.35rem;
+  background: transparent;
+  color: var(--dca-text-muted);
+  text-align: left;
+}
+
+.dca-app .dca-diff-index button:hover,
+.dca-app .dca-diff-index button.active {
   background: var(--dca-raised);
 }
 
-.dca-diff-item.danger {
-  border-color: color-mix(in srgb, var(--dca-danger) 45%, transparent);
+.dca-app .dca-diff-index button.active {
+  box-shadow: inset 2px 0 0 var(--dca-accent);
 }
 
-.dca-diff-item > header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 0.5rem;
+.dca-diff-index button > i { color: var(--dca-info); }
+.dca-diff-index button > span {
+  overflow: hidden;
+  font: 0.68rem/1.3 var(--dca-font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dca-diff-index button > small {
+  display: inline-flex;
+  gap: 0.18rem;
+  font: 0.62rem/1 var(--dca-font-mono);
 }
 
-.dca-diff-item > header > div {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
+.dca-diff-mobile-file {
+  display: none;
+  align-items: center;
+  gap: 0.45rem;
 }
 
-.dca-diff-item code {
-  color: var(--dca-text-muted);
-  font-size: 0.78rem;
-  overflow-wrap: anywhere;
-}
-
-.dca-diff-risk {
+.dca-diff-mobile-file > span {
   flex: 0 0 auto;
-  border-radius: var(--dca-radius-sm);
-  padding: 0.1rem 0.45rem;
-  background: var(--dca-danger-soft);
-  color: var(--dca-danger);
-  font-size: 0.72rem;
+  color: var(--dca-text-muted);
+  font-size: 0.7rem;
 }
 
-.dca-conflict-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-  margin-top: 0.45rem;
-}
-
-.dca-change-stack {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
-  gap: 0.4rem;
-  margin-top: 0.45rem;
-}
-
-.dca-change-stack details {
+.dca-diff-mobile-file > select {
   min-width: 0;
-  border: 1px solid var(--dca-border);
-  border-radius: var(--dca-radius-sm);
-  background: var(--dca-canvas);
+  flex: 1 1 auto;
 }
 
-.dca-change-stack summary {
-  padding: 0.35rem 0.45rem;
-  color: var(--dca-text-secondary);
-  font-size: 0.76rem;
-  cursor: pointer;
-}
-
-.dca-change-stack pre {
-  max-height: 22rem;
-  margin: 0;
-  overflow: auto;
-  border-top: 1px solid var(--dca-border);
-  padding: 0.5rem;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
-.dca-conflict-stack details {
-  border: 1px solid var(--dca-border);
-  border-radius: var(--dca-radius-sm);
-  padding: 0.35rem;
+@container dca-session-sidebar (max-width: 620px) {
+  .dca-diff-workspace { grid-template-columns: minmax(0, 1fr); }
+  .dca-diff-index { display: none; }
+  .dca-diff-mobile-file { display: flex; }
+  .dca-diff-toolbar { flex-wrap: wrap; }
+  .dca-diff-toolbar > div:first-child { flex: 1 1 auto; }
 }
 
 .dca-context-meter {
