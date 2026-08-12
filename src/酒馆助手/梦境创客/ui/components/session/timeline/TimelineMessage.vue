@@ -133,9 +133,12 @@ async function resend() {
 }
 
 .dca-message-guidance {
+  align-self: flex-end;
   border-style: dashed;
   border-color: color-mix(in srgb, var(--dca-warning) 55%, transparent);
-  background: var(--dca-warning-soft);
+  background:
+    linear-gradient(var(--dca-warning-soft), var(--dca-warning-soft)),
+    var(--dca-user-message-gradient);
 }
 
 .dca-message > header {

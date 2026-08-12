@@ -2,7 +2,7 @@ import { klona } from 'klona';
 import { DreamCreatorWorkspaceFileStore } from '../persistence/workspace-file-store';
 import { materializeUserSkills, projectSkills } from '../skills/skill-registry';
 import type { AgentSkill } from '../skills/types';
-import { diffWorkspaceFiles } from './file-diff';
+import { diffRequestedWorkspaceFiles } from './file-diff';
 import type { LiveWorkspaceApplyInput, LiveWorkspaceApplyResult, LiveWorkspaceSource } from './live-repository';
 import { MemoryWorkspaceRepository } from './memory-repository';
 import { WorkspaceError, type WorkspaceChange, type WorkspaceFile } from './types';
@@ -81,7 +81,7 @@ export class SessionWorkspaceLiveSource implements LiveWorkspaceSource {
         warning = result.warning;
         if (status !== 'success') {
           const files = await this.load();
-          return { changes: diffWorkspaceFiles(before, files), files, status, warning };
+          return { changes: diffRequestedWorkspaceFiles(input.changes, before, files), files, status, warning };
         }
       }
       const skillChanges = grouped.get('skill') ?? [];
@@ -90,7 +90,7 @@ export class SessionWorkspaceLiveSource implements LiveWorkspaceSource {
       if (storageChanges.length > 0) await this.applyStorage(storageChanges, input.toolCallId);
     } catch (error) {
       const files = await this.load();
-      const changes = diffWorkspaceFiles(before, files);
+      const changes = diffRequestedWorkspaceFiles(input.changes, before, files);
       if (changes.length === 0) throw error;
       return {
         changes,
@@ -100,7 +100,7 @@ export class SessionWorkspaceLiveSource implements LiveWorkspaceSource {
       };
     }
     const files = await this.load();
-    return { changes: diffWorkspaceFiles(before, files), files, status, warning };
+    return { changes: diffRequestedWorkspaceFiles(input.changes, before, files), files, status, warning };
   }
 
   private async applySkills(changes: WorkspaceChange[], toolCallId: string): Promise<void> {

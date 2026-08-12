@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionUiItem } from '../../core/session/types';
-import { buildTimelineBlocks } from './timeline';
+import { buildTimelineBlocks, defaultRunCollapsed, itemKindLabel } from './timeline';
 
 describe('timeline', () => {
   it('使用调用方提供的当前时间持续计算运行耗时', () => {
@@ -62,5 +62,55 @@ describe('timeline', () => {
 
     expect(first?.durationMs).toBe(2_200);
     expect(second?.durationMs).toBe(2_200);
+  });
+
+  it('中途引导作为用户消息留在原位置，并把前后过程切成两个运行块', () => {
+    const ui: SessionUiItem[] = [
+      { at: 1_000, checkpointId: 'checkpoint:guide', content: '开始', id: 'user:guide', kind: 'user' },
+      {
+        at: 1_400,
+        checkpointId: 'checkpoint:guide',
+        content: '读取前置文件',
+        id: 'tool:before',
+        kind: 'tool',
+        status: 'completed',
+      },
+      {
+        at: 2_000,
+        checkpointId: 'checkpoint:guide',
+        content: '<mid_turn_guidance>再补充两行</mid_turn_guidance>',
+        id: 'guidance:1',
+        kind: 'guidance',
+      },
+      {
+        at: 2_400,
+        checkpointId: 'checkpoint:guide',
+        content: '写入文件',
+        id: 'tool:after',
+        kind: 'tool',
+        status: 'completed',
+      },
+      {
+        at: 3_000,
+        checkpointId: 'checkpoint:guide',
+        content: '完成',
+        id: 'assistant:final',
+        kind: 'assistant',
+        status: 'completed',
+      },
+    ];
+
+    const blocks = buildTimelineBlocks(ui, 'completed', 200, 20_000);
+    expect(blocks.map(block => block.type === 'run' ? block.id : block.item.id)).toEqual([
+      'user:guide',
+      'run:checkpoint:guide:0',
+      'guidance:1',
+      'run:checkpoint:guide:1',
+      'assistant:final',
+    ]);
+    const runs = blocks.filter(block => block.type === 'run');
+    expect(runs.map(run => run.items.map(item => item.id))).toEqual([['tool:before'], ['tool:after']]);
+    expect(runs.every(defaultRunCollapsed)).toBe(true);
+    expect(itemKindLabel('guidance')).toBe('你 · 中途引导');
   });
 });

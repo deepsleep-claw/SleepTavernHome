@@ -22,6 +22,7 @@ function character(id: string): CharacterStoreReference {
 describe('tavern settings cross-window cache', () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.stubGlobal('builtin', { saveSettings: vi.fn(async () => undefined) });
     vi.stubGlobal('SillyTavern', {
       extensionSettings: {},
       saveSettingsDebounced: vi.fn(async () => undefined),
@@ -45,7 +46,8 @@ describe('tavern settings cross-window cache', () => {
     await secondStore.save(second);
 
     expect(Object.keys(firstStore.load().characterStores).sort()).toEqual(['first', 'second']);
-    expect(SillyTavern.saveSettingsDebounced).toHaveBeenCalledTimes(2);
+    expect(builtin.saveSettings).toHaveBeenCalledTimes(2);
+    expect(SillyTavern.saveSettingsDebounced).not.toHaveBeenCalled();
     firstStore.destroy();
     secondStore.destroy();
   });

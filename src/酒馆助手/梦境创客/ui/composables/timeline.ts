@@ -74,38 +74,65 @@ export function buildTimelineBlocks(
     byCheckpoint.set(item.checkpointId, items);
   }
   const lastCheckpointId = [...ui].reverse().find(item => item.kind === 'user')?.checkpointId;
-  const finalAssistantIds = new Set<string>();
-  const runItemsByCheckpoint = new Map<string, SessionUiItem[]>();
+  const runByItemId = new Map<string, RunTimelineBlock>();
   for (const [checkpointId, items] of byCheckpoint) {
     const user = items.find(item => item.kind === 'user');
     const assistants = items.filter(item => item.kind === 'assistant');
     const activeStillRunning =
       checkpointId === lastCheckpointId && ['running', 'waiting-approval'].includes(activeStatus ?? '');
-    if (!activeStillRunning && assistants.length > 0) finalAssistantIds.add(assistants.at(-1)!.id);
-    const processItems = items.filter(
-      item => item.kind !== 'user' && item.kind !== 'guidance' && !finalAssistantIds.has(item.id),
-    );
-    if (processItems.length > 0 && user) runItemsByCheckpoint.set(checkpointId, processItems);
+    const finalAssistant = !activeStillRunning && assistants.length > 0 ? assistants.at(-1) : undefined;
+    if (!user) continue;
+
+    const processItems = items.filter(item => item.kind !== 'user' && item.id !== finalAssistant?.id);
+    const hasGuidance = processItems.some(item => item.kind === 'guidance');
+    const segments: Array<{ endedAt?: number; items: SessionUiItem[]; startedAt: number }> = [
+      { items: [], startedAt: user.at },
+    ];
+    for (const item of processItems) {
+      if (item.kind === 'guidance') {
+        segments.at(-1)!.endedAt = item.at;
+        segments.push({ items: [], startedAt: item.at });
+      } else {
+        segments.at(-1)!.items.push(item);
+      }
+    }
+    const nonEmptySegments = segments
+      .map((segment, index) => ({ ...segment, index }))
+      .filter(segment => segment.items.length > 0);
+    const lastSegmentIndex = nonEmptySegments.at(-1)?.index;
+    for (const segment of nonEmptySegments) {
+      const isLastSegment = segment.index === lastSegmentIndex;
+      const endFromItems = Math.max(
+        segment.startedAt,
+        ...segment.items.map(item => item.at + Math.max(0, item.durationMs ?? 0)),
+      );
+      const endedAt =
+        segment.endedAt ??
+        (isLastSegment && activeStillRunning
+          ? now
+          : Math.max(endFromItems, finalAssistant?.at ?? segment.startedAt));
+      const block: RunTimelineBlock = {
+        durationMs: hasGuidance
+          ? Math.max(0, endedAt - segment.startedAt)
+          : runDuration(user, items, activeStillRunning, now),
+        id: hasGuidance ? `run:${checkpointId}:${segment.index}` : `run:${checkpointId}`,
+        items: segment.items,
+        status: isLastSegment
+          ? runDisplayStatus(user, checkpointId === lastCheckpointId, activeStatus)
+          : 'completed',
+        type: 'run',
+      };
+      segment.items.forEach(item => runByItemId.set(item.id, block));
+    }
   }
   const blocks: TimelineBlock[] = [];
   const insertedRuns = new Set<string>();
   for (const item of ui.slice(-limit)) {
-    const checkpointId = item.checkpointId;
-    const runItems = checkpointId ? runItemsByCheckpoint.get(checkpointId) : undefined;
-    if (runItems?.some(candidate => candidate.id === item.id)) {
-      if (insertedRuns.has(checkpointId!)) continue;
-      insertedRuns.add(checkpointId!);
-      const checkpointItems = byCheckpoint.get(checkpointId!) ?? runItems;
-      const user = checkpointItems.find(candidate => candidate.kind === 'user');
-      const activeStillRunning =
-        checkpointId === lastCheckpointId && ['running', 'waiting-approval'].includes(activeStatus ?? '');
-      blocks.push({
-        durationMs: runDuration(user, checkpointItems, activeStillRunning, now),
-        id: `run:${checkpointId}`,
-        items: runItems,
-        status: runDisplayStatus(user, checkpointId === lastCheckpointId, activeStatus),
-        type: 'run',
-      });
+    const run = runByItemId.get(item.id);
+    if (run) {
+      if (insertedRuns.has(run.id)) continue;
+      insertedRuns.add(run.id);
+      blocks.push(run);
       continue;
     }
     blocks.push({ id: item.id, item, type: 'item' });
@@ -187,7 +214,7 @@ export function reasoningLabel(item: SessionUiItem): string {
 export function itemKindLabel(kind: SessionUiItem['kind']): string {
   return {
     assistant: '梦境创客',
-    guidance: '中途引导',
+    guidance: '你 · 中途引导',
     manual: '玩家修改工作区',
     reasoning: '思考过程',
     status: '运行状态',
@@ -204,5 +231,5 @@ export function cleanGuidance(value: string): string {
 }
 
 export function isMarkdownMessage(item: SessionUiItem): boolean {
-  return item.kind === 'assistant' || item.kind === 'user';
+  return item.kind === 'assistant' || item.kind === 'guidance' || item.kind === 'user';
 }

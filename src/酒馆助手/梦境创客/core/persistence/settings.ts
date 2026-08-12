@@ -186,6 +186,15 @@ const SETTINGS_KEY = 'dream-card-agent';
 const SHARED_CACHE_KEY = 'dream-card-agent:settings:v3';
 const SETTINGS_CHANNEL = 'dream-card-agent:settings';
 
+async function saveTavernSettingsImmediately(): Promise<void> {
+  if (typeof builtin !== 'undefined' && typeof builtin.saveSettings === 'function') {
+    await builtin.saveSettings();
+    return;
+  }
+  // 测试环境或旧版酒馆缺少立即保存入口时才降级；真实酒馆不能把防抖调度误当成已落盘。
+  await Promise.resolve(SillyTavern.saveSettingsDebounced());
+}
+
 export function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamCardAgentSettings {
   const anchor = raw?.floatingButtonAnchor ?? 'middle-right';
   const defaultOffset = defaultFloatingButtonOffset(anchor);
@@ -364,7 +373,7 @@ export class TavernAgentSettingsStore implements AgentSettingsStore {
       const merged = mergeSettingsChanges(base, normalizeSettings(settings), latest);
       this.writeCache(merged);
       SillyTavern.extensionSettings[SETTINGS_KEY] = structuredClone(merged);
-      await SillyTavern.saveSettingsDebounced();
+      await saveTavernSettingsImmediately();
       this.baselines.set(settings, structuredClone(settings));
       this.channel?.postMessage({ revision: merged.syncRevision, type: 'settings-updated' });
       this.notify();

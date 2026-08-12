@@ -44,10 +44,43 @@ export class CharacterMetadataStore {
       };
     }
     const bytes = await this.client.download(reference.url);
-    if ((await sha256(bytes)) !== reference.sha256) throw new Error(`角色会话索引校验失败：${bindingId}`);
-    const metadata = canonicalParse<CharacterMetadata>(new TextDecoder().decode(bytes));
+    const actualHash = await sha256(bytes);
+    let metadata: CharacterMetadata;
+    try {
+      metadata = canonicalParse<CharacterMetadata>(new TextDecoder().decode(bytes));
+    } catch {
+      throw new Error(`角色会话索引格式不匹配：${bindingId}`);
+    }
     if (metadata.schemaVersion !== 1 || metadata.bindingId !== bindingId) {
       throw new Error(`角色会话索引格式不匹配：${bindingId}`);
+    }
+    if (
+      actualHash !== reference.sha256 ||
+      metadata.revision !== reference.revision ||
+      bytes.byteLength !== reference.size
+    ) {
+      console.warn('[梦境创客] 角色会话索引引用落后，已采用服务器上的有效索引并修复引用。', {
+        actualRevision: metadata.revision,
+        bindingId,
+        referencedRevision: reference.revision,
+      });
+      const settings = this.settingsStore.load();
+      const latestReference = settings.characterStores[bindingId];
+      if (latestReference?.url === reference.url) {
+        settings.characterStores[bindingId] = {
+          avatarId: metadata.avatarId,
+          bindingId,
+          characterName: metadata.characterName,
+          revision: metadata.revision,
+          sha256: actualHash,
+          size: bytes.byteLength,
+          updatedAt: metadata.updatedAt,
+          url: reference.url,
+        };
+        await this.settingsStore.save(settings).catch(error => {
+          console.warn('[梦境创客] 有效角色索引已载入，但引用修复暂未持久化。', error);
+        });
+      }
     }
     return metadata;
   }

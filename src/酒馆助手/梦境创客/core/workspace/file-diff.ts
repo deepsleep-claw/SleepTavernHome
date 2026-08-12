@@ -36,3 +36,30 @@ export function diffWorkspaceFiles(before: WorkspaceFile[], after: WorkspaceFile
   }
   return changes.sort((left, right) => left.path.localeCompare(right.path));
 }
+
+/**
+ * 从写后真实投影中只提取本次工具明确触及的资源。
+ *
+ * 酒馆保存世界书时可能顺带规范化整本书的默认字段与序列化格式；这些变化虽然出现在
+ * 写后投影里，却不是当前工具的文件意图。resourceId 是首选关联键，路径仅用于兼容
+ * 新建资源或宿主在写入时重新分配身份的情况。
+ */
+export function diffRequestedWorkspaceFiles(
+  requested: WorkspaceChange[],
+  before: WorkspaceFile[],
+  after: WorkspaceFile[],
+): WorkspaceChange[] {
+  const resourceIds = new Set<string>();
+  const paths = new Set<string>();
+  for (const change of requested) {
+    paths.add(change.path);
+    if (change.kind === 'move') paths.add(change.from);
+    if ('before' in change) resourceIds.add(change.before.resourceId);
+    if ('after' in change) resourceIds.add(change.after.resourceId);
+  }
+  return diffWorkspaceFiles(before, after).filter(change => {
+    if (paths.has(change.path) || (change.kind === 'move' && paths.has(change.from))) return true;
+    if ('before' in change && resourceIds.has(change.before.resourceId)) return true;
+    return 'after' in change && resourceIds.has(change.after.resourceId);
+  });
+}

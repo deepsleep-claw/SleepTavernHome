@@ -2,7 +2,7 @@ import { materializeCardWorkspace, projectCardWorkspace, synchronizeCardAgentMet
 import type { CardStateAdapter } from '../transaction/adapter';
 import { applyRealtimeStateOperations } from '../transaction/realtime-apply';
 import { diffCardStates } from '../transaction/state-diff';
-import { diffWorkspaceFiles } from './file-diff';
+import { diffRequestedWorkspaceFiles } from './file-diff';
 import type { LiveWorkspaceApplyInput, LiveWorkspaceApplyResult, LiveWorkspaceSource } from './live-repository';
 import { MemoryWorkspaceRepository } from './memory-repository';
 import type { WorkspaceChange, WorkspaceFile } from './types';
@@ -51,7 +51,7 @@ export class CardWorkspaceLiveSource implements LiveWorkspaceSource {
         warning: `写入后无法重新读取真实资源：${error instanceof Error ? error.message : String(error)}`,
       };
     }
-    const actualChanges = diffWorkspaceFiles(beforeFiles, afterFiles);
+    const actualChanges = diffRequestedWorkspaceFiles(input.changes, beforeFiles, afterFiles);
     if (result.error) {
       if (actualChanges.length === 0) throw result.error;
       return {
