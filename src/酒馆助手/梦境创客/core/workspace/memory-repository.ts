@@ -1,4 +1,5 @@
 import { klona } from 'klona';
+import { decodeWorkspaceSegment, parseYamlObject, serializeYaml } from '../mapping/serde';
 import { applyUnifiedPatch } from './unified-patch';
 import { isSameOrDescendant, normalizeWorkspacePath, parentWorkspacePath } from './path';
 import { searchWorkspaceFiles } from './search';
@@ -164,11 +165,21 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
       ) {
         throw new WorkspaceError('ALREADY_EXISTS', `目标路径已经存在：${to}`, to);
       }
+      const movedWorldbookMetadata = this.prepareMovedWorldbookMetadata(from, to);
       for (const file of targets) {
         const nextPath = `${to}${file.path.slice(from.length)}`;
         this.current.delete(file.path);
         this.current.set(nextPath, { ...file, path: nextPath });
         this.movedFrom.set(nextPath, file.path);
+      }
+      if (movedWorldbookMetadata) {
+        const movedFile = this.current.get(movedWorldbookMetadata.path);
+        if (movedFile) {
+          this.current.set(movedWorldbookMetadata.path, {
+            ...movedFile,
+            content: movedWorldbookMetadata.content,
+          });
+        }
       }
     });
   }
@@ -318,6 +329,17 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
         filePath => parentWorkspacePath(filePath) === path || isSameOrDescendant(filePath, path),
       )
     );
+  }
+
+  /** 移动一本世界书时，book.yaml里的name只是目录名镜像，必须同步以免误导Agent。 */
+  private prepareMovedWorldbookMetadata(from: string, to: string): { content: string; path: string } | undefined {
+    if (!/^\/worldbooks\/[^/]+$/u.test(from) || !/^\/worldbooks\/[^/]+$/u.test(to)) return undefined;
+    const sourcePath = `${from}/book.yaml`;
+    const sourceFile = this.current.get(sourcePath);
+    if (!sourceFile) return undefined;
+    const metadata = parseYamlObject(sourceFile.content, sourcePath);
+    metadata.name = decodeWorkspaceSegment(to.slice('/worldbooks/'.length));
+    return { content: serializeYaml(metadata), path: `${to}/book.yaml` };
   }
 
   /** 世界书的 entries 是结构目录，即使书中暂时没有条目也应该可见、可列出。 */

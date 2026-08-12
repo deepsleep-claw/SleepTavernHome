@@ -465,10 +465,11 @@ function materializeBooks(base: CardWorkspaceState, files: Map<string, Workspace
     const resourceId = requiredString(metadata.resource_id, 'resource_id', metadataFile.path);
     const projectedResourceId = metadataFile.resourceId.match(/^worldbook:(.*):metadata$/u)?.[1];
     const baseBook = base.worldbooks.find(book => book.resourceId === (projectedResourceId ?? resourceId));
+    const name = decodeWorkspaceSegment(workspaceBasename(directory));
     if (baseBook) {
       const changedInternalMetadata =
         resourceId !== baseBook.resourceId ||
-        (metadata.name !== undefined && metadata.name !== baseBook.name) ||
+        (metadata.name !== undefined && metadata.name !== baseBook.name && metadata.name !== name) ||
         (metadata.round_trip_safe !== undefined && metadata.round_trip_safe !== baseBook.roundTripSafe) ||
         (metadata.unknown_fields !== undefined && !canonicalEqual(metadata.unknown_fields, baseBook.unknownFields));
       if (changedInternalMetadata) {
@@ -479,7 +480,6 @@ function materializeBooks(base: CardWorkspaceState, files: Map<string, Workspace
         );
       }
     }
-    const name = decodeWorkspaceSegment(workspaceBasename(directory));
     const entries = [...files.values()]
       .filter(item => parentWorkspacePath(item.path) === `${directory}/entries` && item.path.endsWith('.md'))
       .sort((left, right) => left.path.localeCompare(right.path))

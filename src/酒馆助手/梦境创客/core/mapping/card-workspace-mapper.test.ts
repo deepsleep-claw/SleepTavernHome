@@ -434,6 +434,12 @@ describe('card workspace mapper', () => {
       'rename-book',
     );
     expect(
+      parseYamlObject(
+        (await repository.read(`/worldbooks/${encodeWorkspaceSegment('学院新版')}/book.yaml`)).content,
+        '/worldbooks/学院新版/book.yaml',
+      ).name,
+    ).toBe('学院新版');
+    expect(
       materializeCardWorkspace(base, repository.snapshot()).state.worldbooks.find(
         book => book.resourceId === 'book-academy',
       )?.name,
