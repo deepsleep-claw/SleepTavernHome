@@ -15,6 +15,7 @@
     <div class="dca-settings-content">
       <div class="dca-settings-content-inner">
         <GeneralSettings v-if="settingsSection === 'general'" />
+        <ThemeSettings v-else-if="settingsSection === 'theme'" />
         <AgentSettings v-else-if="settingsSection === 'agent'" />
         <PresetSettings v-else-if="settingsSection === 'preset'" />
         <ApiSettings v-else-if="settingsSection === 'api'" />
@@ -27,6 +28,7 @@
 </template>
 
 <script setup lang="ts">
+import { defineAsyncComponent } from 'vue';
 import { useDreamCardAgent, type SettingsSection } from '../../composables/runtime';
 import ApiSettings from './ApiSettings.vue';
 import AgentSettings from './AgentSettings.vue';
@@ -36,10 +38,13 @@ import PresetSettings from './PresetSettings.vue';
 import SkillSettings from './SkillSettings.vue';
 import StorageSettings from './StorageSettings.vue';
 
+const ThemeSettings = defineAsyncComponent(() => import('./ThemeSettings.vue'));
+
 const { settingsSection } = useDreamCardAgent();
 
 const navItems: { icon: string; label: string; section: SettingsSection }[] = [
   { icon: 'fa-solid fa-sliders', label: '常规', section: 'general' },
+  { icon: 'fa-solid fa-palette', label: '主题', section: 'theme' },
   { icon: 'fa-solid fa-robot', label: 'Agent配置', section: 'agent' },
   { icon: 'fa-solid fa-layer-group', label: '预设', section: 'preset' },
   { icon: 'fa-solid fa-plug', label: 'API', section: 'api' },

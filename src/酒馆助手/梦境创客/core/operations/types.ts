@@ -56,10 +56,13 @@ export type WorkspaceOperationRecord = {
 };
 
 export type TurnOperationSummary = {
+  eventStart?: number;
+  modelMessageStart?: number;
   operationIds: string[];
   recoveryAvailable: boolean;
   redoOperationIds: string[];
   turnId: string;
+  userMessageId?: string;
 };
 
 export type PersistedOperationLog = {

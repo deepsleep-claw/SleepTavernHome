@@ -20,6 +20,8 @@ export type AgentSkill = {
   directories?: string[];
   id: string;
   loading: SkillLoadingMode;
+  /** 用户在设置中锁定后，Agent只能读取，不能修改、移动或删除。 */
+  locked?: boolean;
   name: string;
   /** @deprecated 旧版固定目录兼容；读取时会折叠进resources。 */
   references?: Record<string, string>;

@@ -52,7 +52,7 @@ function parseWorldbookIds(value: unknown): Map<string, string> {
 
 function keyword(value: string | RegExp): WorldbookKeyword {
   // 酒馆助手函数运行在父窗口，返回的 RegExp 属于另一个 JavaScript realm，
-  // 因此不能使用 instanceof RegExp 判断。复制到当前窗口后，快照与最终校验才能稳定识别它。
+  // 因此不能使用 instanceof RegExp 判断。复制到当前窗口后，映射与写后回读才能稳定识别它。
   return Object.prototype.toString.call(value) === '[object RegExp]'
     ? new RegExp((value as RegExp).source, (value as RegExp).flags)
     : value;

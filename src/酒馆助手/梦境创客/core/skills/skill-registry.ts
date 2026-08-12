@@ -16,13 +16,14 @@ function skillFile(skill: AgentSkill): WorkspaceFile {
       {
         description: skill.description,
         loading: skill.loading,
+        locked: skill.locked === true,
         name: skill.name,
       },
       skill.body,
     ),
     mediaType: 'text/markdown',
     path,
-    readonly: skill.builtin,
+    readonly: skill.builtin || skill.locked === true,
     resourceId: `skill:${skill.id}`,
   };
 }
@@ -33,7 +34,7 @@ function resourceFile(skill: AgentSkill, name: string, resource: SkillResource):
     content: binary ? '' : (resource.content ?? ''),
     mediaType: resource.mediaType,
     path: `${skillRoot(skill)}/${name}`,
-    readonly: skill.builtin,
+    readonly: skill.builtin || skill.locked === true,
     resourceId: `skill:${skill.id}:resource:${name}`,
     skillResource: binary
       ? { sha256: resource.sha256 ?? `unresolved:${skill.id}:${name}`, size: resource.size }
@@ -123,6 +124,7 @@ function parseSkill(input: WorkspaceFile, allFiles: WorkspaceFile[], previous?: 
     directories: previous ? skillDirectories(previous) : [],
     id: workspaceBasename(root),
     loading,
+    ...(metadata.locked === true || previous?.locked === true ? { locked: true } : {}),
     name: requiredString(metadata.name, 'name', input.path),
     resources,
   };
@@ -169,6 +171,7 @@ export function assessSkillMutation(
   operation: 'delete' | 'move' | 'patch' | 'write',
   path: string,
   existingSkillIds: Iterable<string>,
+  lockedSkillIds: Iterable<string> = [],
 ): SkillMutationAssessment {
   if (path === '/skills/index.md' || path.startsWith('/skills/builtin/')) {
     return { allowed: false, confirmationRequired: false, reason: '内置Skill和Skill索引不可修改。' };
@@ -178,6 +181,13 @@ export function assessSkillMutation(
     return { allowed: false, confirmationRequired: false, reason: 'Skill只能写入/skills/user。' };
   }
   const exists = new Set(existingSkillIds).has(match[1]);
+  if (new Set(lockedSkillIds).has(match[1])) {
+    return {
+      allowed: false,
+      confirmationRequired: false,
+      reason: `SKILL_LOCKED：Skill“${match[1]}”已由用户在设置中锁定，Agent不能修改、移动或删除它。`,
+    };
+  }
   const confirmationRequired = exists && ['delete', 'move', 'patch', 'write'].includes(operation);
   return { allowed: true, confirmationRequired };
 }

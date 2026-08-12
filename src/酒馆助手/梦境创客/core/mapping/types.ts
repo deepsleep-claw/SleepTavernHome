@@ -98,7 +98,7 @@ export type TavernResourceScope = 'character' | 'global' | 'preset-current';
 export type ResourceCapability = {
   available: boolean;
   reason?: string;
-  /** 用于阻止把 preset-current 的 Working Copy 写入后来切换到的另一个预设。 */
+  /** 用于阻止把 preset-current 的实时文件修改写入后来切换到的另一个预设。 */
   targetId: string;
 };
 

@@ -14,7 +14,6 @@ async function runtime(): Promise<PersistedSessionRuntime> {
     createdAt: 1,
     events: [{ at: 2, status: 'completed', type: 'status' }],
     headerMessageCount: compiledPreset.messages.length,
-    history: { checkpoints: [], position: -1 },
     mode: 'normal',
     modelMessages: compiledPreset.messages,
     preset: DEFAULT_PRESET,
@@ -24,12 +23,12 @@ async function runtime(): Promise<PersistedSessionRuntime> {
     title: '会话',
     ui: [],
     updatedAt: 2,
-    version: 1,
+    version: 2,
   };
 }
 
 describe('session persistence coordinator', () => {
-  it('把运行时、规范上下文与Working Copy放进同一完整Revision', async () => {
+  it('把运行时与规范上下文放进单个会话文件', async () => {
     const settings = new MemoryAgentSettingsStore();
     const store = new SessionRevisionStore(new MemoryTavernFileClient(), settings);
     const persistence = new SessionPersistenceCoordinator({
@@ -39,14 +38,9 @@ describe('session persistence coordinator', () => {
       store,
     });
     const state = await runtime();
-    const files = [
-      { content: '正文', mediaType: 'text/markdown' as const, path: '/character/description.md', readonly: false, resourceId: 'r' },
-    ];
-    await persistence.persist(state, files, { snapshot: Uint8Array.of(1) });
+    await persistence.persist(state);
     const loaded = await persistence.load('session');
     expect(loaded.runtime).toEqual(state);
-    expect(loaded.workingCopy).toEqual(files);
-    expect(loaded.snapshotBlobs.snapshot).toEqual(Uint8Array.of(1));
     expect(settings.load().characterStores.binding).toMatchObject({ avatarId: 'avatar.png', bindingId: 'binding' });
   });
 
@@ -58,7 +52,7 @@ describe('session persistence coordinator', () => {
       characterName: '梦梦',
       store: new SessionRevisionStore(new MemoryTavernFileClient(), settings),
     });
-    await persistence.persist(await runtime(), [], {});
+    await persistence.persist(await runtime());
     expect(Object.keys(settings.load().characterStores)).toEqual(['binding']);
   });
 });

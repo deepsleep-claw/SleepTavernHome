@@ -5,6 +5,7 @@ import {
   defaultBuiltinAgentConfiguration,
   type AgentConfiguration,
 } from './builtin-agent';
+import type { SessionMode } from '../session/types';
 
 export type { AgentConfiguration } from './builtin-agent';
 
@@ -61,6 +62,7 @@ export type GlobalSkillIndexEntry = {
   files?: Record<string, GlobalSkillFileIndexEntry>;
   id: string;
   loading: 'full' | 'on-demand';
+  locked?: boolean;
   name: string;
   revision: number;
   sha256?: string;
@@ -104,6 +106,8 @@ export type CharacterStoreReference = {
 };
 
 export type DreamCardAgentSettings = {
+  activeThemeId: string;
+  approvalMode: SessionMode;
   activeAgentConfigurationId: string;
   activeProfileId?: string;
   activePresetId: string;
@@ -129,6 +133,8 @@ export type DreamCardAgentSettings = {
 export const DEFAULT_AGENT_CONFIGURATION_ID = DEFAULT_BUILTIN_AGENT.id;
 
 export const DEFAULT_DREAM_CARD_AGENT_SETTINGS: DreamCardAgentSettings = {
+  activeThemeId: 'builtin:clean',
+  approvalMode: 'normal',
   activeAgentConfigurationId: DEFAULT_AGENT_CONFIGURATION_ID,
   activePresetId: DEFAULT_PRESET.id,
   agentConfigurations: [defaultBuiltinAgentConfiguration()],
@@ -253,7 +259,12 @@ export function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamC
   return {
     ...structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS),
     ...structuredClone(raw ?? {}),
+    approvalMode: ['full', 'normal', 'yolo'].includes(raw?.approvalMode ?? '') ? raw!.approvalMode! : 'normal',
     characterStores: structuredClone(raw?.characterStores ?? {}),
+    activeThemeId:
+      typeof raw?.activeThemeId === 'string' && raw.activeThemeId.trim()
+        ? raw.activeThemeId.trim()
+        : DEFAULT_DREAM_CARD_AGENT_SETTINGS.activeThemeId,
     compressImages: raw?.compressImages !== false,
     dangerousNonCharacterResourceWrites: raw?.dangerousNonCharacterResourceWrites === true,
     files: structuredClone(raw?.files ?? {}),
@@ -298,6 +309,8 @@ export function mergeSettingsChanges(
   const choose = <K extends keyof DreamCardAgentSettings>(key: K): DreamCardAgentSettings[K] =>
     structuredClone(equal(base[key], incoming[key]) ? latest[key] : incoming[key]);
   return {
+    activeThemeId: choose('activeThemeId'),
+    approvalMode: choose('approvalMode'),
     activeAgentConfigurationId: choose('activeAgentConfigurationId'),
     activeProfileId: choose('activeProfileId'),
     activePresetId: choose('activePresetId'),

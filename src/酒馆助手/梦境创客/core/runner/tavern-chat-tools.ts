@@ -6,24 +6,28 @@ import type { MemoryWorkspaceRepository } from '../workspace/memory-repository';
 import type { RunnerTool, ToolConfirmation } from './tools';
 
 export type TavernChatRunnerToolOptions = {
+  approvalMode?: () => 'full' | 'manual' | 'yolo';
   beforeGeneration?: () => Promise<boolean>;
   isYolo?: () => boolean;
   resolveFileUrl?: (fileId: string) => string | undefined;
 };
 
 function confirmation(
-  workspace: TavernChatWorkspace,
   options: TavernChatRunnerToolOptions,
+  input: unknown,
   toolCallId: string,
   toolName: string,
+  highRisk = false,
 ): ToolConfirmation | undefined {
-  return !options.isYolo?.() && workspace.needsAuthorization()
-    ? {
-        description: '本次运行将直接操作当前角色的酒馆聊天记录；聊天改动不进入角色卡快照，也不能用梦境创客Undo。',
-        toolCallId,
-        toolName,
-      }
-    : undefined;
+  const mode = options.approvalMode?.() ?? (options.isYolo?.() ? 'yolo' : 'manual');
+  if (mode === 'full' || (mode === 'yolo' && !highRisk)) return undefined;
+  return {
+    description: '将直接操作当前角色的酒馆聊天记录；聊天改动不能用梦境创客Undo。',
+    intent: input,
+    risk: highRisk ? 'high' : 'ordinary',
+    toolCallId,
+    toolName,
+  };
 }
 
 async function authorizeAndRun<T>(
@@ -38,7 +42,32 @@ async function authorizeAndRun<T>(
 
 async function beforeGeneration(options: TavernChatRunnerToolOptions): Promise<void> {
   if (options.beforeGeneration && !(await options.beforeGeneration())) {
-    throw new Error('CHECKPOINT_REJECTED：用户拒绝了生成前的Working Copy检查点，本次酒馆生成未执行。');
+    throw new Error('GENERATION_PREPARATION_REJECTED：生成前准备未通过，本次酒馆生成未执行。');
+  }
+}
+
+async function runGeneration<T>(
+  workspace: TavernChatWorkspace,
+  signal: AbortSignal,
+  action: () => Promise<T>,
+): Promise<T> {
+  const interrupted = new Error('用户打断了酒馆生成。') as Error & { code: string };
+  interrupted.code = 'USER_INTERRUPTED';
+  const stop = () => workspace.stopGeneration();
+  if (signal.aborted) {
+    stop();
+    throw interrupted;
+  }
+  signal.addEventListener('abort', stop, { once: true });
+  try {
+    const result = await action();
+    if (signal.aborted) throw interrupted;
+    return result;
+  } catch (error) {
+    if (signal.aborted) throw interrupted;
+    throw error;
+  } finally {
+    signal.removeEventListener('abort', stop);
   }
 }
 
@@ -47,8 +76,9 @@ export function createTavernChatRunnerTools(
   workspace: TavernChatWorkspace,
   options: TavernChatRunnerToolOptions = {},
 ): RunnerTool[] {
-  const mutationConfirmation = (toolName: string) => (_input: unknown, toolCallId: string) =>
-    confirmation(workspace, options, toolCallId, toolName);
+  const mutationConfirmation = (toolName: string, highRisk?: (input: unknown) => boolean) =>
+    (input: unknown, toolCallId: string) =>
+      confirmation(options, input, toolCallId, toolName, highRisk?.(input) ?? false);
   return [
     {
       definition: tool({
@@ -112,7 +142,7 @@ export function createTavernChatRunnerTools(
           message: z.string().min(1),
         }),
       }),
-      execute: async (input, toolCallId) =>
+      execute: async (input, toolCallId, context) =>
         authorizeAndRun(workspace, toolCallId, async () => {
           const value = input as { chatId: string; images?: string[]; message: string };
           await workspace.prepareGeneration(value.chatId, 'send', repository);
@@ -128,7 +158,9 @@ export function createTavernChatRunnerTools(
               return { title: path.split('/').at(-1) ?? 'image', url };
             }),
           );
-          await workspace.sendAndGenerate(value.chatId, value.message, images, repository);
+          await runGeneration(workspace, context?.abortSignal ?? new AbortController().signal, () =>
+            workspace.sendAndGenerate(value.chatId, value.message, images, repository),
+          );
           return { chatId: value.chatId, completed: true, images: images.length };
         }),
       name: 'send_tavern_message',
@@ -140,19 +172,24 @@ export function createTavernChatRunnerTools(
         description: '不追加用户消息，直接为最新user楼层调用酒馆原生生成并等待完成。',
         inputSchema: z.object({ chatId: z.string().min(1) }),
       }),
-      execute: async (input, toolCallId) =>
+      execute: async (input, toolCallId, context) =>
         authorizeAndRun(workspace, toolCallId, async () => {
           const chatId = (input as { chatId: string }).chatId;
           await workspace.prepareGeneration(chatId, 'reply', repository);
           await beforeGeneration(options);
-          await workspace.generateReply(chatId, repository);
+          await runGeneration(workspace, context?.abortSignal ?? new AbortController().signal, () =>
+            workspace.generateReply(chatId, repository),
+          );
           return { chatId, completed: true };
         }),
       name: 'generate_tavern_reply',
       readonly: false,
     },
     {
-      confirmation: mutationConfirmation('switch_tavern_swipe'),
+      confirmation: mutationConfirmation(
+        'switch_tavern_swipe',
+        input => (input as { target?: unknown } | undefined)?.target === 'generate',
+      ),
       definition: tool({
         description:
           '操作最新assistant楼层的Swipe。target为0基编号时直接选择现有Swipe；传generate时调用酒馆原生机制生成新Swipe并等待完成。',
@@ -161,21 +198,27 @@ export function createTavernChatRunnerTools(
           target: z.union([z.number().int().min(0), z.literal('generate')]),
         }),
       }),
-      execute: async (input, toolCallId) =>
+      execute: async (input, toolCallId, context) =>
         authorizeAndRun(workspace, toolCallId, async () => {
           const value = input as { chatId: string; target: number | 'generate' };
           if (value.target === 'generate') {
             await workspace.prepareGeneration(value.chatId, 'swipe', repository);
             await beforeGeneration(options);
           }
-          await workspace.switchSwipe(value.chatId, value.target, repository);
+          if (value.target === 'generate') {
+            await runGeneration(workspace, context?.abortSignal ?? new AbortController().signal, () =>
+              workspace.switchSwipe(value.chatId, value.target, repository),
+            );
+          } else {
+            await workspace.switchSwipe(value.chatId, value.target, repository);
+          }
           return { chatId: value.chatId, selected: value.target };
         }),
       name: 'switch_tavern_swipe',
       readonly: false,
     },
     {
-      confirmation: mutationConfirmation('truncate_tavern_chat'),
+      confirmation: mutationConfirmation('truncate_tavern_chat', () => true),
       definition: tool({
         description:
           '按酒馆语义从指定0基楼层开始截断：该楼层及其后的所有消息都会立即删除。不能只抽掉中间一层，也没有梦境创客Undo。',

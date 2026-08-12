@@ -1,17 +1,15 @@
 import type { ModelMessage } from 'ai';
-import type { HistoryCheckpoint } from '../history/timeline';
-import type { CardWorkspaceState } from '../mapping/types';
+import type { OperationReplayConflict, OperationReplayDirection } from '../operations/operation-replayer';
+import type { PersistedOperationLog } from '../operations/types';
 import type { CompiledPreset, StructuredPreset } from '../preset/compiler';
 import type { RunnerEvent, RunnerStatus } from '../runner/agent-runner';
 import type { ContextUsage } from '../runner/context';
 import type { AgentSkill } from '../skills/types';
-import type { MergeConflict, MergePreparation } from '../transaction/merge';
-import type { StateOperation } from '../transaction/state-diff';
-import type { WorkspaceChange, WorkspaceFile } from '../workspace/types';
+import type { WorkspaceFile } from '../workspace/types';
 import type { TavernChatWorkspaceRuntime } from '../tavern/chat-workspace';
 import type { SessionAttachmentSummary, StoredSessionAttachment } from './attachments';
 
-export type SessionMode = 'normal' | 'yolo';
+export type SessionMode = 'full' | 'normal' | 'yolo';
 
 export type SessionModelControls = {
   reasoningEffort: 'auto' | 'off' | string;
@@ -25,7 +23,7 @@ export type SessionAgentConfiguration = {
   skillIds: string[];
 };
 
-export type SessionLifecycleStatus = RunnerStatus | 'abnormal' | 'awaiting-approval' | 'committing';
+export type SessionLifecycleStatus = RunnerStatus | 'abnormal';
 
 export type SessionUiItem = {
   attachments?: SessionAttachmentSummary[];
@@ -54,56 +52,13 @@ export type ManualWorkspaceFileChange = {
 };
 
 export type ManualEditGroup = {
-  attachedToAgent: boolean;
-  beforeSnapshot?: string;
   checkpointId: string;
-  completed: boolean;
   files: Record<string, ManualWorkspaceFileChange>;
   modelMessageIndex?: number;
   uiItemId: string;
 };
 
-export type SkillChange = {
-  after?: AgentSkill;
-  before?: AgentSkill;
-  highRisk: boolean;
-  kind: 'create' | 'delete' | 'modify';
-  label: string;
-  path: string;
-};
-
-export type SessionApproval = {
-  candidateSnapshot: string;
-  conflicts: MergeConflict[];
-  error?: string;
-  fileChanges: WorkspaceApprovalChange[];
-  /** true 表示Runner正在等待这次生成前检查点，处理后会继续当前工具链。 */
-  midRun: boolean;
-  skillChanges: SkillChange[];
-  stateChanges: StateOperation[];
-  warnings: string[];
-};
-
-export type WorkspaceApprovalChange = {
-  after?: WorkspaceFile;
-  before?: WorkspaceFile;
-  highRisk: boolean;
-  kind: WorkspaceChange['kind'];
-  label: string;
-  path: string;
-};
-
-export type SessionSnapshotPayload = {
-  card: CardWorkspaceState;
-  events: RunnerEvent[];
-  modelMessages: ModelMessage[];
-  workspaceFiles?: WorkspaceFile[];
-  /** @deprecated 旧快照兼容字段；全局Skill不参与角色卡Undo/Redo。 */
-  skills?: AgentSkill[];
-};
-
 export type PersistedSessionRuntime = {
-  activeBase?: CardWorkspaceState;
   activeCheckpointId?: string;
   agentConfiguration?: SessionAgentConfiguration;
   attachments?: Record<string, StoredSessionAttachment>;
@@ -111,15 +66,13 @@ export type PersistedSessionRuntime = {
   createdAt: number;
   events: RunnerEvent[];
   headerMessageCount: number;
-  history: { checkpoints: HistoryCheckpoint[]; position: number };
   lastError?: string;
   manualEditGroup?: ManualEditGroup;
   mode: SessionMode;
   modelControls?: SessionModelControls;
   modelMessages: ModelMessage[];
-  pending?: PendingCandidate;
+  operationLog?: PersistedOperationLog;
   preset: StructuredPreset;
-  rejectNextTavernGeneration?: boolean;
   sessionId: string;
   skills: AgentSkill[];
   status: SessionLifecycleStatus;
@@ -127,13 +80,12 @@ export type PersistedSessionRuntime = {
   title: string;
   ui: SessionUiItem[];
   updatedAt: number;
-  version: 1;
+  version: 2;
   warnings?: string[];
 };
 
 export type SessionView = {
   agentConfiguration: SessionAgentConfiguration;
-  approval?: SessionApproval;
   bindingId: string;
   characterName: string;
   contextUsage: ContextUsage;
@@ -141,6 +93,12 @@ export type SessionView = {
   events: RunnerEvent[];
   mode: SessionMode;
   modelControls: SessionModelControls;
+  operationLog: PersistedOperationLog;
+  operationReplay?: {
+    conflicts: OperationReplayConflict[];
+    direction: OperationReplayDirection;
+    turnId: string;
+  };
   preset: StructuredPreset;
   sessionId: string;
   skills: AgentSkill[];
@@ -149,20 +107,5 @@ export type SessionView = {
   title: string;
   ui: SessionUiItem[];
   warnings: string[];
-  workingChanges: WorkspaceChange[];
   workingFiles: WorkspaceFile[];
-};
-
-export type PendingCandidate = {
-  base: CardWorkspaceState;
-  candidateSnapshot: string;
-  checkpointId: string;
-  preparation: MergePreparation;
-  fileChanges: WorkspaceApprovalChange[];
-  skillChanges: SkillChange[];
-  skills: AgentSkill[];
-  state: CardWorkspaceState;
-  stopped: boolean;
-  midRun?: boolean;
-  warnings: string[];
 };

@@ -39,6 +39,7 @@ function parseSkillSource(value: string, id: string, url: string): Omit<AgentSki
     description: metadata.description,
     id,
     loading: metadata.loading,
+    ...(metadata.locked === true ? { locked: true } : {}),
     name: metadata.name,
   };
 }
@@ -57,6 +58,7 @@ function indexEntry(
     files,
     id: skill.id,
     loading: skill.loading,
+    locked: skill.locked === true,
     name: skill.name,
     revision,
     sha256: mainSha256,
@@ -71,6 +73,7 @@ function skillSource(skill: AgentSkill): string {
       description: skill.description,
       id: skill.id,
       loading: skill.loading,
+      locked: skill.locked === true,
       name: skill.name,
     },
     skill.body,

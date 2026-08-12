@@ -207,7 +207,7 @@ function clearMarkerHover(): void {
   overflow: hidden;
   border: 1px solid var(--dca-border);
   border-radius: var(--dca-radius-sm);
-  background: #2d2d2d;
+  background: var(--dca-code-canvas);
 }
 
 .dca-ace-host,
@@ -232,7 +232,7 @@ function clearMarkerHover(): void {
   z-index: 5;
   border-radius: var(--dca-radius-sm);
   padding: 0.12rem 0.35rem;
-  background: rgb(20 18 27 / 82%);
+  background: color-mix(in srgb, var(--dca-code-raised) 82%, transparent);
   color: var(--dca-text-muted);
   font-size: 0.68rem;
   pointer-events: none;
@@ -245,19 +245,19 @@ function clearMarkerHover(): void {
   max-width: 18rem;
   align-items: center;
   gap: 0.35rem;
-  border: 1px solid rgb(243 190 79 / 45%);
+  border: 1px solid color-mix(in srgb, var(--dca-warning) 45%, transparent);
   border-radius: var(--dca-radius-sm);
   padding: 0.25rem 0.45rem;
-  background: #201c16;
-  color: #f6d890;
+  background: var(--dca-code-raised);
+  color: var(--dca-warning);
   font-size: 0.72rem;
   pointer-events: none;
 }
 
 .dca-vfs-editor .dca-ace-secret-marker {
   position: absolute;
-  border-bottom: 2px dotted #efbd55;
-  background: rgb(239 189 85 / 18%);
+  border-bottom: 2px dotted var(--dca-warning);
+  background: color-mix(in srgb, var(--dca-warning) 18%, transparent);
 }
 
 .dca-vfs-editor .ace_gutter-cell.ace_warning {
@@ -267,7 +267,7 @@ function clearMarkerHover(): void {
 .dca-vfs-editor .ace_gutter-cell.ace_warning::after {
   position: absolute;
   right: 0.25rem;
-  color: #efbd55;
+  color: var(--dca-warning);
   content: '\f3ed';
   font-family: 'Font Awesome 6 Free';
   font-weight: 900;

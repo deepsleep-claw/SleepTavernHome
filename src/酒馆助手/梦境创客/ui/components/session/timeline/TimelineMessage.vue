@@ -62,12 +62,15 @@ const { action, runtime, state } = useDreamCardAgent();
 const editing = ref(false);
 const editDraft = ref('');
 
+const lastUserMessageId = computed(() => [...(state.value.active?.ui ?? [])].reverse().find(item => item.kind === 'user')?.id);
+const lastVisibleMessageId = computed(() => state.value.active?.ui.at(-1)?.id);
+
 const canModifyHistory = computed(() =>
   Boolean(
     state.value.active &&
     !state.value.busy &&
-    !state.value.active.approval &&
-    !['awaiting-approval', 'committing', 'running', 'waiting-approval'].includes(state.value.active.status),
+    props.item.id === lastUserMessageId.value &&
+    !['running', 'waiting-approval'].includes(state.value.active.status),
   ),
 );
 
@@ -77,7 +80,7 @@ const canSend = computed(() =>
     state.value.active &&
     !state.value.busy &&
     ['completed', 'idle'].includes(state.value.active.status) &&
-    !state.value.active.approval,
+    props.item.id === lastVisibleMessageId.value,
   ),
 );
 
@@ -121,8 +124,8 @@ async function resend() {
 
 .dca-message-user {
   align-self: flex-end;
-  border-color: rgb(157 124 255 / 35%);
-  background: linear-gradient(160deg, rgb(157 124 255 / 16%), rgb(157 124 255 / 8%));
+  border-color: color-mix(in srgb, var(--dca-accent) 35%, transparent);
+  background: var(--dca-user-message-gradient);
 }
 
 .dca-message-assistant {
@@ -131,7 +134,7 @@ async function resend() {
 
 .dca-message-guidance {
   border-style: dashed;
-  border-color: rgb(223 177 94 / 55%);
+  border-color: color-mix(in srgb, var(--dca-warning) 55%, transparent);
   background: var(--dca-warning-soft);
 }
 
@@ -177,7 +180,7 @@ async function resend() {
 }
 
 .dca-message-attachments > span.missing {
-  border-color: rgb(224 108 130 / 45%);
+  border-color: color-mix(in srgb, var(--dca-danger) 45%, transparent);
   color: var(--dca-danger);
 }
 

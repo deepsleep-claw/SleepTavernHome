@@ -262,19 +262,6 @@ export class DreamCreatorWorkspaceFileStore {
     return this.project(bindingId, sessionId);
   }
 
-  async restorePersistentSnapshot(
-    bindingId: string,
-    sessionId: string,
-    desiredFiles: WorkspaceFile[],
-  ): Promise<WorkspaceFile[]> {
-    const current = await this.project(bindingId, sessionId);
-    const desired = desiredFiles.filter(file => file.path.startsWith('/files/'));
-    const decisions = Object.fromEntries(
-      new Set([...current.map(file => file.path), ...desired.map(file => file.path)]).values().map(path => [path, 'agent']),
-    ) as Record<string, 'agent'>;
-    return this.applyWorkspace(bindingId, sessionId, current.filter(file => file.path.startsWith('/files/')), desired, decisions);
-  }
-
   async releaseSession(bindingId: string, sessionId: string): Promise<void> {
     const settings = this.settingsStore.load();
     const tempIds: string[] = [];

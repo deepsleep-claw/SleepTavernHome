@@ -13,6 +13,9 @@ import { richToolOutput } from './tool-output';
 
 export type ToolConfirmation = {
   description: string;
+  intent?: unknown;
+  risk?: 'high' | 'ordinary';
+  sessionId?: string;
   toolCallId: string;
   toolName: string;
 };
@@ -20,7 +23,7 @@ export type ToolConfirmation = {
 export type RunnerTool = {
   confirmation?: (input: unknown, toolCallId: string) => Promise<ToolConfirmation | undefined> | ToolConfirmation | undefined;
   definition: Tool;
-  execute: (input: unknown, toolCallId: string) => Promise<unknown>;
+  execute: (input: unknown, toolCallId: string, context?: { abortSignal: AbortSignal }) => Promise<unknown>;
   name: string;
   readonly: boolean;
 };
@@ -93,21 +96,24 @@ function skillConfirmation(
   operation: 'delete' | 'move' | 'patch' | 'write',
   path: string,
   existingSkillIds: string[],
+  lockedSkillIds: string[],
   toolCallId: string,
   toolName: string,
 ): ToolConfirmation | undefined {
   if (!path.startsWith('/skills/')) return undefined;
-  const assessment = assessSkillMutation(operation, path, existingSkillIds);
+  const assessment = assessSkillMutation(operation, path, existingSkillIds, lockedSkillIds);
   if (!assessment.allowed) throw new Error(assessment.reason);
   return assessment.confirmationRequired
-    ? { description: `高危Skill操作需要确认：${operation} ${path}`, toolCallId, toolName }
+    ? { description: `高危Skill操作需要确认：${operation} ${path}`, risk: 'high', toolCallId, toolName }
     : undefined;
 }
 
 export type WorkspaceRunnerToolOptions = {
+  approvalMode?: () => 'full' | 'manual' | 'yolo';
   canWriteNonCharacterResources?: () => boolean;
   chatWorkspace?: TavernChatWorkspace;
   isYolo?: () => boolean;
+  lockedSkillIds?: string[];
 };
 
 type MutationOperation = 'delete' | 'move' | 'patch' | 'write';
@@ -130,14 +136,71 @@ function chatConfirmation(
   toolCallId: string,
   toolName: string,
 ): ToolConfirmation | undefined {
-  if (!chatPath(path) || !options.chatWorkspace || options.isYolo?.() || !options.chatWorkspace.needsAuthorization()) {
-    return undefined;
-  }
+  if (!chatPath(path) || !options.chatWorkspace) return undefined;
   return {
-    description: '本次运行将直接修改当前角色的酒馆聊天记录；聊天改动不进入角色卡Diff与快照。',
+    description: '将直接修改当前角色的酒馆聊天记录；聊天改动不可由梦境创客Undo。',
+    risk: 'ordinary',
     toolCallId,
     toolName,
   };
+}
+
+function approvalMode(options: WorkspaceRunnerToolOptions): 'full' | 'manual' | 'yolo' {
+  if (options.approvalMode) return options.approvalMode();
+  return options.isYolo?.() ? 'yolo' : 'manual';
+}
+
+function ordinaryConfirmation(operation: MutationOperation, path: string, toolCallId: string, toolName: string) {
+  const verb = operation === 'delete' ? '删除' : operation === 'move' ? '移动' : operation === 'patch' ? '修改' : '写入';
+  return {
+    description: `${verb}工作区内容：${path}`,
+    risk: 'ordinary' as const,
+    toolCallId,
+    toolName,
+  };
+}
+
+function inherentlyHighRisk(operation: MutationOperation, path: string, input: unknown): boolean {
+  if (operation === 'delete') {
+    return (
+      /^\/worldbooks\/[^/]+(?:\/)?$/u.test(path) ||
+      path === '/greetings' ||
+      path.startsWith('/files/') ||
+      path.startsWith('/skills/user/')
+    );
+  }
+  if (operation === 'write' && (input as { overwrite?: boolean } | undefined)?.overwrite === true) {
+    return (
+      path === '/worldbooks/bindings.yaml' ||
+      path === '/greetings/index.yaml' ||
+      path.startsWith('/files/') ||
+      path.startsWith('/skills/user/') ||
+      nonCharacterResourcePath(path)
+    );
+  }
+  return false;
+}
+
+async function mutationConfirmation(
+  operation: MutationOperation,
+  path: string,
+  input: unknown,
+  repository: WorkspaceRepository,
+  existingSkillIds: string[],
+  options: WorkspaceRunnerToolOptions,
+  toolCallId: string,
+  toolName: string,
+): Promise<ToolConfirmation | undefined> {
+  const specialized =
+    chatConfirmation(path, options, toolCallId, toolName) ??
+    skillConfirmation(operation, path, existingSkillIds, options.lockedSkillIds ?? [], toolCallId, toolName) ??
+    (await resourceConfirmation(operation, path, input, repository, options, toolCallId, toolName));
+  const highRisk = specialized?.risk === 'high' || inherentlyHighRisk(operation, path, input);
+  const mode = approvalMode(options);
+  if (mode === 'full') return undefined;
+  if (mode === 'yolo' && !highRisk) return undefined;
+  const confirmation = specialized ?? ordinaryConfirmation(operation, path, toolCallId, toolName);
+  return { ...confirmation, intent: input, risk: highRisk ? 'high' : 'ordinary' };
 }
 
 async function currentScriptEnabled(repository: WorkspaceRepository, path: string): Promise<boolean> {
@@ -165,11 +228,11 @@ async function resourceConfirmation(
         'NON_CHARACTER_RESOURCE_WRITE_DISABLED：全局与当前预设的正则/脚本默认只读。请让用户在开发者模式中显式开启危险写入权限。',
       );
     }
-    return { description: `高危非角色资源操作需要确认：${operation} ${path}`, toolCallId, toolName };
+    return { description: `高危非角色资源操作需要确认：${operation} ${path}`, risk: 'high', toolCallId, toolName };
   }
   if (!characterScriptPath(path) || operation === 'delete' || operation === 'move') return undefined;
   if (path.endsWith('/script.js') && (await currentScriptEnabled(repository, path))) {
-    return { description: `修改已启用脚本的代码需要确认：${path}`, toolCallId, toolName };
+    return { description: `修改已启用脚本的代码需要确认：${path}`, risk: 'high', toolCallId, toolName };
   }
   if (!path.endsWith('/info.yaml')) return undefined;
   let candidate: string;
@@ -182,7 +245,7 @@ async function resourceConfirmation(
     const nextEnabled = parseYamlObject(candidate, path).enabled === true;
     const previousEnabled = await currentScriptEnabled(repository, path);
     if (nextEnabled && !previousEnabled) {
-      return { description: `启用或创建已启用脚本需要确认：${path}`, toolCallId, toolName };
+      return { description: `启用或创建已启用脚本需要确认：${path}`, risk: 'high', toolCallId, toolName };
     }
   } catch {
     // 无效 YAML 会在文件工具或候选物化时返回明确错误，不在确认阶段吞掉真正写入。
@@ -263,10 +326,15 @@ export function createWorkspaceRunnerTools(
     {
       confirmation: async (input, toolCallId) => {
         const path = (input as { path: string }).path;
-        return (
-          chatConfirmation(path, options, toolCallId, 'write_file') ??
-          skillConfirmation('write', path, existingSkillIds, toolCallId, 'write_file') ??
-          (await resourceConfirmation('write', path, input, repository, options, toolCallId, 'write_file'))
+        return mutationConfirmation(
+          'write',
+          path,
+          input,
+          repository,
+          existingSkillIds,
+          options,
+          toolCallId,
+          'write_file',
         );
       },
       definition: tool({
@@ -320,10 +388,15 @@ export function createWorkspaceRunnerTools(
     {
       confirmation: async (input, toolCallId) => {
         const path = (input as { path: string }).path;
-        return (
-          chatConfirmation(path, options, toolCallId, 'apply_patch') ??
-          skillConfirmation('patch', path, existingSkillIds, toolCallId, 'apply_patch') ??
-          (await resourceConfirmation('patch', path, input, repository, options, toolCallId, 'apply_patch'))
+        return mutationConfirmation(
+          'patch',
+          path,
+          input,
+          repository,
+          existingSkillIds,
+          options,
+          toolCallId,
+          'apply_patch',
         );
       },
       definition: tool({
@@ -359,12 +432,13 @@ export function createWorkspaceRunnerTools(
     {
       confirmation: async (input, toolCallId) => {
         const value = input as { from: string; to: string };
-        return (
-          skillConfirmation('move', value.from, existingSkillIds, toolCallId, 'move_path') ??
-          skillConfirmation('move', value.to, existingSkillIds, toolCallId, 'move_path') ??
-          (await resourceConfirmation('move', value.from, input, repository, options, toolCallId, 'move_path')) ??
-          (await resourceConfirmation('move', value.to, input, repository, options, toolCallId, 'move_path'))
+        const source = await mutationConfirmation(
+          'move', value.from, input, repository, existingSkillIds, options, toolCallId, 'move_path',
         );
+        const target = await mutationConfirmation(
+          'move', value.to, input, repository, existingSkillIds, options, toolCallId, 'move_path',
+        );
+        return source?.risk === 'high' ? source : target?.risk === 'high' ? target : source ?? target;
       },
       definition: tool({
         description: '移动或重命名文件/目录，保留稳定资源身份。',
@@ -383,13 +457,19 @@ export function createWorkspaceRunnerTools(
     {
       confirmation: async (input, toolCallId) => {
         const path = (input as { path: string }).path;
-        return (
-          skillConfirmation('delete', path, existingSkillIds, toolCallId, 'delete_path') ??
-          (await resourceConfirmation('delete', path, input, repository, options, toolCallId, 'delete_path'))
+        return mutationConfirmation(
+          'delete',
+          path,
+          input,
+          repository,
+          existingSkillIds,
+          options,
+          toolCallId,
+          'delete_path',
         );
       },
       definition: tool({
-        description: '删除文件或整个目录。删除世界书等高危变更仍会在最终提交阶段再次确认。',
+        description: '删除文件或整个目录。高风险路径会在执行此工具前请求确认。',
         inputSchema: z.object({ path: pathSchema }),
       }),
       execute: async (input, toolCallId) => {

@@ -13,6 +13,7 @@ import {
   type FloatingViewport,
 } from './ui/floating-anchor';
 import { destroyDreamCardAgentWindow, openDreamCardAgentWindow } from './ui/popup';
+import { applyThemeToHost } from './ui/theme/runtime';
 
 export const DREAM_CARD_AGENT_ID = 'dream-card-agent';
 export const DREAM_CARD_AGENT_NAME = '梦境创客';
@@ -99,6 +100,7 @@ function mountWandEntry(owner: string): { destroy: () => void } {
 
 function mountFloatingButton(owner: string): { destroy: () => void } {
   const runtime = getDreamCardAgentRuntime();
+  const initialState = runtime.snapshot();
   const host = window.parent;
   const namespace = eventNamespace(owner);
   $(`#${FLOATING_BUTTON_ID}`).remove();
@@ -115,8 +117,9 @@ function mountFloatingButton(owner: string): { destroy: () => void } {
       openDreamCardAgentWindow();
     })
     .appendTo('body');
-  let anchor: FloatingButtonAnchor = runtime.snapshot().floatingButtonAnchor;
-  let offset: FloatingButtonOffset = runtime.snapshot().floatingButtonOffset;
+  let anchor: FloatingButtonAnchor = initialState.floatingButtonAnchor;
+  let offset: FloatingButtonOffset = initialState.floatingButtonOffset;
+  let themeId = initialState.activeThemeId;
   let suppressClick = false;
   let stopDragging = () => {};
 
@@ -208,9 +211,14 @@ function mountFloatingButton(owner: string): { destroy: () => void } {
     host.document.addEventListener('pointercancel', end);
   };
   $button.on(`pointerdown${namespace}`, startDragging);
+  applyThemeToHost(themeId);
   setPlacement(anchor, offset);
   host.addEventListener('resize', keepVisible);
   const unsubscribe = runtime.subscribe(state => {
+    if (state.activeThemeId !== themeId) {
+      themeId = state.activeThemeId;
+      applyThemeToHost(themeId);
+    }
     $button.toggle(state.floatingButton);
     if (
       state.floatingButtonAnchor !== anchor ||

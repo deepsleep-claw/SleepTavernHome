@@ -10,10 +10,24 @@ import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
 import type { RunnerTool, ToolConfirmation } from './tools';
 
 export type WorldbookRunnerToolOptions = {
-  getBaseState: () => CardWorkspaceState;
+  approvalMode?: () => 'full' | 'manual' | 'yolo';
+  getBaseState: () => Promise<CardWorkspaceState> | CardWorkspaceState;
   chatBindingConfirmation?: (input: unknown, toolCallId: string) => ToolConfirmation | undefined;
   setChatBinding?: (chatId: string, worldbook: string | null, toolCallId: string) => Promise<void>;
 };
+
+function semanticConfirmation(
+  options: WorldbookRunnerToolOptions,
+  input: unknown,
+  toolCallId: string,
+  toolName: string,
+  description: string,
+  highRisk = false,
+): ToolConfirmation | undefined {
+  const mode = options.approvalMode?.() ?? 'manual';
+  if (mode === 'full' || (mode === 'yolo' && !highRisk)) return undefined;
+  return { description, intent: input, risk: highRisk ? 'high' : 'ordinary', toolCallId, toolName };
+}
 
 function normalizedName(value: string, label = '世界书名称'): string {
   const name = value.trim();
@@ -121,7 +135,7 @@ export function createWorldbookRunnerTools(
       execute: async input => {
         const value = input as { maxResults?: number; query?: string };
         const query = value.query?.trim().toLocaleLowerCase() ?? '';
-        const base = options.getBaseState();
+        const base = await options.getBaseState();
         const editable = new Set(workingBooks(repository, base).filter(book => book.writable).map(book => book.name));
         const matches = bridge
           .getWorldbookNames()
@@ -153,13 +167,15 @@ export function createWorldbookRunnerTools(
       readonly: true,
     },
     {
+      confirmation: (input, toolCallId) =>
+        semanticConfirmation(options, input, toolCallId, 'create_worldbook', '创建新的可编辑世界书。'),
       definition: tool({
-        description: '在Working Copy中新建一本空世界书。不会自动绑定；本轮结束后与其他角色卡改动一并审批。',
+        description: '立即新建一本空世界书。不会自动绑定；工具完成时世界书已经写入酒馆。',
         inputSchema: z.object({ name: z.string().min(1) }),
       }),
       execute: async (input, toolCallId) => {
         const name = normalizedName((input as { name: string }).name);
-        const base = options.getBaseState();
+        const base = await options.getBaseState();
         if (knownNames(repository, bridge, base).has(name)) throw new Error(`世界书名称已存在：${name}`);
         const book: WorldbookData = {
           entries: [],
@@ -176,16 +192,18 @@ export function createWorldbookRunnerTools(
       readonly: false,
     },
     {
+      confirmation: (input, toolCallId) =>
+        semanticConfirmation(options, input, toolCallId, 'clone_worldbook', '复制世界书并创建独立版本。'),
       definition: tool({
         description:
-          '完整复制一本世界书到Working Copy，保留条目顺序、未知字段与extra，但为副本分配独立资源身份。新名称必须由你明确提供。',
+          '立即完整复制一本世界书，保留条目顺序、未知字段与extra，但为副本分配独立资源身份。新名称必须由你明确提供。',
         inputSchema: z.object({ name: z.string().min(1).describe('副本的新名称'), source: z.string().min(1) }),
       }),
       execute: async (input, toolCallId) => {
         const value = input as { name: string; source: string };
         const name = normalizedName(value.name, '新世界书名称');
         const sourceName = normalizedName(value.source, '源世界书名称');
-        const base = options.getBaseState();
+        const base = await options.getBaseState();
         if (knownNames(repository, bridge, base).has(name)) throw new Error(`世界书名称已存在：${name}`);
         const source = await loadBook(repository, bridge, base, sourceName);
         if (!source.roundTripSafe) throw new Error(`世界书“${sourceName}”无法无损读取，不能复制。`);
@@ -203,10 +221,22 @@ export function createWorldbookRunnerTools(
       readonly: false,
     },
     {
-      confirmation: (input, toolCallId) => options.chatBindingConfirmation?.(input, toolCallId),
+      confirmation: (input, toolCallId) => {
+        const chat = options.chatBindingConfirmation?.(input, toolCallId);
+        if (chat) return { ...chat, intent: input, risk: 'high' };
+        const value = input as { characterPrimary?: unknown; chat?: unknown };
+        return semanticConfirmation(
+          options,
+          input,
+          toolCallId,
+          'set_worldbook_binding',
+          '修改角色卡或聊天的世界书绑定。',
+          Object.prototype.hasOwnProperty.call(value, 'characterPrimary') || Boolean(value.chat),
+        );
+      },
       definition: tool({
         description:
-          '修改世界书绑定。省略的字段保持不变；characterPrimary或chat.worldbook传null表示清除。绑定一本尚未进入工作区的现有世界书时，会先无损载入可编辑Working Copy。',
+          '修改世界书绑定。省略的字段保持不变；characterPrimary或chat.worldbook传null表示清除。绑定一本尚未进入工作区的现有世界书时，会先无损载入实时工作区。',
         inputSchema: bindingSchema,
       }),
       execute: async (input, toolCallId) => {
@@ -214,7 +244,7 @@ export function createWorldbookRunnerTools(
         if (value.chat && !options.setChatBinding) {
           throw new Error('CHAT_WORKSPACE_UNAVAILABLE：当前环境尚未提供聊天世界书绑定能力。');
         }
-        const base = options.getBaseState();
+        const base = await options.getBaseState();
         const names = [
           ...(typeof value.characterPrimary === 'string' ? [value.characterPrimary] : []),
           ...(value.addCharacterAdditional ?? []),

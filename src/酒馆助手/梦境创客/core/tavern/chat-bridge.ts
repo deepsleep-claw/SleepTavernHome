@@ -40,6 +40,7 @@ export interface TavernChatBridge {
   readChat(ref: string): Promise<TavernChatData>;
   selectSwipe(messageId: number, swipe: number): Promise<void>;
   sendMessageAndGenerate(message: TavernChatMessageWrite, images: TavernChatImage[]): Promise<void>;
+  stopGeneration(): void;
   setChatWorldbook(name: string | null): Promise<void>;
   switchChat(ref: string): Promise<void>;
   truncate(fromMessageId: number): Promise<void>;
@@ -49,6 +50,7 @@ export interface TavernChatBridge {
 type HostMainModule = {
   doNewChat: (options?: { deleteCurrentChat?: boolean }) => Promise<void>;
   getPastCharacterChats: () => Promise<Array<Record<string, unknown>>>;
+  stopGeneration: () => void;
 };
 
 let hostMainModulePromise: Promise<HostMainModule> | undefined;
@@ -212,6 +214,9 @@ export function createGlobalTavernChatBridge(): TavernChatBridge {
       await createChatMessages([rawMessage(message, images)]);
       await SillyTavern.generate('normal');
     },
+    stopGeneration: () => {
+      void hostMainModule().then(module => module.stopGeneration());
+    },
     setChatWorldbook: async name => setChatLorebook(name),
     switchChat: async ref => SillyTavern.openCharacterChat(normalizeChatRef(ref)),
     truncate: async fromMessageId => {
@@ -270,6 +275,10 @@ export class FakeTavernChatBridge implements TavernChatBridge {
       selectedSwipe: 0,
       swipes: [message.message],
     });
+  }
+
+  stopGeneration(): void {
+    this.calls.push('stop-generation');
   }
 
   async createChat(name: string): Promise<string> {

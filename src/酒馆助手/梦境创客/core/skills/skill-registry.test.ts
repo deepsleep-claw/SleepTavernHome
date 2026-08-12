@@ -112,4 +112,17 @@ describe('agent skills', () => {
     });
     expect(assessSkillMutation('write', '/character/description.md', ['old'])).toMatchObject({ allowed: false });
   });
+
+  it('设置中锁定的用户Skill对Agent保持只读', () => {
+    const locked = userSkill({ locked: true });
+    const files = projectSkills([locked]);
+    expect(files.find(file => file.path === '/skills/user/academy-writer/SKILL.md')).toMatchObject({ readonly: true });
+    expect(materializeUserSkills(files)).toEqual([locked]);
+    expect(
+      assessSkillMutation('patch', '/skills/user/academy-writer/SKILL.md', ['academy-writer'], ['academy-writer']),
+    ).toMatchObject({ allowed: false, confirmationRequired: false, reason: expect.stringContaining('SKILL_LOCKED') });
+    expect(
+      assessSkillMutation('write', '/skills/user/academy-writer/new.md', ['academy-writer'], ['academy-writer']),
+    ).toMatchObject({ allowed: false });
+  });
 });

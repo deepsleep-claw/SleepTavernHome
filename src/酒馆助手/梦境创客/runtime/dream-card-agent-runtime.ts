@@ -1,7 +1,5 @@
 import { klona } from 'klona';
-import { MemoryBinaryBlobStore } from '../core/history/blob-store';
-import { ContentAddressedSnapshotStore } from '../core/history/snapshot-store';
-import { HistoryTimeline } from '../core/history/timeline';
+import { IndexedDbOperationRecoveryStore } from '../core/operations/recovery-store';
 import { materializeCardWorkspace, projectCardWorkspace } from '../core/mapping/card-workspace-mapper';
 import type { CardWorkspaceState } from '../core/mapping/types';
 import { GlobalTavernFileClient, type TavernFileClient } from '../core/persistence/file-client';
@@ -56,12 +54,14 @@ import { createGlobalTavernBridge, type TavernBridge } from '../core/tavern/brid
 import { createGlobalTavernChatBridge, type TavernChatBridge } from '../core/tavern/chat-bridge';
 import { ProductionCardStateAdapter } from '../core/tavern/production-adapter';
 import type { CardStateAdapter } from '../core/transaction/adapter';
-import { commitWorkingCopy } from '../core/transaction/commit';
-import type { WorkspaceFile } from '../core/workspace/types';
+import { applyRealtimeStateOperations } from '../core/transaction/realtime-apply';
+import { diffCardStates } from '../core/transaction/state-diff';
 
 export type DreamCardAgentRuntimeState = {
+  approvalMode: SessionMode;
   active?: SessionView;
   activeSessionAccess: 'live' | 'readonly-history';
+  activeThemeId: string;
   activeAgentConfigurationId: string;
   activeProfileId?: string;
   activePresetId: string;
@@ -126,20 +126,7 @@ type DeferredSessionSave = {
 const SESSION_OPTION_SAVE_DELAY_MS = 350;
 
 function isSessionOperationActive(status: SessionLifecycleStatus): boolean {
-  return ['awaiting-approval', 'committing', 'running', 'waiting-approval'].includes(status);
-}
-
-function retainedSnapshotBlobs(
-  runtime: PersistedSessionRuntime,
-  blobs: Record<string, Uint8Array>,
-): Record<string, Uint8Array> {
-  const retained = new Set(
-    runtime.history.checkpoints
-      .flatMap(checkpoint => [checkpoint.beforeSnapshot, checkpoint.afterSnapshot])
-      .filter((hash): hash is string => Boolean(hash)),
-  );
-  if (runtime.pending?.candidateSnapshot) retained.add(runtime.pending.candidateSnapshot);
-  return Object.fromEntries(Object.entries(blobs).filter(([hash]) => retained.has(hash)));
+  return ['running', 'waiting-approval'].includes(status);
 }
 
 export class DreamCardAgentRuntime {
@@ -153,6 +140,7 @@ export class DreamCardAgentRuntime {
   private readonly workspaceFileStore: DreamCreatorWorkspaceFileStore;
   private readonly globalSkillStore: GlobalSkillStore;
   private readonly lock = new GlobalAgentTaskLock();
+  private readonly operationRecoveryStore = new IndexedDbOperationRecoveryStore();
   private readonly log: PageDebugLog;
   private readonly now: () => number;
   private readonly settingsStore: AgentSettingsStore;
@@ -161,7 +149,11 @@ export class DreamCardAgentRuntime {
   private readonly settingsUnsubscribe?: () => void;
   private readonly subscribers = new Set<Subscriber>();
   private readonly deferredSessionSaves = new Map<string, DeferredSessionSave>();
-  private toolConfirmationResolve?: (approved: boolean) => void;
+  private toolConfirmationResolve?: {
+    resolve: (approved: boolean) => void;
+    sessionId: string;
+    toolCallId: string;
+  };
   private busyCount = 0;
   private localDeferredSaveDepth = 0;
   private skillIndexSignature = '';
@@ -188,7 +180,9 @@ export class DreamCardAgentRuntime {
     this.globalSkillStore = new GlobalSkillStore(this.fileClient, this.settingsStore, this.now);
     const settings = this.settingsStore.load();
     this.state = {
+      approvalMode: settings.approvalMode,
       activeSessionAccess: 'live',
+      activeThemeId: settings.activeThemeId,
       activeAgentConfigurationId: settings.activeAgentConfigurationId,
       activeProfileId: settings.activeProfileId,
       activePresetId: settings.activePresetId,
@@ -293,7 +287,7 @@ export class DreamCardAgentRuntime {
         bindingId,
         sessionId,
       );
-      result = this.createHistoryView(revision.entry, revision.runtime, revision.workingCopy);
+      result = this.createHistoryView(revision.entry, revision.runtime);
       this.historyViews.set(sessionId, result);
       this.activeService = undefined;
       this.state.active = result;
@@ -320,7 +314,6 @@ export class DreamCardAgentRuntime {
         characterName: current.character.name,
         store: revisionStore,
       });
-      const snapshotBlobs = new MemoryBinaryBlobStore();
       const sessionId = crypto.randomUUID();
       const attachmentStore = new ExternalSessionAttachmentStore(
         current.character.bindingId,
@@ -334,17 +327,17 @@ export class DreamCardAgentRuntime {
         executor: this.executorFactory(profile),
         contextWindow: this.profileContextWindow(profile),
         lock: this.lock,
-        mode: input.mode,
+        mode: input.mode ?? this.state.approvalMode,
         canWriteNonCharacterResources: () => this.canWriteNonCharacterResources(),
         now: this.now,
-        onPersist: async (runtime, files) => {
-          await persistence.persist(runtime, files, retainedSnapshotBlobs(runtime, snapshotBlobs.dump()));
+        onPersist: async runtime => {
+          await persistence.persist(runtime);
         },
         onSkillsCommit: (skills, mountedIds) => this.commitMountedSkills(skills, mountedIds),
         onUpdate: view => this.updateService(view),
+        operationRecoveryStore: this.operationRecoveryStore,
         requestToolApproval: request => this.requestToolConfirmation(request),
         preset: this.selectedPreset(agentConfiguration.presetId),
-        snapshots: new ContentAddressedSnapshotStore(snapshotBlobs),
         tavernBridge: this.bridge,
         tavernChatBridge: this.chatBridge,
         sessionId,
@@ -410,7 +403,6 @@ export class DreamCardAgentRuntime {
         store: revisionStore,
       });
       const revision = await persistence.load(sessionId);
-      const snapshotBlobs = new MemoryBinaryBlobStore(revision.snapshotBlobs);
       const attachmentStore = new ExternalSessionAttachmentStore(
         current.character.bindingId,
         this.workspaceFileStore,
@@ -425,21 +417,21 @@ export class DreamCardAgentRuntime {
           lock: this.lock,
           now: this.now,
           canWriteNonCharacterResources: () => this.canWriteNonCharacterResources(),
-          onPersist: async (runtime, files) => {
-            await persistence.persist(runtime, files, retainedSnapshotBlobs(runtime, snapshotBlobs.dump()));
+          onPersist: async runtime => {
+            await persistence.persist(runtime);
           },
           onSkillsCommit: (skills, mountedIds) => this.commitMountedSkills(skills, mountedIds),
           onUpdate: view => this.updateService(view),
+          operationRecoveryStore: this.operationRecoveryStore,
           requestToolApproval: request => this.requestToolConfirmation(request),
-          snapshots: new ContentAddressedSnapshotStore(snapshotBlobs),
           tavernBridge: this.bridge,
           tavernChatBridge: this.chatBridge,
           workspaceFiles: await this.workspaceFileStore.project(current.character.bindingId, sessionId),
           workspaceStore: this.workspaceFileStore,
         },
         revision.runtime,
-        revision.workingCopy,
       );
+      service.setMode(this.state.approvalMode);
       this.services.set(service.sessionId, service);
       this.activeService = service;
       this.state.activeSessionAccess = 'live';
@@ -454,7 +446,7 @@ export class DreamCardAgentRuntime {
     return this.requireService().view();
   }
 
-  /** 关闭页签只卸载前端运行实例，持久化的会话与快照仍保留，可从历史重新打开。 */
+  /** 关闭页签只卸载前端运行实例，持久化的会话与操作记录仍保留，可从历史重新打开。 */
   async closeSession(sessionId: string): Promise<void> {
     if (this.historyViews.delete(sessionId)) {
       if (this.state.active?.sessionId === sessionId) {
@@ -515,10 +507,6 @@ export class DreamCardAgentRuntime {
     return service.view();
   }
 
-  async approve(decisions: Record<string, 'agent' | 'current'>): Promise<SessionView> {
-    return this.runActiveView(service => service.approve(decisions));
-  }
-
   async undo(): Promise<SessionView> {
     return this.runActiveView(service => service.undo());
   }
@@ -531,12 +519,21 @@ export class DreamCardAgentRuntime {
     return this.runActiveView(service => service.redo());
   }
 
+  async confirmOperationReplay(continueWithoutConflicts: boolean): Promise<SessionView> {
+    return this.runActiveView(service => service.confirmOperationReplay(continueWithoutConflicts));
+  }
+
   async resend(messageId: string): Promise<SessionView> {
     return this.runActiveView(service => service.resend(messageId));
   }
 
-  async writeWorkingFile(path: string, content: string, overwriteConflict = false): Promise<SessionView> {
-    return this.runActiveView(service => service.writeWorkingFile(path, content, overwriteConflict));
+  async writeWorkingFile(
+    path: string,
+    content: string,
+    overwriteConflict = false,
+    expectedContent?: string,
+  ): Promise<SessionView> {
+    return this.runActiveView(service => service.writeWorkingFile(path, content, overwriteConflict, expectedContent));
   }
 
   async useCurrentWorkingFile(path: string): Promise<SessionView> {
@@ -606,43 +603,11 @@ export class DreamCardAgentRuntime {
   }
 
   async cleanupCurrentCharacterStorage(): Promise<{ cleanedSessions: number; removedFiles: number }> {
-    let cleanedSessions = 0;
+    const cleanedSessions = 0;
     let removedFiles = 0;
     await this.run(async () => {
       const character = this.state.currentCharacter;
       if (!character) throw new Error('请先打开角色卡。');
-      const metadata = await this.characterStore.load(character.bindingId, {
-        avatarId: character.avatarId,
-        characterName: character.name,
-      });
-      const store = new SessionRevisionStore(this.fileClient, this.settingsStore, this.now);
-      for (const entry of Object.values(metadata.sessions)) {
-        const revision = await store.load(character.bindingId, entry.sessionId);
-        const timeline = new HistoryTimeline({
-          checkpoints: revision.runtime.history.checkpoints,
-          now: this.now,
-          position: revision.runtime.history.position,
-        });
-        const removedCheckpoints = timeline.cleanupAbandoned();
-        revision.runtime.history = timeline.export();
-        const blobs = retainedSnapshotBlobs(revision.runtime, revision.snapshotBlobs);
-        if (
-          removedCheckpoints.length === 0 &&
-          Object.keys(blobs).length === Object.keys(revision.snapshotBlobs).length
-        ) {
-          continue;
-        }
-        await store.commit({
-          avatarId: character.avatarId,
-          bindingId: character.bindingId,
-          characterName: character.name,
-          runtime: revision.runtime,
-          snapshotBlobs: blobs,
-          status: entry.status,
-          workingCopy: revision.workingCopy,
-        });
-        cleanedSessions += 1;
-      }
       removedFiles = await this.workspaceFileStore.clearCache(character.bindingId);
       removedFiles += (
         await new FileRegistryGarbageCollector(this.fileClient, this.settingsStore, this.now).collect([], 0)
@@ -810,7 +775,13 @@ export class DreamCardAgentRuntime {
   }
 
   async setMode(mode: SessionMode): Promise<void> {
-    this.requireService().setMode(mode);
+    const settings = this.settingsStore.load();
+    settings.approvalMode = mode;
+    await this.settingsStore.save(settings);
+    this.state.approvalMode = mode;
+    for (const service of this.services.values()) service.setMode(mode);
+    if (this.state.activeSessionAccess === 'live') this.state.active = this.activeService?.view();
+    this.emit();
   }
 
   async applyPreset(preset: StructuredPreset): Promise<void> {
@@ -897,15 +868,25 @@ export class DreamCardAgentRuntime {
   }
 
   stop(): void {
-    this.resolveToolConfirmation(false);
-    this.activeService?.stop();
+    const running = [...this.services.values()].find(service => isSessionOperationActive(service.view().status));
+    if (!running) return;
+    if (this.toolConfirmationResolve?.sessionId === running.sessionId) this.resolveToolConfirmation(false, running.sessionId);
+    running.stop();
   }
 
-  resolveToolConfirmation(approved: boolean): void {
-    const resolve = this.toolConfirmationResolve;
+  stopSession(sessionId: string): void {
+    const service = this.services.get(sessionId);
+    if (!service || !isSessionOperationActive(service.view().status)) return;
+    if (this.toolConfirmationResolve?.sessionId === sessionId) this.resolveToolConfirmation(false, sessionId);
+    service.stop();
+  }
+
+  resolveToolConfirmation(approved: boolean, sessionId = this.activeService?.sessionId): void {
+    const pending = this.toolConfirmationResolve;
+    if (pending && pending.sessionId !== sessionId) throw new Error('该审批不属于当前会话。');
     this.toolConfirmationResolve = undefined;
     this.state.toolConfirmation = undefined;
-    resolve?.(approved);
+    pending?.resolve(approved);
     this.emit();
   }
 
@@ -970,6 +951,7 @@ export class DreamCardAgentRuntime {
   }
 
   async updateSettings(input: {
+    activeThemeId?: string;
     compressImages?: boolean;
     dangerousNonCharacterResourceWrites?: boolean;
     developerMode?: boolean;
@@ -980,6 +962,7 @@ export class DreamCardAgentRuntime {
     sendWithCtrlEnter?: boolean;
   }): Promise<void> {
     const settings = this.settingsStore.load();
+    if (input.activeThemeId !== undefined) settings.activeThemeId = input.activeThemeId;
     if (input.compressImages !== undefined) settings.compressImages = input.compressImages;
     if (input.dangerousNonCharacterResourceWrites !== undefined) {
       if (!settings.developerMode && input.dangerousNonCharacterResourceWrites) {
@@ -998,7 +981,7 @@ export class DreamCardAgentRuntime {
   }
 
   destroy(): void {
-    this.resolveToolConfirmation(false);
+    this.resolveToolConfirmation(false, this.toolConfirmationResolve?.sessionId);
     for (const service of this.services.values()) {
       const pending = this.deferredSessionSaves.get(service.sessionId);
       if (!pending) continue;
@@ -1026,15 +1009,9 @@ export class DreamCardAgentRuntime {
     const target = klona(current);
     if (collision) target.character.bindingId = `binding:${crypto.randomUUID()}`;
     const materialized = materializeCardWorkspace(target, projectCardWorkspace(target)).state;
-    const result = await commitWorkingCopy({
-      adapter,
-      base: current,
-      decisions: {},
-      metadataBindingId: materialized.character.bindingId,
-      working: materialized,
-    });
-    if (result.status === 'rolled-back') throw result.error;
-    return result.state;
+    const result = await applyRealtimeStateOperations(adapter, diffCardStates(current, materialized));
+    if (result.error) throw result.error;
+    return adapter.read();
   }
 
   private async switchCharacterInternal(bindingId: string): Promise<void> {
@@ -1069,27 +1046,11 @@ export class DreamCardAgentRuntime {
   private createHistoryView(
     entry: SessionIndexEntry,
     runtime: PersistedSessionRuntime,
-    workingFiles: WorkspaceFile[],
   ): SessionView {
     const configuration = runtime.agentConfiguration ?? this.selectedAgentConfiguration();
-    const pending = runtime.pending;
+    const ui = klona(runtime.ui);
     return {
       agentConfiguration: klona(configuration),
-      approval: pending
-        ? {
-            candidateSnapshot: pending.candidateSnapshot,
-            conflicts: klona(pending.preparation.conflicts),
-            fileChanges: klona(pending.fileChanges ?? []),
-            midRun: pending.midRun === true,
-            skillChanges: klona(pending.skillChanges ?? []),
-            stateChanges: klona(
-              pending.preparation.agentChanges.filter(
-                change => !pending.preparation.redundantPaths.includes(change.path),
-              ),
-            ),
-            warnings: [...pending.warnings],
-          }
-        : undefined,
       bindingId: entry.bindingId,
       characterName: entry.characterName,
       contextUsage: measureContext(runtime.modelMessages, DEFAULT_CONTEXT_WINDOW),
@@ -1097,19 +1058,23 @@ export class DreamCardAgentRuntime {
       events: klona(runtime.events),
       mode: runtime.mode,
       modelControls: klona(runtime.modelControls ?? { reasoningEffort: 'auto', webSearch: false }),
+      operationLog: klona(runtime.operationLog ?? { records: [], turns: [], version: 1 }),
+      operationReplay: undefined,
       preset: cloneStructuredPreset(runtime.preset),
       sessionId: runtime.sessionId,
       skills: klona(runtime.skills),
       status: runtime.status,
       title: runtime.title,
-      ui: klona(runtime.ui.filter(item => !item.hidden)),
+      ui: ui.filter(item => !item.hidden),
       warnings: [...(runtime.warnings ?? [])],
-      workingChanges: [],
-      workingFiles: workingFiles.map(file => ({ ...klona(file), readonly: true })),
+      workingFiles: [],
     };
   }
 
   private async refreshSessionIndex(current: CardWorkspaceState): Promise<void> {
+    await new SessionRevisionStore(this.fileClient, this.settingsStore, this.now).flushPending(
+      current.character.bindingId,
+    );
     const metadata = await this.characterStore.load(current.character.bindingId, {
       avatarId: current.character.avatarId,
       characterName: current.character.name,
@@ -1143,6 +1108,7 @@ export class DreamCardAgentRuntime {
       return;
     }
     try {
+      await new SessionRevisionStore(this.fileClient, this.settingsStore, this.now).flushPending(character.bindingId);
       const metadata = await this.characterStore.load(character.bindingId, {
         avatarId: character.avatarId,
         characterName: character.name,
@@ -1368,15 +1334,31 @@ export class DreamCardAgentRuntime {
 
   private requestToolConfirmation(request: ToolConfirmation): Promise<boolean> {
     if (this.toolConfirmationResolve) throw new Error('已有高危工具正在等待确认。');
+    if (!request.sessionId) throw new Error('工具审批缺少会话归属。');
     this.state.toolConfirmation = request;
     this.emit();
     return new Promise(resolve => {
-      this.toolConfirmationResolve = resolve;
+      this.toolConfirmationResolve = {
+        resolve,
+        sessionId: request.sessionId!,
+        toolCallId: request.toolCallId,
+      };
     });
   }
 
   private updateService(view: SessionView): void {
     this.state.sessionStatuses[view.sessionId] = view.status;
+    // 会话正文、当前标题、角色索引和已打开页签是同一份会话的不同投影。
+    // rename/send 会先更新运行中的 SessionView；在下一次索引回读前也要立即
+    // 同步摘要，否则工具栏标题已变化，而侧边栏与页签仍显示旧名称。
+    for (const session of this.state.sessions) {
+      if (session.sessionId === view.sessionId) session.title = view.title;
+    }
+    for (const group of this.state.characterGroups) {
+      for (const session of group.sessions) {
+        if (session.sessionId === view.sessionId) session.title = view.title;
+      }
+    }
     this.updateLoadedSessionIds();
     if (this.activeService?.sessionId === view.sessionId) {
       this.state.active = view;
@@ -1391,9 +1373,11 @@ export class DreamCardAgentRuntime {
 
   private reloadSettingsState(): void {
     const settings = this.settingsStore.load();
+    this.state.activeThemeId = settings.activeThemeId;
     this.state.activeAgentConfigurationId = settings.activeAgentConfigurationId;
     this.state.activeProfileId = settings.activeProfileId;
     this.state.activePresetId = settings.activePresetId;
+    this.state.approvalMode = settings.approvalMode;
     this.state.agentConfigurations = settings.agentConfigurations;
     this.state.compressImages = settings.compressImages;
     this.state.developerMode = settings.developerMode;

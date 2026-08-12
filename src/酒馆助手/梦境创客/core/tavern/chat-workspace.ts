@@ -384,6 +384,10 @@ export class TavernChatWorkspace {
     this.authorized = false;
   }
 
+  stopGeneration(): void {
+    this.bridge.stopGeneration();
+  }
+
   async executeOnce<T>(toolCallId: string, action: () => Promise<T>): Promise<{ executed: boolean; value?: T }> {
     if (!toolCallId) throw new Error('聊天工具调用必须包含稳定的toolCallId。');
     if (this.completedToolCallIds.has(toolCallId)) return { executed: false };

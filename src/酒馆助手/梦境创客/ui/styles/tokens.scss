@@ -1,49 +1,55 @@
-// 梦境创客设计 Token。
+// 梦境创客设计 Token（主题契约）。
 // 工作台内样式挂在 .dca-app 下；窗口外壳在父页面，类名为 .dca-floating-*。
 // 两者都需要同一组变量，因此 Token 同时定义在这两个根上。
+// 此处的中性色只作为主题加载前和异常降级的安全默认值；正式外观由 theme/builtins.ts
+// 或导入的主题包覆盖。组件样式不得直接写具体配色。
 .dca-app,
 .dca-floating-window,
 .dca-floating-body-frame,
 .dca-shadow-root,
 .dca-floating-trigger {
   // 背景层级：页面底 → 普通面板 → 抬升卡片 → 浮层
-  --dca-canvas: #0e0d14;
-  --dca-surface: #15131d;
-  --dca-raised: #1c1a26;
-  --dca-overlay: #252131;
+  --dca-canvas: #0b0c0e;
+  --dca-surface: #111315;
+  --dca-raised: #181a1d;
+  --dca-overlay: #202328;
 
   // 文字层级
-  --dca-text: #ede9f8;
-  --dca-text-secondary: #b3aac8;
-  --dca-text-muted: #837a9b;
-  --dca-text-disabled: #58516d;
+  --dca-text: #f2f3f5;
+  --dca-text-secondary: #b7bbc2;
+  --dca-text-muted: #838891;
+  --dca-text-disabled: #555a63;
 
   // 语义色（-soft 为同色系低透明底色）
-  --dca-accent: #9d7cff;
-  --dca-accent-strong: #b9a3ff;
-  --dca-accent-soft: rgb(157 124 255 / 14%);
-  --dca-success: #5cc9a7;
-  --dca-success-soft: rgb(92 201 167 / 12%);
-  --dca-warning: #dfb15e;
-  --dca-warning-soft: rgb(223 177 94 / 12%);
-  --dca-danger: #e06c82;
-  --dca-danger-soft: rgb(224 108 130 / 12%);
-  --dca-info: #6fa8e8;
-  --dca-info-soft: rgb(111 168 232 / 12%);
+  --dca-accent: #f4f4f5;
+  --dca-accent-strong: #fff;
+  --dca-accent-soft: rgb(255 255 255 / 9%);
+  --dca-on-accent: #0b0c0e;
+  --dca-success: #64cba8;
+  --dca-success-soft: rgb(100 203 168 / 12%);
+  --dca-warning: #dfb56a;
+  --dca-warning-soft: rgb(223 181 106 / 12%);
+  --dca-danger: #e5798d;
+  --dca-danger-soft: rgb(229 121 141 / 12%);
+  --dca-on-danger: #fff;
+  --dca-info: #7aa9e6;
+  --dca-info-soft: rgb(122 169 230 / 12%);
 
   // 边框
-  --dca-border: #2b2738;
-  --dca-border-strong: #403a54;
+  --dca-border: #292c31;
+  --dca-border-strong: #3b3f46;
+  --dca-focus-ring: rgb(255 255 255 / 26%);
 
   // 圆角
   --dca-radius-sm: 6px;
-  --dca-radius-md: 10px;
-  --dca-radius-lg: 14px;
+  --dca-radius-md: 9px;
+  --dca-radius-lg: 12px;
 
   // 阴影
-  --dca-shadow-1: 0 1px 2px rgb(0 0 0 / 35%);
-  --dca-shadow-2: 0 8px 28px rgb(0 0 0 / 42%);
-  --dca-shadow-3: 0 24px 70px rgb(0 0 0 / 60%);
+  --dca-shadow-color: #000;
+  --dca-shadow-1: 0 1px 2px rgb(0 0 0 / 30%);
+  --dca-shadow-2: 0 10px 30px rgb(0 0 0 / 38%);
+  --dca-shadow-3: 0 24px 70px rgb(0 0 0 / 58%);
 
   // 间距
   --dca-space-1: 4px;
@@ -58,9 +64,38 @@
   --dca-control-h-sm: 28px;
 
   // 字体
+  --dca-font-ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --dca-font-display: var(--dca-font-ui);
   --dca-font-mono: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
 
   // 动画
   --dca-motion-fast: 0.14s;
   --dca-motion-normal: 0.22s;
+
+  // 通用效果与组件级外观挂点
+  --dca-highlight: rgb(255 255 255 / 4%);
+  --dca-scrim: rgb(0 0 0 / 68%);
+  --dca-scrollbar: #40444b;
+  --dca-scrollbar-hover: #5a6069;
+  --dca-code-canvas: #0a0b0d;
+  --dca-code-raised: #141619;
+  --dca-switch-thumb: #fff;
+  --dca-mask-soft: rgb(0 0 0 / 18%);
+  --dca-mask-opaque: #000;
+  --dca-sidebar-background: linear-gradient(180deg, #111315, #0d0f11);
+  --dca-sidebar-hover: rgb(255 255 255 / 5%);
+  --dca-sidebar-active: rgb(255 255 255 / 9%);
+  --dca-brand-gradient: linear-gradient(135deg, #f4f4f5, #aeb4bd);
+  --dca-avatar-gradient: linear-gradient(135deg, #777d86, #34383e);
+  --dca-user-message-gradient: linear-gradient(160deg, rgb(255 255 255 / 8%), rgb(255 255 255 / 3%));
+  --dca-home-background: radial-gradient(circle at 52% 20%, rgb(255 255 255 / 5%), transparent 34%), #0b0c0e;
+  --dca-home-pattern:
+    linear-gradient(115deg, transparent 40%, rgb(255 255 255 / 2%) 40.2%, transparent 40.5%),
+    linear-gradient(150deg, transparent 62%, rgb(255 255 255 / 2%) 62.2%, transparent 62.5%);
+  --dca-home-stars:
+    radial-gradient(circle at 18% 20%, #8b9098 0 1px, transparent 1.5px),
+    radial-gradient(circle at 77% 17%, #d4d7dc 0 1px, transparent 1.5px),
+    radial-gradient(circle at 63% 31%, #696e76 0 1px, transparent 1.5px),
+    radial-gradient(circle at 35% 11%, #fff 0 1px, transparent 1.5px);
+  --dca-home-brand-shadow: 0 0 2rem rgb(255 255 255 / 12%);
 }

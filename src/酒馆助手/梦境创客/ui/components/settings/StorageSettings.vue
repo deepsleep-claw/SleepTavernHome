@@ -104,7 +104,7 @@
       </div>
       <div>
         <strong>重置数据</strong>
-        <small>删除会话、快照、附件、缓存和角色索引；API、预设、Agent 配置与全局 Skill 保留。</small>
+        <small>删除会话、操作记录、附件、缓存和角色索引；API、预设、Agent 配置与全局 Skill 保留。</small>
       </div>
     </div>
 
@@ -214,7 +214,7 @@ async function removeFile(file: ManagedFileSummary) {
 }
 
 async function resetCharacter(group: CharacterFileStorageSummary) {
-  if (!window.confirm(`重置会删除“${group.characterName}”的全部会话、快照和文件。确定继续吗？`)) return;
+  if (!window.confirm(`重置会删除“${group.characterName}”的全部会话、操作记录和文件。确定继续吗？`)) return;
   if (!window.confirm('此操作不可撤销。请再次确认重置这个角色的梦境创客数据。')) return;
   if (!(await run(() => runtime.resetCharacterData(group.bindingId), `已重置“${group.characterName}”的数据。`))) return;
   if (isCurrent(group.bindingId)) {
@@ -224,7 +224,7 @@ async function resetCharacter(group: CharacterFileStorageSummary) {
 }
 
 async function resetEverything() {
-  if (!window.confirm('重置全部数据会删除所有角色的会话、快照、附件与缓存。确定继续吗？')) return;
+  if (!window.confirm('重置全部数据会删除所有角色的会话、操作记录、附件与缓存。确定继续吗？')) return;
   if (!window.confirm('此操作不可撤销。请再次确认重置梦境创客的全部角色数据。')) return;
   if (!(await run(() => runtime.resetAllData(), '已重置全部角色数据。'))) return;
   openedSessionIds.value = [];
@@ -374,7 +374,7 @@ async function resetEverything() {
   align-items: center;
   justify-content: space-between;
   gap: 0.8rem;
-  border: 1px solid rgb(224 108 130 / 40%);
+  border: 1px solid color-mix(in srgb, var(--dca-danger) 40%, transparent);
   border-radius: var(--dca-radius-md);
   padding: 0.65rem 0.75rem;
   background: var(--dca-danger-soft);

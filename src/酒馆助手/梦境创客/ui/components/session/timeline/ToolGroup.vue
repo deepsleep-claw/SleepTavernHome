@@ -59,7 +59,7 @@ function toolTrackIcon(tool: SessionUiItem): string {
 }
 
 .dca-step-tools.has-failure > summary > span {
-  color: #f2a3b3;
+  color: var(--dca-danger);
 }
 
 .dca-tool-group > summary > small {

@@ -40,7 +40,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
   border-radius: 999px;
   padding: 2px;
   background: var(--dca-overlay);
-  box-shadow: inset 0 1px 2px rgb(0 0 0 / 28%);
+  box-shadow: inset 0 1px 2px color-mix(in srgb, var(--dca-shadow-color) 28%, transparent);
   transition:
     border-color var(--dca-motion-fast) ease,
     background var(--dca-motion-fast) ease,
@@ -55,7 +55,7 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
 .dca-app button.dca-switch.active {
   border-color: var(--dca-accent);
   background: var(--dca-accent);
-  box-shadow: 0 0 0 1px rgb(157 124 255 / 12%);
+  box-shadow: 0 0 0 1px var(--dca-focus-ring);
 }
 
 .dca-app button.dca-switch > span {
@@ -63,14 +63,14 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
   height: 1rem;
   border-radius: 50%;
   background: var(--dca-text-muted);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 45%);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--dca-shadow-color) 45%, transparent);
   transition:
     transform var(--dca-motion-normal) cubic-bezier(0.2, 0.8, 0.2, 1),
     background var(--dca-motion-fast) ease;
 }
 
 .dca-app button.dca-switch.active > span {
-  background: #fff;
+  background: var(--dca-switch-thumb);
   transform: translateX(1.2rem);
 }
 

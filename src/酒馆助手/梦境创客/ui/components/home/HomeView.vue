@@ -42,7 +42,7 @@
         <div v-if="recentSessions.length" class="dca-welcome-recent-list">
           <div v-for="(session, index) in recentSessions" :key="session.sessionId" class="dca-recent-item">
             <div v-if="deletePendingSessionId === session.sessionId" class="dca-welcome-delete-confirm">
-              <span>确定删除“{{ session.title }}”及其全部快照？</span>
+              <span>确定删除“{{ session.title }}”及其全部操作记录？</span>
               <button type="button" @click="deletePendingSessionId = ''">取消</button>
               <button class="danger" type="button" @click="confirmDeleteSession(session.sessionId)">确认删除</button>
             </div>
@@ -137,16 +137,12 @@ function recentIcon(index: number) {
   position: relative;
   height: 100%;
   overflow: auto;
-  background:
-    radial-gradient(circle at 52% 20%, rgba(47, 65, 139, 0.24), transparent 34%),
-    linear-gradient(145deg, #0a1225, #101a33 58%, #0a1328);
+  background: var(--dca-home-background);
 }
 .dca-home::before {
   position: absolute;
   inset: 0;
-  background:
-    linear-gradient(115deg, transparent 40%, rgba(80, 87, 211, 0.06) 40.2%, transparent 40.5%),
-    linear-gradient(150deg, transparent 62%, rgba(65, 107, 211, 0.06) 62.2%, transparent 62.5%);
+  background: var(--dca-home-pattern);
   content: '';
   pointer-events: none;
 }
@@ -154,11 +150,7 @@ function recentIcon(index: number) {
   position: absolute;
   inset: 0;
   opacity: 0.48;
-  background-image:
-    radial-gradient(circle at 18% 20%, #8fa7ff 0 1px, transparent 1.5px),
-    radial-gradient(circle at 77% 17%, #c6d0ff 0 1px, transparent 1.5px),
-    radial-gradient(circle at 63% 31%, #657fff 0 1px, transparent 1.5px),
-    radial-gradient(circle at 35% 11%, #fff 0 1px, transparent 1.5px);
+  background-image: var(--dca-home-stars);
   background-size:
     23rem 19rem,
     31rem 27rem,
@@ -187,9 +179,9 @@ function recentIcon(index: number) {
   margin-bottom: 1rem;
   place-items: center;
   border-radius: 1.25rem;
-  background: radial-gradient(circle at 30% 25%, #a580ff, #5d4ce0 48%, #2847ba);
-  box-shadow: 0 1rem 3rem rgba(80, 65, 222, 0.35);
-  color: #fff;
+  background: var(--dca-brand-gradient);
+  box-shadow: var(--dca-home-brand-shadow);
+  color: var(--dca-on-accent);
   font-size: 1.65rem;
   transform: rotate(-7deg);
 }
@@ -200,9 +192,9 @@ function recentIcon(index: number) {
   letter-spacing: 0.01em;
 }
 .dca-welcome-hero h1 em {
-  color: #8065ff;
+  color: var(--dca-accent);
   font-style: normal;
-  text-shadow: 0 0 2rem rgba(102, 81, 255, 0.4);
+  text-shadow: var(--dca-home-brand-shadow);
 }
 .dca-welcome-hero > p {
   max-width: 40rem;
@@ -212,7 +204,7 @@ function recentIcon(index: number) {
 }
 .dca-welcome-character {
   margin-top: 0.8rem;
-  color: #9eb2e8;
+  color: var(--dca-text-secondary);
   font-size: 0.76rem;
 }
 .dca-welcome-actions {
@@ -223,28 +215,28 @@ function recentIcon(index: number) {
 .dca-welcome-actions button {
   min-width: 10.6rem;
   min-height: 3.25rem;
-  border-color: rgba(116, 133, 192, 0.25);
-  background: rgba(25, 36, 66, 0.7);
+  border-color: var(--dca-border-strong);
+  background: color-mix(in srgb, var(--dca-raised) 88%, transparent);
 }
 .dca-welcome-actions button.primary {
-  border-color: #4774ef;
-  background: linear-gradient(135deg, #3475ef, #6751e4);
-  color: #fff;
-  box-shadow: 0 0.8rem 2rem rgba(45, 86, 210, 0.25);
+  border-color: var(--dca-accent);
+  background: var(--dca-accent);
+  color: var(--dca-on-accent);
+  box-shadow: var(--dca-shadow-2);
 }
 .dca-configure-api {
   margin-top: 0.7rem;
   border: 0 !important;
   background: transparent !important;
-  color: #87a8ff !important;
+  color: var(--dca-accent-strong) !important;
   font-size: 0.74rem !important;
 }
 .dca-welcome-recents {
   margin-top: clamp(2.2rem, 6vh, 4.5rem);
-  border: 1px solid rgba(105, 124, 175, 0.2);
+  border: 1px solid var(--dca-border);
   border-radius: 0.85rem;
-  background: linear-gradient(145deg, rgba(19, 29, 54, 0.82), rgba(13, 23, 46, 0.72));
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.02);
+  background: color-mix(in srgb, var(--dca-surface) 88%, transparent);
+  box-shadow: inset 0 1px var(--dca-highlight);
   backdrop-filter: blur(12px);
 }
 .dca-welcome-recents > header {
@@ -290,7 +282,7 @@ function recentIcon(index: number) {
   text-align: left;
 }
 .dca-app .dca-welcome-recent-list .dca-recent-open:hover {
-  background: rgba(74, 101, 171, 0.1);
+  background: var(--dca-sidebar-hover);
 }
 .dca-recent-icon {
   display: grid;
@@ -299,20 +291,20 @@ function recentIcon(index: number) {
   flex: 0 0 auto;
   place-items: center;
   border-radius: 0.55rem;
-  background: rgba(116, 74, 235, 0.18);
-  color: #9f7fff;
+  background: var(--dca-accent-soft);
+  color: var(--dca-accent-strong);
 }
 .dca-recent-icon.tone-1 {
-  background: rgba(69, 91, 226, 0.18);
-  color: #7194ff;
+  background: var(--dca-info-soft);
+  color: var(--dca-info);
 }
 .dca-recent-icon.tone-2 {
-  background: rgba(43, 156, 200, 0.16);
-  color: #59c2ea;
+  background: var(--dca-success-soft);
+  color: var(--dca-success);
 }
 .dca-recent-icon.tone-3 {
-  background: rgba(232, 167, 53, 0.15);
-  color: #f1bb54;
+  background: var(--dca-warning-soft);
+  color: var(--dca-warning);
 }
 .dca-recent-copy {
   display: flex;
@@ -354,7 +346,7 @@ function recentIcon(index: number) {
 }
 .dca-welcome-delete:hover:not(:disabled) {
   background: var(--dca-danger-soft);
-  color: #f2a3b3;
+  color: var(--dca-danger);
 }
 .dca-welcome-delete-confirm {
   display: flex;
@@ -379,9 +371,9 @@ function recentIcon(index: number) {
   font-size: 0.72rem;
 }
 .dca-welcome-delete-confirm > button.danger {
-  border-color: rgba(231, 83, 113, 0.35);
+  border-color: color-mix(in srgb, var(--dca-danger) 35%, transparent);
   background: var(--dca-danger-soft);
-  color: #f2a3b3;
+  color: var(--dca-danger);
 }
 .dca-welcome-empty {
   display: flex;
@@ -396,7 +388,7 @@ function recentIcon(index: number) {
 .dca-welcome-empty > i {
   margin-bottom: 0.7rem;
   font-size: 1.7rem;
-  color: #6479ae;
+  color: var(--dca-text-disabled);
 }
 .dca-welcome-empty p {
   margin: 0.3rem 0 0;
@@ -404,7 +396,7 @@ function recentIcon(index: number) {
 }
 .dca-welcome-footer {
   margin-top: clamp(2rem, 5vh, 4rem);
-  color: #596784;
+  color: var(--dca-text-muted);
   font-size: 0.72rem;
   text-align: center;
 }

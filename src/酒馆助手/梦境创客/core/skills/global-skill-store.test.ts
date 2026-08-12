@@ -48,6 +48,18 @@ describe('GlobalSkillStore', () => {
     expect(files.urls()).toEqual([]);
   });
 
+  it('锁定状态随Skill正文和全局索引保存，设置界面仍可解锁', async () => {
+    const files = new MemoryTavernFileClient();
+    const settings = new MemoryAgentSettingsStore();
+    const store = new GlobalSkillStore(files, settings);
+    await store.save(skill({ locked: true }));
+    expect(settings.load().globalSkills.writer.locked).toBe(true);
+    expect(await store.load('writer')).toMatchObject({ locked: true });
+    await store.save(skill());
+    expect(settings.load().globalSkills.writer.locked).toBe(false);
+    expect((await store.load('writer')).locked).toBeUndefined();
+  });
+
   it('中文Skill ID映射为ASCII物理文件名', async () => {
     const files = new MemoryTavernFileClient();
     const settings = new MemoryAgentSettingsStore();

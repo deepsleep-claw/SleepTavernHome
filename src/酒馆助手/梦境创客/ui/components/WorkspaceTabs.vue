@@ -36,15 +36,14 @@
       <button
         class="dca-session-tab-close"
         type="button"
-        :disabled="isSessionTabRunning(session.sessionId)"
         :title="
           isSessionTabRunning(session.sessionId)
-            ? '任务运行期间不能关闭页签，可以切换到其它页签'
+            ? '停止任务并关闭页签'
             : '关闭页签（不会删除会话）'
         "
-        @click.stop="closeSessionTab(session.sessionId)"
+        @click.stop="requestClose(session.sessionId)"
       >
-        <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        <i :class="isSessionTabRunning(session.sessionId) ? 'fa-solid fa-stop' : 'fa-solid fa-xmark'" aria-hidden="true"></i>
       </button>
     </div>
     <button
@@ -71,11 +70,23 @@
     >
       <i class="fa-solid fa-gear" aria-hidden="true"></i><span>设置</span>
     </button>
+    <div v-if="closingSessionId" class="dca-modal-backdrop" role="presentation">
+      <section class="dca-modal dca-stop-close-dialog" role="dialog" aria-modal="true">
+        <header>
+          <i class="fa-solid fa-stop" aria-hidden="true"></i>
+          <div><strong>停止任务并关闭页签？</strong><span>当前模型或工具调用会被中断；已成功写入的实时文件修改会保留。</span></div>
+        </header>
+        <footer>
+          <button type="button" @click="closingSessionId = ''">取消</button>
+          <button class="danger" type="button" @click="confirmStopAndClose">停止并关闭</button>
+        </footer>
+      </section>
+    </div>
   </nav>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { useDreamCardAgent } from '../composables/runtime';
 
 const {
@@ -86,6 +97,7 @@ const {
   mobileSurface,
   openSessionTab,
   openedSessionIds,
+  runtime,
   state,
   workspaceView,
 } = useDreamCardAgent();
@@ -105,6 +117,21 @@ const openedSessions = computed(() =>
     ),
 );
 const canCreateSession = computed(() => Boolean(state.value.currentCharacter && state.value.profiles.length));
+const closingSessionId = ref('');
+
+function requestClose(sessionId: string) {
+  if (isSessionTabRunning(sessionId)) closingSessionId.value = sessionId;
+  else void closeSessionTab(sessionId);
+}
+
+function confirmStopAndClose() {
+  const sessionId = closingSessionId.value;
+  if (!sessionId) return;
+  runtime.stopSession(sessionId);
+  openedSessionIds.value = openedSessionIds.value.filter(id => id !== sessionId);
+  if (state.value.active?.sessionId === sessionId) workspaceView.value = 'home';
+  closingSessionId.value = '';
+}
 </script>
 
 <style lang="scss">
@@ -176,11 +203,11 @@ const canCreateSession = computed(() => Boolean(state.value.currentCharacter && 
 }
 
 .dca-session-tab.readonly {
-  color: #91a1c8;
+  color: var(--dca-text-secondary);
 }
 .dca-session-tab.readonly .dca-session-tab-open > i {
   font-size: 0.68rem;
-  color: #8298d2;
+  color: var(--dca-accent-strong);
 }
 
 .dca-session-tab > button {
@@ -239,7 +266,7 @@ const canCreateSession = computed(() => Boolean(state.value.currentCharacter && 
 
 .dca-session-tab-close:hover:not(:disabled),
 .dca-session-tab-close:focus-visible {
-  background: rgba(255, 255, 255, 0.1) !important;
+  background: var(--dca-highlight) !important;
   opacity: 1;
 }
 
@@ -247,6 +274,13 @@ const canCreateSession = computed(() => Boolean(state.value.currentCharacter && 
   cursor: not-allowed;
   opacity: 0.35;
 }
+
+.dca-stop-close-dialog { width: min(32rem, calc(100vw - 2rem)); }
+.dca-stop-close-dialog > header { display: flex; gap: 0.7rem; }
+.dca-stop-close-dialog > header i { color: var(--dca-danger); }
+.dca-stop-close-dialog > header div { display: grid; gap: 0.2rem; }
+.dca-stop-close-dialog > header span { color: var(--dca-text-muted); font-size: 0.78rem; }
+.dca-stop-close-dialog > footer { display: flex; justify-content: flex-end; gap: 0.5rem; }
 
 .dca-settings-tab {
   margin-left: auto;

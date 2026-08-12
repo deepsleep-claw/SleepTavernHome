@@ -28,4 +28,39 @@ describe('timeline', () => {
     expect(first?.durationMs).toBe(3_500);
     expect(second?.durationMs).toBe(5_500);
   });
+
+  it('已完成的旧历史缺少整轮耗时时使用末条记录估算且不随当前时间增长', () => {
+    const ui: SessionUiItem[] = [
+      {
+        at: 1_000,
+        checkpointId: 'checkpoint:legacy',
+        content: '旧任务',
+        id: 'user:legacy',
+        kind: 'user',
+      },
+      {
+        at: 2_500,
+        checkpointId: 'checkpoint:legacy',
+        content: '旧思考',
+        durationMs: 500,
+        id: 'reasoning:legacy',
+        kind: 'reasoning',
+        status: 'completed',
+      },
+      {
+        at: 3_200,
+        checkpointId: 'checkpoint:legacy',
+        content: '最终回复',
+        id: 'assistant:legacy',
+        kind: 'assistant',
+        status: 'completed',
+      },
+    ];
+
+    const first = buildTimelineBlocks(ui, 'completed', 200, 100_000).find(block => block.type === 'run');
+    const second = buildTimelineBlocks(ui, 'completed', 200, 200_000).find(block => block.type === 'run');
+
+    expect(first?.durationMs).toBe(2_200);
+    expect(second?.durationMs).toBe(2_200);
+  });
 });

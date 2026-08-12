@@ -18,6 +18,14 @@ export class WorkspaceOperationLog {
     turn.redoOperationIds = [];
   }
 
+  beginTurn(
+    turnId: string,
+    metadata: Pick<TurnOperationSummary, 'eventStart' | 'modelMessageStart' | 'userMessageId'> = {},
+  ): void {
+    if (this.turns.at(-1)?.turnId !== turnId) this.abandonRedoBeforeNextTurn();
+    Object.assign(this.ensureTurn(turnId), metadata);
+  }
+
   recordsForTurn(turnId: string): WorkspaceOperationRecord[] {
     const turn = this.turns.find(item => item.turnId === turnId);
     if (!turn) return [];
@@ -27,6 +35,11 @@ export class WorkspaceOperationLog {
 
   latestTurn(): TurnOperationSummary | undefined {
     const turn = this.turns.at(-1);
+    return turn ? klona(turn) : undefined;
+  }
+
+  turn(turnId: string): TurnOperationSummary | undefined {
+    const turn = this.turns.find(item => item.turnId === turnId);
     return turn ? klona(turn) : undefined;
   }
 
@@ -53,6 +66,10 @@ export class WorkspaceOperationLog {
   abandonRedoBeforeNextTurn(): void {
     const latest = this.turns.at(-1);
     if (latest) latest.redoOperationIds = [];
+  }
+
+  discardRedo(turnId: string): void {
+    this.ensureTurn(turnId).redoOperationIds = [];
   }
 
   export(): PersistedOperationLog {

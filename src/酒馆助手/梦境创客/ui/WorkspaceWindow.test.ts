@@ -92,7 +92,6 @@ const mock = vi.hoisted(() => {
         },
       ],
       warnings: [],
-      workingChanges: [],
       workingFiles: [
         {
           content: '描述',
@@ -425,7 +424,8 @@ describe('WorkspaceWindow', () => {
     expect(root.querySelector('.dca-composer button[aria-label="停止当前任务"]')).not.toBeNull();
     const tabButtons = root.querySelectorAll<HTMLButtonElement>('.dca-session-tab button');
     expect(tabButtons[0].disabled).toBe(false);
-    expect(tabButtons[1].disabled).toBe(true);
+    expect(tabButtons[1].disabled).toBe(false);
+    expect(tabButtons[1].title).toBe('停止任务并关闭页签');
 
     mock.state.active.status = 'completed';
     mock.state.sessionStatuses['session-1'] = 'completed';

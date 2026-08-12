@@ -9,11 +9,7 @@
   overflow: hidden;
   background: var(--dca-canvas);
   color: var(--dca-text);
-  font:
-    14px/1.5 system-ui,
-    -apple-system,
-    'Segoe UI',
-    sans-serif;
+  font: 14px/1.5 var(--dca-font-ui);
 }
 
 .dca-app.sidebar-collapsed {
@@ -74,7 +70,7 @@
 .dca-app button.dca-btn-primary {
   border-color: transparent;
   background: var(--dca-accent);
-  color: #fff;
+  color: var(--dca-on-accent);
   font-weight: 600;
 }
 
@@ -96,14 +92,14 @@
 }
 
 .dca-app button.dca-btn-danger {
-  border-color: rgb(224 108 130 / 45%);
+  border-color: color-mix(in srgb, var(--dca-danger) 45%, transparent);
   background: var(--dca-danger-soft);
-  color: #f2a3b3;
+  color: var(--dca-danger);
 }
 
 .dca-app button.dca-btn-danger:hover:not(:disabled) {
   border-color: var(--dca-danger);
-  background: rgb(224 108 130 / 20%);
+  background: color-mix(in srgb, var(--dca-danger) 20%, transparent);
 }
 
 .dca-app button.dca-icon-btn {
@@ -265,7 +261,7 @@
 
 .dca-badge-running,
 .dca-badge-committing {
-  border-color: rgb(92 201 167 / 45%);
+  border-color: color-mix(in srgb, var(--dca-success) 45%, transparent);
   background: var(--dca-success-soft);
   color: var(--dca-success);
 }
@@ -276,16 +272,16 @@
 
 .dca-badge-failed,
 .dca-badge-abnormal {
-  border-color: rgb(224 108 130 / 45%);
+  border-color: color-mix(in srgb, var(--dca-danger) 45%, transparent);
   background: var(--dca-danger-soft);
-  color: #f2a3b3;
+  color: var(--dca-danger);
 }
 
 .dca-badge-awaiting-approval,
 .dca-badge-waiting-approval,
 .dca-badge-context-exhausted,
 .dca-badge-stopped {
-  border-color: rgb(223 177 94 / 45%);
+  border-color: color-mix(in srgb, var(--dca-warning) 45%, transparent);
   background: var(--dca-warning-soft);
   color: var(--dca-warning);
 }
@@ -311,13 +307,13 @@
 }
 
 .dca-alert-error {
-  border-color: rgb(224 108 130 / 45%);
+  border-color: color-mix(in srgb, var(--dca-danger) 45%, transparent);
   background: var(--dca-danger-soft);
-  color: #f2a3b3;
+  color: var(--dca-danger);
 }
 
 .dca-alert-warning {
-  border-color: rgb(223 177 94 / 45%);
+  border-color: color-mix(in srgb, var(--dca-warning) 45%, transparent);
   background: var(--dca-warning-soft);
   color: var(--dca-warning);
 }
@@ -386,7 +382,7 @@
   z-index: 10000;
   display: grid;
   padding: 1rem;
-  background: rgb(8 7 12 / 72%);
+  background: var(--dca-scrim);
   backdrop-filter: blur(6px);
   inset: 0;
   place-items: center;
@@ -411,12 +407,12 @@
 .dca-app ::-webkit-scrollbar-thumb {
   border: 3px solid transparent;
   border-radius: 999px;
-  background: var(--dca-border-strong);
+  background: var(--dca-scrollbar);
   background-clip: padding-box;
 }
 
 .dca-app ::-webkit-scrollbar-thumb:hover {
-  background: var(--dca-text-disabled);
+  background: var(--dca-scrollbar-hover);
   background-clip: padding-box;
 }
 
@@ -568,7 +564,7 @@
 }
 
 .dca-markdown tr:nth-child(even) td {
-  background: rgb(255 255 255 / 2%);
+  background: var(--dca-highlight);
 }
 
 // ---------- 设置区块骨架（工具栏 + 编辑区 + 粘性保存栏） ----------

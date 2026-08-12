@@ -16,9 +16,8 @@
         <ManualChangeCard v-else-if="inner.item.kind === 'manual'" :item="inner.item" />
         <ReasoningBlock v-else-if="inner.item.kind === 'reasoning'" :item="inner.item" />
         <div v-else class="dca-step-text" :class="{ 'dca-step-text-assistant': inner.item.kind === 'assistant' }">
-          <header>
-            <span v-if="inner.item.kind !== 'assistant'">{{ itemKindLabel(inner.item.kind) }}</span>
-            <small>{{ formatTime(inner.item.at) }}</small>
+          <header v-if="inner.item.kind !== 'assistant'">
+            <span>{{ itemKindLabel(inner.item.kind) }}</span>
           </header>
           <!-- eslint-disable vue/no-v-html -- 内容已由 ui/markdown.ts 的默认安全 Schema 清洗。 -->
           <div
@@ -36,7 +35,6 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import { formatTime } from '../../../composables/format';
 import {
   cleanGuidance,
   isMarkdownMessage,
@@ -232,7 +230,4 @@ function renderMessageMarkdown(value: string): string {
   color: var(--dca-text-secondary);
 }
 
-.dca-step-text-assistant > header {
-  justify-content: flex-end;
-}
 </style>

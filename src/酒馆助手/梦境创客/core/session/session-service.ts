@@ -1,9 +1,6 @@
 import { klona } from 'klona';
 import type { ModelMessage } from 'ai';
-import type { ContentAddressedSnapshotStore } from '../history/snapshot-store';
-import { HistoryTimeline } from '../history/timeline';
-import { materializeCardWorkspace, projectCardWorkspace } from '../mapping/card-workspace-mapper';
-import { serializeYaml } from '../mapping/serde';
+import { projectCardWorkspace } from '../mapping/card-workspace-mapper';
 import type { CardWorkspaceState } from '../mapping/types';
 import { compilePreset, DEFAULT_PRESET, type CompiledPreset, type StructuredPreset } from '../preset/compiler';
 import { PersistentRunnerJournal } from '../persistence/journal';
@@ -15,19 +12,26 @@ import type { ModelStepExecutor } from '../runner/step-executor';
 import { createWorkspaceRunnerTools, type ToolConfirmation } from '../runner/tools';
 import { createTavernChatRunnerTools } from '../runner/tavern-chat-tools';
 import { createWorldbookRunnerTools } from '../runner/worldbook-tools';
-import { materializeUserSkills, projectSkills } from '../skills/skill-registry';
+import { createWorkspaceOperationRecord } from '../operations/file-operation';
+import { WorkspaceOperationLog } from '../operations/operation-log';
+import {
+  executeOperationReplay,
+  planOperationReplay,
+  type OperationReplayConflict,
+  type OperationReplayDirection,
+} from '../operations/operation-replayer';
+import { OperationRecoveryCoordinator, type OperationRecoveryStore } from '../operations/recovery-store';
 import type { AgentSkill } from '../skills/types';
 import type { CardStateAdapter } from '../transaction/adapter';
 import type { TavernBridge } from '../tavern/bridge';
 import type { TavernChatBridge } from '../tavern/chat-bridge';
 import { TavernChatWorkspace } from '../tavern/chat-workspace';
 import { canonicalEqual, canonicalStringify } from '../transaction/canonical';
-import { commitWorkingCopy } from '../transaction/commit';
-import { defaultApprovals, prepareThreeWayMerge, type ApprovalDecision } from '../transaction/merge';
-import { diffCardStates } from '../transaction/state-diff';
-import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
-import { maskSecretsForModel, scanSecrets } from '../workspace/secret-protection';
-import type { WorkspaceChange, WorkspaceFile } from '../workspace/types';
+import { CardWorkspaceLiveSource } from '../workspace/card-live-source';
+import { LiveWorkspaceRepository } from '../workspace/live-repository';
+import { SessionWorkspaceLiveSource } from '../workspace/session-live-source';
+import { maskSecretsForModel } from '../workspace/secret-protection';
+import type { WorkspaceFile } from '../workspace/types';
 import type { SessionAttachmentStore } from './attachment-store';
 import {
   attachmentSummary,
@@ -39,17 +43,14 @@ import {
 import { defaultPresetValues } from './prompt';
 import { globalAgentTaskLock, type GlobalAgentTaskLock } from './task-lock';
 import type {
-  PendingCandidate,
   PersistedSessionRuntime,
   ManualEditGroup,
   SessionAgentConfiguration,
   SessionLifecycleStatus,
   SessionModelControls,
   SessionMode,
-  SessionSnapshotPayload,
   SessionUiItem,
   SessionView,
-  SkillChange,
 } from './types';
 
 type SessionServiceOptions = {
@@ -61,15 +62,15 @@ type SessionServiceOptions = {
   lock?: GlobalAgentTaskLock;
   mode?: SessionMode;
   now?: () => number;
-  onPersist?: (runtime: PersistedSessionRuntime, files: WorkspaceFile[]) => Promise<void>;
+  onPersist?: (runtime: PersistedSessionRuntime) => Promise<void>;
   onSkillsCommit?: (skills: AgentSkill[], previouslyMountedSkillIds: string[]) => Promise<AgentSkill[]>;
   onUpdate?: (view: SessionView) => void;
+  operationRecoveryStore?: OperationRecoveryStore;
   preset?: StructuredPreset;
   requestToolApproval?: (request: ToolConfirmation) => Promise<boolean>;
   scheduleStreamingUpdate?: (callback: () => void) => () => void;
   sessionId?: string;
   skills?: AgentSkill[];
-  snapshots: ContentAddressedSnapshotStore;
   tavernBridge?: TavernBridge;
   tavernChatBridge?: TavernChatBridge;
   attachmentStore?: SessionAttachmentStore;
@@ -87,34 +88,6 @@ function isNonCharacterResourcePath(path: string): boolean {
 
 function isStoragePath(path: string): boolean {
   return /^\/(?:files|temp)(?:\/|$)/u.test(path);
-}
-
-function persistentStorageFiles(files: WorkspaceFile[]): WorkspaceFile[] {
-  return files.filter(file => file.path.startsWith('/files/')).map(file => klona(file));
-}
-
-function persistedWorkingCopyFiles(files: WorkspaceFile[]): WorkspaceFile[] {
-  return files.filter(file => !file.path.startsWith('/context/chats/')).map(file => klona(file));
-}
-
-function workspaceApprovalChanges(changes: WorkspaceChange[]) {
-  return changes
-    .filter(change => change.path.startsWith('/files/'))
-    .map(change => ({
-      after: 'after' in change ? klona(change.after) : undefined,
-      before: 'before' in change ? klona(change.before) : undefined,
-      highRisk: change.kind === 'delete',
-      kind: change.kind,
-      label:
-        change.kind === 'create'
-          ? `新增持久文件 ${change.path}`
-          : change.kind === 'delete'
-            ? `删除持久文件 ${change.path}`
-            : change.kind === 'move'
-              ? `移动持久文件 ${change.path}`
-              : `修改持久文件 ${change.path}`,
-      path: change.path,
-    }));
 }
 
 function sessionTitleFromMessage(message: string): string {
@@ -144,97 +117,11 @@ function assistantReasoning(messages: ModelMessage[]): string {
     .join('');
 }
 
-function diffSkills(before: AgentSkill[], after: AgentSkill[]): SkillChange[] {
-  const beforeById = new Map(before.map(skill => [skill.id, skill]));
-  const afterById = new Map(after.map(skill => [skill.id, skill]));
-  const result: SkillChange[] = [];
-  for (const skill of before) {
-    const next = afterById.get(skill.id);
-    if (!next) {
-      result.push({
-        before: klona(skill),
-        highRisk: true,
-        kind: 'delete',
-        label: `删除Skill“${skill.name}”`,
-        path: `/skills/user/${skill.id}`,
-      });
-    } else if (!canonicalEqual(skill, next)) {
-      result.push({
-        after: klona(next),
-        before: klona(skill),
-        highRisk: true,
-        kind: 'modify',
-        label: `修改Skill“${next.name}”`,
-        path: `/skills/user/${skill.id}`,
-      });
-    }
-  }
-  for (const skill of after) {
-    if (!beforeById.has(skill.id)) {
-      result.push({
-        after: klona(skill),
-        highRisk: false,
-        kind: 'create',
-        label: `新增Skill“${skill.name}”`,
-        path: `/skills/user/${skill.id}`,
-      });
-    }
-  }
-  return result.sort((left, right) => left.path.localeCompare(right.path));
-}
-
-function applySkillDecisions(
-  current: AgentSkill[],
-  changes: SkillChange[],
-  decisions: Record<string, ApprovalDecision>,
-): AgentSkill[] {
-  const result = new Map(current.map(skill => [skill.id, klona(skill)]));
-  for (const change of changes) {
-    if (decisions[change.path] !== 'agent') continue;
-    const id = change.after?.id ?? change.before?.id;
-    if (!id) continue;
-    if (change.after) result.set(id, klona(change.after));
-    else result.delete(id);
-  }
-  return [...result.values()].sort((left, right) => left.name.localeCompare(right.name));
-}
-
-function conflictsChanged(previous: PendingCandidate, current: ReturnType<typeof prepareThreeWayMerge>): boolean {
-  return canonicalStringify(previous.preparation.conflicts) !== canonicalStringify(current.conflicts);
-}
-
-async function markSecretRemovalRisks(preparation: ReturnType<typeof prepareThreeWayMerge>): Promise<void> {
-  for (const change of preparation.agentChanges) {
-    if (!change.path.startsWith('/resources/scripts/') || change.kind === 'create') continue;
-    const dataPath = change.path.includes('/data/') || change.path.endsWith('/data');
-    const beforeScript = change.before as { data?: Record<string, unknown> } | undefined;
-    const afterScript = change.after as { data?: Record<string, unknown> } | undefined;
-    const beforeValue = dataPath ? change.before : beforeScript?.data;
-    const afterValue = dataPath ? change.after : afterScript?.data;
-    if (beforeValue === undefined) continue;
-    try {
-      const beforeText = serializeYaml({ value: beforeValue });
-      const afterText = serializeYaml({ value: afterValue ?? null });
-      const checkPath = '/tavern-helper-scripts/character/scripts/check/data.yaml';
-      const beforeFindings = await scanSecrets(beforeText, checkPath);
-      const afterFindings = await scanSecrets(afterText, checkPath);
-      const remaining = new Set(afterFindings.map(finding => afterText.slice(finding.start, finding.end)));
-      if (beforeFindings.some(finding => !remaining.has(beforeText.slice(finding.start, finding.end)))) {
-        change.highRisk = true;
-        change.label = `${change.label}（移除敏感内容）`;
-      }
-    } catch {
-      // 检测失败按 fail-open 策略继续，不阻断正常提交。
-    }
-  }
-}
-
 export class CardAgentSessionService {
   readonly bindingId: string;
   readonly characterName: string;
   readonly createdAt: number;
   readonly sessionId: string;
-  private activeBase?: CardWorkspaceState;
   private activeCheckpointId?: string;
   private agentConfiguration: SessionAgentConfiguration;
   private attachments: Record<string, StoredSessionAttachment>;
@@ -250,15 +137,11 @@ export class CardAgentSessionService {
   private readonly onSkillsCommit?: SessionServiceOptions['onSkillsCommit'];
   private readonly onUpdate?: SessionServiceOptions['onUpdate'];
   private readonly requestToolApproval?: SessionServiceOptions['requestToolApproval'];
-  private rejectNextTavernGeneration = false;
   private readonly scheduleStreamingUpdate: (callback: () => void) => () => void;
-  private readonly snapshots: ContentAddressedSnapshotStore;
   private readonly tavernBridge?: TavernBridge;
   private readonly tavernChatWorkspace?: TavernChatWorkspace;
-  private storageBaseFiles: WorkspaceFile[] = [];
   private storageFiles: WorkspaceFile[] = [];
   private readonly workspaceStore?: DreamCreatorWorkspaceFileStore;
-  private timeline: HistoryTimeline;
   private events: RunnerEvent[] = [];
   private headerMessageCount: number;
   private hasStreamedReasoningInCurrentStep = false;
@@ -267,9 +150,18 @@ export class CardAgentSessionService {
   private mode: SessionMode;
   private modelMessages: ModelMessage[];
   private modelControls: SessionModelControls;
-  private pending?: PendingCandidate;
+  private mutationActor: 'agent' | 'user' = 'agent';
   private preset: StructuredPreset;
-  private repository?: MemoryWorkspaceRepository;
+  private readonly operationLog: WorkspaceOperationLog;
+  private readonly operationRecovery: OperationRecoveryCoordinator;
+  private pendingOperationReplay?: {
+    after?: { kind: 'undo-message'; messageId: string };
+    conflicts: OperationReplayConflict[];
+    direction: OperationReplayDirection;
+    turnId: string;
+  };
+  private replayingOperations = false;
+  private repository?: LiveWorkspaceRepository;
   private runner?: AgentRunner;
   private skills: AgentSkill[];
   private status: SessionLifecycleStatus = 'idle';
@@ -277,14 +169,12 @@ export class CardAgentSessionService {
   private ui: SessionUiItem[] = [];
   private warnings: string[] = [];
   private cancelStreamingUpdate?: () => void;
-  private midRunCheckpointOutcome?: boolean;
-  private midRunCheckpointResolve?: (approved: boolean) => void;
 
   private constructor(
     options: SessionServiceOptions,
     initial: CardWorkspaceState,
     compiled: CompiledPreset,
-    restored?: { files: WorkspaceFile[]; runtime: PersistedSessionRuntime },
+    restored?: { runtime: PersistedSessionRuntime },
   ) {
     this.adapter = options.adapter;
     this.attachmentStore = options.attachmentStore;
@@ -308,6 +198,8 @@ export class CardAgentSessionService {
     this.headerMessageCount = restored?.runtime.headerMessageCount ?? compiled.messages.length;
     this.lock = options.lock ?? globalAgentTaskLock;
     this.manualEditGroup = restored?.runtime.manualEditGroup ? klona(restored.runtime.manualEditGroup) : undefined;
+    this.operationLog = new WorkspaceOperationLog(restored?.runtime.operationLog);
+    this.operationRecovery = new OperationRecoveryCoordinator(options.operationRecoveryStore);
     this.mode = restored?.runtime.mode ?? options.mode ?? 'normal';
     this.modelMessages = klona(restored?.runtime.modelMessages ?? compiled.messages);
     this.modelControls = klona(restored?.runtime.modelControls ?? { reasoningEffort: 'auto', webSearch: false });
@@ -317,7 +209,6 @@ export class CardAgentSessionService {
     this.onUpdate = options.onUpdate;
     this.preset = klona(restored?.runtime.preset ?? options.preset ?? DEFAULT_PRESET);
     this.requestToolApproval = options.requestToolApproval;
-    this.rejectNextTavernGeneration = restored?.runtime.rejectNextTavernGeneration ?? false;
     this.scheduleStreamingUpdate =
       options.scheduleStreamingUpdate ??
       (callback => {
@@ -326,32 +217,20 @@ export class CardAgentSessionService {
       });
     this.sessionId = restored?.runtime.sessionId ?? options.sessionId ?? crypto.randomUUID();
     this.skills = klona(restored?.runtime.skills ?? options.skills ?? []);
-    this.snapshots = options.snapshots;
     this.tavernBridge = options.tavernBridge;
     this.tavernChatWorkspace = options.tavernChatBridge
       ? new TavernChatWorkspace(options.tavernChatBridge, restored?.runtime.tavernChats)
       : undefined;
     this.workspaceStore = options.workspaceStore;
     this.storageFiles = klona(options.workspaceFiles ?? []);
-    this.timeline = new HistoryTimeline({
-      checkpoints: restored?.runtime.history.checkpoints,
-      now: this.now,
-      position: restored?.runtime.history.position,
-    });
     this.title = restored?.runtime.title ?? (options.title?.trim() || DEFAULT_SESSION_TITLE);
-    this.activeBase = restored?.runtime.activeBase;
     this.activeCheckpointId = restored?.runtime.activeCheckpointId;
     this.events = klona(restored?.runtime.events ?? []);
     this.lastError = restored?.runtime.lastError;
-    this.pending = restored?.runtime.pending
-      ? { ...klona(restored.runtime.pending), fileChanges: klona(restored.runtime.pending.fileChanges ?? []) }
-      : undefined;
     this.status = restored?.runtime.status ?? 'idle';
     this.ui = klona(restored?.runtime.ui ?? []);
     this.warnings = [...(restored?.runtime.warnings ?? [])];
-    this.repository = restored
-      ? this.createRestoredRepository(this.activeBase ?? initial, restored.files)
-      : this.createRepository(initial);
+    this.repository = undefined;
   }
 
   static async create(options: SessionServiceOptions): Promise<CardAgentSessionService> {
@@ -359,6 +238,7 @@ export class CardAgentSessionService {
     const preset = options.preset ?? DEFAULT_PRESET;
     const compiled = await compilePreset(preset, defaultPresetValues(options.skills ?? []));
     const service = new CardAgentSessionService(options, initial, compiled);
+    service.repository = await service.createRepository();
     await service.refreshTavernChatWorkspace();
     return service;
   }
@@ -366,17 +246,12 @@ export class CardAgentSessionService {
   static async restore(
     options: SessionServiceOptions,
     runtime: PersistedSessionRuntime,
-    workingFiles: WorkspaceFile[],
   ): Promise<CardAgentSessionService> {
     const initial = await options.adapter.read();
-    const service = new CardAgentSessionService(options, initial, runtime.compiledPreset, {
-      files: workingFiles,
-      runtime,
-    });
+    const service = new CardAgentSessionService(options, initial, runtime.compiledPreset, { runtime });
+    service.repository = await service.createRepository();
     await service.refreshTavernChatWorkspace();
-    if (runtime.status === 'awaiting-approval' && runtime.pending?.midRun) {
-      service.buildRunner('failed', recoverPendingRunnerStep(service.modelMessages, service.events));
-    } else if (runtime.status === 'running' || runtime.status === 'waiting-approval' || runtime.status === 'abnormal') {
+    if (runtime.status === 'running' || runtime.status === 'waiting-approval' || runtime.status === 'abnormal') {
       service.status = 'abnormal';
       service.lastError = '上次页面在任务完成前关闭，已恢复到最后一个成功步骤。';
       service.completeRunUi('abnormal', service.now());
@@ -400,25 +275,8 @@ export class CardAgentSessionService {
 
   view(): SessionView {
     const canWriteNonCharacterResources = this.canWriteNonCharacterResources();
-    const approval = this.pending
-      ? {
-          candidateSnapshot: this.pending.candidateSnapshot,
-          conflicts: klona(this.pending.preparation.conflicts),
-          error: this.lastError,
-          fileChanges: klona(this.pending.fileChanges),
-          midRun: this.pending.midRun === true,
-          skillChanges: klona(this.pending.skillChanges),
-          stateChanges: klona(
-            this.pending.preparation.agentChanges.filter(
-              change => !this.pending!.preparation.redundantPaths.includes(change.path),
-            ),
-          ),
-          warnings: [...this.pending.warnings],
-        }
-      : undefined;
     return {
       agentConfiguration: klona(this.agentConfiguration),
-      approval,
       bindingId: this.bindingId,
       characterName: this.characterName,
       contextUsage: this.runner?.state.contextUsage ?? measureContext(this.modelMessages, this.contextWindow),
@@ -426,6 +284,14 @@ export class CardAgentSessionService {
       events: klona(this.events),
       mode: this.mode,
       modelControls: klona(this.modelControls),
+      operationLog: this.operationLog.export(),
+      operationReplay: this.pendingOperationReplay
+        ? {
+            conflicts: klona(this.pendingOperationReplay.conflicts),
+            direction: this.pendingOperationReplay.direction,
+            turnId: this.pendingOperationReplay.turnId,
+          }
+        : undefined,
       preset: klona(this.preset),
       sessionId: this.sessionId,
       skills: klona(this.skills),
@@ -440,7 +306,6 @@ export class CardAgentSessionService {
         })),
       })),
       warnings: [...this.warnings],
-      workingChanges: this.repository?.changes() ?? [],
       workingFiles: (this.repository?.snapshot() ?? []).map(file => ({
         ...file,
         readonly: file.readonly || (!canWriteNonCharacterResources && isNonCharacterResourcePath(file.path)),
@@ -451,7 +316,6 @@ export class CardAgentSessionService {
   setMode(mode: SessionMode): void {
     this.mode = mode;
     this.notify();
-    void this.persist();
   }
 
   async setModelControls(controls: Partial<SessionModelControls>): Promise<void> {
@@ -479,12 +343,11 @@ export class CardAgentSessionService {
   }
 
   async refreshManagedFiles(): Promise<SessionView> {
-    // 已中断或待审批的会话必须保留原Working Copy；它们在真正继续时会得到明确的文件缺失错误。
-    if (this.pending || this.activeCheckpointId || !['completed', 'idle'].includes(this.status)) return this.view();
+    if (this.activeCheckpointId || !['completed', 'idle'].includes(this.status)) return this.view();
     const current = await this.adapter.read();
     this.assertBinding(current);
     await this.reloadStorageFiles();
-    this.repository = this.createRepository(current);
+    this.repository = await this.createRepository(current);
     this.notify();
     return this.view();
   }
@@ -514,9 +377,8 @@ export class CardAgentSessionService {
     availableSkills: AgentSkill[],
   ): Promise<void> {
     if (
-      this.pending ||
       this.activeCheckpointId ||
-      ['running', 'waiting-approval', 'committing'].includes(this.status)
+      ['running', 'waiting-approval'].includes(this.status)
     ) {
       throw new Error('当前轮次结束前不能替换Agent配置。');
     }
@@ -526,7 +388,7 @@ export class CardAgentSessionService {
     this.agentConfiguration = klona(configuration);
     this.preset = klona(preset);
     this.skills = klona(availableSkills.filter(skill => configuration.skillIds.includes(skill.id)));
-    this.repository = this.createRepository(current);
+    this.repository = await this.createRepository(current);
     await this.refreshCompiledHeader();
     await this.persist();
   }
@@ -541,9 +403,8 @@ export class CardAgentSessionService {
     availableSkills: AgentSkill[],
   ): Promise<void> {
     if (
-      this.pending ||
       this.activeCheckpointId ||
-      ['running', 'waiting-approval', 'committing'].includes(this.status)
+      ['running', 'waiting-approval'].includes(this.status)
     ) {
       throw new Error('当前轮次结束前不能同步Agent配置。');
     }
@@ -559,7 +420,7 @@ export class CardAgentSessionService {
     if (resourcesChanged) {
       const current = await this.adapter.read();
       this.assertBinding(current);
-      this.repository = this.createRepository(current);
+      this.repository = await this.createRepository(current);
     }
     if (!this.hasConversationMessages()) await this.refreshCompiledHeader();
     this.notify();
@@ -579,9 +440,8 @@ export class CardAgentSessionService {
 
   async setSkills(skills: AgentSkill[]): Promise<void> {
     if (
-      this.pending ||
       this.activeCheckpointId ||
-      ['running', 'waiting-approval', 'committing'].includes(this.status)
+      ['running', 'waiting-approval'].includes(this.status)
     ) {
       throw new Error('当前轮次结束前不能更新全局Skill挂载。');
     }
@@ -591,7 +451,7 @@ export class CardAgentSessionService {
     const current = await this.adapter.read();
     this.assertBinding(current);
     this.skills = klona(mounted);
-    this.repository = this.createRepository(current);
+    this.repository = await this.createRepository(current);
     if (!this.hasConversationMessages()) await this.refreshCompiledHeader();
     this.notify();
   }
@@ -603,14 +463,12 @@ export class CardAgentSessionService {
   ): Promise<SessionView> {
     const text = message.trim();
     if (!text && attachmentInputs.length === 0) throw new Error('请输入要交给Agent的要求，或添加附件。');
-    if (this.pending) throw new Error('请先处理当前待批准的修改。');
     if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status))
       throw new Error('Agent已经在运行。');
-    if (this.activeCheckpointId || this.activeBase) {
+    if (this.activeCheckpointId) {
       throw new Error('当前轮次尚未结束，请从中断处继续，或回退这条用户消息后再发送新要求。');
     }
     await this.reloadStorageFiles();
-    const beforeWorkspaceFiles = persistentStorageFiles(this.storageFiles);
     const attachments = this.attachmentStore
       ? await this.attachmentStore.save(this.sessionId, attachmentInputs)
       : storeSessionAttachments(attachmentInputs);
@@ -622,34 +480,31 @@ export class CardAgentSessionService {
       }
       const base = await this.adapter.read();
       this.assertBinding(base);
-      this.activeBase = klona(base);
-      const beforeSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
-        card: base,
-        events: this.events,
-        modelMessages: this.modelMessages,
-        workspaceFiles: beforeWorkspaceFiles,
-      });
-      const checkpoint = this.timeline.beginTurn({
-        beforeAgentCursor: this.modelMessages.length,
-        beforeSnapshot,
+      const turnId = crypto.randomUUID();
+      this.activeCheckpointId = turnId;
+      this.operationLog.beginTurn(turnId, {
+        eventStart: this.events.length,
+        modelMessageStart: this.modelMessages.length,
         userMessageId,
       });
-      this.activeCheckpointId = checkpoint.id;
       attachments.forEach(attachment => {
         this.attachments[attachment.id] = attachment;
       });
       const attachmentSummaries = attachments.map(attachmentSummary);
       const existing = this.ui.find(item => item.id === userMessageId && item.kind === 'user');
       if (existing) {
+        existing.at = this.now();
         existing.content = text;
         existing.attachments = attachmentSummaries;
-        existing.checkpointId = checkpoint.id;
+        existing.checkpointId = turnId;
         existing.hidden = false;
+        delete existing.durationMs;
+        delete existing.runStatus;
       } else {
         this.ui.push({
           at: this.now(),
           attachments: attachmentSummaries,
-          checkpointId: checkpoint.id,
+          checkpointId: turnId,
           content: text,
           id: userMessageId,
           kind: 'user',
@@ -658,7 +513,7 @@ export class CardAgentSessionService {
       if (attachments.length > 0) {
         this.ui.push({
           at: this.now(),
-          checkpointId: checkpoint.id,
+          checkpointId: turnId,
           content: JSON.stringify({
             changes: attachments.map(attachment => ({
               after: `<${attachment.mediaType}，${attachment.size} bytes>`,
@@ -675,7 +530,7 @@ export class CardAgentSessionService {
       }
       this.syncUiVisibility();
       await this.reloadStorageFiles();
-      this.repository = this.createRepository(base);
+      this.repository = await this.createRepository(base);
       this.tavernChatWorkspace?.resetRunAuthorization();
       await this.refreshTavernChatWorkspace();
       this.buildRunner();
@@ -684,8 +539,7 @@ export class CardAgentSessionService {
       this.status = state.status;
       this.lastError = state.failure;
       if (state.status === 'completed' || state.status === 'stopped') {
-        if (!this.activeBase) throw new Error('本轮完成时缺少当前Base数据。');
-        await this.freezeCandidate(this.activeBase, state.status === 'stopped');
+        await this.completeRealtimeTurn(state.status === 'stopped');
       }
       await this.persist();
       return this.view();
@@ -706,8 +560,7 @@ export class CardAgentSessionService {
       this.status = state.status;
       this.lastError = state.failure;
       if ((state.status === 'completed' || state.status === 'stopped') && this.repository) {
-        if (!this.activeBase) throw new Error('无法恢复：缺少本轮Base数据。');
-        await this.freezeCandidate(this.activeBase, state.status === 'stopped');
+        await this.completeRealtimeTurn(state.status === 'stopped');
       }
       await this.persist();
       return this.view();
@@ -718,20 +571,6 @@ export class CardAgentSessionService {
 
   stop(): void {
     this.runner?.stop();
-    if (this.midRunCheckpointResolve) {
-      // 生成工具正在等待角色卡检查点时，AbortSignal无法直接打断这个本地Promise。
-      // 主动给工具返回拒绝结果，Runner会在当前工具结束后观察stopRequested并正常收束本轮。
-      this.midRunCheckpointOutcome = false;
-      this.flushMidRunCheckpoint();
-    } else if (this.pending?.midRun) {
-      // 刷新恢复后原等待Promise已经不存在：取消酒馆生成，并把已有改动保留为普通停止候选。
-      this.pending.midRun = false;
-      this.pending.stopped = true;
-      this.status = 'awaiting-approval';
-      this.lastError = undefined;
-      this.notify();
-      void this.persist();
-    }
   }
 
   enqueueGuidance(message: string): void {
@@ -741,78 +580,64 @@ export class CardAgentSessionService {
     this.runner.enqueueGuidance(message);
   }
 
-  async approve(decisions: Record<string, ApprovalDecision>): Promise<SessionView> {
-    if (!this.pending) throw new Error('当前没有待批准的修改。');
-    const midRun = this.pending.midRun === true;
-    const retryState = midRun
-      ? undefined
-      : {
-          activeBase: this.activeBase ? klona(this.activeBase) : undefined,
-          activeCheckpointId: this.activeCheckpointId,
-          history: this.timeline.export(),
-          pending: klona(this.pending),
-          warnings: [...this.warnings],
-          workingFiles: this.repository?.snapshot() ?? [],
-        };
-    this.lock.acquire(this.sessionId);
-    try {
-      try {
-        await this.applyApproval(decisions);
-        await this.persist();
-      } catch (error) {
-        if (midRun) {
-          this.midRunCheckpointOutcome = false;
-        } else if (retryState) {
-          this.timeline = new HistoryTimeline({ ...retryState.history, now: this.now });
-          this.pending = retryState.pending;
-          this.activeBase = retryState.activeBase;
-          this.activeCheckpointId = retryState.activeCheckpointId;
-          this.repository = this.createRestoredRepository(retryState.pending.base, retryState.workingFiles);
-          this.status = 'failed';
-          this.lastError = `应用结果未能完整保存：${error instanceof Error ? error.message : String(error)}`;
-          this.warnings = retryState.warnings;
-          this.syncUiVisibility();
-          this.notify();
-        }
-        throw error;
-      } finally {
-        if (midRun) this.flushMidRunCheckpoint();
-      }
-      return this.view();
-    } finally {
-      this.lock.release(this.sessionId);
-    }
-  }
-
   async undo(): Promise<SessionView> {
     this.assertHistoryRestoreAllowed();
     await this.finalizeManualEdits();
-    return this.restore('undo');
+    return this.replayLatestOperations('undo');
   }
 
   async undoToUserMessage(messageId: string): Promise<SessionView> {
     this.assertHistoryRestoreAllowed();
     await this.finalizeManualEdits();
-    const previous = this.timeline.export();
-    const restore = this.timeline.undoToUserMessage(messageId);
-    if (!restore) throw new Error('该消息当前不能回退。');
-    try {
-      return await this.restoreSnapshot(restore);
-    } catch (error) {
-      this.timeline = new HistoryTimeline({ ...previous, now: this.now });
-      throw error;
+    const latestVisible = [...this.ui].reverse().find(item => !item.hidden);
+    const user = this.ui.find(item => item.id === messageId && item.kind === 'user' && !item.hidden);
+    if (!user?.checkpointId) throw new Error('该用户消息当前不能回退。');
+    if (latestVisible?.checkpointId !== user.checkpointId) throw new Error('只能回退最新一轮消息。');
+    const records = this.operationLog.recordsForTurn(user.checkpointId).filter(record => record.state === 'applied');
+    if (!this.repository) throw new Error('实时文件工作区尚未初始化。');
+    const plan = await planOperationReplay(this.repository, records, 'undo');
+    if (plan.conflicts.length > 0) {
+      this.pendingOperationReplay = {
+        after: { kind: 'undo-message', messageId },
+        conflicts: plan.conflicts,
+        direction: 'undo',
+        turnId: user.checkpointId,
+      };
+      this.notify();
+      return this.view();
     }
+    await this.replayTurn(user.checkpointId, 'undo', [], false);
+    return this.finishMessageUndo(messageId, user.checkpointId);
   }
 
   async redo(): Promise<SessionView> {
     this.assertHistoryRestoreAllowed();
     await this.finalizeManualEdits();
-    return this.restore('redo');
+    return this.replayLatestOperations('redo');
   }
 
-  async writeWorkingFile(path: string, content: string, overwriteConflict = false): Promise<SessionView> {
+  async confirmOperationReplay(continueWithoutConflicts: boolean): Promise<SessionView> {
+    const pending = this.pendingOperationReplay;
+    if (!pending) throw new Error('当前没有等待确认的撤销或重做。');
+    if (!continueWithoutConflicts) {
+      this.pendingOperationReplay = undefined;
+      this.notify();
+      return this.view();
+    }
+    await this.replayTurn(pending.turnId, pending.direction, pending.conflicts.map(item => item.operationId), false);
+    if (pending.after?.kind === 'undo-message') return this.finishMessageUndo(pending.after.messageId, pending.turnId);
+    await this.persist();
+    return this.view();
+  }
+
+  async writeWorkingFile(
+    path: string,
+    content: string,
+    overwriteConflict = false,
+    expectedContent?: string,
+  ): Promise<SessionView> {
     this.assertManualResourceWrite(path);
-    return this.applyManualWorkspaceChange({ content, kind: 'write', overwriteConflict, path });
+    return this.applyManualWorkspaceChange({ content, expectedContent, kind: 'write', overwriteConflict, path });
   }
 
   async useCurrentWorkingFile(path: string): Promise<SessionView> {
@@ -821,13 +646,13 @@ export class CardAgentSessionService {
     if (isStoragePath(path)) {
       await this.reloadStorageFiles();
       if (!this.storageFiles.some(file => file.path === path)) throw new Error(`当前文件存储中不存在文件：${path}`);
-      this.repository = this.createRepository(current);
+      this.repository = await this.createRepository(current);
       this.notify();
       return this.view();
     }
     const file = projectCardWorkspace(current, 100, { allowNonCharacterWrites: true }).find(item => item.path === path);
     if (!file) throw new Error(`当前实际数据中不存在文件：${path}`);
-    this.repository = this.createRepository(current);
+    this.repository = await this.createRepository(current);
     this.notify();
     return this.view();
   }
@@ -839,170 +664,66 @@ export class CardAgentSessionService {
 
   async finalizeManualEdits(): Promise<void> {
     if (!this.manualEditGroup) return;
-    if (!this.manualEditGroup.attachedToAgent && !this.manualEditGroup.completed) {
-      this.timeline.markAbnormal(this.manualEditGroup.checkpointId);
-      this.syncUiVisibility();
-    }
     this.manualEditGroup = undefined;
     await this.persist();
   }
 
   private async applyManualWorkspaceChange(input: {
     content?: string;
+    expectedContent?: string;
     kind: 'delete' | 'write';
     overwriteConflict?: boolean;
     path: string;
   }): Promise<SessionView> {
-    if (['running', 'waiting-approval', 'committing'].includes(this.status)) {
-      throw new Error('Agent运行或工具确认期间不能手动编辑Working Copy。');
+    if (['running', 'waiting-approval'].includes(this.status)) {
+      throw new Error('Agent运行或工具确认期间不能手动编辑实时文件。');
     }
-    if (isStoragePath(input.path)) return this.applyManualStorageChange(input);
-    const current = await this.adapter.read();
-    this.assertBinding(current);
-    const actualFiles = projectCardWorkspace(current, 100, { allowNonCharacterWrites: true });
-    const actualFile = actualFiles.find(file => file.path === input.path);
-    if (!input.overwriteConflict && !this.pending && input.kind === 'write' && this.repository) {
-      const editorFile = await this.repository.read(input.path).catch(() => undefined);
-      if (editorFile && actualFile && editorFile.content !== actualFile.content && input.content !== actualFile.content) {
-        throw new Error(
-          `MANUAL_EDIT_CONFLICT：${input.path}\nBase：${editorFile.content}\nCurrent：${actualFile.content}\nPlayer：${input.content ?? ''}`,
-        );
-      }
-    }
-    const manualRepository = new MemoryWorkspaceRepository({
-      files: actualFiles,
-      readonlyRoots: ['/context', '/library', '/worldbooks-global-readonly', '/skills/builtin'],
-    });
-    const toolCallId = `manual:${crypto.randomUUID()}`;
-    if (input.kind === 'write')
-      await manualRepository.write(input.path, input.content ?? '', toolCallId, { overwrite: true });
-    else await manualRepository.remove(input.path, toolCallId);
-    const materialized = materializeCardWorkspace(current, manualRepository.snapshot());
-    const operations = diffCardStates(current, materialized.state);
-    if (operations.length === 0) return this.view();
-    const group = await this.ensureManualEditGroup(current);
-    const previous = group.files[input.path];
-    group.files[input.path] = {
-      after: input.kind === 'write' ? input.content ?? '' : undefined,
-      before: previous?.before ?? actualFile?.content,
-      kind: input.kind,
-      path: input.path,
-    };
-    this.updateManualUi(group, 'active');
-    const result = await commitWorkingCopy({
-      adapter: this.adapter,
-      base: current,
-      decisions: Object.fromEntries(operations.map(operation => [operation.path, 'agent' as const])),
-      working: materialized.state,
-    });
-    if (result.status === 'rolled-back') {
-      group.files[input.path].error = result.error.message;
-      this.updateManualUi(group, 'failed');
-      await this.persist();
-      return this.view();
-    }
-    delete group.files[input.path].error;
-    await this.updateManualModelMessage(group);
-    if (group.attachedToAgent) {
-      if (!this.repository || !this.pending) throw new Error('Agent候选修改已丢失。');
-      if (input.kind === 'write')
-        await this.repository.write(input.path, input.content ?? '', `manual-sync:${crypto.randomUUID()}`, {
-          overwrite: true,
-        });
-      else {
-        await this.repository.remove(input.path, `manual-sync:${crypto.randomUUID()}`).catch(() => undefined);
-      }
-      await this.refreshPendingAfterManualChange();
-    } else {
-      const afterSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
-        card: result.state,
-        events: this.events,
-        modelMessages: this.modelMessages,
-      });
-      if (group.completed) {
-        this.timeline.updateCompletedTurn(group.checkpointId, {
-          afterAgentCursor: this.modelMessages.length,
-          afterSnapshot,
-        });
-      } else {
-        this.timeline.completeTurn(group.checkpointId, {
-          afterAgentCursor: this.modelMessages.length,
-          afterSnapshot,
-        });
-        group.completed = true;
-      }
-      this.repository = this.createRepository(result.state);
-      this.status = 'completed';
-    }
-    this.updateManualUi(group, 'active');
-    this.syncUiVisibility();
-    await this.persist();
-    return this.view();
-  }
-
-  private async applyManualStorageChange(input: {
-    content?: string;
-    kind: 'delete' | 'write';
-    overwriteConflict?: boolean;
-    path: string;
-  }): Promise<SessionView> {
-    if (!this.workspaceStore) throw new Error('当前环境没有可用的梦境创客文件存储。');
-    if (this.pending) throw new Error('请先处理当前Agent候选修改，再编辑 /files 或 /temp。');
-    const currentCard = await this.adapter.read();
-    this.assertBinding(currentCard);
-    await this.reloadStorageFiles();
-    const currentFile = this.storageFiles.find(file => file.path === input.path);
-    const group = await this.ensureManualEditGroup(currentCard);
-    const repository = new MemoryWorkspaceRepository({ files: this.storageFiles });
-    const toolCallId = `manual-storage:${crypto.randomUUID()}`;
-    if (input.kind === 'write') await repository.write(input.path, input.content ?? '', toolCallId, { overwrite: true });
-    else await repository.remove(input.path, toolCallId);
-    const previous = group.files[input.path];
-    group.files[input.path] = {
-      after: input.kind === 'write' ? input.content ?? '' : undefined,
-      before: previous?.before ?? (currentFile?.external && !currentFile.mediaType.startsWith('text/') ? '<二进制文件>' : currentFile?.content),
-      kind: input.kind,
-      path: input.path,
-    };
-    this.updateManualUi(group, 'active');
-    try {
-      this.storageFiles = await this.workspaceStore.applyWorkspace(
-        this.bindingId,
-        this.sessionId,
-        this.storageFiles,
-        repository.snapshot(),
-        { [input.path]: 'agent' },
+    if (!this.repository) this.repository = await this.createRepository();
+    const currentFile = await this.repository.read(input.path).catch(() => undefined);
+    if (
+      input.kind === 'write' &&
+      !input.overwriteConflict &&
+      input.expectedContent !== undefined &&
+      currentFile?.content !== input.expectedContent &&
+      currentFile?.content !== input.content
+    ) {
+      throw new Error(
+        `MANUAL_EDIT_CONFLICT：${input.path}\nBase：${input.expectedContent}\nCurrent：${currentFile?.content ?? '<不存在>'}\nPlayer：${input.content ?? ''}`,
       );
+    }
+    const group = await this.ensureManualEditGroup();
+    const toolCallId = `manual:${crypto.randomUUID()}`;
+    this.mutationActor = 'user';
+    try {
+      if (input.kind === 'write') {
+        await this.repository.write(input.path, input.content ?? '', toolCallId, { overwrite: true });
+      } else {
+        await this.repository.remove(input.path, toolCallId);
+      }
     } catch (error) {
-      group.files[input.path].error = error instanceof Error ? error.message : String(error);
+      group.files[input.path] = {
+        after: input.kind === 'write' ? input.content ?? '' : undefined,
+        before: currentFile?.content,
+        error: error instanceof Error ? error.message : String(error),
+        kind: input.kind,
+        path: input.path,
+      };
       this.updateManualUi(group, 'failed');
       await this.persist();
       return this.view();
+    } finally {
+      this.mutationActor = 'agent';
     }
-    delete group.files[input.path].error;
+    const previous = group.files[input.path];
+    group.files[input.path] = {
+      after: input.kind === 'write' ? input.content ?? '' : undefined,
+      before: previous?.before ?? currentFile?.content,
+      kind: input.kind,
+      path: input.path,
+    };
     await this.updateManualModelMessage(group);
-    const afterSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
-      card: currentCard,
-      events: this.events,
-      modelMessages: this.modelMessages,
-      workspaceFiles: persistentStorageFiles(this.storageFiles),
-    });
-    if (group.completed) {
-      this.timeline.updateCompletedTurn(group.checkpointId, {
-        afterAgentCursor: this.modelMessages.length,
-        afterSnapshot,
-      });
-    } else {
-      this.timeline.completeTurn(group.checkpointId, {
-        afterAgentCursor: this.modelMessages.length,
-        afterSnapshot,
-      });
-      group.completed = true;
-    }
-    this.repository = this.createRepository(currentCard);
-    this.status = 'completed';
     this.updateManualUi(group, 'active');
-    this.syncUiVisibility();
+    this.status = 'completed';
     await this.persist();
     return this.view();
   }
@@ -1032,45 +753,154 @@ export class CardAgentSessionService {
     return this.send(item.content, messageId, attachments);
   }
 
-  private createRepository(state: CardWorkspaceState): MemoryWorkspaceRepository {
-    this.storageBaseFiles = klona(this.storageFiles);
-    const repository = new MemoryWorkspaceRepository({
-      files: [
-        ...projectCardWorkspace(state, 100, { allowNonCharacterWrites: true }),
-        ...projectSkills(this.skills),
-        ...this.storageFiles,
-      ],
-      readonlyRoots: ['/context', '/library', '/worldbooks-global-readonly', '/skills/builtin'],
+  private async createRepository(_state?: CardWorkspaceState): Promise<LiveWorkspaceRepository> {
+    const source = new SessionWorkspaceLiveSource({
+      bindingId: this.bindingId,
+      cardSource: new CardWorkspaceLiveSource(this.adapter),
+      getSkills: () => this.skills,
+      getStorageFiles: () => this.storageFiles,
+      onSkillsCommit: this.onSkillsCommit,
+      sessionId: this.sessionId,
+      setSkills: skills => {
+        this.skills = klona(skills);
+        this.agentConfiguration.skillIds = [...new Set([...this.agentConfiguration.skillIds, ...skills.map(skill => skill.id)])];
+      },
+      setStorageFiles: files => {
+        this.storageFiles = klona(files);
+      },
+      workspaceStore: this.workspaceStore,
     });
+    const repository = new LiveWorkspaceRepository({
+      completedToolCallIds: this.operationLog
+        .export()
+        .records.filter(record => record.state === 'applied')
+        .map(record => record.toolCallId),
+      onCommitted: (result, toolCallId) => this.recordRealtimeMutation(result, toolCallId),
+      readonlyRoots: ['/context', '/library', '/worldbooks-global-readonly', '/skills/builtin'],
+      source,
+    });
+    await repository.initialize();
     this.tavernChatWorkspace?.projectCached(repository);
     return repository;
   }
 
-  private createRestoredRepository(
-    state: CardWorkspaceState,
-    currentFiles: WorkspaceFile[],
-  ): MemoryWorkspaceRepository {
-    this.storageBaseFiles = klona(this.storageFiles);
-    const restoredStorage = currentFiles.filter(file => isStoragePath(file.path));
-    const restoredNonStorage = currentFiles.filter(file => !isStoragePath(file.path));
-    const repository = new MemoryWorkspaceRepository({
-      completedToolCallIds: this.events
-        .filter(event => event.type === 'tool-completed')
-        .map(event => event.call.toolCallId),
-      currentFiles: [...restoredNonStorage, ...(restoredStorage.length ? restoredStorage : this.storageFiles)],
-      files: [
-        ...projectCardWorkspace(state, 100, { allowNonCharacterWrites: true }),
-        ...projectSkills(this.skills),
-        ...this.storageFiles,
-      ],
-      readonlyRoots: ['/context', '/worldbooks-global-readonly', '/skills/builtin'],
-    });
-    this.tavernChatWorkspace?.projectCached(repository);
-    return repository;
+  private async recordRealtimeMutation(
+    result: NonNullable<ReturnType<LiveWorkspaceRepository['mutationResult']>>,
+    toolCallId: string,
+  ): Promise<void> {
+    if (this.replayingOperations) return;
+    const turnId = this.activeCheckpointId ?? `manual:${crypto.randomUUID()}`;
+    this.operationLog.beginTurn(turnId);
+    for (const change of result.changes) {
+      if (change.path.startsWith('/temp/') || change.path.startsWith('/context/chats/')) continue;
+      this.operationLog.append(
+        await createWorkspaceOperationRecord({
+          actor: this.mutationActor,
+          approvalMode: this.mode === 'full' ? 'full' : this.mode === 'yolo' ? 'yolo' : 'manual',
+          change,
+          toolCallId,
+          turnId,
+          undoable: result.status !== 'uncertain',
+          warning: result.warning,
+        }),
+      );
+    }
+    const recoverySaved = await this.operationRecovery.persist(this.sessionId, turnId, this.operationLog.export());
+    if (!recoverySaved) {
+      this.operationLog.setRecoveryAvailable(turnId, false);
+      this.warnings = [
+        ...new Set([...this.warnings, '浏览器临时恢复记录写入失败：本轮后续不再重试，Undo/Redo可能不可用。']),
+      ];
+    }
+    if (result.status !== 'success' && result.warning) {
+      this.warnings = [...new Set([...this.warnings, result.warning])];
+    }
+  }
+
+  private async replayLatestOperations(direction: OperationReplayDirection): Promise<SessionView> {
+    const latest = this.operationLog.latestTurn();
+    if (!latest || latest.operationIds.length === 0) {
+      throw new Error(direction === 'undo' ? '最新一轮没有可撤销的文件修改。' : '最新一轮没有可重做的文件修改。');
+    }
+    const records = this.operationLog
+      .recordsForTurn(latest.turnId)
+      .filter(record =>
+        direction === 'undo'
+          ? record.state === 'applied'
+          : record.state === 'undone' && latest.redoOperationIds.includes(record.operationId),
+      );
+    if (records.length === 0) {
+      throw new Error(direction === 'undo' ? '最新一轮修改已经撤销。' : '最新一轮没有可重做的修改。');
+    }
+    if (!latest.recoveryAvailable) throw new Error('本轮恢复记录不可用，不能安全撤销或重做。');
+    if (!this.repository) throw new Error('实时文件工作区尚未初始化。');
+    const plan = await planOperationReplay(this.repository, records, direction);
+    if (plan.conflicts.length > 0) {
+      this.pendingOperationReplay = { conflicts: plan.conflicts, direction, turnId: latest.turnId };
+      this.notify();
+      return this.view();
+    }
+    return this.replayTurn(latest.turnId, direction, []);
+  }
+
+  private async replayTurn(
+    turnId: string,
+    direction: OperationReplayDirection,
+    skipOperationIds: string[],
+    persist = true,
+  ): Promise<SessionView> {
+    if (!this.repository) throw new Error('实时文件工作区尚未初始化。');
+    const records = this.operationLog
+      .recordsForTurn(turnId)
+      .filter(record => (direction === 'undo' ? record.state === 'applied' : record.state === 'undone'));
+    this.replayingOperations = true;
+    try {
+      const result = await executeOperationReplay({ direction, records, repository: this.repository, skipOperationIds });
+      if (direction === 'undo') this.operationLog.markUndone(turnId, result.appliedOperationIds);
+      else this.operationLog.markRedone(turnId, result.appliedOperationIds);
+      this.pendingOperationReplay = undefined;
+      if (result.failed.length > 0) {
+        this.warnings = [
+          ...new Set([...this.warnings, ...result.failed.map(item => `${item.path}：${item.reason}`)]),
+        ];
+      }
+      const recoverySaved = await this.operationRecovery.persist(this.sessionId, turnId, this.operationLog.export());
+      if (!recoverySaved) this.operationLog.setRecoveryAvailable(turnId, false);
+      if (persist) await this.persist();
+      this.notify();
+      return this.view();
+    } finally {
+      this.replayingOperations = false;
+    }
+  }
+
+  private async finishMessageUndo(messageId: string, turnId: string): Promise<SessionView> {
+    const turn = this.operationLog.turn(turnId);
+    if (!turn) throw new Error('消息对应的操作轮次已经丢失。');
+    if (turn.modelMessageStart !== undefined) this.modelMessages = this.modelMessages.slice(0, turn.modelMessageStart);
+    if (turn.eventStart !== undefined) this.events = this.events.slice(0, turn.eventStart);
+    for (const item of this.ui) {
+      if (item.checkpointId !== turnId) continue;
+      if (item.id === messageId && item.kind === 'user') {
+        item.hidden = false;
+        delete item.durationMs;
+        delete item.runStatus;
+      } else {
+        item.hidden = true;
+      }
+    }
+    this.activeCheckpointId = undefined;
+    // 消息回退会移除该轮Agent上下文，不能只重做文件而留下缺失的Agent消息。
+    this.operationLog.discardRedo(turnId);
+    this.runner = undefined;
+    this.status = 'completed';
+    this.lastError = undefined;
+    await this.persist();
+    return this.view();
   }
 
   private buildRunner(initialStatus: RunnerStatus = 'idle', initialPending?: PendingRunnerStep): void {
-    if (!this.repository) throw new Error('Working Copy不存在。');
+    if (!this.repository) throw new Error('实时文件工作区尚未初始化。');
     const journal = new PersistentRunnerJournal(this.events, async events => {
       this.events = events;
       this.consumeLatestEvent(events.at(-1)!);
@@ -1089,7 +919,8 @@ export class CardAgentSessionService {
       now: this.now,
       onReasoningDelta: delta => this.appendStreamingReasoning(delta),
       onTextDelta: delta => this.appendStreamingText(delta),
-      requestApproval: this.requestToolApproval,
+      requestApproval: request =>
+        this.requestToolApproval?.({ ...request, sessionId: this.sessionId }) ?? Promise.resolve(false),
       prepareMessages: this.attachmentStore
         ? messages => this.attachmentStore!.prepareMessages(this.sessionId, messages)
           : undefined,
@@ -1099,17 +930,17 @@ export class CardAgentSessionService {
           this.repository,
           this.skills.map(skill => skill.id),
           {
+            approvalMode: () => (this.mode === 'full' ? 'full' : this.mode === 'yolo' ? 'yolo' : 'manual'),
             canWriteNonCharacterResources: this.canWriteNonCharacterResources,
             chatWorkspace: this.tavernChatWorkspace,
+            lockedSkillIds: this.skills.filter(skill => skill.locked).map(skill => skill.id),
             isYolo: () => this.mode === 'yolo',
           },
         ),
         ...(this.tavernBridge
           ? createWorldbookRunnerTools(this.repository, this.tavernBridge, {
-              getBaseState: () => {
-                if (!this.activeBase) throw new Error('当前没有正在运行的Working Copy。');
-                return this.activeBase;
-              },
+              approvalMode: () => (this.mode === 'full' ? 'full' : this.mode === 'yolo' ? 'yolo' : 'manual'),
+              getBaseState: () => this.adapter.read(),
               chatBindingConfirmation: (input, toolCallId) => {
                 const changesChatBinding = Boolean((input as { chat?: unknown } | undefined)?.chat);
                 if (
@@ -1120,8 +951,7 @@ export class CardAgentSessionService {
                   return undefined;
                 }
                 return {
-                  description:
-                    '本次运行将直接修改酒馆聊天绑定的世界书；这项聊天改动不进入角色卡快照，也不能用梦境创客Undo。',
+                  description: '本次运行将直接修改酒馆聊天绑定的世界书；聊天改动不能用梦境创客Undo。',
                   toolCallId,
                   toolName: 'set_worldbook_binding',
                 };
@@ -1138,7 +968,8 @@ export class CardAgentSessionService {
           : []),
         ...(this.tavernChatWorkspace
           ? createTavernChatRunnerTools(this.repository, this.tavernChatWorkspace, {
-              beforeGeneration: () => this.checkpointBeforeTavernGeneration(),
+              approvalMode: () => (this.mode === 'full' ? 'full' : this.mode === 'yolo' ? 'yolo' : 'manual'),
+              beforeGeneration: async () => true,
               isYolo: () => this.mode === 'yolo',
               resolveFileUrl: fileId => this.workspaceStore?.getReference(fileId)?.url,
             })
@@ -1153,31 +984,17 @@ export class CardAgentSessionService {
     }
   }
 
-  private async ensureManualEditGroup(current: CardWorkspaceState): Promise<ManualEditGroup> {
+  private async ensureManualEditGroup(): Promise<ManualEditGroup> {
     if (this.manualEditGroup) return this.manualEditGroup;
-    const attachedToAgent = Boolean(this.pending && this.activeCheckpointId);
-    let checkpointId = this.activeCheckpointId;
-    let beforeSnapshot: string | undefined;
-    if (!attachedToAgent) {
-      beforeSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
-        card: current,
-        events: this.events,
-        modelMessages: this.modelMessages,
-        workspaceFiles: persistentStorageFiles(this.storageFiles),
-      });
-      checkpointId = this.timeline.beginTurn({
-        beforeAgentCursor: this.modelMessages.length,
-        beforeSnapshot,
-        userMessageId: `manual:${crypto.randomUUID()}`,
-      }).id;
-    }
-    if (!checkpointId) throw new Error('无法为玩家修改建立检查点。');
+    const checkpointId = this.activeCheckpointId ?? `manual:${crypto.randomUUID()}`;
+    this.operationLog.beginTurn(checkpointId, {
+      eventStart: this.events.length,
+      modelMessageStart: this.modelMessages.length,
+      userMessageId: checkpointId,
+    });
     const uiItemId = `manual:${crypto.randomUUID()}`;
     this.manualEditGroup = {
-      attachedToAgent,
-      beforeSnapshot,
       checkpointId,
-      completed: false,
       files: {},
       uiItemId,
     };
@@ -1240,41 +1057,6 @@ export class CardAgentSessionService {
     }
   }
 
-  private async refreshPendingAfterManualChange(): Promise<void> {
-    if (!this.pending || !this.repository) return;
-    const previous = this.pending;
-    const materialized = materializeCardWorkspace(previous.base, this.repository.snapshot());
-    const candidateSkills = materializeUserSkills(this.repository.snapshot(), this.skills);
-    const current = await this.adapter.read();
-    const preparation = prepareThreeWayMerge(previous.base, materialized.state, current);
-    await markSecretRemovalRisks(preparation);
-    const skillChanges = diffSkills(this.skills, candidateSkills);
-    const fileChanges = workspaceApprovalChanges(this.repository.changes());
-    const candidateSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
-      card: materialized.state,
-      events: this.events,
-      modelMessages: this.modelMessages,
-      workspaceFiles: persistentStorageFiles(this.repository.snapshot()),
-    });
-    this.pending = {
-      ...previous,
-      candidateSnapshot,
-      fileChanges,
-      preparation,
-      skillChanges,
-      skills: candidateSkills,
-      state: materialized.state,
-      warnings: materialized.warnings,
-    };
-    const effective = preparation.agentChanges.filter(change => !preparation.redundantPaths.includes(change.path));
-    if (effective.length === 0 && skillChanges.length === 0 && fileChanges.length === 0) {
-      await this.applyApproval({});
-      this.manualEditGroup = undefined;
-    } else {
-      this.status = 'awaiting-approval';
-    }
-  }
-
   private async refreshCompiledHeader(): Promise<void> {
     const next = await compilePreset(this.preset, defaultPresetValues(this.skills));
     this.modelMessages.splice(0, this.headerMessageCount, ...klona(next.messages));
@@ -1293,273 +1075,21 @@ export class CardAgentSessionService {
     return this.modelMessages.length > this.headerMessageCount;
   }
 
-  private async applyApproval(decisions: Record<string, ApprovalDecision>): Promise<void> {
-    const pending = this.pending;
-    if (!pending) throw new Error('当前没有待批准的修改。');
-    const midRun = pending.midRun === true;
+  private async completeRealtimeTurn(stopped: boolean): Promise<void> {
+    if (!this.activeCheckpointId) throw new Error('本轮完成时缺少操作边界。');
     const current = await this.adapter.read();
     this.assertBinding(current);
-    const latest = prepareThreeWayMerge(pending.base, pending.state, current);
-    if (conflictsChanged(pending, latest)) {
-      pending.preparation = latest;
-      this.status = 'awaiting-approval';
-      this.lastError = undefined;
-      this.warnings = ['批准期间酒馆数据再次变化，请重新检查冲突。'];
-      return;
-    }
-    this.status = 'committing';
-    this.lastError = undefined;
-    this.notify();
-    const result = await commitWorkingCopy({
-      adapter: this.adapter,
-      base: pending.base,
-      decisions,
-      working: pending.state,
-    });
-    if (result.status === 'rolled-back') {
-      this.lastError = result.rollbackError
-        ? `${result.error.message}；回滚也失败：${result.rollbackError.message}`
-        : result.error.message;
-      if (midRun) {
-        const rebased = this.normalizeWorkspaceBase(result.state);
-        this.activeBase = rebased;
-        this.pending = undefined;
-        this.status = 'running';
-        this.rebaseActiveRepository(rebased);
-        this.finishMidRunCheckpoint(false);
-      } else {
-        this.status = 'awaiting-approval';
-      }
-      return;
-    }
-    if (this.workspaceStore && this.repository) {
-      try {
-        this.storageFiles = await this.workspaceStore.applyWorkspace(
-          this.bindingId,
-          this.sessionId,
-          this.storageBaseFiles,
-          this.repository.snapshot(),
-          decisions,
-        );
-      } catch (error) {
-        const rollbackOperations = diffCardStates(result.state, current);
-        await commitWorkingCopy({
-          adapter: this.adapter,
-          base: result.state,
-          decisions: Object.fromEntries(rollbackOperations.map(operation => [operation.path, 'agent'])),
-          working: current,
-        });
-        this.lastError = error instanceof Error ? error.message : String(error);
-        if (midRun) {
-          const restored = await this.adapter.read();
-          const rebased = this.normalizeWorkspaceBase(restored);
-          this.activeBase = rebased;
-          this.pending = undefined;
-          this.status = 'running';
-          this.rebaseActiveRepository(rebased);
-          this.finishMidRunCheckpoint(false);
-        } else {
-          this.status = 'awaiting-approval';
-        }
-        return;
-      }
-    }
-    const previouslyMountedSkillIds = this.skills.map(skill => skill.id);
-    const approvedSkills = applySkillDecisions(this.skills, pending.skillChanges, decisions);
-    const approvedIds = new Set(approvedSkills.map(skill => skill.id));
-    this.agentConfiguration.skillIds = [
-      ...new Set([
-        ...this.agentConfiguration.skillIds.filter(
-          id => !previouslyMountedSkillIds.includes(id) || approvedIds.has(id),
-        ),
-        ...approvedSkills.map(skill => skill.id),
-      ]),
-    ];
-    this.skills = this.onSkillsCommit
-      ? await this.onSkillsCommit(approvedSkills, previouslyMountedSkillIds)
-      : approvedSkills;
-    if (midRun) {
-      const effectiveStateChanges = pending.preparation.agentChanges.filter(
-        change => !pending.preparation.redundantPaths.includes(change.path),
-      );
-      const hadEffectiveChanges =
-        effectiveStateChanges.length > 0 || pending.skillChanges.length > 0 || pending.fileChanges.length > 0;
-      const approvedAny = [...effectiveStateChanges, ...pending.skillChanges, ...pending.fileChanges].some(
-        change => decisions[change.path] === 'agent',
-      );
-      const rebased = this.normalizeWorkspaceBase(result.state);
-      this.activeBase = rebased;
-      this.pending = undefined;
-      this.status = 'running';
-      this.lastError = undefined;
-      this.rebaseActiveRepository(rebased);
-      this.finishMidRunCheckpoint(!hadEffectiveChanges || approvedAny);
-      return;
-    }
-    const afterSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
-      card: result.state,
-      events: this.events,
-      modelMessages: this.modelMessages,
-      workspaceFiles: persistentStorageFiles(this.storageFiles),
-    });
-    this.timeline.completeTurn(pending.checkpointId, {
-      afterAgentCursor: this.modelMessages.length,
-      afterSnapshot,
-      stopped: pending.stopped,
-    });
-    this.syncUiVisibility();
-    this.pending = undefined;
     this.activeCheckpointId = undefined;
-    this.activeBase = undefined;
-    this.status = 'completed';
+    this.status = stopped ? 'stopped' : 'completed';
     this.lastError = undefined;
-    this.repository = this.createRepository(result.state);
-    if (this.manualEditGroup?.attachedToAgent && this.manualEditGroup.checkpointId === pending.checkpointId) {
-      this.manualEditGroup = undefined;
-    }
-  }
-
-  private async freezeCandidate(base: CardWorkspaceState, stopped: boolean): Promise<void> {
-    if (!this.repository || !this.activeCheckpointId) throw new Error('Working Copy或检查点不存在。');
-    const materialized = materializeCardWorkspace(base, this.repository.snapshot());
-    const candidateSkills = materializeUserSkills(this.repository.snapshot(), this.skills);
-    const current = await this.adapter.read();
-    const preparation = prepareThreeWayMerge(base, materialized.state, current);
-    await markSecretRemovalRisks(preparation);
-    const skillChanges = diffSkills(this.skills, candidateSkills);
-    if (this.workspaceStore) {
-      const tempDecisions = Object.fromEntries(
-        this.repository
-          .changes()
-          .filter(change => change.path.startsWith('/temp/'))
-          .map(change => [change.path, 'agent' as const]),
-      );
-      if (Object.keys(tempDecisions).length > 0) {
-        this.storageFiles = await this.workspaceStore.applyWorkspace(
-          this.bindingId,
-          this.sessionId,
-          this.storageBaseFiles,
-          this.repository.snapshot(),
-          tempDecisions,
-        );
-      }
-    }
-    const fileChanges = workspaceApprovalChanges(this.repository.changes());
-    const candidateSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
-      card: materialized.state,
-      events: this.events,
-      modelMessages: this.modelMessages,
-      workspaceFiles: persistentStorageFiles(this.repository.snapshot()),
-    });
-    this.pending = {
-      base,
-      candidateSnapshot,
-      checkpointId: this.activeCheckpointId,
-      fileChanges,
-      preparation,
-      skillChanges,
-      skills: candidateSkills,
-      state: materialized.state,
-      stopped,
-      warnings: materialized.warnings,
-    };
-    const effectiveStateChanges = preparation.agentChanges.filter(
-      change => !preparation.redundantPaths.includes(change.path),
-    );
-    const hasChanges = effectiveStateChanges.length > 0 || skillChanges.length > 0 || fileChanges.length > 0;
-    if (!hasChanges) {
-      await this.applyApproval({});
-      return;
-    }
-    const decisions = defaultApprovals(preparation, this.mode);
-    if (this.mode === 'yolo') {
-      preparation.redundantPaths.forEach(path => {
-        decisions[path] = 'current';
-      });
-      skillChanges
-        .filter(change => !change.highRisk)
-        .forEach(change => {
-          decisions[change.path] = 'agent';
-        });
-      fileChanges
-        .filter(change => !change.highRisk)
-        .forEach(change => {
-          decisions[change.path] = 'agent';
-        });
-      const unresolvedState = effectiveStateChanges.some(change => decisions[change.path] === undefined);
-      const unresolvedSkills = skillChanges.some(change => decisions[change.path] === undefined);
-      const unresolvedFiles = fileChanges.some(change => decisions[change.path] === undefined);
-      if (!unresolvedState && !unresolvedSkills && !unresolvedFiles) {
-        await this.applyApproval(decisions);
-        return;
-      }
-    }
-    this.status = 'awaiting-approval';
-    this.warnings = materialized.warnings;
-  }
-
-  private async restore(direction: 'redo' | 'undo'): Promise<SessionView> {
-    this.assertHistoryRestoreAllowed();
-    const previous = this.timeline.export();
-    const restore = direction === 'undo' ? this.timeline.undo() : this.timeline.redo();
-    if (!restore) throw new Error(direction === 'undo' ? '没有可回退的修改。' : '没有可重做的修改。');
-    try {
-      return await this.restoreSnapshot(restore);
-    } catch (error) {
-      this.timeline = new HistoryTimeline({ ...previous, now: this.now });
-      throw error;
-    }
+    this.repository = await this.createRepository(current);
+    this.manualEditGroup = undefined;
   }
 
   private assertHistoryRestoreAllowed(): void {
     const runnerActive = this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status);
-    if (
-      this.pending ||
-      runnerActive ||
-      ['awaiting-approval', 'committing', 'running', 'waiting-approval'].includes(this.status)
-    ) {
+    if (runnerActive || ['running', 'waiting-approval'].includes(this.status)) {
       throw new Error('运行或审批期间不能回退历史。');
-    }
-  }
-
-  private async restoreSnapshot(restore: { checkpointId: string; snapshot: string }): Promise<SessionView> {
-    this.lock.acquire(this.sessionId);
-    try {
-      const payload = await this.snapshots.get<SessionSnapshotPayload>(restore.snapshot);
-      const current = await this.adapter.read();
-      this.assertBinding(current);
-      const operations = diffCardStates(current, payload.card);
-      const result = await commitWorkingCopy({
-        adapter: this.adapter,
-        base: current,
-        decisions: Object.fromEntries(operations.map(operation => [operation.path, 'agent'])),
-        working: payload.card,
-      });
-      if (result.status === 'rolled-back') throw result.error;
-      if (this.workspaceStore && payload.workspaceFiles) {
-        this.storageFiles = await this.workspaceStore.restorePersistentSnapshot(
-          this.bindingId,
-          this.sessionId,
-          payload.workspaceFiles,
-        );
-      } else {
-        await this.reloadStorageFiles();
-      }
-      this.modelMessages = payload.modelMessages;
-      this.events = payload.events;
-      this.repository = this.createRepository(result.state);
-      this.syncUiVisibility();
-      this.pending = undefined;
-      this.activeCheckpointId = undefined;
-      this.activeBase = undefined;
-      this.runner = undefined;
-      this.status = 'completed';
-      this.lastError = undefined;
-      this.warnings = [];
-      await this.persist();
-      return this.view();
-    } finally {
-      this.lock.release(this.sessionId);
     }
   }
 
@@ -1735,7 +1265,6 @@ export class CardAgentSessionService {
 
   private exportRuntime(): PersistedSessionRuntime {
     return {
-      activeBase: this.activeBase ? klona(this.activeBase) : undefined,
       activeCheckpointId: this.activeCheckpointId,
       agentConfiguration: klona(this.agentConfiguration),
       attachments: klona(this.attachments),
@@ -1743,36 +1272,30 @@ export class CardAgentSessionService {
       createdAt: this.createdAt,
       events: klona(this.events),
       headerMessageCount: this.headerMessageCount,
-      history: this.timeline.export(),
       lastError: this.lastError,
       manualEditGroup: this.manualEditGroup ? klona(this.manualEditGroup) : undefined,
       mode: this.mode,
       modelControls: klona(this.modelControls),
       modelMessages: klona(this.modelMessages),
-      pending: this.pending ? klona(this.pending) : undefined,
+      operationLog: this.operationLog.export(),
       preset: klona(this.preset),
-      rejectNextTavernGeneration: this.rejectNextTavernGeneration || undefined,
       sessionId: this.sessionId,
       skills: klona(this.skills),
       status: this.status,
       title: this.title,
       ui: klona(this.ui),
       updatedAt: this.now(),
-      version: 1,
+      version: 2,
       warnings: [...this.warnings],
     };
   }
 
   private async persist(): Promise<void> {
-    this.timeline.cleanupAbandoned();
     const referencedAttachments = new Set(this.ui.flatMap(item => item.attachments?.map(attachment => attachment.id) ?? []));
     Object.keys(this.attachments).forEach(id => {
       if (!referencedAttachments.has(id)) delete this.attachments[id];
     });
-    await this.onPersist?.(
-      this.exportRuntime(),
-      persistedWorkingCopyFiles(this.repository?.snapshot() ?? []),
-    );
+    await this.onPersist?.(this.exportRuntime());
     this.notify();
   }
 
@@ -1784,142 +1307,6 @@ export class CardAgentSessionService {
   private async refreshTavernChatWorkspace(): Promise<void> {
     if (!this.tavernChatWorkspace || !this.repository) return;
     await this.tavernChatWorkspace.initialize(this.repository);
-  }
-
-  private async checkpointBeforeTavernGeneration(): Promise<boolean> {
-    if (this.rejectNextTavernGeneration) {
-      this.rejectNextTavernGeneration = false;
-      return false;
-    }
-    if (!this.repository || !this.activeBase || !this.activeCheckpointId) return true;
-    if (this.repository.changes().length === 0) return true;
-    if (this.midRunCheckpointResolve) throw new Error('已经存在一个等待处理的生成前检查点。');
-
-    const materialized = materializeCardWorkspace(this.activeBase, this.repository.snapshot());
-    const candidateSkills = materializeUserSkills(this.repository.snapshot(), this.skills);
-    const current = await this.adapter.read();
-    this.assertBinding(current);
-    const preparation = prepareThreeWayMerge(this.activeBase, materialized.state, current);
-    await markSecretRemovalRisks(preparation);
-    const skillChanges = diffSkills(this.skills, candidateSkills);
-    if (this.workspaceStore) {
-      const tempDecisions = Object.fromEntries(
-        this.repository
-          .changes()
-          .filter(change => change.path.startsWith('/temp/'))
-          .map(change => [change.path, 'agent' as const]),
-      );
-      if (Object.keys(tempDecisions).length > 0) {
-        this.storageFiles = await this.workspaceStore.applyWorkspace(
-          this.bindingId,
-          this.sessionId,
-          this.storageBaseFiles,
-          this.repository.snapshot(),
-          tempDecisions,
-        );
-      }
-    }
-    const fileChanges = workspaceApprovalChanges(this.repository.changes());
-    const candidateSnapshot = await this.snapshots.put<SessionSnapshotPayload>({
-      card: materialized.state,
-      events: this.events,
-      modelMessages: this.modelMessages,
-      workspaceFiles: persistentStorageFiles(this.repository.snapshot()),
-    });
-    this.pending = {
-      base: klona(this.activeBase),
-      candidateSnapshot,
-      checkpointId: this.activeCheckpointId,
-      fileChanges,
-      midRun: true,
-      preparation,
-      skillChanges,
-      skills: candidateSkills,
-      state: materialized.state,
-      stopped: false,
-      warnings: materialized.warnings,
-    };
-    const decision = new Promise<boolean>(resolve => {
-      this.midRunCheckpointResolve = resolve;
-    });
-    const effectiveStateChanges = preparation.agentChanges.filter(
-      change => !preparation.redundantPaths.includes(change.path),
-    );
-    const hasChanges = effectiveStateChanges.length > 0 || skillChanges.length > 0 || fileChanges.length > 0;
-    if (!hasChanges) {
-      await this.applyApproval({});
-      this.flushMidRunCheckpoint();
-      return decision;
-    }
-
-    const decisions = defaultApprovals(preparation, this.mode);
-    if (this.mode === 'yolo') {
-      preparation.redundantPaths.forEach(path => {
-        decisions[path] = 'current';
-      });
-      skillChanges
-        .filter(change => !change.highRisk)
-        .forEach(change => {
-          decisions[change.path] = 'agent';
-        });
-      fileChanges
-        .filter(change => !change.highRisk)
-        .forEach(change => {
-          decisions[change.path] = 'agent';
-        });
-      const unresolvedState = effectiveStateChanges.some(change => decisions[change.path] === undefined);
-      const unresolvedSkills = skillChanges.some(change => decisions[change.path] === undefined);
-      const unresolvedFiles = fileChanges.some(change => decisions[change.path] === undefined);
-      if (!unresolvedState && !unresolvedSkills && !unresolvedFiles) {
-        await this.applyApproval(decisions);
-        this.flushMidRunCheckpoint();
-        return decision;
-      }
-    }
-    this.status = 'awaiting-approval';
-    this.warnings = materialized.warnings;
-    await this.persist();
-    return decision;
-  }
-
-  private rebaseActiveRepository(state: CardWorkspaceState): void {
-    if (!this.repository) return;
-    this.storageBaseFiles = klona(this.storageFiles);
-    const transientReferences = this.repository.snapshot().filter(file => file.path.startsWith('/library/'));
-    this.repository.rebase([
-      ...projectCardWorkspace(state, 100, { allowNonCharacterWrites: true }),
-      ...projectSkills(this.skills),
-      ...this.storageFiles,
-      ...transientReferences,
-    ]);
-    this.tavernChatWorkspace?.projectCached(this.repository);
-  }
-
-  private normalizeWorkspaceBase(state: CardWorkspaceState): CardWorkspaceState {
-    const files = projectCardWorkspace(state, 100, { allowNonCharacterWrites: true });
-    return materializeCardWorkspace(state, files).state;
-  }
-
-  private finishMidRunCheckpoint(approved: boolean): void {
-    const resolve = this.midRunCheckpointResolve;
-    if (resolve) {
-      this.midRunCheckpointOutcome = approved;
-      return;
-    }
-    // 页面刷新后，原Runner等待中的Promise已经不存在。把结果留给恢复执行：
-    // 批准时重新执行原聊天工具；拒绝时让它收到一次CHECKPOINT_REJECTED。
-    this.rejectNextTavernGeneration = !approved;
-    this.status = 'failed';
-    this.lastError = '生成前检查点已经处理，请从中断处继续本轮Agent任务。';
-  }
-
-  private flushMidRunCheckpoint(): void {
-    const resolve = this.midRunCheckpointResolve;
-    const outcome = this.midRunCheckpointOutcome;
-    if (!resolve || outcome === undefined) return;
-    this.midRunCheckpointResolve = undefined;
-    this.midRunCheckpointOutcome = undefined;
-    resolve(outcome);
   }
 
   private notify(): void {
@@ -1941,23 +1328,8 @@ export class CardAgentSessionService {
   }
 
   private syncUiVisibility(): void {
-    const history = this.timeline.export();
-    const active = history.checkpoints.filter(checkpoint => checkpoint.active);
-    const positionById = new Map(active.map((checkpoint, index) => [checkpoint.id, index]));
     for (const item of this.ui) {
-      if (!item.checkpointId) continue;
-      const index = positionById.get(item.checkpointId);
-      if (index === undefined) {
-        item.hidden = true;
-      } else if (index <= history.position) {
-        item.hidden = false;
-        if (item.kind === 'manual') item.manualStatus = item.status === 'failed' ? 'failed' : 'active';
-      } else if (index === history.position + 1) {
-        item.hidden = item.kind !== 'user' && item.kind !== 'manual';
-        if (item.kind === 'manual') item.manualStatus = 'undone';
-      } else {
-        item.hidden = true;
-      }
+      if (item.kind === 'manual' && !item.hidden) item.manualStatus = item.status === 'failed' ? 'failed' : 'active';
     }
   }
 }

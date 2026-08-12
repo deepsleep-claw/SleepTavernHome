@@ -25,9 +25,9 @@ const { characterSwitchRequest, confirmCharacterSwitch } = useDreamCardAgent();
   width: min(26rem, 100%);
   padding: 1.4rem;
   border: 1px solid var(--dca-border-strong);
-  border-radius: 1rem;
-  background: #111b32;
-  box-shadow: 0 1.5rem 5rem rgba(0, 0, 0, 0.5);
+  border-radius: var(--dca-radius-lg);
+  background: var(--dca-raised);
+  box-shadow: var(--dca-shadow-3);
   text-align: center;
 }
 .dca-switch-icon {
@@ -37,8 +37,8 @@ const { characterSwitchRequest, confirmCharacterSwitch } = useDreamCardAgent();
   margin: 0 auto 0.8rem;
   place-items: center;
   border-radius: 0.9rem;
-  background: rgba(91, 104, 255, 0.18);
-  color: #8da8ff;
+  background: var(--dca-accent-soft);
+  color: var(--dca-accent);
   font-size: 1.2rem;
 }
 .dca-switch-dialog h2 {
@@ -65,8 +65,8 @@ const { characterSwitchRequest, confirmCharacterSwitch } = useDreamCardAgent();
   flex: 1;
 }
 .dca-switch-dialog footer .primary {
-  border-color: #527cf3;
-  background: linear-gradient(135deg, #3e72eb, #6c4be5);
-  color: #fff;
+  border-color: var(--dca-accent);
+  background: var(--dca-accent);
+  color: var(--dca-on-accent);
 }
 </style>

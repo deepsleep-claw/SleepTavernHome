@@ -43,7 +43,7 @@
         <div v-if="sessions.length === 0" class="dca-empty">没有匹配的会话。</div>
       </div>
       <div v-if="deletePending" class="dca-inline-confirm">
-        <span>确认永久删除“{{ pendingTitle }}”及其快照？</span>
+        <span>确认永久删除“{{ pendingTitle }}”及其操作记录？</span>
         <button type="button" @click="deletePending = undefined">取消</button>
         <button class="danger" type="button" @click="remove">确认删除</button>
       </div>
@@ -108,7 +108,7 @@ function statusName(value: string) {
   display: grid;
   place-items: center;
   padding: 1rem;
-  background: rgba(3, 7, 18, 0.72);
+  background: var(--dca-scrim);
   backdrop-filter: blur(8px);
 }
 .dca-all-dialog {
@@ -117,9 +117,9 @@ function statusName(value: string) {
   max-height: min(44rem, 90vh);
   flex-direction: column;
   border: 1px solid var(--dca-border-strong);
-  border-radius: 1rem;
-  background: #101a31;
-  box-shadow: 0 1.5rem 5rem rgba(0, 0, 0, 0.45);
+  border-radius: var(--dca-radius-lg);
+  background: var(--dca-raised);
+  box-shadow: var(--dca-shadow-3);
 }
 .dca-all-dialog > header {
   display: flex;
@@ -151,7 +151,7 @@ function statusName(value: string) {
   padding: 0 0.75rem;
   border: 1px solid var(--dca-border);
   border-radius: 0.6rem;
-  background: rgba(4, 10, 24, 0.6);
+  background: color-mix(in srgb, var(--dca-canvas) 72%, transparent);
   color: var(--dca-text-muted);
 }
 .dca-all-search input {
@@ -200,15 +200,15 @@ function statusName(value: string) {
   gap: 0.5rem;
   padding: 0.75rem 1rem;
   border-top: 1px solid var(--dca-border);
-  background: rgba(122, 38, 61, 0.12);
+  background: var(--dca-danger-soft);
 }
 .dca-inline-confirm span {
   flex: 1;
   font-size: 0.78rem;
 }
 .dca-inline-confirm .danger {
-  border-color: rgba(248, 113, 113, 0.45);
-  color: #fca5a5;
+  border-color: color-mix(in srgb, var(--dca-danger) 45%, transparent);
+  color: var(--dca-danger);
 }
 @media (max-width: 720px) {
   .dca-dialog-backdrop {

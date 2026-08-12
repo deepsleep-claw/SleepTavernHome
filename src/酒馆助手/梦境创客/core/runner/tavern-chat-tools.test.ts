@@ -5,20 +5,28 @@ import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
 import { createTavernChatRunnerTools } from './tavern-chat-tools';
 
 describe('酒馆聊天Runner工具', () => {
-  it('普通模式只在本轮第一次直接操作前请求一次授权', async () => {
+  it('手动模式逐个审批聊天写入，YOLO仍审批不可逆截断', async () => {
     const repository = new MemoryWorkspaceRepository();
     const workspace = new TavernChatWorkspace(new FakeTavernChatBridge());
     await workspace.initialize(repository);
-    const tools = createTavernChatRunnerTools(repository, workspace, { isYolo: () => false });
+    const tools = createTavernChatRunnerTools(repository, workspace, { approvalMode: () => 'manual' });
     const create = tools.find(item => item.name === 'create_tavern_chat')!;
     const truncate = tools.find(item => item.name === 'truncate_tavern_chat')!;
 
     expect(create.confirmation?.({ name: '测试' }, 'call-1')).toMatchObject({ toolName: 'create_tavern_chat' });
     await create.execute({ name: '测试' }, 'call-1');
-    expect(truncate.confirmation?.({ chatId: 'c02', fromMessageId: 0 }, 'call-2')).toBeUndefined();
+    expect(truncate.confirmation?.({ chatId: 'c02', fromMessageId: 0 }, 'call-2')).toMatchObject({
+      risk: 'high',
+      toolName: 'truncate_tavern_chat',
+    });
+    const yolo = createTavernChatRunnerTools(repository, workspace, { approvalMode: () => 'yolo' });
+    expect(yolo.find(item => item.name === 'create_tavern_chat')!.confirmation?.({ name: '新聊天' }, 'call-3'))
+      .toBeUndefined();
+    expect(yolo.find(item => item.name === 'truncate_tavern_chat')!.confirmation?.({ chatId: 'c02', fromMessageId: 0 }, 'call-4'))
+      .toBeDefined();
   });
 
-  it('生成前先等待Working Copy检查点，拒绝时把明确错误返回给模型', async () => {
+  it('生成前准备被拒绝时把明确错误返回给模型', async () => {
     const repository = new MemoryWorkspaceRepository();
     const workspace = new TavernChatWorkspace(new FakeTavernChatBridge());
     await workspace.initialize(repository);
@@ -31,7 +39,7 @@ describe('酒馆聊天Runner工具', () => {
       ['---', 'role: user', '---', '测试'].join('\n'),
       repository,
     );
-    await expect(generate.execute({ chatId: 'c01' }, 'generate-1')).rejects.toThrow('CHECKPOINT_REJECTED');
+    await expect(generate.execute({ chatId: 'c01' }, 'generate-1')).rejects.toThrow('GENERATION_PREPARATION_REJECTED');
     expect(beforeGeneration).toHaveBeenCalledOnce();
   });
 

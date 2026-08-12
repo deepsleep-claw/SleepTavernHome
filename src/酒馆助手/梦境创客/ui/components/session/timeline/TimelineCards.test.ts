@@ -133,7 +133,6 @@ describe('timeline cards', () => {
 
     expect(root.querySelector('.dca-step-text')?.textContent).toContain('这是一段中途输出。');
     expect(root.querySelector('.dca-step-text')?.textContent).not.toContain('梦境创客');
-    expect(root.querySelector('.dca-step-text > header')?.textContent).not.toContain('梦境创客');
-    expect(root.querySelector('.dca-step-text > header > small')).not.toBeNull();
+    expect(root.querySelector('.dca-step-text > header')).toBeNull();
   });
 });

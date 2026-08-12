@@ -347,6 +347,18 @@ export function diffCardStates(before: CardWorkspaceState, after: CardWorkspaceS
 
   diffResourceScopes(before, after, result);
 
+  // card_agent 是由VFS维护的稳定ID索引。世界书/开场白变化后必须作为最后一项最小写回，
+  // 否则下次读取会为刚创建的资源重新分配身份。
+  pushOperation(
+    result,
+    operation(
+      '/character/extensions/card_agent',
+      '更新梦境创客稳定资源索引',
+      before.character.extensions.card_agent,
+      after.character.extensions.card_agent,
+    ),
+  );
+
   const deletedEntries = result.filter(item => item.kind === 'delete' && item.path.includes('/entries/'));
   const originalEntryCount = before.worldbooks.reduce((total, book) => total + book.entries.length, 0);
   if (deletedEntries.length >= 10 || (originalEntryCount > 0 && deletedEntries.length / originalEntryCount >= 0.5)) {

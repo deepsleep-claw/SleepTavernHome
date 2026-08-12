@@ -39,6 +39,10 @@
               <span>摘要</span>
               <input v-model="skillDraft.description" type="text" maxlength="240" @input="markDirty" />
             </label>
+            <label class="dca-field wide dca-skill-lock-field">
+              <input v-model="skillDraft.locked" type="checkbox" @change="markDirty" />
+              <span>锁定此 Skill（Agent仍可读取，但不能修改、移动或删除）</span>
+            </label>
             <label class="dca-field wide">
               <span>SKILL.md</span>
               <textarea
@@ -193,7 +197,14 @@ const currentDirectory = ref('');
 const selectedPath = ref('SKILL.md');
 let loadToken = 0;
 
-const skillDraft = reactive({ body: '', description: '', id: '', loading: 'on-demand' as SkillLoadingMode, name: '' });
+const skillDraft = reactive({
+  body: '',
+  description: '',
+  id: '',
+  loading: 'on-demand' as SkillLoadingMode,
+  locked: false,
+  name: '',
+});
 const loadingOptions = [
   { description: '在首次请求及压缩后的新头部中注入', label: 'full · 全量加载', value: 'full' },
   { description: '由 Agent 通过 /skills/index.md 主动读取', label: 'on-demand · 按需读取', value: 'on-demand' },
@@ -296,6 +307,7 @@ function skillFromDraft(): AgentSkill {
     directories: [...directoryDraft.value],
     id: editingSkill.value?.id ?? `${template.id}-${crypto.randomUUID().slice(0, 8)}`,
     loading: skillDraft.loading,
+    locked: skillDraft.locked,
     name: skillDraft.name.trim(),
     resources: structuredClone(resourceDraft.value),
   };

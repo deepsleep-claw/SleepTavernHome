@@ -86,7 +86,7 @@
 
 .dca-floating-titlebar button.dca-floating-close:hover {
   background: var(--dca-danger-soft);
-  color: #f2a3b3;
+  color: var(--dca-danger);
 }
 
 .dca-floating-body-frame {
@@ -168,11 +168,11 @@
   width: 3.1rem;
   height: 3.1rem;
   place-items: center;
-  border: 1px solid rgb(255 255 255 / 22%);
+  border: 1px solid color-mix(in srgb, var(--dca-text) 22%, transparent);
   border-radius: var(--dca-radius-lg);
   background: var(--dca-accent);
-  box-shadow: 0 10px 30px rgb(0 0 0 / 55%);
-  color: #fff;
+  box-shadow: var(--dca-shadow-2);
+  color: var(--dca-on-accent);
   cursor: pointer;
   font-size: 1.15rem;
   touch-action: none;

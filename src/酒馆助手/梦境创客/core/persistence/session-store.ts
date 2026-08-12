@@ -1,14 +1,16 @@
-import type { WorkspaceFile } from '../workspace/types';
 import { canonicalParse, canonicalStringify, sha256 } from '../transaction/canonical';
 import type { PersistedSessionRuntime } from '../session/types';
 import { CharacterMetadataStore } from './character-store';
 import type { AgentSettingsStore, SessionIndexEntry } from './settings';
 import type { TavernFileClient } from './file-client';
+import {
+  IndexedDbSessionDraftCache,
+  type PendingSessionDraft,
+  type SessionDraftCache,
+} from './session-draft-cache';
 
 type SessionFilePayload = {
   runtime: PersistedSessionRuntime;
-  snapshotBlobs: Record<string, string>;
-  workingCopy: WorkspaceFile[];
 };
 
 type SessionFileEnvelope = {
@@ -16,15 +18,13 @@ type SessionFileEnvelope = {
   encoding: 'base64' | 'gzip+base64';
   format: 'dream-card-agent-session';
   revision: number;
-  schemaVersion: 2;
+  schemaVersion: 3;
   sha256: string;
 };
 
 export type SessionRevision = {
   entry: SessionIndexEntry;
   runtime: PersistedSessionRuntime;
-  snapshotBlobs: Record<string, Uint8Array>;
-  workingCopy: WorkspaceFile[];
 };
 
 export type CommitSessionRevision = {
@@ -32,9 +32,7 @@ export type CommitSessionRevision = {
   bindingId: string;
   characterName: string;
   runtime: PersistedSessionRuntime;
-  snapshotBlobs: Record<string, Uint8Array>;
   status: SessionIndexEntry['status'];
-  workingCopy: WorkspaceFile[];
 };
 
 function safe(value: string): string {
@@ -70,13 +68,13 @@ async function envelope(payload: SessionFilePayload, revision: number): Promise<
     encoding: typeof CompressionStream === 'undefined' ? 'base64' : 'gzip+base64',
     format: 'dream-card-agent-session',
     revision,
-    schemaVersion: 2,
+    schemaVersion: 3,
     sha256: await sha256(raw),
   };
 }
 
 async function openEnvelope(value: SessionFileEnvelope): Promise<SessionFilePayload> {
-  if (value.format !== 'dream-card-agent-session' || value.schemaVersion !== 2) {
+  if (value.format !== 'dream-card-agent-session' || value.schemaVersion !== 3) {
     throw new Error('会话文件格式不匹配。');
   }
   let raw = fromBase64(value.data);
@@ -88,14 +86,6 @@ async function openEnvelope(value: SessionFileEnvelope): Promise<SessionFilePayl
   return canonicalParse<SessionFilePayload>(new TextDecoder().decode(raw));
 }
 
-function encodeSnapshots(blobs: Record<string, Uint8Array>): Record<string, string> {
-  return Object.fromEntries(Object.entries(blobs).map(([hash, bytes]) => [hash, toBase64(bytes)]));
-}
-
-function decodeSnapshots(blobs: Record<string, string>): Record<string, Uint8Array> {
-  return Object.fromEntries(Object.entries(blobs).map(([hash, bytes]) => [hash, fromBase64(bytes)]));
-}
-
 export class SessionRevisionStore {
   private readonly characters: CharacterMetadataStore;
 
@@ -103,28 +93,46 @@ export class SessionRevisionStore {
     private readonly client: TavernFileClient,
     settingsStore: AgentSettingsStore,
     private readonly now: () => number = Date.now,
+    private readonly draftCache: SessionDraftCache = new IndexedDbSessionDraftCache(),
   ) {
     this.characters = new CharacterMetadataStore(client, settingsStore, now);
   }
 
   async commit(input: CommitSessionRevision): Promise<SessionIndexEntry> {
+    await this.draftCache.save(input).catch(() => undefined);
+    const entry = await this.commitDraft(input);
+    await this.draftCache.remove(input.bindingId, input.runtime.sessionId).catch(() => undefined);
+    return entry;
+  }
+
+  /** 重连后重传本浏览器尚未同步的会话；单个失败不会阻挡其它会话。 */
+  async flushPending(bindingId: string): Promise<{ failed: number; recovered: number }> {
+    const drafts = await this.draftCache.list(bindingId).catch(() => []);
+    let failed = 0;
+    let recovered = 0;
+    for (const draft of drafts) {
+      try {
+        await this.commitDraft(draft);
+        await this.draftCache.remove(draft.bindingId, draft.runtime.sessionId).catch(() => undefined);
+        recovered += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    return { failed, recovered };
+  }
+
+  private async commitDraft(input: PendingSessionDraft): Promise<SessionIndexEntry> {
     const metadata = await this.characters.load(input.bindingId, {
       avatarId: input.avatarId,
       characterName: input.characterName,
     });
     const previous = metadata.sessions[input.runtime.sessionId];
     const revision = (previous?.revision ?? 0) + 1;
-    const packed = await envelope(
-      {
-        runtime: input.runtime,
-        snapshotBlobs: encodeSnapshots(input.snapshotBlobs),
-        workingCopy: input.workingCopy,
-      },
-      revision,
-    );
+    const packed = await envelope({ runtime: input.runtime }, revision);
     const bytes = new TextEncoder().encode(canonicalStringify(packed));
     const name = `DreamCreator--Session--${safe(input.bindingId)}--${safe(input.runtime.sessionId)}.json`;
-    const url = await this.client.upload(name, bytes);
+    const url = await this.uploadWithRetry(name, bytes);
     const timestamp = this.now();
     const entry: SessionIndexEntry = {
       avatarId: input.avatarId ?? previous?.avatarId,
@@ -157,8 +165,18 @@ export class SessionRevisionStore {
     return {
       entry,
       runtime: payload.runtime,
-      snapshotBlobs: decodeSnapshots(payload.snapshotBlobs),
-      workingCopy: payload.workingCopy,
     };
+  }
+
+  private async uploadWithRetry(name: string, bytes: Uint8Array): Promise<string> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        return await this.client.upload(name, bytes);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
   }
 }

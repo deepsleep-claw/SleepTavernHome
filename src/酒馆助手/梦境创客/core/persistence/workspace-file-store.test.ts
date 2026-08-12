@@ -76,7 +76,7 @@ describe('DreamCreatorWorkspaceFileStore', () => {
     expect(store.listReferences('role')).toEqual([]);
   });
 
-  it('Agent 对 /files 的文本修改产生新版本，并可恢复历史快照', async () => {
+  it('Agent 对 /files 的文本修改会立即产生新版本', async () => {
     let time = 10;
     const store = new DreamCreatorWorkspaceFileStore(
       new MemoryTavernFileClient(),
@@ -95,8 +95,6 @@ describe('DreamCreatorWorkspaceFileStore', () => {
     const committed = await store.applyWorkspace('role', 's1', base, working, { '/files/note.md': 'agent' });
     expect(committed.find(file => file.path === '/files/note.md')?.content).toBe('new');
 
-    const restored = await store.restorePersistentSnapshot('role', 's1', base);
-    expect(restored.find(file => file.path === '/files/note.md')?.content).toBe('old');
   });
 
   it('多文件提交中途失败时恢复原索引并删除已经上传的新版本', async () => {

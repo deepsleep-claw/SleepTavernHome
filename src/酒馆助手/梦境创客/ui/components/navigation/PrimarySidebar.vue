@@ -173,7 +173,7 @@ const activeProfileName = computed(
 );
 const statusLabel = computed(
   () =>
-    ({ running: '运行中', 'waiting-approval': '等待确认', 'awaiting-approval': '等待审批', committing: '提交中' })[
+    ({ running: '运行中', 'waiting-approval': '等待确认' })[
       state.value.active?.status ?? ''
     ] ?? '就绪',
 );
@@ -223,7 +223,7 @@ function relativeTime(timestamp: number): string {
   min-height: 0;
   flex-direction: column;
   border-right: 1px solid var(--dca-border);
-  background: linear-gradient(180deg, rgba(18, 27, 51, 0.98), rgba(10, 17, 34, 0.98));
+  background: var(--dca-sidebar-background);
 }
 .dca-sidebar-brand {
   display: flex;
@@ -251,11 +251,11 @@ function relativeTime(timestamp: number): string {
   gap: 0.7rem;
   justify-content: flex-start;
   border-color: var(--dca-border);
-  background: rgba(255, 255, 255, 0.035);
+  background: var(--dca-highlight);
 }
 .dca-sidebar-primary-actions button:first-child {
-  border-color: rgba(83, 126, 255, 0.45);
-  background: linear-gradient(135deg, rgba(55, 104, 239, 0.25), rgba(94, 66, 190, 0.18));
+  border-color: color-mix(in srgb, var(--dca-accent) 45%, transparent);
+  background: var(--dca-sidebar-active);
 }
 .dca-character-groups {
   min-height: 0;
@@ -290,7 +290,7 @@ function relativeTime(timestamp: number): string {
   text-align: left;
 }
 .dca-character-toggle:hover {
-  background: rgba(89, 115, 183, 0.11);
+  background: var(--dca-sidebar-hover);
 }
 .dca-character-avatar {
   display: grid;
@@ -298,10 +298,10 @@ function relativeTime(timestamp: number): string {
   height: 2rem;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid rgba(138, 112, 255, 0.4);
+  border: 1px solid color-mix(in srgb, var(--dca-accent) 40%, transparent);
   border-radius: 0.65rem;
-  background: linear-gradient(135deg, #6e4be8, #324fd3);
-  color: #fff;
+  background: var(--dca-avatar-gradient);
+  color: var(--dca-on-accent);
   font-weight: 800;
   overflow: hidden;
 }
@@ -371,7 +371,7 @@ function relativeTime(timestamp: number): string {
 }
 .dca-character-sessions > button:hover,
 .dca-character-sessions > button.active {
-  background: rgba(55, 104, 239, 0.17);
+  background: var(--dca-accent-soft);
   color: var(--dca-text);
 }
 .dca-character-session-title {
@@ -390,7 +390,7 @@ function relativeTime(timestamp: number): string {
   height: 0.38rem;
   flex: 0 0 auto;
   border-radius: 50%;
-  background: #53617c;
+  background: var(--dca-text-disabled);
 }
 .dca-session-state.state-running,
 .dca-session-state.state-waiting-approval {
@@ -399,7 +399,7 @@ function relativeTime(timestamp: number): string {
 }
 .dca-all-sessions-button {
   justify-content: center;
-  color: #86a8ff !important;
+  color: var(--dca-accent-strong) !important;
   font-size: 0.73rem;
 }
 .dca-sidebar-empty {
@@ -416,7 +416,7 @@ function relativeTime(timestamp: number): string {
   flex: 0 0 auto;
   padding: 0.75rem;
   border-top: 1px solid var(--dca-border);
-  background: rgba(6, 12, 27, 0.52);
+  background: color-mix(in srgb, var(--dca-canvas) 64%, transparent);
 }
 .dca-work-context-character {
   display: flex;

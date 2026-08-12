@@ -119,6 +119,21 @@
       </div>
     </div>
     <small class="dca-shortcut-hint">{{ shortcutHint }} · 可拖入文件或粘贴图片</small>
+    <div v-if="showFullAccessWarning" class="dca-modal-backdrop" role="presentation">
+      <section class="dca-modal dca-full-access-warning" role="dialog" aria-modal="true">
+        <header>
+          <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
+          <div>
+            <strong>开启完全权限模式？</strong>
+            <span>之后所有Agent工具调用都会自动放行，包括删除、覆盖和聊天操作。文件锁与只读权限仍然有效。</span>
+          </div>
+        </header>
+        <footer>
+          <button type="button" @click="showFullAccessWarning = false">取消</button>
+          <button class="danger" type="button" @click="enableFullAccess">我了解风险，开启</button>
+        </footer>
+      </section>
+    </div>
   </div>
 </template>
 
@@ -141,6 +156,7 @@ const { action, runtime, state } = useDreamCardAgent();
 const message = ref('');
 const attachments = ref<AttachmentDraft[]>([]);
 const attachmentBusy = ref(false);
+const showFullAccessWarning = ref(false);
 const fileInput = ref<HTMLInputElement>();
 const imageInput = ref<HTMLInputElement>();
 
@@ -162,6 +178,7 @@ const reasoningEfforts = computed(() => activeProfile.value?.modelSettings?.reas
 const approvalModeOptions = [
   { label: '审批：手动', value: 'normal' },
   { label: '审批：YOLO', value: 'yolo' },
+  { label: '审批：完全权限', value: 'full' },
 ];
 const profileSelectOptions = computed(() => [
   { disabled: true, label: 'API Profile', value: '' },
@@ -173,21 +190,14 @@ const reasoningOptions = computed(() => [
   ...reasoningEfforts.value.map(effort => ({ label: `推理：${effort.name}`, value: effort.id })),
 ]);
 
-const isWaitingForMidRunApproval = computed(
-  () => state.value.active?.status === 'awaiting-approval' && state.value.active.approval?.midRun === true,
-);
 const isRunning = computed(
-  () => ['running', 'waiting-approval'].includes(state.value.active?.status ?? '') || isWaitingForMidRunApproval.value,
+  () => ['running', 'waiting-approval'].includes(state.value.active?.status ?? ''),
 );
 const canResume = computed(
-  () =>
-    ['abnormal', 'failed', 'stopped', 'context-exhausted'].includes(state.value.active?.status ?? '') &&
-    !state.value.active?.approval,
+  () => ['abnormal', 'failed', 'stopped', 'context-exhausted'].includes(state.value.active?.status ?? ''),
 );
 const canSend = computed(() =>
-  Boolean(
-    state.value.active && ['completed', 'idle'].includes(state.value.active.status) && !state.value.active.approval,
-  ),
+  Boolean(state.value.active && ['completed', 'idle'].includes(state.value.active.status)),
 );
 const canCompose = computed(() => isRunning.value || canSend.value);
 const canAddAttachments = computed(() => canSend.value && !state.value.busy && !attachmentBusy.value);
@@ -348,7 +358,16 @@ async function changeProfile(id: string) {
 }
 
 async function changeMode(mode: string) {
+  if (mode === 'full') {
+    showFullAccessWarning.value = true;
+    return;
+  }
   await action(() => runtime.setMode(mode === 'yolo' ? 'yolo' : 'normal'));
+}
+
+async function enableFullAccess() {
+  const succeeded = await action(() => runtime.setMode('full'));
+  if (succeeded) showFullAccessWarning.value = false;
 }
 
 function stop() {
@@ -386,8 +405,8 @@ onBeforeUnmount(() => attachments.value.forEach(revokePreview));
 }
 
 .dca-composer-shell:focus-within {
-  border-color: rgb(157 124 255 / 65%);
-  box-shadow: 0 0 0 2px rgb(157 124 255 / 12%);
+  border-color: color-mix(in srgb, var(--dca-accent) 65%, transparent);
+  box-shadow: 0 0 0 2px var(--dca-focus-ring);
 }
 
 .dca-app .dca-composer-shell textarea {
@@ -514,7 +533,7 @@ onBeforeUnmount(() => attachments.value.forEach(revokePreview));
 
 .dca-app button.dca-send-button.dca-guidance-button {
   background: var(--dca-accent);
-  color: #fff;
+  color: var(--dca-on-accent);
   box-shadow: 0 0 0 3px var(--dca-accent-soft);
 }
 
@@ -525,13 +544,13 @@ onBeforeUnmount(() => attachments.value.forEach(revokePreview));
 
 .dca-app button.dca-send-button.dca-stop-button {
   background: var(--dca-danger);
-  color: #fff;
+  color: var(--dca-on-accent);
   box-shadow: 0 0 0 3px var(--dca-danger-soft);
 }
 
 .dca-app button.dca-send-button.dca-stop-button:hover:not(:disabled) {
-  background: #ef8095;
-  color: #fff;
+  background: var(--dca-danger);
+  color: var(--dca-on-danger);
 }
 
 .dca-composer-select {
@@ -566,7 +585,7 @@ onBeforeUnmount(() => attachments.value.forEach(revokePreview));
 }
 
 .dca-app .dca-web-toggle.active {
-  border-color: rgb(157 124 255 / 45%);
+  border-color: color-mix(in srgb, var(--dca-accent) 45%, transparent);
   background: var(--dca-accent-soft);
   color: var(--dca-accent);
 }

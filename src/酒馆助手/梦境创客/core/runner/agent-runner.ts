@@ -126,6 +126,7 @@ export class AgentRunner {
   private apiUsageBaseline?: ApiUsageBaseline;
   private readonly contextWindow: number;
   private controller?: AbortController;
+  private toolController?: AbortController;
   private compactionFresh = false;
   private readonly executor: ModelStepExecutor;
   private headerMessageCount: number;
@@ -175,6 +176,7 @@ export class AgentRunner {
   stop(): void {
     this.stopRequested = true;
     this.controller?.abort();
+    this.toolController?.abort();
   }
 
   async start(userMessage: UserContent): Promise<AgentRunnerState> {
@@ -193,6 +195,30 @@ export class AgentRunner {
   }
 
   private async runLoop(): Promise<AgentRunnerState> {
+    try {
+      return await this.runLoopUnsafe();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.state.failure = this.stopRequested ? '用户已停止当前任务。' : message;
+      this.state.status = this.stopRequested ? 'stopped' : 'failed';
+      try {
+        await this.journal.append({
+          at: this.now(),
+          failure: this.state.failure,
+          status: this.state.status,
+          type: 'status',
+        });
+      } catch {
+        // 日志或UI订阅本身失败时也必须收束状态，不能留下没有执行协程的running僵尸。
+      }
+      return this.state;
+    } finally {
+      this.controller = undefined;
+      this.toolController = undefined;
+    }
+  }
+
+  private async runLoopUnsafe(): Promise<AgentRunnerState> {
     this.stopRequested = false;
     this.state.failure = undefined;
     await this.setStatus('running');
@@ -378,7 +404,13 @@ export class AgentRunner {
       await this.setStatus('running');
       if (!approved) return { approved: false, message: '用户拒绝了这次高危操作。' };
     }
-    return target.execute(call.input, call.toolCallId);
+    this.toolController = new AbortController();
+    if (this.stopRequested) this.toolController.abort();
+    try {
+      return await target.execute(call.input, call.toolCallId, { abortSignal: this.toolController.signal });
+    } finally {
+      this.toolController = undefined;
+    }
   }
 
   private async completeTool(call: RunnerToolCall, output: unknown): Promise<void> {

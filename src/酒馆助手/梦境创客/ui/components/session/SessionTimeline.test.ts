@@ -17,6 +17,7 @@ afterEach(() => {
   mounted?.root.remove();
   mounted = undefined;
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe('SessionTimeline', () => {
@@ -63,12 +64,102 @@ describe('SessionTimeline', () => {
 
     expect(root.querySelector('.dca-run-summary')?.textContent).toContain('正在运行 不足1秒');
     expect(root.querySelector('.dca-step-text .dca-markdown')?.textContent?.trim()).toBe('中途输出');
-    expect(root.querySelector('.dca-step-text > header')?.textContent).not.toContain('梦境创客');
-    expect(root.querySelector('.dca-step-text > header > small')).not.toBeNull();
+    expect(root.querySelector('.dca-step-text > header')).toBeNull();
 
     await vi.advanceTimersByTimeAsync(2_100);
     await nextTick();
 
     expect(root.querySelector('.dca-run-summary')?.textContent).toContain('正在运行 2秒');
+  });
+
+  it('回退后重新发送时随时间线重新增长更新贴底边界，用户上滚后停止跟随', async () => {
+    let resizeCallback: ResizeObserverCallback | undefined;
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(callback: ResizeObserverCallback) {
+          resizeCallback = callback;
+        }
+
+        disconnect() {}
+
+        observe() {}
+
+        unobserve() {}
+      },
+    );
+    let frameId = 0;
+    const frames = new Map<number, FrameRequestCallback>();
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      frameId += 1;
+      frames.set(frameId, callback);
+      return frameId;
+    });
+    vi.stubGlobal('cancelAnimationFrame', (id: number) => frames.delete(id));
+    const flushFrames = () => {
+      while (frames.size > 0) {
+        const pending = [...frames.values()];
+        frames.clear();
+        pending.forEach(callback => callback(0));
+      }
+    };
+    const reportHeight = (height: number) =>
+      resizeCallback?.([{ contentRect: { height } } as ResizeObserverEntry], {} as ResizeObserver);
+
+    runtimeMock.context = {
+      action: async () => true,
+      runtime: {},
+      state: shallowRef({
+        active: { approval: undefined, events: [], sessionId: 'session:resend', status: 'running', ui: [] },
+        activeSessionAccess: 'live',
+        busy: false,
+        toolConfirmation: undefined,
+      }),
+    };
+    const root = document.createElement('div');
+    document.body.append(root);
+    const app = createApp(SessionTimeline);
+    app.mount(root);
+    mounted = { root, unmount: () => app.unmount() };
+
+    const scroller = root.querySelector<HTMLElement>('.dca-timeline')!;
+    const clientHeight = 300;
+    let scrollHeight = 900;
+    let scrollTop = 600;
+    Object.defineProperties(scroller, {
+      clientHeight: { configurable: true, get: () => clientHeight },
+      scrollHeight: { configurable: true, get: () => scrollHeight },
+      scrollTop: {
+        configurable: true,
+        get: () => scrollTop,
+        set: (value: number) => {
+          scrollTop = Math.max(0, Math.min(value, scrollHeight - clientHeight));
+        },
+      },
+    });
+    reportHeight(900);
+    flushFrames();
+    scroller.dispatchEvent(new Event('scroll'));
+
+    // 回退旧分支后高度骤减，浏览器会把 scrollTop 夹到新的底部。
+    scrollHeight = 350;
+    scrollTop = 50;
+    reportHeight(350);
+    flushFrames();
+    expect(scrollTop).toBe(50);
+
+    // 重新发送继续输出时，新的最大滚动位置必须跟随内容增长。
+    scrollHeight = 850;
+    reportHeight(850);
+    flushFrames();
+    expect(scrollTop).toBe(550);
+
+    // 用户主动离开底部后，不应被后续流式输出强制拉回。
+    scrollTop = 100;
+    scroller.dispatchEvent(new Event('scroll'));
+    scrollHeight = 1_200;
+    reportHeight(1_200);
+    flushFrames();
+    expect(scrollTop).toBe(100);
   });
 });

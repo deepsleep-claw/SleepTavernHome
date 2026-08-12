@@ -246,7 +246,7 @@ async function removeConfiguration() {
 }
 
 .dca-agent-skill-row.builtin {
-  border: 1px solid rgb(157 124 255 / 35%);
+  border: 1px solid color-mix(in srgb, var(--dca-accent) 35%, transparent);
   cursor: default;
 }
 </style>

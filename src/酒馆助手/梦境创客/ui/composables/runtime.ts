@@ -10,7 +10,7 @@ import {
 } from '../../runtime/dream-card-agent-runtime';
 
 export type WorkspaceView = 'home' | 'session' | 'settings';
-export type SettingsSection = 'agent' | 'api' | 'diagnostics' | 'general' | 'preset' | 'skills' | 'storage';
+export type SettingsSection = 'agent' | 'api' | 'diagnostics' | 'general' | 'preset' | 'skills' | 'storage' | 'theme';
 export type SidebarTab = 'context' | 'diff' | 'files';
 
 export type SkillEditorRequest = { builtin?: boolean; deleting: boolean; skill?: AgentSkill };
@@ -166,7 +166,7 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
   }
 
   function isSessionTabRunning(id: string): boolean {
-    return ['awaiting-approval', 'committing', 'running', 'waiting-approval'].includes(
+    return ['running', 'waiting-approval'].includes(
       state.value.sessionStatuses[id] ?? '',
     );
   }
@@ -188,7 +188,7 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
     if (!(await action(() => runtime.deleteSession(id)))) return false;
     openedSessionIds.value = openedSessionIds.value.filter(item => item !== id);
     if (workspaceView.value === 'session' && wasActive) workspaceView.value = 'home';
-    toastr.success('会话及其快照已删除。', '梦境创客');
+    toastr.success('会话及其操作记录已删除。', '梦境创客');
     return true;
   }
 
@@ -197,7 +197,7 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
     if (!(await action(() => runtime.deleteCharacterSession(bindingId, id)))) return false;
     openedSessionIds.value = openedSessionIds.value.filter(item => item !== id);
     if (workspaceView.value === 'session' && wasActive) workspaceView.value = 'home';
-    toastr.success('会话及其快照已删除。', '梦境创客');
+    toastr.success('会话及其操作记录已删除。', '梦境创客');
     return true;
   }
 

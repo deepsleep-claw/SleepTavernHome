@@ -1,4 +1,5 @@
 import { klona } from 'klona';
+import { normalizeWorkspacePath } from './path';
 import { MemoryWorkspaceRepository } from './memory-repository';
 import type {
   SearchQuery,
@@ -10,6 +11,7 @@ import type {
   WorkspaceRepository,
   WorkspaceWriteOptions,
 } from './types';
+import type { FileOperationPayload } from '../operations/types';
 
 export type LiveWorkspaceApplyInput = {
   changes: WorkspaceChange[];
@@ -33,7 +35,7 @@ export type LiveWorkspaceRepositoryOptions = {
   source: LiveWorkspaceSource;
 };
 
-type LocalMutation = (repository: MemoryWorkspaceRepository, localToolCallId: string) => Promise<void>;
+type LocalMutation = (localToolCallId: string) => Promise<void>;
 
 /**
  * 直接面向实时资源的VFS门面。
@@ -41,31 +43,32 @@ type LocalMutation = (repository: MemoryWorkspaceRepository, localToolCallId: st
  * 每次读操作都会重新获取宿主投影；写操作在最新投影上构造文件级意图，交给Source写入真实资源，
  * 再用写后回读结果更新缓存。它不保留Working Copy，也不等待轮末统一提交。
  */
-export class LiveWorkspaceRepository implements WorkspaceRepository {
-  private readonly completedToolCalls = new Set<string>();
-  private files: WorkspaceFile[] = [];
+export class LiveWorkspaceRepository extends MemoryWorkspaceRepository implements WorkspaceRepository {
+  private readonly committedToolCalls = new Set<string>();
   private readonly onCommitted?: LiveWorkspaceRepositoryOptions['onCommitted'];
   private readonly outcomes = new Map<string, WorkspaceMutationResult>();
-  private readonly readonlyRoots: string[];
   private readonly source: LiveWorkspaceSource;
+  private readonly transientProjections = new Map<string, WorkspaceFile[]>();
 
   constructor(options: LiveWorkspaceRepositoryOptions) {
+    super({ readonlyRoots: options.readonlyRoots });
     this.source = options.source;
     this.onCommitted = options.onCommitted;
-    this.readonlyRoots = options.readonlyRoots ?? [];
-    options.completedToolCallIds?.forEach(id => this.completedToolCalls.add(id));
+    options.completedToolCallIds?.forEach(id => this.committedToolCalls.add(id));
   }
 
   async initialize(): Promise<void> {
-    this.files = klona(await this.source.load());
+    this.rebase(await this.source.load());
   }
 
   async list(path: string): Promise<WorkspaceEntry[]> {
-    return (await this.fresh()).list(path);
+    await this.refresh();
+    return super.list(path);
   }
 
   async read(path: string): Promise<WorkspaceFile> {
-    return (await this.fresh()).read(path);
+    await this.refresh();
+    return super.read(path);
   }
 
   async write(
@@ -74,25 +77,34 @@ export class LiveWorkspaceRepository implements WorkspaceRepository {
     toolCallId: string,
     options: WorkspaceWriteOptions = {},
   ): Promise<void> {
-    await this.mutate(toolCallId, (repository, localToolCallId) =>
-      repository.write(path, content, localToolCallId, options),
-    );
+    await this.mutate(toolCallId, localToolCallId => super.write(path, content, localToolCallId, options));
   }
 
   async patch(path: string, patch: string, toolCallId: string): Promise<void> {
-    await this.mutate(toolCallId, (repository, localToolCallId) => repository.patch(path, patch, localToolCallId));
+    await this.mutate(toolCallId, localToolCallId => super.patch(path, patch, localToolCallId));
   }
 
   async move(from: string, to: string, toolCallId: string): Promise<void> {
-    await this.mutate(toolCallId, (repository, localToolCallId) => repository.move(from, to, localToolCallId));
+    await this.mutate(toolCallId, localToolCallId => super.move(from, to, localToolCallId));
   }
 
   async remove(path: string, toolCallId: string): Promise<void> {
-    await this.mutate(toolCallId, (repository, localToolCallId) => repository.remove(path, localToolCallId));
+    await this.mutate(toolCallId, localToolCallId => super.remove(path, localToolCallId));
+  }
+
+  async stageFiles(inputs: WorkspaceFile[], toolCallId: string): Promise<void> {
+    await this.mutate(toolCallId, localToolCallId => super.stageFiles(inputs, localToolCallId));
+  }
+
+  override replaceProjection(root: string, inputs: WorkspaceFile[]): void {
+    const normalized = normalizeWorkspacePath(root);
+    this.transientProjections.set(normalized, klona(inputs));
+    super.replaceProjection(normalized, inputs);
   }
 
   async search(query: SearchQuery): Promise<SearchResult> {
-    return (await this.fresh()).search(query);
+    await this.refresh();
+    return super.search(query);
   }
 
   mutationResult(toolCallId: string): WorkspaceMutationResult | undefined {
@@ -100,33 +112,52 @@ export class LiveWorkspaceRepository implements WorkspaceRepository {
     return result ? klona(result) : undefined;
   }
 
-  snapshot(): WorkspaceFile[] {
-    return klona(this.files);
+  /**
+   * Undo/Redo专用入口。仍然经过实时Source和写后回读，但调用方可以用独立toolCallId
+   * 把它与原始模型工具调用区分开。冲突检查由operation-replayer在调用前完成。
+   */
+  async replay(payload: FileOperationPayload, toolCallId: string): Promise<void> {
+    await this.mutate(toolCallId, async localToolCallId => {
+      if (payload.kind === 'create') {
+        await super.stageFiles([{ ...klona(payload.file), path: payload.path }], localToolCallId);
+      } else if (payload.kind === 'delete') {
+        await super.remove(payload.path, localToolCallId);
+      } else if (payload.kind === 'modify') {
+        await super.patch(payload.path, payload.forwardPatch, localToolCallId);
+      } else {
+        await super.move(payload.from, payload.path, localToolCallId);
+      }
+    });
   }
 
-  private async fresh(): Promise<MemoryWorkspaceRepository> {
-    this.files = klona(await this.source.load());
-    return new MemoryWorkspaceRepository({ files: this.files, readonlyRoots: this.readonlyRoots });
+  private async refresh(): Promise<void> {
+    this.rebase(await this.source.load());
+    this.restoreTransientProjections();
   }
 
   private async mutate(toolCallId: string, mutation: LocalMutation): Promise<void> {
     if (!toolCallId) throw new Error('工具调用必须包含稳定的toolCallId。');
-    if (this.completedToolCalls.has(toolCallId)) {
+    if (this.committedToolCalls.has(toolCallId)) {
       this.outcomes.set(toolCallId, { changes: [], idempotent: true, status: 'success' });
       return;
     }
-    const repository = await this.fresh();
-    await mutation(repository, `${toolCallId}:intent`);
-    const requested = repository.changes();
+    await this.refresh();
+    await mutation(`${toolCallId}:intent`);
+    const requested = this.changes();
     const applied = await this.source.apply({ changes: requested, toolCallId });
-    this.files = klona(applied.files);
+    this.rebase(applied.files);
+    this.restoreTransientProjections();
     const outcome: WorkspaceMutationResult = {
       changes: klona(applied.changes),
       status: applied.status,
       warning: applied.warning,
     };
     this.outcomes.set(toolCallId, outcome);
-    this.completedToolCalls.add(toolCallId);
+    this.committedToolCalls.add(toolCallId);
     await this.onCommitted?.(klona(outcome), toolCallId);
+  }
+
+  private restoreTransientProjections(): void {
+    for (const [root, files] of this.transientProjections) super.replaceProjection(root, files);
   }
 }

@@ -235,7 +235,7 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
   }
 
   /**
-   * 用最新的外部投影替换一个目录，同时更新Base与Working Copy。
+   * 用最新的外部投影替换一个目录，同时重置这部分内存基线。
    * 适用于聊天、只读资料库等不应进入角色卡Diff的实时视图。
    */
   replaceProjection(inputRoot: string, inputs: WorkspaceFile[]): void {
@@ -263,7 +263,7 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
     }
   }
 
-  /** 一次性建立一组Working Copy文件；整组共享同一个幂等工具调用。 */
+  /** 一次性建立一组内存文件；整组共享同一个幂等工具调用。 */
   async stageFiles(inputs: WorkspaceFile[], toolCallId: string): Promise<void> {
     await this.once(toolCallId, () => {
       const files = inputs.map(input => {

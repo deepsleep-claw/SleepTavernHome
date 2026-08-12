@@ -102,11 +102,23 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
   color: var(--dca-text-muted);
   font-size: 0.78rem;
   line-height: 1.45;
-  mask-image: linear-gradient(to bottom, transparent 0, rgb(0 0 0 / 18%) 20%, #000 58%, #000 100%);
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    var(--dca-mask-soft) 20%,
+    var(--dca-mask-opaque) 58%,
+    var(--dca-mask-opaque) 100%
+  );
   scrollbar-width: none;
   white-space: pre-wrap;
   word-break: break-word;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0, rgb(0 0 0 / 18%) 20%, #000 58%, #000 100%);
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    var(--dca-mask-soft) 20%,
+    var(--dca-mask-opaque) 58%,
+    var(--dca-mask-opaque) 100%
+  );
 }
 
 .dca-reasoning-card.running > summary > .dca-reasoning-preview {
@@ -125,7 +137,7 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
   height: 0.85rem;
   margin-bottom: -0.85rem;
   background: linear-gradient(to bottom, color-mix(in srgb, var(--dca-canvas) 62%, transparent), transparent);
-  box-shadow: inset 0 0.45rem 0.55rem -0.55rem rgb(0 0 0 / 75%);
+  box-shadow: inset 0 0.45rem 0.55rem -0.55rem color-mix(in srgb, var(--dca-shadow-color) 75%, transparent);
   content: '';
   pointer-events: none;
 }

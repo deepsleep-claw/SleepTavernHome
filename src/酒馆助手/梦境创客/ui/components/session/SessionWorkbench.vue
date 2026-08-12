@@ -11,7 +11,7 @@
         <i class="fa-solid fa-lock" aria-hidden="true"></i>
         <div>
           <strong>历史记录只读</strong
-          ><span>对应角色卡已不可用。你仍可查看消息、工具过程、文件快照与 Diff，但不能发送或修改内容。</span>
+          ><span>对应角色卡已不可用。你仍可查看消息、工具过程、操作记录与 Diff，但不能发送或修改内容。</span>
         </div>
       </div>
       <SessionComposer v-else />
@@ -28,6 +28,7 @@
       :focus-file-path="focusFilePath"
       @close="sidebarCollapsed = true"
     />
+    <OperationReplayDialog />
   </section>
 </template>
 
@@ -36,6 +37,7 @@ import { ref, watch } from 'vue';
 import { useDreamCardAgent, type SidebarTab } from '../../composables/runtime';
 import { useSidebarResize } from '../../composables/sidebar-resize';
 import SessionComposer from './SessionComposer.vue';
+import OperationReplayDialog from './OperationReplayDialog.vue';
 import SessionTimeline from './SessionTimeline.vue';
 import SessionToolbar from './SessionToolbar.vue';
 import SessionSidebar from './sidebar/SessionSidebar.vue';
@@ -100,14 +102,14 @@ watch(
   align-items: center;
   gap: 0.75rem;
   margin: 0.7rem;
-  border: 1px solid rgba(110, 129, 181, 0.28);
+  border: 1px solid color-mix(in srgb, var(--dca-info) 28%, transparent);
   border-radius: 0.75rem;
   padding: 0.75rem 0.9rem;
-  background: rgba(34, 47, 77, 0.55);
+  background: color-mix(in srgb, var(--dca-info-soft) 55%, transparent);
   color: var(--dca-text-muted);
 }
 .dca-readonly-composer > i {
-  color: #8da7e8;
+  color: var(--dca-info);
 }
 .dca-readonly-composer > div {
   display: flex;

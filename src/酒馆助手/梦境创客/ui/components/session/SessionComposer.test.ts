@@ -19,17 +19,16 @@ afterEach(() => {
 });
 
 describe('SessionComposer', () => {
-  it('生成前检查点等待期间仍可输入引导或停止任务', () => {
+  it('逐工具审批等待期间仍可输入引导或停止任务', () => {
     const stop = vi.fn();
     runtimeMock.context = {
       action: async () => true,
       runtime: { stop },
       state: shallowRef({
         active: {
-          approval: { midRun: true },
           mode: 'normal',
           modelControls: { reasoningEffort: 'auto', webSearch: false },
-          status: 'awaiting-approval',
+          status: 'waiting-approval',
         },
         activeProfileId: undefined,
         busy: true,

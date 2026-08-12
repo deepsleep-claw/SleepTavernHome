@@ -1,6 +1,7 @@
 import { klona } from 'klona';
 import { describe, expect, it } from 'vitest';
-import { commitWorkingCopy } from '../transaction/commit';
+import { synchronizeCardAgentMetadata } from '../mapping/card-workspace-mapper';
+import { applyRealtimeStateOperations } from '../transaction/realtime-apply';
 import { diffCardStates, type StateOperation } from '../transaction/state-diff';
 import type { TavernWorldbookEntry } from './bridge';
 import { ProductionCardStateAdapter } from './production-adapter';
@@ -8,6 +9,13 @@ import { FakeTavernBridge } from './test-bridge';
 
 function operation(path: string, before: unknown, after: unknown, kind: StateOperation['kind'] = 'modify'): StateOperation {
   return { after, before, highRisk: false, kind, label: path, path };
+}
+
+async function applyWorking(adapter: ProductionCardStateAdapter, base: Awaited<ReturnType<ProductionCardStateAdapter['read']>>, working: Awaited<ReturnType<ProductionCardStateAdapter['read']>>) {
+  synchronizeCardAgentMetadata(working);
+  const result = await applyRealtimeStateOperations(adapter, diffCardStates(base, working));
+  if (result.error) throw result.error;
+  return adapter.read();
 }
 
 describe('ProductionCardStateAdapter', () => {
@@ -43,7 +51,7 @@ describe('ProductionCardStateAdapter', () => {
     expect(bridge.books.get('主世界书')).toHaveLength(1);
   });
 
-  it('新条目正式UID会反馈给事务快照', async () => {
+  it('新条目正式UID会反馈给实时工作区', async () => {
     const bridge = new FakeTavernBridge();
     const adapter = new ProductionCardStateAdapter(bridge);
     const base = await adapter.read();
@@ -55,12 +63,8 @@ describe('ProductionCardStateAdapter', () => {
       resourceId: 'temp-entry',
       uid: 'temp:temp-entry',
     });
-    const decisions = Object.fromEntries(diffCardStates(base, working).map(item => [item.path, 'agent' as const]));
-    const result = await commitWorkingCopy({ adapter, base, decisions, working });
-    expect(result.status).toBe('committed');
-    if (result.status === 'committed') {
-      expect(result.state.worldbooks[0].entries.find(item => item.resourceId === 'temp-entry')?.uid).toBe(100);
-    }
+    const state = await applyWorking(adapter, base, working);
+    expect(state.worldbooks[0].entries.find(item => item.resourceId === 'temp-entry')?.uid).toBe(100);
   });
 
   it('重命名与整书增删保留条目资源ID', async () => {
@@ -79,7 +83,7 @@ describe('ProductionCardStateAdapter', () => {
     expect(bridge.books.has('空书')).toBe(false);
   });
 
-  it('同一事务先重命名世界书，再对新名称执行条目增改删和重排', async () => {
+  it('同一次实时写入先重命名世界书，再对新名称执行条目增改删和重排', async () => {
     const bridge = new FakeTavernBridge();
     const adapter = new ProductionCardStateAdapter(bridge);
     const base = await adapter.read();
@@ -95,15 +99,7 @@ describe('ProductionCardStateAdapter', () => {
       resourceId: 'rename-created-entry',
       uid: 'temp:rename-created-entry',
     });
-    const changes = diffCardStates(base, working);
-    const result = await commitWorkingCopy({
-      adapter,
-      base,
-      decisions: Object.fromEntries(changes.map(change => [change.path, 'agent' as const])),
-      working,
-    });
-
-    expect(result.status, result.status === 'rolled-back' ? result.error.message : undefined).toBe('committed');
+    await applyWorking(adapter, base, working);
     expect(bridge.books.has('主世界书')).toBe(false);
     expect(bridge.books.get('重命名后的世界书')?.map(entry => entry.content)).toEqual([
       '重命名后新增',
@@ -114,7 +110,7 @@ describe('ProductionCardStateAdapter', () => {
     );
   });
 
-  it('事务创建未绑定世界书后同步元数据并通过最终回读校验', async () => {
+  it('实时创建未绑定世界书后同步元数据并采用写后回读', async () => {
     const bridge = new FakeTavernBridge();
     const adapter = new ProductionCardStateAdapter(bridge);
     const base = await adapter.read();
@@ -134,22 +130,12 @@ describe('ProductionCardStateAdapter', () => {
       unknownFields: {},
       writable: true,
     });
-    const changes = diffCardStates(base, working);
-    const result = await commitWorkingCopy({
-      adapter,
-      base,
-      decisions: Object.fromEntries(changes.map(change => [change.path, 'agent' as const])),
-      working,
-    });
-
-    expect(result.status).toBe('committed');
+    const state = await applyWorking(adapter, base, working);
     expect(bridge.bindings).toEqual({ additional: [], primary: '主世界书' });
     expect(bridge.raw?.data.extensions?.card_agent).toMatchObject({
       worldbooks: expect.arrayContaining([{ id: 'new-book', name: '未绑定新书' }]),
     });
-    if (result.status === 'committed') {
-      expect(result.state.worldbooks.find(book => book.resourceId === 'new-book')?.entries[0].uid).toBe(100);
-    }
+    expect(state.worldbooks.find(book => book.resourceId === 'new-book')?.entries[0].uid).toBe(100);
   });
 
   it('创建并绑定世界书后同步元数据不会把刚写入的primary绑定覆盖回旧值', async () => {
@@ -167,15 +153,7 @@ describe('ProductionCardStateAdapter', () => {
       writable: true,
     });
     working.bindings.primary = '外部绑定新书';
-    const changes = diffCardStates(base, working);
-    const result = await commitWorkingCopy({
-      adapter,
-      base,
-      decisions: Object.fromEntries(changes.map(change => [change.path, 'agent' as const])),
-      working,
-    });
-
-    expect(result.status).toBe('committed');
+    await applyWorking(adapter, base, working);
     expect(bridge.raw?.data.extensions?.world).toBe('外部绑定新书');
     expect(bridge.raw?.data.extensions?.card_agent).toMatchObject({
       worldbooks: expect.arrayContaining([{ id: 'external-bound-book', name: '外部绑定新书' }]),
@@ -213,19 +191,9 @@ describe('ProductionCardStateAdapter', () => {
       unknownFields: {},
       writable: true,
     });
-    const changes = diffCardStates(base, working);
-    const result = await commitWorkingCopy({
-      adapter,
-      base,
-      decisions: Object.fromEntries(changes.map(change => [change.path, 'agent' as const])),
-      working,
-    });
-
-    expect(result.status).toBe('committed');
-    if (result.status === 'committed') {
-      expect(result.state.worldbooks.find(book => book.resourceId === 'implicit-book')?.entries[0].unknownFields)
-        .toMatchObject({ vendor_default: '由酒馆补齐' });
-    }
+    const state = await applyWorking(adapter, base, working);
+    expect(state.worldbooks.find(book => book.resourceId === 'implicit-book')?.entries[0].unknownFields)
+      .toMatchObject({ vendor_default: '由酒馆补齐' });
   });
 
   it('向现有世界书新增条目时接受酒馆补齐的隐式字段', async () => {
@@ -251,24 +219,13 @@ describe('ProductionCardStateAdapter', () => {
       uid: 'temp:implicit-existing-book-entry',
       unknownFields: {},
     });
-    const changes = diffCardStates(base, working);
-    const result = await commitWorkingCopy({
-      adapter,
-      base,
-      decisions: Object.fromEntries(changes.map(change => [change.path, 'agent' as const])),
-      working,
-    });
-
-    expect(result.status).toBe('committed');
-    if (result.status === 'committed') {
-      expect(
-        result.state.worldbooks[0].entries.find(entry => entry.resourceId === 'implicit-existing-book-entry')
-          ?.unknownFields,
-      ).toMatchObject({ vendor_default: '由酒馆补齐' });
-    }
+    const state = await applyWorking(adapter, base, working);
+    expect(
+      state.worldbooks[0].entries.find(entry => entry.resourceId === 'implicit-existing-book-entry')?.unknownFields,
+    ).toMatchObject({ vendor_default: '由酒馆补齐' });
   });
 
-  it('修改既有条目时接受酒馆补齐的未知字段，但拒绝语义写入被忽略', async () => {
+  it('修改既有条目时接受酒馆补齐的未知字段', async () => {
     const bridge = new FakeTavernBridge();
     const originalUpdate = bridge.updateWorldbook.bind(bridge);
     bridge.updateWorldbook = async (name, updater) => {
@@ -281,36 +238,11 @@ describe('ProductionCardStateAdapter', () => {
     const base = await adapter.read();
     const working = klona(base);
     working.worldbooks[0].entries[0].content = '确认写入的新正文';
-    const changes = diffCardStates(base, working);
-    const result = await commitWorkingCopy({
-      adapter,
-      base,
-      decisions: Object.fromEntries(changes.map(change => [change.path, 'agent' as const])),
-      working,
+    const state = await applyWorking(adapter, base, working);
+    expect(state.worldbooks[0].entries[0]).toMatchObject({
+      content: '确认写入的新正文',
+      unknownFields: { vendor_default: '修改后由酒馆补齐', vendor_field: 'preserve' },
     });
-    expect(result.status).toBe('committed');
-    if (result.status === 'committed') {
-      expect(result.state.worldbooks[0].entries[0]).toMatchObject({
-        content: '确认写入的新正文',
-        unknownFields: { vendor_default: '修改后由酒馆补齐', vendor_field: 'preserve' },
-      });
-    }
-
-    const ignoredBridge = new FakeTavernBridge();
-    ignoredBridge.updateWorldbook = async name => ignoredBridge.getWorldbook(name);
-    const ignoredAdapter = new ProductionCardStateAdapter(ignoredBridge);
-    const ignoredBase = await ignoredAdapter.read();
-    const ignoredWorking = klona(ignoredBase);
-    ignoredWorking.worldbooks[0].entries[0].content = '不会落盘';
-    const ignoredChanges = diffCardStates(ignoredBase, ignoredWorking);
-    const ignoredResult = await commitWorkingCopy({
-      adapter: ignoredAdapter,
-      base: ignoredBase,
-      decisions: Object.fromEntries(ignoredChanges.map(change => [change.path, 'agent' as const])),
-      working: ignoredWorking,
-    });
-    expect(ignoredResult.status).toBe('rolled-back');
-    if (ignoredResult.status === 'rolled-back') expect(ignoredResult.error.message).toContain('语义不一致');
   });
 
   it('覆盖角色元数据、空开场白和世界书元数据/排序分支', async () => {
@@ -466,7 +398,7 @@ describe('ProductionCardStateAdapter', () => {
     });
   });
 
-  it('一次事务内同一资源作用域无论多少语义字段都只写酒馆一次', async () => {
+  it('一次实时操作内同一资源作用域无论多少语义字段都只写酒馆一次', async () => {
     const bridge = new FakeTavernBridge();
     bridge.regexes.set('character', [
       { disabled: false, findRegex: '/old/u', id: 'r1', placement: [1], replaceString: 'old', scriptName: '旧正则' },
@@ -477,14 +409,7 @@ describe('ProductionCardStateAdapter', () => {
     working.resources.regexes.character.regexes[0].name = '新正则';
     working.resources.regexes.character.regexes[0].findRegex = '/new/u';
     working.resources.regexes.character.regexes[0].replaceString = 'new';
-    const changes = diffCardStates(base, working);
-    const result = await commitWorkingCopy({
-      adapter,
-      base,
-      decisions: Object.fromEntries(changes.map(change => [change.path, 'agent' as const])),
-      working,
-    });
-    expect(result.status).toBe('committed');
+    await applyWorking(adapter, base, working);
     expect(bridge.calls.filter(call => call === 'replace-regexes:character')).toHaveLength(1);
   });
 });

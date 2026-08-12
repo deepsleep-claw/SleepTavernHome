@@ -43,6 +43,8 @@ describe('WorkspaceOperationLog', () => {
     log.markUndone('turn-1', ['op-create']);
     expect(log.recordsForTurn('turn-1')).toMatchObject([{ state: 'undone' }]);
     expect(log.latestTurn()?.redoOperationIds).toEqual(['op-create']);
+    log.discardRedo('turn-1');
+    expect(log.latestTurn()?.redoOperationIds).toEqual([]);
     const restored = new WorkspaceOperationLog(log.export());
     restored.markRedone('turn-1', ['op-create']);
     expect(restored.recordsForTurn('turn-1')).toMatchObject([{ state: 'applied' }]);

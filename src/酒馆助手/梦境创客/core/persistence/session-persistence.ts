@@ -1,5 +1,4 @@
 import type { PersistedSessionRuntime, SessionLifecycleStatus } from '../session/types';
-import type { WorkspaceFile } from '../workspace/types';
 import { SessionRevisionStore, type SessionRevision } from './session-store';
 import type { SessionIndexEntry } from './settings';
 
@@ -7,7 +6,7 @@ function manifestStatus(status: SessionLifecycleStatus): SessionIndexEntry['stat
   if (status === 'abnormal') return 'abnormal';
   if (status === 'completed') return 'completed';
   if (status === 'stopped') return 'stopped';
-  if (status === 'running' || status === 'waiting-approval' || status === 'committing') return 'running';
+  if (status === 'running' || status === 'waiting-approval') return 'running';
   return 'idle';
 }
 
@@ -21,19 +20,13 @@ export type SessionPersistenceOptions = {
 export class SessionPersistenceCoordinator {
   constructor(private readonly options: SessionPersistenceOptions) {}
 
-  async persist(
-    runtime: PersistedSessionRuntime,
-    workingCopy: WorkspaceFile[],
-    snapshotBlobs: Record<string, Uint8Array>,
-  ): Promise<void> {
+  async persist(runtime: PersistedSessionRuntime): Promise<void> {
     await this.options.store.commit({
       avatarId: this.options.avatarId,
       bindingId: this.options.bindingId,
       characterName: this.options.characterName,
       runtime,
-      snapshotBlobs,
       status: manifestStatus(runtime.status),
-      workingCopy,
     });
   }
 

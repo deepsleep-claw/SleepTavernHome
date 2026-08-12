@@ -63,7 +63,7 @@ describe('workspace runner tools', () => {
     expect((await repository.read('/character/description.md')).content).toBe('新内容');
   });
 
-  it('内置Skill禁止改写，已有用户Skill需要确认，新Skill无需确认', async () => {
+  it('手动模式逐次确认所有写入，同时保留Skill高危等级和内置保护', async () => {
     const repository = new MemoryWorkspaceRepository();
     const tools = new Map(createWorkspaceRunnerTools(repository, ['old']).map(item => [item.name, item]));
     await expect(
@@ -72,14 +72,18 @@ describe('workspace runner tools', () => {
     expect(await tools.get('apply_patch')!.confirmation?.({ path: '/skills/user/old/SKILL.md' }, 'call')).toMatchObject({
       toolName: 'apply_patch',
     });
-    expect(await tools.get('write_file')!.confirmation?.({ path: '/skills/user/new/SKILL.md' }, 'call')).toBeUndefined();
+    expect(await tools.get('write_file')!.confirmation?.({ path: '/skills/user/new/SKILL.md' }, 'call')).toMatchObject({
+      risk: 'ordinary',
+    });
     expect(
       await tools.get('move_path')!.confirmation?.({ from: '/skills/user/old', to: '/skills/user/renamed' }, 'call'),
     ).toBeDefined();
     expect(
       await tools.get('move_path')!.confirmation?.({ from: '/skills/user/new', to: '/skills/user/old' }, 'call'),
     ).toBeDefined();
-    expect(await tools.get('delete_path')!.confirmation?.({ path: '/character/description.md' }, 'call')).toBeUndefined();
+    expect(await tools.get('delete_path')!.confirmation?.({ path: '/character/description.md' }, 'call')).toMatchObject({
+      risk: 'ordinary',
+    });
   });
 
   it('把外部二进制文件作为不泄露物理地址的多模态工具结果返回', async () => {
@@ -158,7 +162,7 @@ describe('workspace runner tools', () => {
     expect(await tools.get('write_file')!.confirmation?.(input, 'global-write')).toMatchObject({ toolName: 'write_file' });
   });
 
-  it('仅在启用脚本或修改已启用脚本代码时要求角色脚本确认', async () => {
+  it('YOLO只在启用脚本或修改已启用脚本代码时要求角色脚本确认', async () => {
     const root = '/tavern-helper-scripts/character/scripts/s1';
     const repository = new MemoryWorkspaceRepository({
       files: [
@@ -172,7 +176,9 @@ describe('workspace runner tools', () => {
         { content: '', mediaType: 'text/plain', path: `${root}/script.js`, readonly: false, resourceId: 'script' },
       ],
     });
-    const tools = new Map(createWorkspaceRunnerTools(repository).map(item => [item.name, item]));
+    const tools = new Map(
+      createWorkspaceRunnerTools(repository, [], { approvalMode: () => 'yolo' }).map(item => [item.name, item]),
+    );
     expect(
       await tools
         .get('write_file')!

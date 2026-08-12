@@ -42,7 +42,7 @@
         <div>
           <strong>{{ currentSkill.name }}</strong>
           <span>
-            {{ currentSkill.loading }} · {{ Object.keys(currentSkill.resources ?? {}).length }} 个资源 ·
+            {{ currentSkill.loading }} · {{ currentSkill.locked ? '已锁定 · ' : '' }}{{ Object.keys(currentSkill.resources ?? {}).length }} 个资源 ·
             {{ formatBytes(skillResourceBytes(currentSkill)) }}
           </span>
         </div>
@@ -166,7 +166,7 @@ function openSkillFolder() {
 }
 
 .dca-skill-card.builtin {
-  border-color: rgb(157 124 255 / 40%);
+  border-color: color-mix(in srgb, var(--dca-accent) 40%, transparent);
   background: var(--dca-accent-soft);
 }
 

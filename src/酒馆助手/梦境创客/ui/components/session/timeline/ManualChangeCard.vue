@@ -63,9 +63,9 @@ async function redo() {
 .dca-manual-card {
   width: min(48rem, 100%);
   align-self: flex-start;
-  border: 1px solid rgb(104 190 160 / 45%);
+  border: 1px solid color-mix(in srgb, var(--dca-success) 45%, transparent);
   border-radius: var(--dca-radius-md);
-  background: rgb(61 138 112 / 8%);
+  background: var(--dca-success-soft);
 }
 
 .dca-manual-card > summary {

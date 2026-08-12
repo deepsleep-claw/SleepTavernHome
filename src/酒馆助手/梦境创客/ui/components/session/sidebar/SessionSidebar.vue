@@ -105,51 +105,40 @@
     <section v-else-if="tab === 'diff'" class="dca-side-scroll">
       <header class="dca-side-heading">
         <div>
-          <strong>Working Diff</strong>
-          <small>不重叠的酒馆手改会保留</small>
+          <strong>文件修改记录</strong>
+          <small>按用户消息查看，或汇总整个会话</small>
         </div>
         <div v-if="state.activeSessionAccess === 'live'" class="dca-row-actions">
           <button type="button" :disabled="state.busy" @click="undo">撤销</button>
           <button type="button" :disabled="state.busy" @click="redo">重做</button>
         </div>
       </header>
-      <div v-if="!state.active?.approval" class="dca-empty">当前没有待批准修改。</div>
-      <article
-        v-for="change in approvalChanges"
-        v-else
-        :key="change.path"
-        class="dca-diff-item"
-        :class="{ danger: change.highRisk }"
-      >
+      <div class="dca-diff-scope">
+        <select v-model="diffScope" aria-label="Diff范围">
+          <option value="latest">最新一轮</option>
+          <option v-for="(turn, index) in operationTurns" :key="turn.turnId" :value="turn.turnId">
+            第 {{ index + 1 }} 轮 · {{ turn.operationIds.length }} 项
+          </option>
+          <option value="all">整个会话</option>
+        </select>
+      </div>
+      <div v-if="selectedOperationRecords.length === 0" class="dca-empty">这个范围没有文件修改。</div>
+      <article v-for="record in selectedOperationRecords" v-else :key="record.operationId" class="dca-diff-item">
         <header>
           <div>
-            <strong>{{ change.label }}</strong>
-            <code>{{ change.path }}</code>
+            <strong>{{ operationLabel(record) }}</strong>
+            <code>{{ record.forward.path }}</code>
           </div>
-          <span v-if="change.highRisk" class="dca-diff-risk">强制确认</span>
+          <span class="dca-diff-risk" :class="record.state">{{ operationStateLabel(record.state) }}</span>
         </header>
-        <div v-if="conflictByPath(change.path)" class="dca-conflict-stack">
-          <details>
-            <summary>Base</summary>
-            <pre>{{ pretty(conflictByPath(change.path)?.base) }}</pre>
+        <div class="dca-change-stack">
+          <details v-if="operationBefore(record) !== undefined" open>
+            <summary>{{ record.forward.kind === 'delete' ? '删除的内容' : '修改前' }}</summary>
+            <pre>{{ operationBefore(record) }}</pre>
           </details>
-          <details>
-            <summary>酒馆当前</summary>
-            <pre>{{ pretty(conflictByPath(change.path)?.current) }}</pre>
-          </details>
-          <details>
-            <summary>Agent</summary>
-            <pre>{{ pretty(conflictByPath(change.path)?.agent) }}</pre>
-          </details>
-        </div>
-        <div v-else class="dca-change-stack">
-          <details v-if="change.before !== undefined" open>
-            <summary>{{ change.after === undefined ? '将删除的内容' : '修改前' }}</summary>
-            <pre>{{ diffValue(change.before) }}</pre>
-          </details>
-          <details v-if="change.after !== undefined" open>
-            <summary>{{ change.before === undefined ? '新增内容' : '修改后' }}</summary>
-            <pre>{{ diffValue(change.after) }}</pre>
+          <details v-if="operationAfter(record) !== undefined" open>
+            <summary>{{ record.forward.kind === 'create' ? '新建内容' : '修改后' }}</summary>
+            <pre>{{ operationAfter(record) }}</pre>
           </details>
         </div>
       </article>
@@ -207,6 +196,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import type { WorkspaceOperationRecord } from '../../../../core/operations/types';
 import { maskSecretsForModel } from '../../../../core/workspace/secret-protection';
 import { pretty } from '../../../composables/format';
 import { useDreamCardAgent, type SidebarTab } from '../../../composables/runtime';
@@ -230,6 +220,7 @@ const selectedFilePath = ref('');
 const fileDraft = ref('');
 const editorView = ref<'edit' | 'preview'>('edit');
 const largePreviewApproved = ref(false);
+const diffScope = ref('latest');
 const secretFindings = ref<Awaited<ReturnType<typeof maskSecretsForModel>>['findings']>([]);
 const secretWarning = ref('');
 const expandedDirectories = ref(
@@ -294,7 +285,7 @@ const selectedFile = computed(() => files.value.find(file => file.path === selec
 const isBinaryFile = computed(() =>
   Boolean(selectedFile.value?.external && !selectedFile.value.mediaType.startsWith('text/')),
 );
-const isRunning = computed(() => ['committing', 'running'].includes(state.value.active?.status ?? ''));
+const isRunning = computed(() => ['running', 'waiting-approval'].includes(state.value.active?.status ?? ''));
 const canEditFile = computed(() =>
   Boolean(
     selectedFile.value && !isBinaryFile.value && !selectedFile.value.readonly && state.value.active && !isRunning.value,
@@ -311,19 +302,39 @@ const secretMarkers = computed<VfsEditorMarker[]>(() =>
     startLine: Math.max(0, finding.startLine - 1),
   })),
 );
-const approvalChanges = computed(() => [
-  ...(state.value.active?.approval?.stateChanges ?? []),
-  ...(state.value.active?.approval?.fileChanges ?? []),
-  ...(state.value.active?.approval?.skillChanges ?? []),
-]);
-const changeCount = computed(() => approvalChanges.value.length);
+const operationTurns = computed(() => state.value.active?.operationLog?.turns ?? []);
+const selectedOperationRecords = computed(() => {
+  const log = state.value.active?.operationLog;
+  if (!log) return [];
+  if (diffScope.value === 'all') return log.records;
+  const turnId = diffScope.value === 'latest' ? log.turns.at(-1)?.turnId : diffScope.value;
+  if (!turnId) return [];
+  const ids = new Set(log.turns.find(turn => turn.turnId === turnId)?.operationIds ?? []);
+  return log.records.filter(record => ids.has(record.operationId));
+});
+const changeCount = computed(() => state.value.active?.operationLog?.records.length ?? 0);
 
-function diffValue(value: unknown): string {
-  if (typeof value === 'object' && value !== null && 'content' in value) {
-    const content = (value as { content?: unknown }).content;
-    if (typeof content === 'string') return content;
-  }
-  return pretty(value);
+function operationLabel(record: WorkspaceOperationRecord): string {
+  if (record.forward.kind === 'create') return '新建文件';
+  if (record.forward.kind === 'delete') return '删除文件';
+  if (record.forward.kind === 'move') return `移动文件（${record.forward.from}）`;
+  return '修改文件';
+}
+
+function operationStateLabel(state: WorkspaceOperationRecord['state']): string {
+  return ({ applied: '已应用', uncertain: '恢复不可用', undone: '已撤销' } as const)[state];
+}
+
+function operationBefore(record: WorkspaceOperationRecord): string | undefined {
+  if (record.forward.kind === 'create') return undefined;
+  if (record.forward.kind === 'delete') return record.forward.file.content;
+  return record.forward.before.content;
+}
+
+function operationAfter(record: WorkspaceOperationRecord): string | undefined {
+  if (record.forward.kind === 'delete') return undefined;
+  if (record.forward.kind === 'create') return record.forward.file.content;
+  return record.forward.after.content;
 }
 
 watch(selectedFile, file => {
@@ -399,7 +410,7 @@ async function saveFile() {
   const file = selectedFile.value;
   if (!file) return;
   try {
-    await runtime.writeWorkingFile(file.path, fileDraft.value);
+    await runtime.writeWorkingFile(file.path, fileDraft.value, false, file.content);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!message.startsWith('MANUAL_EDIT_CONFLICT')) {
@@ -407,13 +418,9 @@ async function saveFile() {
       return;
     }
     const usePlayer = window.confirm('这个文件在你编辑期间又被修改了。\n\n确定：保存你的版本\n取消：保留酒馆当前版本');
-    if (usePlayer) await action(() => runtime.writeWorkingFile(file.path, fileDraft.value, true));
+    if (usePlayer) await action(() => runtime.writeWorkingFile(file.path, fileDraft.value, true, file.content));
     else await action(() => runtime.useCurrentWorkingFile(file.path));
   }
-}
-
-function conflictByPath(path: string) {
-  return state.value.active?.approval?.conflicts.find(conflict => conflict.path === path);
 }
 
 async function undo() {
@@ -470,7 +477,7 @@ async function redo() {
   border-radius: var(--dca-radius-sm);
   padding: 0 0.25rem;
   background: var(--dca-danger);
-  color: #fff;
+  color: var(--dca-on-accent);
   font-size: 0.7rem;
   font-style: normal;
   text-align: center;
@@ -543,7 +550,7 @@ async function redo() {
 }
 
 .dca-app .dca-file-tree-row.active {
-  border-color: rgb(157 124 255 / 40%);
+  border-color: color-mix(in srgb, var(--dca-accent) 40%, transparent);
   background-color: var(--dca-accent-soft);
 }
 
@@ -641,15 +648,15 @@ async function redo() {
 }
 
 .dca-secret-banner.protected {
-  border-color: rgb(239 189 85 / 40%);
-  background: rgb(239 189 85 / 9%);
-  color: #efd18a;
+  border-color: color-mix(in srgb, var(--dca-warning) 40%, transparent);
+  background: var(--dca-warning-soft);
+  color: var(--dca-warning);
 }
 
 .dca-secret-banner.warning {
-  border-color: rgb(224 108 130 / 45%);
+  border-color: color-mix(in srgb, var(--dca-danger) 45%, transparent);
   background: var(--dca-danger-soft);
-  color: #f2a3b3;
+  color: var(--dca-danger);
 }
 
 .dca-file-preview {
@@ -728,7 +735,7 @@ async function redo() {
 }
 
 .dca-diff-item.danger {
-  border-color: rgb(224 108 130 / 45%);
+  border-color: color-mix(in srgb, var(--dca-danger) 45%, transparent);
 }
 
 .dca-diff-item > header {
@@ -755,7 +762,7 @@ async function redo() {
   border-radius: var(--dca-radius-sm);
   padding: 0.1rem 0.45rem;
   background: var(--dca-danger-soft);
-  color: #f2a3b3;
+  color: var(--dca-danger);
   font-size: 0.72rem;
 }
 
@@ -824,7 +831,7 @@ async function redo() {
   top: 0;
   bottom: 0;
   width: 2px;
-  background: rgb(255 255 255 / 70%);
+  background: color-mix(in srgb, var(--dca-text) 70%, transparent);
 }
 
 .dca-metric-grid {

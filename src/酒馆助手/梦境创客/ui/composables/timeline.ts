@@ -41,6 +41,25 @@ function runDisplayStatus(
   return 'completed';
 }
 
+function runDuration(
+  user: SessionUiItem | undefined,
+  items: SessionUiItem[],
+  activeStillRunning: boolean,
+  now: number,
+): number {
+  if (user?.durationMs !== undefined) return user.durationMs;
+  const startedAt = user?.at ?? items[0]?.at ?? now;
+  if (activeStillRunning) return Math.max(0, now - startedAt);
+
+  // 旧版本没有持久化整轮 durationMs。已完成轮次绝不能以“现在”作为结束点，
+  // 否则每次打开历史都会继续变长；用该轮最后一个可见事件（含片段自身耗时）兼容估算。
+  const endedAt = Math.max(
+    startedAt,
+    ...items.map(item => item.at + Math.max(0, item.durationMs ?? 0)),
+  );
+  return Math.max(0, endedAt - startedAt);
+}
+
 export function buildTimelineBlocks(
   ui: SessionUiItem[],
   activeStatus: string | undefined,
@@ -76,9 +95,12 @@ export function buildTimelineBlocks(
     if (runItems?.some(candidate => candidate.id === item.id)) {
       if (insertedRuns.has(checkpointId!)) continue;
       insertedRuns.add(checkpointId!);
-      const user = byCheckpoint.get(checkpointId!)?.find(candidate => candidate.kind === 'user');
+      const checkpointItems = byCheckpoint.get(checkpointId!) ?? runItems;
+      const user = checkpointItems.find(candidate => candidate.kind === 'user');
+      const activeStillRunning =
+        checkpointId === lastCheckpointId && ['running', 'waiting-approval'].includes(activeStatus ?? '');
       blocks.push({
-        durationMs: user?.durationMs ?? Math.max(0, now - (user?.at ?? item.at)),
+        durationMs: runDuration(user, checkpointItems, activeStillRunning, now),
         id: `run:${checkpointId}`,
         items: runItems,
         status: runDisplayStatus(user, checkpointId === lastCheckpointId, activeStatus),

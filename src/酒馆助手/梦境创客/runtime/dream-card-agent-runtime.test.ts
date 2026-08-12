@@ -343,6 +343,8 @@ describe('DreamCardAgentRuntime', () => {
     await runtime.createSession();
     expect((await runtime.send('请补全角色的背景故事与动机')).title).toBe('请补全角色的背景故事');
     expect((await runtime.renameSession('  我的角色创作  ')).title).toBe('我的角色创作');
+    expect(runtime.snapshot().sessions[0]?.title).toBe('我的角色创作');
+    expect(runtime.snapshot().characterGroups[0]?.sessions[0]?.title).toBe('我的角色创作');
     runtime.destroy();
   });
 
