@@ -134,7 +134,8 @@ function scheduleTimelineTail() {
 }
 
 function isRunCollapsed(block: RunTimelineBlock): boolean {
-  if (block.items.some(item => item.toolCallId === activeToolConfirmation.value?.toolCallId)) return false;
+  const activeToolCallId = activeToolConfirmation.value?.toolCallId;
+  if (activeToolCallId && block.items.some(item => item.toolCallId === activeToolCallId)) return false;
   return runCollapseOverrides[block.id] ?? defaultRunCollapsed(block);
 }
 

@@ -21,6 +21,68 @@ afterEach(() => {
 });
 
 describe('SessionTimeline', () => {
+  it('没有待审批工具时允许反复展开和收起已完成的运行块', async () => {
+    runtimeMock.context = {
+      action: async () => true,
+      runtime: {},
+      state: shallowRef({
+        active: {
+          approval: undefined,
+          events: [],
+          sessionId: 'session:collapse',
+          status: 'completed',
+          ui: [
+            {
+              at: 1,
+              checkpointId: 'checkpoint:collapse',
+              content: '执行任务',
+              id: 'user:collapse',
+              kind: 'user',
+            },
+            {
+              at: 2,
+              checkpointId: 'checkpoint:collapse',
+              content: '处理中',
+              id: 'assistant:collapse',
+              kind: 'assistant',
+              status: 'completed',
+            },
+            {
+              at: 3,
+              checkpointId: 'checkpoint:collapse',
+              content: '{}',
+              id: 'tool:collapse',
+              kind: 'tool',
+              status: 'completed',
+              toolCallId: 'call:collapse',
+              toolName: 'list_directory',
+            },
+          ],
+        },
+        activeSessionAccess: 'live',
+        busy: false,
+        toolConfirmation: undefined,
+      }),
+    };
+    const root = document.createElement('div');
+    document.body.append(root);
+    const app = createApp(SessionTimeline);
+    app.mount(root);
+    mounted = { root, unmount: () => app.unmount() };
+
+    const summary = root.querySelector<HTMLButtonElement>('.dca-run-summary')!;
+    const content = root.querySelector<HTMLElement>('.dca-run-content')!;
+    expect(content.style.display).toBe('none');
+
+    summary.click();
+    await nextTick();
+    expect(content.style.display).not.toBe('none');
+
+    summary.click();
+    await nextTick();
+    expect(content.style.display).toBe('none');
+  });
+
   it('运行期间没有流式更新也持续刷新计时，并隐藏中途助手署名', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
