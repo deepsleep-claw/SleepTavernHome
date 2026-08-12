@@ -163,8 +163,16 @@ export async function readTavernState(bridge: TavernBridge): Promise<TavernState
   const bindings = bridge.getCharacterBindings();
   const chat = bridge.getChatWorldbook();
   const globalNames = bridge.getGlobalWorldbooks();
-  const allNames = [...new Set([bindings.primary, ...bindings.additional, chat, ...globalNames].filter((item): item is string => Boolean(item)))];
   const storedBookIds = parseWorldbookIds(extension.worldbooks);
+  const availableNames = new Set(bridge.getWorldbookNames());
+  const storedNames = [...storedBookIds.keys()].filter(worldbookName => availableNames.has(worldbookName));
+  const allNames = [
+    ...new Set(
+      [bindings.primary, ...bindings.additional, chat, ...storedNames, ...globalNames].filter(
+        (item): item is string => Boolean(item),
+      ),
+    ),
+  ];
   const worldbooks = await Promise.all(
     allNames.map(async worldbookName => {
       const id = storedBookIds.get(worldbookName) ?? `worldbook:${await shortHash(worldbookName)}`;

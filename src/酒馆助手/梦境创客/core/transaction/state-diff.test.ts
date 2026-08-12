@@ -25,6 +25,7 @@ describe('semantic state diff', () => {
     working.worldbooks[0].entries.reverse();
     working.bindings.primary = '重命名世界书';
     const operations = diffCardStates(base, working);
+    expect(operations.some(item => item.path === '/character/extensions/card_agent')).toBe(false);
     expect(operations.map(item => item.path)).toEqual(
       expect.arrayContaining([
         '/character/fields/description',
@@ -37,7 +38,9 @@ describe('semantic state diff', () => {
         '/bindings/primary',
       ]),
     );
-    expect(applyStateOperations(base, operations)).toEqual(working);
+    const replayed = applyStateOperations(base, operations);
+    replayed.character.extensions.card_agent = klona(working.character.extensions.card_agent);
+    expect(replayed).toEqual(working);
     expect(readStatePath(working, '/worldbooks/book~11/entries/entry-1')).toMatchObject({ content: 'edited entry' });
   });
 
@@ -59,7 +62,9 @@ describe('semantic state diff', () => {
     const operations = diffCardStates(base, working);
     expect(operations.some(item => item.kind === 'create')).toBe(true);
     expect(operations.some(item => item.kind === 'delete')).toBe(true);
-    expect(applyStateOperations(base, operations)).toEqual(working);
+    const replayed = applyStateOperations(base, operations);
+    replayed.character.extensions.card_agent = klona(working.character.extensions.card_agent);
+    expect(replayed).toEqual(working);
     expect(readStatePath(working, '/unknown')).toBeUndefined();
   });
 
@@ -152,7 +157,9 @@ describe('semantic state diff', () => {
         '/resources/scripts/character/items/script:s1/content',
       ]),
     );
-    expect(applyStateOperations(base, operations)).toEqual(working);
+    const replayed = applyStateOperations(base, operations);
+    replayed.character.extensions.card_agent = klona(working.character.extensions.card_agent);
+    expect(replayed).toEqual(working);
   });
 
   it('读取并应用全部语义路径分支', () => {

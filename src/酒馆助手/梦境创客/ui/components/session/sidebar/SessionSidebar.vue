@@ -142,6 +142,16 @@
             <pre>{{ pretty(conflictByPath(change.path)?.agent) }}</pre>
           </details>
         </div>
+        <div v-else class="dca-change-stack">
+          <details v-if="change.before !== undefined" open>
+            <summary>{{ change.after === undefined ? '将删除的内容' : '修改前' }}</summary>
+            <pre>{{ diffValue(change.before) }}</pre>
+          </details>
+          <details v-if="change.after !== undefined" open>
+            <summary>{{ change.before === undefined ? '新增内容' : '修改后' }}</summary>
+            <pre>{{ diffValue(change.after) }}</pre>
+          </details>
+        </div>
       </article>
     </section>
 
@@ -307,6 +317,14 @@ const approvalChanges = computed(() => [
   ...(state.value.active?.approval?.skillChanges ?? []),
 ]);
 const changeCount = computed(() => approvalChanges.value.length);
+
+function diffValue(value: unknown): string {
+  if (typeof value === 'object' && value !== null && 'content' in value) {
+    const content = (value as { content?: unknown }).content;
+    if (typeof content === 'string') return content;
+  }
+  return pretty(value);
+}
 
 watch(selectedFile, file => {
   fileDraft.value = file?.content ?? '';
@@ -746,6 +764,37 @@ async function redo() {
   flex-direction: column;
   gap: 0.35rem;
   margin-top: 0.45rem;
+}
+
+.dca-change-stack {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+}
+
+.dca-change-stack details {
+  min-width: 0;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-sm);
+  background: var(--dca-canvas);
+}
+
+.dca-change-stack summary {
+  padding: 0.35rem 0.45rem;
+  color: var(--dca-text-secondary);
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.dca-change-stack pre {
+  max-height: 22rem;
+  margin: 0;
+  overflow: auto;
+  border-top: 1px solid var(--dca-border);
+  padding: 0.5rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .dca-conflict-stack details {

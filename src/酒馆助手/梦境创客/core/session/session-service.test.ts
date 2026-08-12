@@ -718,7 +718,7 @@ describe('card agent session service', () => {
     ).toMatchObject({ content: '字'.repeat(200), status: 'running' });
 
     finish();
-    expect((await running).status).toBe('awaiting-approval');
+    expect((await running).status).toBe('completed');
     expect(onUpdate.mock.calls.length).toBeGreaterThan(updatesBeforeStreamingPublish + 1);
   });
 
@@ -816,8 +816,9 @@ describe('card agent session service', () => {
     });
     const waiting = await service.send('修改');
     const result = await service.approve({ '/character/fields/description': 'agent' });
-    expect(result.status).toBe('failed');
+    expect(result.status).toBe('awaiting-approval');
     expect(result.error).toContain('Fault adapter');
+    expect(result.approval?.error).toContain('Fault adapter');
     expect(result.approval).toBeDefined();
     expect((await adapter.read()).character.fields.description).toBe('base description');
     expect(waiting.status).toBe('awaiting-approval');

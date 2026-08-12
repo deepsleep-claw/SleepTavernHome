@@ -339,6 +339,54 @@ describe('card workspace mapper', () => {
     });
   });
 
+  it('允许用最小Frontmatter新建世界书条目', () => {
+    const base = state();
+    const files = projectCardWorkspace(base);
+    files.push({
+      content: serializeFrontmatter({ name: '角色秘密' }, '只有角色知道的秘密。'),
+      mediaType: 'text/markdown',
+      path: `/worldbooks/${encodeWorkspaceSegment('学院')}/entries/character-secret.md`,
+      readonly: false,
+      resourceId: 'entry-character-secret',
+    });
+
+    const created = materializeCardWorkspace(base, files).state.worldbooks
+      .find(book => book.resourceId === 'book-academy')
+      ?.entries.find(item => item.resourceId === 'entry-character-secret');
+
+    expect(created).toMatchObject({
+      content: '只有角色知道的秘密。',
+      effect: { cooldown: null, delay: null, sticky: null },
+      enabled: true,
+      extra: {},
+      name: '角色秘密',
+      position: { depth: 4, order: 101, role: 'system', type: 'before_character_definition' },
+      probability: 100,
+      recursion: { delay_until: null, prevent_incoming: false, prevent_outgoing: false },
+      strategy: {
+        keys: [],
+        keys_secondary: { keys: [], logic: 'and_any' },
+        scan_depth: 'same_as_global',
+        type: 'constant',
+      },
+      uid: 'temp:entry-character-secret',
+      unknownFields: {},
+    });
+  });
+
+  it('已有条目省略元数据块时继承Base，只修改正文', () => {
+    const base = state();
+    const files = projectCardWorkspace(base);
+    const entryFile = files.find(item => item.resourceId === 'entry-library')!;
+    entryFile.content = serializeFrontmatter({ name: '图书馆' }, '只修改正文。');
+
+    const updated = materializeCardWorkspace(base, files).state.worldbooks
+      .find(book => book.resourceId === 'book-academy')
+      ?.entries.find(item => item.resourceId === 'entry-library');
+
+    expect(updated).toEqual({ ...entry(), content: '只修改正文。' });
+  });
+
   it('缺少可选索引、作者与版本文件时使用稳定回退', async () => {
     const base = state();
     base.character.extensions = { foreign: true };

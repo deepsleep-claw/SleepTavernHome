@@ -30,7 +30,17 @@ export function transactionState(entryCount = 2): CardWorkspaceState {
       avatarId: 'avatar.png',
       bindingId: 'binding-1',
       creator: '作者',
-      extensions: { card_agent: { binding_id: 'binding-1' }, other: { keep: true } },
+      extensions: {
+        card_agent: {
+          binding_id: 'binding-1',
+          greetings: [
+            { id: 'greeting/1', name: '初见' },
+            { id: 'greeting-2', name: '重逢' },
+          ],
+          worldbooks: [{ id: 'book/1', name: '主世界书' }],
+        },
+        other: { keep: true },
+      },
       fields: {
         creator_notes: 'notes',
         description: 'base description',

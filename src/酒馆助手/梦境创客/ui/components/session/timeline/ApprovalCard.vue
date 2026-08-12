@@ -10,6 +10,13 @@
     <div v-for="warning in state.active.approval.warnings" :key="warning" class="dca-inline-warning">
       {{ warning }}
     </div>
+    <div v-if="state.active.approval.error" class="dca-approval-error" role="alert">
+      <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
+      <div>
+        <strong>应用失败，修改仍然保留</strong>
+        <span>{{ state.active.approval.error }}</span>
+      </div>
+    </div>
     <div
       v-for="change in approvalChanges"
       :key="change.path"
@@ -21,14 +28,16 @@
         <code>{{ change.path }}</code>
       </div>
       <label v-if="state.activeSessionAccess === 'live'"
-        ><input v-model="decisions[change.path]" type="radio" value="current" />保留当前</label
+        ><input v-model="decisions[change.path]" type="radio" value="agent" />接受修改</label
       >
       <label v-if="state.activeSessionAccess === 'live'"
-        ><input v-model="decisions[change.path]" type="radio" value="agent" />采用修改</label
+        ><input v-model="decisions[change.path]" type="radio" value="current" />拒绝修改</label
       >
     </div>
     <div v-if="state.activeSessionAccess === 'live'" class="dca-row-actions">
-      <button class="dca-btn-primary" type="button" :disabled="state.busy" @click="approve">提交已选修改</button>
+      <button class="dca-btn-primary" type="button" :disabled="state.busy" @click="approve">
+        {{ state.active.approval.error ? '重新应用已选修改' : '应用已选修改' }}
+      </button>
     </div>
     <div v-else class="dca-inline-warning">历史视图仅展示当时的待审批 Diff，不能重新提交。</div>
   </article>
@@ -56,9 +65,10 @@ watch(
   () => {
     Object.keys(decisions).forEach(key => delete decisions[key]);
     approvalChanges.value.forEach(change => {
-      decisions[change.path] = 'current';
+      decisions[change.path] = 'agent';
     });
   },
+  { immediate: true },
 );
 
 async function approve() {
@@ -127,6 +137,31 @@ async function approve() {
 .dca-inline-warning {
   margin: 0.45rem 0;
   color: var(--dca-warning);
+}
+
+.dca-approval-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  margin: 0.55rem 0;
+  border: 1px solid color-mix(in srgb, var(--dca-danger) 45%, transparent);
+  border-radius: var(--dca-radius-md);
+  padding: 0.55rem 0.65rem;
+  background: var(--dca-danger-soft);
+  color: var(--dca-danger);
+}
+
+.dca-approval-error > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.dca-approval-error span {
+  overflow-wrap: anywhere;
+  color: var(--dca-text-secondary);
+  font-size: 0.8rem;
 }
 
 .dca-approval-row {

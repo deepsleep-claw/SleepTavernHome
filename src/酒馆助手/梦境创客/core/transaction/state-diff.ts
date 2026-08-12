@@ -289,15 +289,6 @@ export function diffCardStates(before: CardWorkspaceState, after: CardWorkspaceS
       operation(`/character/${field}`, `修改角色${field}`, before.character[field], after.character[field]),
     );
   }
-  pushOperation(
-    result,
-    operation(
-      '/character/extensions/card_agent',
-      '更新梦境创客角色元数据',
-      before.character.extensions.card_agent,
-      after.character.extensions.card_agent,
-    ),
-  );
   diffIdentified(
     before.character.greetings,
     after.character.greetings,

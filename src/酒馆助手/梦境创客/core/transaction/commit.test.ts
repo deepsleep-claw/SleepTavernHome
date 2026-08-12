@@ -48,6 +48,48 @@ describe('transaction commit', () => {
     });
   });
 
+  it('派生元数据不参与审批，并且只反映最终接受的数据', async () => {
+    const base = transactionState();
+    base.character.extensions.card_agent = {
+      binding_id: base.character.bindingId,
+      greetings: base.character.greetings.map(({ id, name }) => ({ id, name })),
+      keep: 'unknown',
+      worldbooks: base.worldbooks.map(({ name, resourceId }) => ({ id: resourceId, name })),
+    };
+    const working = klona(base);
+    working.character.greetings[0].name = '拒绝的新名称';
+    working.worldbooks.push({
+      entries: [],
+      name: '接受的新世界书',
+      resourceId: 'new-book',
+      roundTripSafe: true,
+      unknownFields: {},
+      writable: true,
+    });
+    const adapter = new MemoryCardStateAdapter(base);
+    const changes = diffCardStates(base, working);
+
+    expect(changes.some(change => change.path === '/character/extensions/card_agent')).toBe(false);
+    const result = await commitWorkingCopy({
+      adapter,
+      base,
+      decisions: {
+        '/character/greetings/greeting~11': 'current',
+        '/worldbooks/new-book': 'agent',
+      },
+      working,
+    });
+
+    expect(result.status).toBe('committed');
+    const state = await adapter.read();
+    expect(state.character.extensions.card_agent).toMatchObject({
+      greetings: expect.arrayContaining([{ id: 'greeting/1', name: '初见' }]),
+      keep: 'unknown',
+      worldbooks: expect.arrayContaining([{ id: 'new-book', name: '接受的新世界书' }]),
+    });
+    expect(adapter.applied.at(-1)?.path).toBe('/character/extensions/card_agent');
+  });
+
   it('中途失败时逆序回滚已写资源', async () => {
     const base = transactionState();
     const working = klona(base);

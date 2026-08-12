@@ -228,79 +228,182 @@ function asRecord(value: unknown, label: string, path: string): Record<string, u
   return value as Record<string, unknown>;
 }
 
+function optionalRecord(value: unknown, label: string, path: string): Record<string, unknown> {
+  return value === undefined ? {} : asRecord(value, label, path);
+}
+
+function parseKeywordArray(
+  value: unknown,
+  fallback: WorldbookEntryData['strategy']['keys'],
+  label: string,
+  path: string,
+): WorldbookEntryData['strategy']['keys'] {
+  if (value === undefined) {
+    return klona(fallback);
+  }
+  if (!Array.isArray(value)) {
+    throw new WorkspaceError('INVALID_PATCH', `${label}必须是数组：${path}`, path);
+  }
+  return value.map(item => parseKeyword(item, path));
+}
+
+function entryNameFromPath(path: string): string {
+  return workspaceBasename(path).replace(/\.md$/u, '') || '新条目';
+}
+
+function whenMissing(value: unknown, fallback: unknown): unknown {
+  return value === undefined ? fallback : value;
+}
+
+/**
+ * `extensions.card_agent` 是由梦境创客维护的派生索引，不属于 Agent 可编辑的工作区内容。
+ * 每次只覆盖本脚本拥有的键，其余扩展字段必须原样保留。
+ */
+export function synchronizeCardAgentMetadata(state: CardWorkspaceState): void {
+  const current = state.character.extensions.card_agent;
+  const preserved = typeof current === 'object' && current !== null && !Array.isArray(current) ? klona(current) : {};
+  state.character.extensions.card_agent = {
+    ...preserved,
+    binding_id: state.character.bindingId,
+    greetings: state.character.greetings.map(({ id, name }) => ({ id, name })),
+    worldbooks: state.worldbooks.map(({ name, resourceId }) => ({ id: resourceId, name })),
+  };
+}
+
 function findBaseEntry(base: CardWorkspaceState, resourceId: string): WorldbookEntryData | undefined {
   return base.worldbooks.flatMap(book => book.entries).find(entry => entry.resourceId === resourceId);
 }
 
-function parseEntry(input: WorkspaceFile, base: CardWorkspaceState): WorldbookEntryData {
+function parseEntry(input: WorkspaceFile, base: CardWorkspaceState, entryIndex: number): WorldbookEntryData {
   const { body, metadata } = parseFrontmatter(input.content, input.path);
-  const strategy = asRecord(metadata.strategy, 'strategy', input.path);
-  const secondary = asRecord(strategy.keys_secondary, 'strategy.keys_secondary', input.path);
-  const position = asRecord(metadata.position, 'position', input.path);
-  const recursion = asRecord(metadata.recursion, 'recursion', input.path);
-  const effect = asRecord(metadata.effect, 'effect', input.path);
-  const keys = Array.isArray(strategy.keys) ? strategy.keys.map(value => parseKeyword(value, input.path)) : undefined;
-  const secondaryKeys = Array.isArray(secondary.keys)
-    ? secondary.keys.map(value => parseKeyword(value, input.path))
-    : undefined;
-  if (!keys || !secondaryKeys) {
-    throw new WorkspaceError('INVALID_PATCH', `世界书关键字必须是数组：${input.path}`, input.path);
-  }
   const baseEntry = findBaseEntry(base, input.resourceId);
+  // 投影会写出完整元数据，但 AI 新建条目时只要求 Frontmatter 存在。
+  // 缺省字段对已有条目继承 Base，对新条目使用酒馆的安全常用值；显式提供的非法类型仍严格报错。
+  const strategy = optionalRecord(metadata.strategy, 'strategy', input.path);
+  const secondary = optionalRecord(strategy.keys_secondary, 'strategy.keys_secondary', input.path);
+  const position = optionalRecord(metadata.position, 'position', input.path);
+  const recursion = optionalRecord(metadata.recursion, 'recursion', input.path);
+  const effect = optionalRecord(metadata.effect, 'effect', input.path);
+  const keys = parseKeywordArray(strategy.keys, baseEntry?.strategy.keys ?? [], 'strategy.keys', input.path);
+  const secondaryKeys = parseKeywordArray(
+    secondary.keys,
+    baseEntry?.strategy.keys_secondary.keys ?? [],
+    'strategy.keys_secondary.keys',
+    input.path,
+  );
   const rawUid = metadata.uid;
-  const uid = typeof rawUid === 'number' ? rawUid : `temp:${input.resourceId}` as const;
+  const uid = typeof rawUid === 'number' ? rawUid : (baseEntry?.uid ?? (`temp:${input.resourceId}` as const));
   return {
     ...(baseEntry ? klona(baseEntry) : {}),
     content: body,
     effect: {
-      cooldown: optionalNullableNumber(effect.cooldown, 'effect.cooldown', input.path),
-      delay: optionalNullableNumber(effect.delay, 'effect.delay', input.path),
-      sticky: optionalNullableNumber(effect.sticky, 'effect.sticky', input.path),
+      cooldown: optionalNullableNumber(
+        whenMissing(effect.cooldown, baseEntry?.effect.cooldown ?? null),
+        'effect.cooldown',
+        input.path,
+      ),
+      delay: optionalNullableNumber(
+        whenMissing(effect.delay, baseEntry?.effect.delay ?? null),
+        'effect.delay',
+        input.path,
+      ),
+      sticky: optionalNullableNumber(
+        whenMissing(effect.sticky, baseEntry?.effect.sticky ?? null),
+        'effect.sticky',
+        input.path,
+      ),
     },
-    enabled: requiredBoolean(metadata.enabled, 'enabled', input.path),
-    extra: asRecord(metadata.extra ?? {}, 'extra', input.path),
-    name: requiredString(metadata.name, 'name', input.path),
+    enabled: requiredBoolean(whenMissing(metadata.enabled, baseEntry?.enabled ?? true), 'enabled', input.path),
+    extra: asRecord(whenMissing(metadata.extra, baseEntry?.extra ?? {}), 'extra', input.path),
+    name: requiredString(
+      whenMissing(metadata.name, baseEntry?.name ?? entryNameFromPath(input.path)),
+      'name',
+      input.path,
+    ),
     position: {
-      depth: requiredNumber(position.depth, 'position.depth', input.path),
-      order: requiredNumber(position.order, 'position.order', input.path),
-      role: requiredOneOf(position.role, 'position.role', input.path, ['assistant', 'system', 'user']),
-      type: requiredOneOf(position.type, 'position.type', input.path, [
-        'after_author_note',
-        'after_character_definition',
-        'after_example_messages',
-        'at_depth',
-        'before_author_note',
-        'before_character_definition',
-        'before_example_messages',
-        'outlet',
+      depth: requiredNumber(whenMissing(position.depth, baseEntry?.position.depth ?? 4), 'position.depth', input.path),
+      order: requiredNumber(
+        whenMissing(position.order, baseEntry?.position.order ?? 100 + entryIndex),
+        'position.order',
+        input.path,
+      ),
+      role: requiredOneOf(whenMissing(position.role, baseEntry?.position.role ?? 'system'), 'position.role', input.path, [
+        'assistant',
+        'system',
+        'user',
       ]),
+      type: requiredOneOf(
+        whenMissing(position.type, baseEntry?.position.type ?? 'before_character_definition'),
+        'position.type',
+        input.path,
+        [
+          'after_author_note',
+          'after_character_definition',
+          'after_example_messages',
+          'at_depth',
+          'before_author_note',
+          'before_character_definition',
+          'before_example_messages',
+          'outlet',
+        ],
+      ),
     },
-    probability: requiredRange(metadata.probability, 'probability', input.path, 0, 100),
+    probability: requiredRange(
+      whenMissing(metadata.probability, baseEntry?.probability ?? 100),
+      'probability',
+      input.path,
+      0,
+      100,
+    ),
     recursion: {
-      delay_until: optionalNullableNumber(recursion.delay_until, 'recursion.delay_until', input.path),
-      prevent_incoming: requiredBoolean(recursion.prevent_incoming, 'recursion.prevent_incoming', input.path),
-      prevent_outgoing: requiredBoolean(recursion.prevent_outgoing, 'recursion.prevent_outgoing', input.path),
+      delay_until: optionalNullableNumber(
+        whenMissing(recursion.delay_until, baseEntry?.recursion.delay_until ?? null),
+        'recursion.delay_until',
+        input.path,
+      ),
+      prevent_incoming: requiredBoolean(
+        whenMissing(recursion.prevent_incoming, baseEntry?.recursion.prevent_incoming ?? false),
+        'recursion.prevent_incoming',
+        input.path,
+      ),
+      prevent_outgoing: requiredBoolean(
+        whenMissing(recursion.prevent_outgoing, baseEntry?.recursion.prevent_outgoing ?? false),
+        'recursion.prevent_outgoing',
+        input.path,
+      ),
     },
     resourceId: input.resourceId,
     strategy: {
       keys,
       keys_secondary: {
         keys: secondaryKeys,
-        logic: requiredOneOf(secondary.logic, 'strategy.keys_secondary.logic', input.path, [
-          'and_all',
-          'and_any',
-          'not_all',
-          'not_any',
-        ]),
+        logic: requiredOneOf(
+          whenMissing(secondary.logic, baseEntry?.strategy.keys_secondary.logic ?? 'and_any'),
+          'strategy.keys_secondary.logic',
+          input.path,
+          ['and_all', 'and_any', 'not_all', 'not_any'],
+        ),
       },
-      scan_depth:
-        strategy.scan_depth === 'same_as_global'
+      scan_depth: whenMissing(strategy.scan_depth, baseEntry?.strategy.scan_depth ?? 'same_as_global') === 'same_as_global'
           ? 'same_as_global'
-          : requiredNumber(strategy.scan_depth, 'strategy.scan_depth', input.path),
-      type: requiredOneOf(strategy.type, 'strategy.type', input.path, ['constant', 'selective', 'vectorized']),
+          : requiredNumber(
+              whenMissing(strategy.scan_depth, baseEntry?.strategy.scan_depth),
+              'strategy.scan_depth',
+              input.path,
+            ),
+      type: requiredOneOf(
+        whenMissing(strategy.type, baseEntry?.strategy.type ?? (keys.length > 0 ? 'selective' : 'constant')),
+        'strategy.type',
+        input.path,
+        ['constant', 'selective', 'vectorized'],
+      ),
     },
     uid,
-    unknownFields: asRecord(metadata.unknown_fields ?? baseEntry?.unknownFields ?? {}, 'unknown_fields', input.path),
+    unknownFields: asRecord(
+      whenMissing(metadata.unknown_fields, baseEntry?.unknownFields ?? {}),
+      'unknown_fields',
+      input.path,
+    ),
   };
 }
 
@@ -364,7 +467,7 @@ function materializeBooks(base: CardWorkspaceState, files: Map<string, Workspace
     const entries = [...files.values()]
       .filter(item => parentWorkspacePath(item.path) === `${directory}/entries` && item.path.endsWith('.md'))
       .sort((left, right) => left.path.localeCompare(right.path))
-      .map(item => parseEntry(item, base));
+      .map((item, index) => parseEntry(item, base, index));
     result.push({
       entries,
       name,
@@ -447,12 +550,6 @@ export function materializeCardWorkspace(
   state.character.greetings = materializeGreetings(base, files, warnings);
   state.character.extensions = klona(base.character.extensions);
   const books = materializeBooks(base, files);
-  state.character.extensions.card_agent = {
-    ...asRecord(state.character.extensions.card_agent ?? {}, 'extensions.card_agent', '/character'),
-    binding_id: state.character.bindingId,
-    greetings: state.character.greetings.map(({ id, name }) => ({ id, name })),
-    worldbooks: books.map(({ name, resourceId }) => ({ id: resourceId, name })),
-  };
   const bindingsFile = files.get('/worldbooks/bindings.yaml');
   if (!bindingsFile) {
     throw new WorkspaceError('NOT_FOUND', 'worldbooks/bindings.yaml不能删除。', '/worldbooks/bindings.yaml');
@@ -470,5 +567,6 @@ export function materializeCardWorkspace(
   state.bindings = removeDanglingBindings(rewriteBindingNames(parsedBindings, base, books), books, warnings);
   state.resources = materializeTavernResources(base, files.values());
   state.worldbooks = books;
+  synchronizeCardAgentMetadata(state);
   return { state, warnings };
 }

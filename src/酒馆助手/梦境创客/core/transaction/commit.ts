@@ -1,4 +1,5 @@
 import type { CardWorkspaceState } from '../mapping/types';
+import { synchronizeCardAgentMetadata } from '../mapping/card-workspace-mapper';
 import type { CardStateAdapter } from './adapter';
 import { canonicalEqual } from './canonical';
 import { prepareThreeWayMerge, resolveMerge, type ApprovalDecision, type MergePreparation } from './merge';
@@ -9,12 +10,28 @@ export type CommitResult =
   | { error: Error; preparation: MergePreparation; rollbackError?: Error; state: CardWorkspaceState; status: 'rolled-back' };
 
 function operationRank(operation: StateOperation): number {
-  if (operation.path.startsWith('/character/fields') || operation.path.startsWith('/character/extensions')) return 0;
+  if (operation.path.startsWith('/character/fields')) return 0;
   if (operation.path.startsWith('/character/greetings') || operation.path === '/character/creator' || operation.path === '/character/version' || operation.path === '/character/tags') return 1;
   if (operation.path.startsWith('/worldbooks')) return 2;
   if (operation.path.startsWith('/resources')) return 3;
   if (operation.path.startsWith('/bindings')) return 4;
+  if (operation.path === '/character/extensions/card_agent') return 5;
   return 5;
+}
+
+function derivedMetadataOperation(current: CardWorkspaceState, resolved: CardWorkspaceState): StateOperation | undefined {
+  const before = current.character.extensions.card_agent;
+  synchronizeCardAgentMetadata(resolved);
+  const after = resolved.character.extensions.card_agent;
+  if (canonicalEqual(before, after)) return undefined;
+  return {
+    after,
+    before,
+    highRisk: false,
+    kind: before === undefined ? 'create' : 'modify',
+    label: '同步梦境创客角色元数据',
+    path: '/character/extensions/card_agent',
+  };
 }
 
 function inverse(operation: StateOperation): StateOperation {
@@ -57,11 +74,15 @@ export async function commitWorkingCopy(options: {
   adapter: CardStateAdapter;
   base: CardWorkspaceState;
   decisions: Record<string, ApprovalDecision>;
+  metadataBindingId?: string;
   working: CardWorkspaceState;
 }): Promise<CommitResult> {
   const current = await options.adapter.read();
   const preparation = prepareThreeWayMerge(options.base, options.working, current);
   const resolved = resolveMerge(current, preparation, options.decisions);
+  if (options.metadataBindingId) resolved.state.character.bindingId = options.metadataBindingId;
+  const metadataOperation = derivedMetadataOperation(current, resolved.state);
+  if (metadataOperation) resolved.operations.push(metadataOperation);
   const operations = [...resolved.operations].sort(
     (left, right) =>
       operationRank(left) - operationRank(right) ||

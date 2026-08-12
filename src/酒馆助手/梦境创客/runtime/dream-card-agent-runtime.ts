@@ -57,7 +57,6 @@ import { createGlobalTavernChatBridge, type TavernChatBridge } from '../core/tav
 import { ProductionCardStateAdapter } from '../core/tavern/production-adapter';
 import type { CardStateAdapter } from '../core/transaction/adapter';
 import { commitWorkingCopy } from '../core/transaction/commit';
-import { diffCardStates } from '../core/transaction/state-diff';
 import type { WorkspaceFile } from '../core/workspace/types';
 
 export type DreamCardAgentRuntimeState = {
@@ -1027,12 +1026,11 @@ export class DreamCardAgentRuntime {
     const target = klona(current);
     if (collision) target.character.bindingId = `binding:${crypto.randomUUID()}`;
     const materialized = materializeCardWorkspace(target, projectCardWorkspace(target)).state;
-    const operations = diffCardStates(current, materialized);
-    if (operations.length === 0) return current;
     const result = await commitWorkingCopy({
       adapter,
       base: current,
-      decisions: Object.fromEntries(operations.map(operation => [operation.path, 'agent'])),
+      decisions: {},
+      metadataBindingId: materialized.character.bindingId,
       working: materialized,
     });
     if (result.status === 'rolled-back') throw result.error;

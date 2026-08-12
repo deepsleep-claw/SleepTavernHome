@@ -75,6 +75,7 @@ export type SkillChange = {
 export type SessionApproval = {
   candidateSnapshot: string;
   conflicts: MergeConflict[];
+  error?: string;
   fileChanges: WorkspaceApprovalChange[];
   skillChanges: SkillChange[];
   stateChanges: StateOperation[];

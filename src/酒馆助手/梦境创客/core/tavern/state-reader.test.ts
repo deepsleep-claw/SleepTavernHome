@@ -65,6 +65,20 @@ describe('readTavernState', () => {
     expect(first.state.character.greetings.map(item => item.name)).toEqual(['默认开场白', '开场白 2']);
   });
 
+  it('通过角色元数据回读尚未绑定但由梦境创客创建的世界书', async () => {
+    const bridge = new FakeTavernBridge();
+    bridge.books.set('未绑定新书', []);
+    const cardAgent = bridge.raw!.data.extensions!.card_agent as { worldbooks: Array<{ id: string; name: string }> };
+    cardAgent.worldbooks.push({ id: 'book-unbound', name: '未绑定新书' });
+
+    const result = await readTavernState(bridge);
+
+    expect(result.state.worldbooks.find(book => book.name === '未绑定新书')).toMatchObject({
+      resourceId: 'book-unbound',
+      writable: true,
+    });
+  });
+
   it('把无法读取的全局世界书降级为只读并给出警告', async () => {
     const bridge = new FakeTavernBridge();
     bridge.globalWorldbooks = ['损坏书'];

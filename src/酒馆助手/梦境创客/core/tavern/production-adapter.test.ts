@@ -78,6 +78,44 @@ describe('ProductionCardStateAdapter', () => {
     expect(bridge.books.has('空书')).toBe(false);
   });
 
+  it('事务创建未绑定世界书后同步元数据并通过最终回读校验', async () => {
+    const bridge = new FakeTavernBridge();
+    const adapter = new ProductionCardStateAdapter(bridge);
+    const base = await adapter.read();
+    const working = klona(base);
+    working.worldbooks.push({
+      entries: [
+        {
+          ...klona(base.worldbooks[0].entries[0]),
+          name: '新条目',
+          resourceId: 'new-entry',
+          uid: 'temp:new-entry',
+        },
+      ],
+      name: '未绑定新书',
+      resourceId: 'new-book',
+      roundTripSafe: true,
+      unknownFields: {},
+      writable: true,
+    });
+    const changes = diffCardStates(base, working);
+    const result = await commitWorkingCopy({
+      adapter,
+      base,
+      decisions: Object.fromEntries(changes.map(change => [change.path, 'agent' as const])),
+      working,
+    });
+
+    expect(result.status).toBe('committed');
+    expect(bridge.bindings).toEqual({ additional: [], primary: '主世界书' });
+    expect(bridge.raw?.data.extensions?.card_agent).toMatchObject({
+      worldbooks: expect.arrayContaining([{ id: 'new-book', name: '未绑定新书' }]),
+    });
+    if (result.status === 'committed') {
+      expect(result.state.worldbooks.find(book => book.resourceId === 'new-book')?.entries[0].uid).toBe(100);
+    }
+  });
+
   it('覆盖角色元数据、空开场白和世界书元数据/排序分支', async () => {
     const bridge = new FakeTavernBridge();
     const adapter = new ProductionCardStateAdapter(bridge);

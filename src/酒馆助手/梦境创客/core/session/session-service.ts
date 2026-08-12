@@ -404,6 +404,7 @@ export class CardAgentSessionService {
       ? {
           candidateSnapshot: this.pending.candidateSnapshot,
           conflicts: klona(this.pending.preparation.conflicts),
+          error: this.lastError,
           fileChanges: klona(this.pending.fileChanges),
           skillChanges: klona(this.pending.skillChanges),
           stateChanges: klona(
@@ -1283,10 +1284,12 @@ export class CardAgentSessionService {
     if (conflictsChanged(pending, latest)) {
       pending.preparation = latest;
       this.status = 'awaiting-approval';
+      this.lastError = undefined;
       this.warnings = ['批准期间酒馆数据再次变化，请重新检查冲突。'];
       return;
     }
     this.status = 'committing';
+    this.lastError = undefined;
     this.notify();
     const result = await commitWorkingCopy({
       adapter: this.adapter,
@@ -1306,7 +1309,7 @@ export class CardAgentSessionService {
         this.rebaseActiveRepository(rebased);
         this.finishMidRunCheckpoint(false);
       } else {
-        this.status = 'failed';
+        this.status = 'awaiting-approval';
       }
       return;
     }
@@ -1337,7 +1340,7 @@ export class CardAgentSessionService {
           this.rebaseActiveRepository(rebased);
           this.finishMidRunCheckpoint(false);
         } else {
-          this.status = 'failed';
+          this.status = 'awaiting-approval';
         }
         return;
       }
