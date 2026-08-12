@@ -6,9 +6,9 @@ import { dreamCreatorFileReference } from '../session/attachments';
 import type { TavernChatWorkspace } from '../tavern/chat-workspace';
 import { parentWorkspacePath } from '../workspace/path';
 import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
-import { applyUnifiedPatch } from '../workspace/unified-patch';
+import { applyUnifiedPatch, createUnifiedPatch } from '../workspace/unified-patch';
 import { maskSecretsForModel, restoreSecretsFromModel } from '../workspace/secret-protection';
-import { isBinaryWorkspaceFile, type WorkspaceRepository } from '../workspace/types';
+import { isBinaryWorkspaceFile, WorkspaceError, type WorkspaceRepository } from '../workspace/types';
 import { richToolOutput } from './tool-output';
 
 export type ToolConfirmation = {
@@ -28,6 +28,18 @@ export type RunnerTool = {
 const pathSchema = z.string().min(1).describe('工作区内的POSIX路径');
 const DEFAULT_READ_LIMIT = 1_000;
 const MAX_READ_CHARACTERS = 100_000;
+
+function mutationSummary(repository: WorkspaceRepository, toolCallId: string) {
+  const result = repository.mutationResult?.(toolCallId);
+  return result
+    ? {
+        changedFiles: result.changes.length,
+        idempotent: result.idempotent ?? false,
+        status: result.status,
+        warning: result.warning,
+      }
+    : undefined;
+}
 
 function lineNumberedView(
   file: Awaited<ReturnType<WorkspaceRepository['read']>>,
@@ -259,10 +271,17 @@ export function createWorkspaceRunnerTools(
       },
       definition: tool({
         description: '新建或整体写入文本文件。已有长文件优先使用apply_patch。',
-        inputSchema: z.object({ content: z.string(), path: pathSchema }),
+        inputSchema: z.object({
+          content: z.string(),
+          overwrite: z
+            .boolean()
+            .optional()
+            .describe('默认false。仅在确认需要整体替换一个已有文件时显式设为true。'),
+          path: pathSchema,
+        }),
       }),
       execute: async (input, toolCallId) => {
-        const value = input as { content: string; path: string };
+        const value = input as { content: string; overwrite?: boolean; path: string };
         if (chatPath(value.path) && options.chatWorkspace) {
           options.chatWorkspace.authorizeRun();
           const result = await options.chatWorkspace.executeOnce(toolCallId, () =>
@@ -271,14 +290,29 @@ export function createWorkspaceRunnerTools(
           return { idempotent: !result.executed, path: value.path, written: true };
         }
         let current = '';
+        let exists = false;
         try {
           current = (await repository.read(value.path)).content;
-        } catch {
-          // 新文件没有可恢复的敏感占位符。
+          exists = true;
+        } catch (error) {
+          if (!(error instanceof WorkspaceError) || error.code !== 'NOT_FOUND') throw error;
+        }
+        if (exists && value.overwrite !== true) {
+          throw new WorkspaceError(
+            'ALREADY_EXISTS',
+            `文件已经存在：${value.path}。请使用apply_patch，或显式设置overwrite=true进行整体替换。`,
+            value.path,
+          );
         }
         const restored = await restoreSecretsFromModel(current, value.content, value.path);
-        await repository.write(value.path, restored.content, toolCallId);
-        return { path: value.path, secretProtectionWarning: restored.warning, written: true };
+        await repository.write(value.path, restored.content, toolCallId, { overwrite: value.overwrite });
+        return {
+          mutation: mutationSummary(repository, toolCallId),
+          overwritten: exists,
+          path: value.path,
+          secretProtectionWarning: restored.warning,
+          written: true,
+        };
       },
       name: 'write_file',
       readonly: false,
@@ -308,10 +342,16 @@ export function createWorkspaceRunnerTools(
         const current = await repository.read(value.path);
         if (isBinaryWorkspaceFile(current)) throw new Error(`二进制文件不能使用apply_patch：${current.path}`);
         const masked = await maskSecretsForModel(current.content, current.path);
-        const patched = applyUnifiedPatch(masked.maskedContent, value.patch);
+        const patched = applyUnifiedPatch(masked.maskedContent, value.patch, current.path);
         const restored = await restoreSecretsFromModel(current.content, patched, current.path);
-        await repository.write(current.path, restored.content, toolCallId);
-        return { patched: true, path: value.path, secretProtectionWarning: restored.warning };
+        const realPatch = createUnifiedPatch(current.path, current.content, restored.content);
+        await repository.patch(current.path, realPatch, toolCallId);
+        return {
+          mutation: mutationSummary(repository, toolCallId),
+          patched: true,
+          path: value.path,
+          secretProtectionWarning: restored.warning,
+        };
       },
       name: 'apply_patch',
       readonly: false,
@@ -335,7 +375,7 @@ export function createWorkspaceRunnerTools(
         options.chatWorkspace?.assertNoMoveOrDelete(value.from);
         options.chatWorkspace?.assertNoMoveOrDelete(value.to);
         await repository.move(value.from, value.to, toolCallId);
-        return { from: value.from, moved: true, to: value.to };
+        return { from: value.from, moved: true, mutation: mutationSummary(repository, toolCallId), to: value.to };
       },
       name: 'move_path',
       readonly: false,
@@ -356,7 +396,7 @@ export function createWorkspaceRunnerTools(
         const value = input as { path: string };
         options.chatWorkspace?.assertNoMoveOrDelete(value.path);
         await repository.remove(value.path, toolCallId);
-        return { deleted: true, path: value.path };
+        return { deleted: true, mutation: mutationSummary(repository, toolCallId), path: value.path };
       },
       name: 'delete_path',
       readonly: false,

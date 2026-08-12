@@ -874,7 +874,8 @@ export class CardAgentSessionService {
       readonlyRoots: ['/context', '/library', '/worldbooks-global-readonly', '/skills/builtin'],
     });
     const toolCallId = `manual:${crypto.randomUUID()}`;
-    if (input.kind === 'write') await manualRepository.write(input.path, input.content ?? '', toolCallId);
+    if (input.kind === 'write')
+      await manualRepository.write(input.path, input.content ?? '', toolCallId, { overwrite: true });
     else await manualRepository.remove(input.path, toolCallId);
     const materialized = materializeCardWorkspace(current, manualRepository.snapshot());
     const operations = diffCardStates(current, materialized.state);
@@ -904,7 +905,10 @@ export class CardAgentSessionService {
     await this.updateManualModelMessage(group);
     if (group.attachedToAgent) {
       if (!this.repository || !this.pending) throw new Error('Agent候选修改已丢失。');
-      if (input.kind === 'write') await this.repository.write(input.path, input.content ?? '', `manual-sync:${crypto.randomUUID()}`);
+      if (input.kind === 'write')
+        await this.repository.write(input.path, input.content ?? '', `manual-sync:${crypto.randomUUID()}`, {
+          overwrite: true,
+        });
       else {
         await this.repository.remove(input.path, `manual-sync:${crypto.randomUUID()}`).catch(() => undefined);
       }
@@ -951,7 +955,7 @@ export class CardAgentSessionService {
     const group = await this.ensureManualEditGroup(currentCard);
     const repository = new MemoryWorkspaceRepository({ files: this.storageFiles });
     const toolCallId = `manual-storage:${crypto.randomUUID()}`;
-    if (input.kind === 'write') await repository.write(input.path, input.content ?? '', toolCallId);
+    if (input.kind === 'write') await repository.write(input.path, input.content ?? '', toolCallId, { overwrite: true });
     else await repository.remove(input.path, toolCallId);
     const previous = group.files[input.path];
     group.files[input.path] = {

@@ -41,6 +41,28 @@ describe('workspace runner tools', () => {
     await expect(repository.read('/character/moved.md')).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
+  it('write_file默认拒绝覆盖，显式overwrite才整体替换', async () => {
+    const repository = new MemoryWorkspaceRepository({
+      files: [
+        {
+          content: '旧内容',
+          mediaType: 'text/markdown',
+          path: '/character/description.md',
+          readonly: false,
+          resourceId: 'description',
+        },
+      ],
+    });
+    const tools = new Map(createWorkspaceRunnerTools(repository).map(item => [item.name, item]));
+    await expect(
+      tools.get('write_file')!.execute({ content: '误覆盖', path: '/character/description.md' }, 'write-default'),
+    ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
+    await tools
+      .get('write_file')!
+      .execute({ content: '新内容', overwrite: true, path: '/character/description.md' }, 'write-overwrite');
+    expect((await repository.read('/character/description.md')).content).toBe('新内容');
+  });
+
   it('内置Skill禁止改写，已有用户Skill需要确认，新Skill无需确认', async () => {
     const repository = new MemoryWorkspaceRepository();
     const tools = new Map(createWorkspaceRunnerTools(repository, ['old']).map(item => [item.name, item]));
@@ -159,7 +181,7 @@ describe('workspace runner tools', () => {
     expect(
       await tools.get('write_file')!.confirmation?.({ content: 'return 1;', path: `${root}/script.js` }, 'edit-off'),
     ).toBeUndefined();
-    await repository.write(`${root}/info.yaml`, 'enabled: true\nname: test\n', 'set-enabled');
+    await repository.write(`${root}/info.yaml`, 'enabled: true\nname: test\n', 'set-enabled', { overwrite: true });
     expect(
       await tools.get('write_file')!.confirmation?.({ content: 'return 2;', path: `${root}/script.js` }, 'edit-on'),
     ).toBeDefined();

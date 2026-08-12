@@ -241,7 +241,7 @@ export function createWorldbookRunnerTools(
         if (Object.prototype.hasOwnProperty.call(value, 'characterPrimary')) {
           next.primary = value.characterPrimary === null ? null : normalizedName(value.characterPrimary!);
         }
-        await repository.write(bindingFile.path, serializeYaml(next), `${toolCallId}:bindings`);
+        await repository.write(bindingFile.path, serializeYaml(next), `${toolCallId}:bindings`, { overwrite: true });
         if (value.chat) {
           await options.setChatBinding!(value.chat.chatId, value.chat.worldbook, `${toolCallId}:chat-binding`);
         }

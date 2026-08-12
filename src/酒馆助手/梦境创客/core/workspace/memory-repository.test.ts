@@ -36,6 +36,15 @@ describe('MemoryWorkspaceRepository', () => {
     expect(workspace.changes()).toMatchObject([{ kind: 'create', path: '/greetings/001-初见.md' }]);
   });
 
+  it('整体写入默认只允许新建，覆盖已有文件必须显式声明', async () => {
+    const workspace = new MemoryWorkspaceRepository({ files });
+    await expect(workspace.write('/character/description.md', '误覆盖', 'write-existing')).rejects.toMatchObject({
+      code: 'ALREADY_EXISTS',
+    });
+    await workspace.write('/character/description.md', '明确覆盖', 'overwrite-existing', { overwrite: true });
+    expect((await workspace.read('/character/description.md')).content).toBe('明确覆盖');
+  });
+
   it('空世界书仍显示并允许列出固定entries目录', async () => {
     const workspace = new MemoryWorkspaceRepository({
       files: [
@@ -187,7 +196,7 @@ describe('MemoryWorkspaceRepository', () => {
 
   it('记录创建、修改和删除，并返回不可外部篡改的快照', async () => {
     const workspace = new MemoryWorkspaceRepository({ files });
-    await workspace.write('/character/description.md', '改写', 'modify');
+    await workspace.write('/character/description.md', '改写', 'modify', { overwrite: true });
     await workspace.write('/character/new.yaml', 'enabled: true', 'create');
     await workspace.write('/notes.txt', 'note', 'plain');
     await workspace.remove('/worldbooks', 'delete-tree');

@@ -60,20 +60,33 @@ export type SearchResult = {
   truncated: boolean;
 };
 
+export type WorkspaceWriteOptions = {
+  /** 默认false。只有明确允许整体覆盖已有文件时才设为true。 */
+  overwrite?: boolean;
+};
+
 export type WorkspaceChange =
   | { after: WorkspaceFile; kind: 'create'; path: string }
   | { before: WorkspaceFile; kind: 'delete'; path: string }
   | { after: WorkspaceFile; before: WorkspaceFile; kind: 'modify'; path: string }
   | { after: WorkspaceFile; before: WorkspaceFile; from: string; kind: 'move'; path: string };
 
+export type WorkspaceMutationResult = {
+  changes: WorkspaceChange[];
+  idempotent?: boolean;
+  status: 'partial_success' | 'success' | 'uncertain';
+  warning?: string;
+};
+
 export interface WorkspaceRepository {
   list(path: string): Promise<WorkspaceEntry[]>;
   read(path: string): Promise<WorkspaceFile>;
-  write(path: string, content: string, toolCallId: string): Promise<void>;
+  write(path: string, content: string, toolCallId: string, options?: WorkspaceWriteOptions): Promise<void>;
   patch(path: string, patch: string, toolCallId: string): Promise<void>;
   move(from: string, to: string, toolCallId: string): Promise<void>;
   remove(path: string, toolCallId: string): Promise<void>;
   search(query: SearchQuery): Promise<SearchResult>;
+  mutationResult?(toolCallId: string): WorkspaceMutationResult | undefined;
 }
 
 export function isBinaryWorkspaceFile(file: WorkspaceFile): boolean {

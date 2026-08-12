@@ -154,12 +154,17 @@ describe('card workspace mapper', () => {
   it('从Working Copy读取角色和世界书的明确修改', async () => {
     const base = state();
     const workspace = new MemoryWorkspaceRepository({ files: projectCardWorkspace(base) });
-    await workspace.write('/character/description.md', '爱丽丝是首席学生。', 'character-edit');
+    await workspace.write('/character/description.md', '爱丽丝是首席学生。', 'character-edit', { overwrite: true });
     const entryPath = workspace.snapshot().find(item => item.resourceId === 'entry-library')?.path;
     expect(entryPath).toBeTruthy();
     const original = await workspace.read(entryPath!);
     const { metadata } = parseFrontmatter(original.content, original.path);
-    await workspace.write(entryPath!, `---\n${String(original.content.split('---\n')[1])}---\n新的世界书正文。`, 'entry-edit');
+    await workspace.write(
+      entryPath!,
+      `---\n${String(original.content.split('---\n')[1])}---\n新的世界书正文。`,
+      'entry-edit',
+      { overwrite: true },
+    );
     const result = materializeCardWorkspace(base, workspace.snapshot()).state;
     expect(result.character.fields.description).toBe('爱丽丝是首席学生。');
     expect(result.worldbooks.find(book => book.resourceId === 'book-academy')?.entries[0]).toMatchObject({

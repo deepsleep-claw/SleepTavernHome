@@ -111,11 +111,18 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
     return cloneFile(file);
   }
 
-  async write(inputPath: string, content: string, toolCallId: string): Promise<void> {
+  async write(inputPath: string, content: string, toolCallId: string, options: { overwrite?: boolean } = {}): Promise<void> {
     await this.once(toolCallId, () => {
       const path = normalizeWorkspacePath(inputPath);
       const existing = this.current.get(path);
       this.assertWritable(path, existing);
+      if (existing && options.overwrite !== true) {
+        throw new WorkspaceError(
+          'ALREADY_EXISTS',
+          `文件已经存在：${path}。请使用apply_patch，或在确实需要整体替换时显式设置overwrite=true。`,
+          path,
+        );
+      }
       this.current.set(path, {
         content,
         external: undefined,

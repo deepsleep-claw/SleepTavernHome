@@ -39,7 +39,7 @@ function modelStep(tool = false): ModelStepResult {
         {
           content: [
             {
-              input: { content: '运行时描述', path: '/character/description.md' },
+              input: { content: '运行时描述', overwrite: true, path: '/character/description.md' },
               toolCallId: 'runtime-write',
               toolName: 'write_file',
               type: 'tool-call',
@@ -56,7 +56,7 @@ function modelStep(tool = false): ModelStepResult {
     toolCalls: tool
       ? [
           {
-            input: { content: '运行时描述', path: '/character/description.md' },
+            input: { content: '运行时描述', overwrite: true, path: '/character/description.md' },
             toolCallId: 'runtime-write',
             toolName: 'write_file',
           },

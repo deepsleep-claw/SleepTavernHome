@@ -33,7 +33,9 @@ describe('tavern resource workspace mapper', () => {
       .filter(file => file.path.startsWith('/regexes/character/') && !file.path.includes('_scope'))
       .map(file => file.path);
     const metadata = parseYamlObject((await repository.read(path)).content, path);
-    await repository.write(path, serializeYaml({ ...metadata, name: '内容名称', order: 950 }), 'rename-regex');
+    await repository.write(path, serializeYaml({ ...metadata, name: '内容名称', order: 950 }), 'rename-regex', {
+      overwrite: true,
+    });
     await repository.write(
       '/regexes/character/new.yaml',
       serializeYaml({
@@ -107,4 +109,3 @@ describe('tavern resource workspace mapper', () => {
     expect(() => materializeTavernResources(base, repository.snapshot())).toThrow(/删除整个目录/u);
   });
 });
-

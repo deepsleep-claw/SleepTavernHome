@@ -49,7 +49,11 @@ class QueueExecutor implements ModelStepExecutor {
 }
 
 function writeDescription(content: string, id = 'write-description'): RunnerToolCall {
-  return { input: { content, path: '/character/description.md' }, toolCallId: id, toolName: 'write_file' };
+  return {
+    input: { content, overwrite: true, path: '/character/description.md' },
+    toolCallId: id,
+    toolName: 'write_file',
+  };
 }
 
 function snapshots(): ContentAddressedSnapshotStore {
@@ -280,7 +284,11 @@ describe('card agent session service', () => {
       executor: new QueueExecutor([
         step([
           {
-            input: { content: 'additional: []\nchat: null\nprimary: null\n', path: '/worldbooks/bindings.yaml' },
+            input: {
+              content: 'additional: []\nchat: null\nprimary: null\n',
+              overwrite: true,
+              path: '/worldbooks/bindings.yaml',
+            },
             toolCallId: 'binding',
             toolName: 'write_file',
           },
@@ -379,6 +387,7 @@ describe('card agent session service', () => {
             },
             toolCallId: 'skill-edit',
             toolName: 'write_file',
+              overwrite: true,
           },
         ]),
         step(),
