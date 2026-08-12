@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createGlobalTavernBridge } from './bridge';
+import { createGlobalTavernBridge, type RawCharacterData } from './bridge';
 import { FakeTavernBridge } from './test-bridge';
 
 const calls = {
@@ -19,6 +19,7 @@ describe('global Tavern bridge', () => {
     vi.stubGlobal('getGlobalWorldbookNames', vi.fn(() => []));
     vi.stubGlobal('getChatMessages', vi.fn(() => []));
     vi.stubGlobal('getWorldbook', vi.fn(async () => []));
+    vi.stubGlobal('getWorldbookNames', vi.fn(() => ['主世界书', '新书']));
     vi.stubGlobal('createWorldbook', vi.fn(async () => true));
     vi.stubGlobal('deleteWorldbook', vi.fn(async () => true));
     vi.stubGlobal('createWorldbookEntries', vi.fn(async (_name, entries) => ({ new_entries: entries, worldbook: entries })));
@@ -53,7 +54,7 @@ describe('global Tavern bridge', () => {
     await bridge.setChatWorldbook('新书');
     await bridge.deleteWorldbook('新书');
     expect(vi.mocked(createWorldbook)).toHaveBeenCalledWith('新书');
-    expect(vi.mocked(rebindCharWorldbooks)).toHaveBeenCalledWith('current', { additional: ['新书'], primary: null });
+    expect(vi.mocked(rebindCharWorldbooks)).toHaveBeenCalledWith('current', { additional: ['新书'] });
     expect(vi.mocked(setChatLorebook)).toHaveBeenCalledWith('新书');
   });
 
@@ -71,8 +72,29 @@ describe('global Tavern bridge', () => {
     const form = init?.body as FormData;
     expect(form.get('personality')).toBe('base personality');
     expect(form.getAll('alternate_greetings')).toEqual(['g2', 'g3']);
+    expect(form.get('world')).toBeNull();
+    expect(form.get('extensions')).toContain('主世界书');
     expect(form.get('json_data')).toContain('unknown_server_field');
     expect(calls.getCharacters).toHaveBeenCalled();
+  });
+
+  it('把主要世界书保存为外部名称绑定，并清除酒馆生成的同名内嵌镜像', async () => {
+    const raw = new FakeTavernBridge().raw!;
+    raw.data.extensions = { ...raw.data.extensions, world: null };
+    raw.data.character_book = { entries: [], name: '新书' };
+    vi.mocked(getCharData).mockReturnValue(raw as ReturnType<typeof getCharData>);
+    vi.mocked(getCharWorldbookNames).mockReturnValue({ additional: [], primary: null });
+    vi.mocked(getWorldbookNames).mockReturnValue(['新书']);
+
+    const bridge = createGlobalTavernBridge();
+    await bridge.setCharacterBindings({ additional: [], primary: '新书' });
+
+    const form = vi.mocked(fetch).mock.calls[0][1]?.body as FormData;
+    const json = JSON.parse(String(form.get('json_data'))) as RawCharacterData;
+    expect(form.get('world')).toBeNull();
+    expect(json.data.extensions?.world).toBe('新书');
+    expect(json.data.character_book).toBeUndefined();
+    expect(rebindCharWorldbooks).not.toHaveBeenCalled();
   });
 
   it('报告角色写入、建书和删书失败', async () => {

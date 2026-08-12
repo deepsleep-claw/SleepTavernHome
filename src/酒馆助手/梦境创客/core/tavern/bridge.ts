@@ -131,7 +131,6 @@ async function saveRawCharacter(character: RawCharacterData): Promise<void> {
   append(form, 'character_version', data.character_version ?? '');
   append(form, 'talkativeness', raw.talkativeness ?? (data.extensions?.talkativeness as number | undefined));
   append(form, 'fav', raw.fav ?? data.extensions?.fav);
-  append(form, 'world', data.extensions?.world);
   append(form, 'tags', (data.tags ?? raw.tags ?? []).join(','));
   append(form, 'extensions', JSON.stringify(data.extensions ?? {}));
   append(form, 'json_data', JSON.stringify(raw));
@@ -221,7 +220,38 @@ export function createGlobalTavernBridge(): TavernBridge {
       replaceScriptTrees(klona(trees), { type: scriptScope(scope) });
       await SillyTavern.saveSettingsDebounced();
     },
-    setCharacterBindings: async bindings => rebindCharWorldbooks('current', bindings),
+    setCharacterBindings: async bindings => {
+      const available = new Set(getWorldbookNames());
+      const missing = [bindings.primary, ...bindings.additional].filter(
+        (name): name is string => typeof name === 'string' && !available.has(name),
+      );
+      if (missing.length > 0) throw new Error(`无法绑定不存在的世界书：${missing.join('、')}`);
+
+      const current = getCharWorldbookNames('current');
+      const raw = getCharData('current') as RawCharacterData | null;
+      if (!raw) throw new Error('绑定世界书前无法重新读取角色卡。');
+      const embedded = raw.data.character_book;
+      const embeddedName =
+        typeof embedded === 'object' && embedded !== null && 'name' in embedded
+          ? (embedded as { name?: unknown }).name
+          : undefined;
+      const mirroredEmbeddedBook = Boolean(bindings.primary && embeddedName === bindings.primary);
+
+      if (current.primary !== bindings.primary || mirroredEmbeddedBook) {
+        raw.data.extensions ??= {};
+        raw.data.extensions.world = bindings.primary ?? '';
+        // SillyTavern 会在角色编辑表单携带 `world` 时生成同名 character_book 副本。
+        // 梦境创客绑定的是外部世界书；若发现这种同名镜像则一并清掉，避免再次提示导入并覆盖外部书。
+        if (mirroredEmbeddedBook) delete raw.data.character_book;
+        await saveRawCharacter(raw);
+      }
+
+      if (JSON.stringify(current.additional) !== JSON.stringify(bindings.additional)) {
+        // 酒馆助手的实现运行时接受 Partial<CharWorldbooks>；只交给它维护附加绑定，
+        // 避免其 primary 分支再次走会自动嵌入世界书的角色编辑表单。
+        await rebindCharWorldbooks('current', { additional: bindings.additional } as CharWorldbooks);
+      }
+    },
     setChatWorldbook: async name => setChatLorebook(name),
     updateWorldbook: async (name, updater) =>
       (await updateWorldbookWith(name, entries =>

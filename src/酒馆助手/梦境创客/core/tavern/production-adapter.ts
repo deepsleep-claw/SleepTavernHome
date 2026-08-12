@@ -3,7 +3,7 @@ import type { CardWorkspaceState, WorldbookData, WorldbookEntryData } from '../m
 import type { CardStateAdapter } from '../transaction/adapter';
 import { applyStateOperation, type StateOperation } from '../transaction/state-diff';
 import type { RawCharacterData, TavernBridge, TavernWorldbookEntry } from './bridge';
-import { readTavernState } from './state-reader';
+import { readStandaloneWorldbook, readTavernState } from './state-reader';
 import { writeRegexScope, writeScriptScope } from './resource-reader';
 
 function decodePath(path: string): string[] {
@@ -26,7 +26,14 @@ function writeCharacterFields(raw: RawCharacterData, state: CardWorkspaceState, 
   else if (segments[1] === 'tags') {
     raw.data.tags = klona(character.tags);
     raw.tags = klona(character.tags);
-  } else if (segments[1] === 'extensions') raw.data.extensions = klona(character.extensions);
+  } else if (segments[1] === 'extensions') {
+    // 事务当前只允许写入梦境创客自己的 card_agent 扩展。必须保持最小 Patch：
+    // 若整份替换 extensions，会把前一步刚写入的 extensions.world 绑定用 Base 中的旧值覆盖掉。
+    raw.data.extensions ??= {};
+    const cardAgent = character.extensions.card_agent;
+    if (cardAgent === undefined) delete raw.data.extensions.card_agent;
+    else raw.data.extensions.card_agent = klona(cardAgent);
+  }
   else if (segments[1].startsWith('greetings')) {
     raw.data.first_mes = character.greetings[0]?.content ?? '';
     raw.first_mes = raw.data.first_mes;
@@ -160,12 +167,18 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
       else if (after && !before) {
         await this.bridge.createWorldbook(after.name);
         if (after.entries.length > 0) {
-          const created = await this.bridge.createWorldbookEntries(after.name, after.entries.map(withResourceId));
-          after.entries.forEach((entry, index) => {
-            entry.uid = created[index].uid;
-          });
-          return { ...operation, after };
+          await this.bridge.createWorldbookEntries(after.name, after.entries.map(withResourceId));
         }
+        // 酒馆会为新条目补齐 UID 和若干隐式默认字段。直接回读并把真实结果反馈给事务，
+        // 否则整书创建会因为“期望值仍是临时结构”而在最终校验阶段被误判为失败。
+        const normalized = await readStandaloneWorldbook(this.bridge, after.name, {
+          resourceId: after.resourceId,
+          writable: after.writable,
+        });
+        if (!normalized.roundTripSafe) {
+          throw new Error(`创建世界书后无法重新读取：${after.name}`);
+        }
+        return { ...operation, after: normalized };
       }
       return undefined;
     }

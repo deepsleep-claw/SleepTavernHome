@@ -2,6 +2,7 @@ import { klona } from 'klona';
 import { describe, expect, it } from 'vitest';
 import { commitWorkingCopy } from '../transaction/commit';
 import { diffCardStates, type StateOperation } from '../transaction/state-diff';
+import type { TavernWorldbookEntry } from './bridge';
 import { ProductionCardStateAdapter } from './production-adapter';
 import { FakeTavernBridge } from './test-bridge';
 
@@ -113,6 +114,82 @@ describe('ProductionCardStateAdapter', () => {
     });
     if (result.status === 'committed') {
       expect(result.state.worldbooks.find(book => book.resourceId === 'new-book')?.entries[0].uid).toBe(100);
+    }
+  });
+
+  it('创建并绑定世界书后同步元数据不会把刚写入的primary绑定覆盖回旧值', async () => {
+    const bridge = new FakeTavernBridge();
+    bridge.raw!.data.extensions!.world = '主世界书';
+    const adapter = new ProductionCardStateAdapter(bridge);
+    const base = await adapter.read();
+    const working = klona(base);
+    working.worldbooks.push({
+      entries: [],
+      name: '外部绑定新书',
+      resourceId: 'external-bound-book',
+      roundTripSafe: true,
+      unknownFields: {},
+      writable: true,
+    });
+    working.bindings.primary = '外部绑定新书';
+    const changes = diffCardStates(base, working);
+    const result = await commitWorkingCopy({
+      adapter,
+      base,
+      decisions: Object.fromEntries(changes.map(change => [change.path, 'agent' as const])),
+      working,
+    });
+
+    expect(result.status).toBe('committed');
+    expect(bridge.raw?.data.extensions?.world).toBe('外部绑定新书');
+    expect(bridge.raw?.data.extensions?.card_agent).toMatchObject({
+      worldbooks: expect.arrayContaining([{ id: 'external-bound-book', name: '外部绑定新书' }]),
+    });
+  });
+
+  it('整书创建时接受酒馆补齐的隐式字段并以真实回读结果完成校验', async () => {
+    const bridge = new FakeTavernBridge();
+    bridge.createWorldbookEntries = async (name, entries) => {
+      const book = bridge.books.get(name);
+      if (!book) throw new Error('missing');
+      const created = entries.map(entry => ({
+        ...klona(entry),
+        uid: bridge.nextUid++,
+        vendor_default: '由酒馆补齐',
+      })) as TavernWorldbookEntry[];
+      book.push(...created);
+      return klona(created);
+    };
+    const adapter = new ProductionCardStateAdapter(bridge);
+    const base = await adapter.read();
+    const working = klona(base);
+    working.worldbooks.push({
+      entries: [
+        {
+          ...klona(base.worldbooks[0].entries[0]),
+          resourceId: 'implicit-entry',
+          uid: 'temp:implicit-entry',
+          unknownFields: {},
+        },
+      ],
+      name: '带酒馆默认值的新书',
+      resourceId: 'implicit-book',
+      roundTripSafe: true,
+      unknownFields: {},
+      writable: true,
+    });
+    const changes = diffCardStates(base, working);
+    const result = await commitWorkingCopy({
+      adapter,
+      base,
+      decisions: Object.fromEntries(changes.map(change => [change.path, 'agent' as const])),
+      working,
+    });
+
+    expect(result.status).toBe('committed');
+    if (result.status === 'committed') {
+      expect(result.state.worldbooks.find(book => book.resourceId === 'implicit-book')?.entries[0].unknownFields)
+        .toMatchObject({ vendor_default: '由酒馆补齐' });
     }
   });
 

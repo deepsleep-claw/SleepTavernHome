@@ -202,6 +202,10 @@ export class FakeTavernBridge implements TavernBridge {
   async setCharacterBindings(bindings: CharWorldbooks): Promise<void> {
     this.calls.push('bind-character');
     this.bindings = klona(bindings);
+    if (this.raw) {
+      this.raw.data.extensions ??= {};
+      this.raw.data.extensions.world = bindings.primary ?? '';
+    }
   }
 
   async setChatWorldbook(name: string | null): Promise<void> {
