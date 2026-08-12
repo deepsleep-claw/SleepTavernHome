@@ -19,6 +19,15 @@ function operationRank(operation: StateOperation): number {
   return 5;
 }
 
+function worldbookOperationRank(operation: StateOperation): number {
+  if (!operation.path.startsWith('/worldbooks/')) return 0;
+  const segment = operation.path.split('/')[3];
+  if (segment === undefined || segment === 'name') return 0;
+  if (segment === 'entries') return 1;
+  if (segment === 'entries-order') return 2;
+  return 1;
+}
+
 function derivedMetadataOperation(current: CardWorkspaceState, resolved: CardWorkspaceState): StateOperation | undefined {
   const before = current.character.extensions.card_agent;
   synchronizeCardAgentMetadata(resolved);
@@ -86,6 +95,7 @@ export async function commitWorkingCopy(options: {
   const operations = [...resolved.operations].sort(
     (left, right) =>
       operationRank(left) - operationRank(right) ||
+      worldbookOperationRank(left) - worldbookOperationRank(right) ||
       Number(left.kind === 'reorder') - Number(right.kind === 'reorder') ||
       left.path.localeCompare(right.path),
   );

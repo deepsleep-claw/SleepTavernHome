@@ -79,6 +79,41 @@ describe('ProductionCardStateAdapter', () => {
     expect(bridge.books.has('空书')).toBe(false);
   });
 
+  it('同一事务先重命名世界书，再对新名称执行条目增改删和重排', async () => {
+    const bridge = new FakeTavernBridge();
+    const adapter = new ProductionCardStateAdapter(bridge);
+    const base = await adapter.read();
+    const working = klona(base);
+    const book = working.worldbooks[0];
+    book.name = '重命名后的世界书';
+    book.entries[0].content = '重命名后修改';
+    book.entries.splice(1, 1);
+    book.entries.unshift({
+      ...klona(book.entries[0]),
+      content: '重命名后新增',
+      name: '新增条目',
+      resourceId: 'rename-created-entry',
+      uid: 'temp:rename-created-entry',
+    });
+    const changes = diffCardStates(base, working);
+    const result = await commitWorkingCopy({
+      adapter,
+      base,
+      decisions: Object.fromEntries(changes.map(change => [change.path, 'agent' as const])),
+      working,
+    });
+
+    expect(result.status, result.status === 'rolled-back' ? result.error.message : undefined).toBe('committed');
+    expect(bridge.books.has('主世界书')).toBe(false);
+    expect(bridge.books.get('重命名后的世界书')?.map(entry => entry.content)).toEqual([
+      '重命名后新增',
+      '重命名后修改',
+    ]);
+    expect(bridge.calls.indexOf('create-book:重命名后的世界书')).toBeLessThan(
+      bridge.calls.indexOf('create-entries:重命名后的世界书'),
+    );
+  });
+
   it('事务创建未绑定世界书后同步元数据并通过最终回读校验', async () => {
     const bridge = new FakeTavernBridge();
     const adapter = new ProductionCardStateAdapter(bridge);

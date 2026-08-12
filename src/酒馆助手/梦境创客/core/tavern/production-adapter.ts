@@ -190,6 +190,13 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
         await this.bridge.createWorldbookEntries(afterBook.name, beforeBook.entries.map(withResourceId));
       }
       await this.bridge.deleteWorldbook(beforeBook.name);
+      const normalizedBook = await readStandaloneWorldbook(this.bridge, afterBook.name, {
+        resourceId: afterBook.resourceId,
+        writable: afterBook.writable,
+      });
+      if (!normalizedBook.roundTripSafe) throw new Error(`重命名世界书后无法重新读取：${afterBook.name}`);
+      afterBook.entries = normalizedBook.entries;
+      afterBook.unknownFields = normalizedBook.unknownFields;
       return undefined;
     }
     if (segments[2] === 'metadata') return undefined;
@@ -221,15 +228,24 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
       return { ...operation, after: normalizedAfter };
     }
     if (before && !after) {
-      const uid = entryUid(before);
+      const uid = entryUid(beforeBook.entries.find(entry => entry.resourceId === before.resourceId) ?? before);
       await this.bridge.updateWorldbook(afterBook.name, entries => entries.filter(entry => entry.uid !== uid));
       return undefined;
     }
     if (before && after) {
-      const uid = entryUid(before);
+      const uid = entryUid(beforeBook.entries.find(entry => entry.resourceId === before.resourceId) ?? before);
       await this.bridge.updateWorldbook(afterBook.name, entries =>
         entries.map(entry => (entry.uid === uid ? { ...entry, ...withResourceId(after), uid: entry.uid } : entry)),
       );
+      const normalizedBook = await readStandaloneWorldbook(this.bridge, afterBook.name, {
+        resourceId: afterBook.resourceId,
+        writable: afterBook.writable,
+      });
+      const normalizedAfter = normalizedBook.entries.find(entry => entry.resourceId === after.resourceId);
+      if (!normalizedBook.roundTripSafe || !normalizedAfter) {
+        throw new Error(`修改世界书条目后无法重新读取：${afterBook.name}/${after.name}`);
+      }
+      return { ...operation, after: normalizedAfter };
     }
     return undefined;
   }
