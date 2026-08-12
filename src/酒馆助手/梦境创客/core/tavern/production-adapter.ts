@@ -207,8 +207,17 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
     const before = operation.before as WorldbookEntryData | undefined;
     const after = operation.after as WorldbookEntryData | undefined;
     if (!before && after) {
-      const [created] = await this.bridge.createWorldbookEntries(afterBook.name, [withResourceId(after)]);
-      const normalizedAfter = { ...after, uid: created.uid } as WorldbookEntryData;
+      await this.bridge.createWorldbookEntries(afterBook.name, [withResourceId(after)]);
+      // createWorldbookEntries 不只分配 UID，还会补齐酒馆自身的隐式字段。
+      // 必须使用完整回读结果规范化本次操作；若只替换 UID，最终校验会把这些合法默认值误判为写入漂移。
+      const normalizedBook = await readStandaloneWorldbook(this.bridge, afterBook.name, {
+        resourceId: afterBook.resourceId,
+        writable: afterBook.writable,
+      });
+      const normalizedAfter = normalizedBook.entries.find(entry => entry.resourceId === after.resourceId);
+      if (!normalizedBook.roundTripSafe || !normalizedAfter) {
+        throw new Error(`创建世界书条目后无法重新读取：${afterBook.name}/${after.name}`);
+      }
       return { ...operation, after: normalizedAfter };
     }
     if (before && !after) {

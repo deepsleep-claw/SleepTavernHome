@@ -193,6 +193,46 @@ describe('ProductionCardStateAdapter', () => {
     }
   });
 
+  it('向现有世界书新增条目时接受酒馆补齐的隐式字段', async () => {
+    const bridge = new FakeTavernBridge();
+    bridge.createWorldbookEntries = async (name, entries) => {
+      const book = bridge.books.get(name);
+      if (!book) throw new Error('missing');
+      const created = entries.map(entry => ({
+        ...klona(entry),
+        uid: bridge.nextUid++,
+        vendor_default: '由酒馆补齐',
+      })) as TavernWorldbookEntry[];
+      book.push(...created);
+      return klona(created);
+    };
+    const adapter = new ProductionCardStateAdapter(bridge);
+    const base = await adapter.read();
+    const working = klona(base);
+    working.worldbooks[0].entries.push({
+      ...klona(base.worldbooks[0].entries[0]),
+      name: '带默认值的新条目',
+      resourceId: 'implicit-existing-book-entry',
+      uid: 'temp:implicit-existing-book-entry',
+      unknownFields: {},
+    });
+    const changes = diffCardStates(base, working);
+    const result = await commitWorkingCopy({
+      adapter,
+      base,
+      decisions: Object.fromEntries(changes.map(change => [change.path, 'agent' as const])),
+      working,
+    });
+
+    expect(result.status).toBe('committed');
+    if (result.status === 'committed') {
+      expect(
+        result.state.worldbooks[0].entries.find(entry => entry.resourceId === 'implicit-existing-book-entry')
+          ?.unknownFields,
+      ).toMatchObject({ vendor_default: '由酒馆补齐' });
+    }
+  });
+
   it('覆盖角色元数据、空开场白和世界书元数据/排序分支', async () => {
     const bridge = new FakeTavernBridge();
     const adapter = new ProductionCardStateAdapter(bridge);

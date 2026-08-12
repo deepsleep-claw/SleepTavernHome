@@ -142,4 +142,23 @@ describe('readTavernState', () => {
     const result = await readTavernState(bridge);
     expect(result.state.worldbooks[0].unknownFields).toEqual({ mapping_error: 'string failure' });
   });
+
+  it('把酒馆父窗口返回的跨realm正则复制为当前窗口正则', async () => {
+    const bridge = new FakeTavernBridge();
+    const foreignRegex = {
+      [Symbol.toStringTag]: 'RegExp',
+      flags: 'iu',
+      source: '位置|效果',
+    } as unknown as RegExp;
+    expect(foreignRegex).not.toBeInstanceOf(RegExp);
+    expect(Object.prototype.toString.call(foreignRegex)).toBe('[object RegExp]');
+    bridge.books.get('主世界书')![0].strategy.keys = [foreignRegex];
+    bridge.getWorldbook = async name => bridge.books.get(name) ?? [];
+
+    const result = await readTavernState(bridge);
+    const keyword = result.state.worldbooks[0].entries[0].strategy.keys[0];
+
+    expect(keyword).toBeInstanceOf(RegExp);
+    expect(keyword).toEqual(/位置|效果/iu);
+  });
 });
