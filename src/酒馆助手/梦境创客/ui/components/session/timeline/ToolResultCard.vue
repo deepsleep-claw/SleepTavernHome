@@ -46,6 +46,52 @@
       </span>
     </div>
 
+    <section v-if="presentation.webSearch" class="dca-web-search-results">
+      <section v-for="(group, groupIndex) in visibleWebSearchGroups" :key="`${groupIndex}:${group.query ?? ''}`">
+        <header class="dca-web-search-query">
+          <span>
+            <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+            <strong>{{ group.query ?? '网页搜索' }}</strong>
+          </span>
+          <small>找到 {{ group.results.length }} 条结果</small>
+        </header>
+        <ol class="dca-web-search-list">
+          <li v-for="(result, resultIndex) in group.results" :key="`${resultIndex}:${result.url ?? result.title}`">
+            <span class="dca-web-search-index">{{ resultIndex + 1 }}</span>
+            <span class="dca-web-search-favicon" aria-hidden="true">
+              <i class="fa-solid fa-globe"></i>
+              <img
+                v-if="result.faviconUrl"
+                :src="result.faviconUrl"
+                alt=""
+                decoding="async"
+                loading="lazy"
+                referrerpolicy="no-referrer"
+                @error="hideBrokenFavicon"
+              />
+            </span>
+            <div class="dca-web-search-result-main">
+              <div class="dca-web-search-result-title">
+                <a
+                  v-if="result.url"
+                  :href="result.url"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  :title="result.title"
+                >
+                  {{ result.title }}
+                </a>
+                <strong v-else :title="result.title">{{ result.title }}</strong>
+                <small v-if="result.domain">{{ result.domain }}</small>
+              </div>
+              <p v-if="result.snippet" :title="result.snippet">{{ result.snippet }}</p>
+            </div>
+            <time v-if="result.publishDate">{{ compactDate(result.publishDate) }}</time>
+          </li>
+        </ol>
+      </section>
+    </section>
+
     <div
       v-if="presentation.preview"
       class="dca-tool-content-scroll dca-tool-preview"
@@ -77,7 +123,7 @@
     </div>
 
     <button v-if="presentation.expandable" class="dca-tool-expand" type="button" @click="expanded = !expanded">
-      <span>{{ expanded ? '收起内容' : '展开更多' }}</span>
+      <span>{{ expandLabel }}</span>
       <i :class="expanded ? 'fa-solid fa-chevron-up' : 'fa-solid fa-chevron-down'" aria-hidden="true"></i>
     </button>
 
@@ -156,6 +202,21 @@ const rawOpen = ref(false);
 const rawTab = ref<'input' | 'output'>(props.tool.toolInput ? 'input' : 'output');
 const presentation = computed(() => buildToolPresentation(props.tool));
 const previewLines = computed(() => presentation.value.preview?.content.split(/\r?\n/u) ?? []);
+const visibleWebSearchGroups = computed(() =>
+  (presentation.value.webSearch?.groups ?? []).map(group => ({
+    ...group,
+    results: expanded.value ? group.results : group.results.slice(0, 3),
+  })),
+);
+const hiddenWebSearchResults = computed(() =>
+  (presentation.value.webSearch?.groups ?? []).reduce((total, group) => total + Math.max(0, group.results.length - 3), 0),
+);
+const expandLabel = computed(() => {
+  if (expanded.value) return '收起内容';
+  return presentation.value.webSearch && hiddenWebSearchResults.value > 0
+    ? `展开其余 ${hiddenWebSearchResults.value} 条`
+    : '展开更多';
+});
 const formattedIntent = computed(() => {
   if (props.confirmation?.intent === undefined) return '';
   try {
@@ -179,6 +240,14 @@ function diffLineClass(line: string): string | undefined {
   if (line.startsWith('-') && !line.startsWith('---')) return 'dca-tool-diff-delete';
   if (line.startsWith('@@')) return 'dca-tool-diff-range';
   return undefined;
+}
+
+function compactDate(value: string): string {
+  return value.match(/\d{4}-\d{2}-\d{2}/u)?.[0] ?? value;
+}
+
+function hideBrokenFavicon(event: Event): void {
+  if (event.currentTarget instanceof HTMLImageElement) event.currentTarget.hidden = true;
 }
 
 async function copyRaw(): Promise<void> {
@@ -364,6 +433,163 @@ async function copyRaw(): Promise<void> {
 .dca-tool-metric-warning strong,
 .dca-tool-row-warning {
   color: var(--dca-warning);
+}
+
+.dca-web-search-results {
+  margin-top: 0.45rem;
+  overflow: hidden;
+  border: 1px solid var(--dca-border);
+  border-radius: 0.4rem;
+  background: color-mix(in srgb, var(--dca-canvas) 82%, transparent);
+}
+
+.dca-web-search-results > section + section {
+  border-top: 1px solid var(--dca-border);
+}
+
+.dca-web-search-query {
+  display: flex;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.35rem 0.55rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--dca-border) 78%, transparent);
+  background: color-mix(in srgb, var(--dca-surface) 72%, transparent);
+}
+
+.dca-web-search-query > span {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.dca-web-search-query i {
+  color: var(--dca-tool-tone);
+  font-size: 0.7rem;
+}
+
+.dca-web-search-query strong {
+  overflow: hidden;
+  color: var(--dca-text-secondary);
+  font-size: 0.72rem;
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dca-web-search-query small {
+  flex: 0 0 auto;
+  color: var(--dca-text-muted);
+  font-size: 0.66rem;
+}
+
+.dca-web-search-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dca-web-search-list > li {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 1.15rem 1.15rem minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 0.42rem;
+  padding: 0.48rem 0.55rem;
+}
+
+.dca-web-search-list > li + li {
+  border-top: 1px solid color-mix(in srgb, var(--dca-border) 70%, transparent);
+}
+
+.dca-web-search-index {
+  display: grid;
+  width: 1.15rem;
+  height: 1.15rem;
+  place-items: center;
+  border-radius: 0.3rem;
+  background: color-mix(in srgb, var(--dca-tool-tone) 10%, transparent);
+  color: var(--dca-text-muted);
+  font: 10px/1 var(--dca-font-mono);
+}
+
+.dca-web-search-favicon {
+  position: relative;
+  display: grid;
+  width: 1.15rem;
+  height: 1.15rem;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 0.25rem;
+  color: var(--dca-tool-tone);
+  font-size: 0.68rem;
+}
+
+.dca-web-search-favicon img {
+  position: absolute;
+  inset: 0.08rem;
+  width: calc(100% - 0.16rem);
+  height: calc(100% - 0.16rem);
+  border-radius: 0.16rem;
+  background: var(--dca-surface);
+  object-fit: contain;
+}
+
+.dca-web-search-result-main {
+  min-width: 0;
+}
+
+.dca-web-search-result-title {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 0.45rem;
+}
+
+.dca-web-search-result-title > a,
+.dca-web-search-result-title > strong {
+  overflow: hidden;
+  color: var(--dca-text);
+  font-size: 0.72rem;
+  font-weight: 550;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dca-web-search-result-title > a:hover {
+  color: var(--dca-info);
+  text-decoration: underline;
+  text-underline-offset: 0.15rem;
+}
+
+.dca-web-search-result-title > small {
+  overflow: hidden;
+  flex: 0 1 auto;
+  color: var(--dca-text-muted);
+  font-size: 0.64rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dca-web-search-result-main > p {
+  display: -webkit-box;
+  margin: 0.22rem 0 0;
+  overflow: hidden;
+  color: var(--dca-text-muted);
+  font-size: 0.67rem;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.dca-web-search-list time {
+  padding-top: 0.05rem;
+  color: var(--dca-text-muted);
+  font: 10px/1.4 var(--dca-font-mono);
+  white-space: nowrap;
 }
 
 .dca-tool-content-scroll {
@@ -639,6 +865,20 @@ async function copyRaw(): Promise<void> {
   .dca-tool-preview,
   .dca-tool-result-rows {
     max-height: 5.5rem;
+  }
+
+  .dca-web-search-list > li {
+    grid-template-columns: 1.1rem 1.1rem minmax(0, 1fr);
+    padding: 0.45rem;
+  }
+
+  .dca-web-search-list time {
+    display: none;
+  }
+
+  .dca-web-search-result-title {
+    display: grid;
+    gap: 0.08rem;
   }
 }
 </style>

@@ -23,6 +23,25 @@ export type ToolCardPreview = {
   mode: 'code' | 'diff' | 'text';
 };
 
+export type ToolWebSearchResult = {
+  domain?: string;
+  faviconUrl?: string;
+  publishDate?: string;
+  snippet?: string;
+  title: string;
+  url?: string;
+};
+
+export type ToolWebSearchGroup = {
+  query?: string;
+  results: ToolWebSearchResult[];
+};
+
+export type ToolWebSearchPresentation = {
+  groups: ToolWebSearchGroup[];
+  totalResults: number;
+};
+
 export type ToolPresentation = {
   expandable: boolean;
   icon: string;
@@ -36,6 +55,7 @@ export type ToolPresentation = {
   summary: string;
   title: string;
   tone: ToolCardTone;
+  webSearch?: ToolWebSearchPresentation;
 };
 
 type ToolDescriptor = Pick<ToolPresentation, 'icon' | 'kind' | 'title' | 'tone'>;
@@ -53,6 +73,7 @@ const TOOL_DESCRIPTORS: Record<string, ToolDescriptor> = {
     title: '生成酒馆回复',
     tone: 'accent',
   },
+  find_in_page: { icon: 'fa-solid fa-magnifying-glass', kind: 'web', title: '页内查找', tone: 'info' },
   list_directory: { icon: 'fa-solid fa-folder-tree', kind: 'file', title: '浏览目录', tone: 'info' },
   list_tavern_chats: { icon: 'fa-solid fa-comments', kind: 'tavern', title: '列出酒馆会话', tone: 'accent' },
   mount_worldbook_reference: {
@@ -63,6 +84,8 @@ const TOOL_DESCRIPTORS: Record<string, ToolDescriptor> = {
   },
   move_path: { icon: 'fa-solid fa-arrow-right-arrow-left', kind: 'file', title: '移动路径', tone: 'info' },
   read_file: { icon: 'fa-regular fa-file-lines', kind: 'file', title: '读取文件', tone: 'info' },
+  open_page: { icon: 'fa-solid fa-arrow-up-right-from-square', kind: 'web', title: '打开网页', tone: 'info' },
+  search: { icon: 'fa-solid fa-globe', kind: 'web', title: '网页搜索', tone: 'info' },
   search_files: { icon: 'fa-solid fa-magnifying-glass', kind: 'search', title: '搜索文件', tone: 'info' },
   search_worldbooks: { icon: 'fa-solid fa-book-open-reader', kind: 'worldbook', title: '搜索世界书', tone: 'warning' },
   send_tavern_message: { icon: 'fa-solid fa-paper-plane', kind: 'tavern', title: '发送酒馆消息', tone: 'accent' },
@@ -120,6 +143,34 @@ function domain(value: string): string {
   } catch {
     return value;
   }
+}
+
+function safeWebUrl(value: string): URL | undefined {
+  try {
+    const url = new URL(value);
+    return ['http:', 'https:'].includes(url.protocol) ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function webSearchResult(value: JsonRecord): ToolWebSearchResult | undefined {
+  const rawUrl = text(value, 'url', 'link') ?? '';
+  const url = safeWebUrl(rawUrl);
+  const title = text(value, 'title') ?? (url ? domain(url.href) : undefined);
+  if (!title && !url) return undefined;
+  return {
+    domain: url ? domain(url.href) : undefined,
+    faviconUrl: url ? new URL('/favicon.ico', url.origin).href : undefined,
+    publishDate: text(value, 'publish_date', 'publishDate', 'published_at', 'date'),
+    snippet: text(value, 'snippet', 'description', 'content'),
+    title: title ?? '搜索结果',
+    url: url?.href,
+  };
+}
+
+function webSearchResults(value: unknown): ToolWebSearchResult[] {
+  return records(value).map(webSearchResult).filter((item): item is ToolWebSearchResult => item !== undefined);
 }
 
 function compactLine(value: string, fallback: string): string {
@@ -347,25 +398,113 @@ function tavernPresentation(
 }
 
 function webPresentation(
+  name: string,
   input: JsonRecord,
   output: JsonRecord,
-): Partial<Pick<ToolPresentation, 'expandable' | 'metrics' | 'rows' | 'summary'>> {
+  outputValue: unknown,
+): Partial<
+  Pick<ToolPresentation, 'expandable' | 'metrics' | 'preview' | 'rows' | 'summary' | 'tone' | 'webSearch'>
+> {
   const action = record(output.action);
-  const sources = records(action.sources ?? output.sources ?? output.results);
-  const query = text(action, 'query') ?? text(output, 'query') ?? text(input, 'query');
+  const actionQueries = Array.isArray(action.queries)
+    ? action.queries.filter(
+        (value): value is string =>
+          typeof value === 'string' && value.trim().length > 0 && !value.startsWith('ws_call_id='),
+      )
+    : [];
+  const fallbackQuery =
+    text(action, 'query') ?? actionQueries[0] ?? text(output, 'query') ?? text(input, 'query');
+  const errorCode = text(output, 'error_code', 'errorCode');
+  if (errorCode) {
+    const message = text(output, 'message') ?? errorCode;
+    return {
+      expandable: false,
+      metrics: [{ label: '状态', tone: 'warning', value: errorCode }],
+      preview: { content: message, mode: 'text' },
+      rows: [],
+      summary: `网页暂不可用 · ${message}`,
+      tone: 'warning',
+    };
+  }
+
+  const pageUrl = text(action, 'url') ?? text(output, 'url') ?? text(input, 'url') ?? '';
+  const pageUrlValue = safeWebUrl(pageUrl);
+  const pageMatches = records(output.matches);
+  if (
+    name === 'find_in_page' ||
+    action.type === 'findInPage' ||
+    action.type === 'find_in_page' ||
+    pageMatches.length > 0 ||
+    number(output, 'total_matches') !== undefined
+  ) {
+    const pattern = text(action, 'pattern') ?? text(output, 'pattern') ?? text(input, 'pattern') ?? '页内内容';
+    const results = pageMatches.map((match, index): ToolWebSearchResult => ({
+      domain: pageUrlValue ? domain(pageUrlValue.href) : undefined,
+      faviconUrl: pageUrlValue ? new URL('/favicon.ico', pageUrlValue.origin).href : undefined,
+      snippet: text(match, 'context'),
+      title: `第 ${index + 1} 处匹配`,
+      url: pageUrlValue?.href,
+    }));
+    const totalResults = number(output, 'total_matches') ?? results.length;
+    return {
+      expandable: results.length > 3,
+      metrics: [],
+      rows: [],
+      summary: `查找“${pattern}” · ${totalResults} 处匹配`,
+      webSearch: { groups: [{ query: pattern, results }], totalResults },
+    };
+  }
+
+  const pageContent = text(output, 'content');
+  if (
+    name === 'open_page' ||
+    action.type === 'openPage' ||
+    action.type === 'open_page' ||
+    (pageUrlValue && pageContent)
+  ) {
+    const title = text(output, 'title') ?? (pageUrlValue ? domain(pageUrlValue.href) : '网页内容');
+    const result: ToolWebSearchResult = {
+      domain: pageUrlValue ? domain(pageUrlValue.href) : undefined,
+      faviconUrl: pageUrlValue ? new URL('/favicon.ico', pageUrlValue.origin).href : undefined,
+      snippet: pageContent ? compactLine(pageContent, '网页正文已读取') : '网页已打开并交给模型阅读',
+      title,
+      url: pageUrlValue?.href,
+    };
+    return {
+      expandable: false,
+      metrics: [],
+      rows: [],
+      summary: `${title} · ${pageContent ? '网页正文已读取' : '网页已打开'}`,
+      webSearch: { groups: [{ results: [result] }], totalResults: 1 },
+    };
+  }
+
+  const groupedOutput = Array.isArray(outputValue)
+    ? records(outputValue)
+        .map(group => ({
+          query: text(group, 'query'),
+          results: webSearchResults(group.results ?? group.sources),
+        }))
+        .filter(group => group.results.length > 0)
+    : [];
+  const directResults = webSearchResults(action.sources ?? output.sources ?? output.results);
+  const groups =
+    groupedOutput.length > 0
+      ? groupedOutput
+      : directResults.length > 0
+        ? [{ query: fallbackQuery, results: directResults }]
+        : [];
+  const totalResults = groups.reduce((total, group) => total + group.results.length, 0);
   return {
-    expandable: sources.length > 3,
-    metrics: sources.length > 0 ? [{ label: '来源', value: String(sources.length) }] : [],
-    rows: sources.map(source => {
-      const url = text(source, 'url', 'link') ?? '';
-      return {
-        detail: text(source, 'snippet', 'description'),
-        icon: 'fa-solid fa-arrow-up-right-from-square',
-        label: text(source, 'title') ?? (domain(url) || '搜索结果'),
-        meta: url ? domain(url) : undefined,
-      };
-    }),
-    summary: query ? `搜索“${query}”` : '联网搜索已完成',
+    expandable: groups.some(group => group.results.length > 3),
+    metrics: [],
+    rows: [],
+    summary: fallbackQuery
+      ? `搜索“${fallbackQuery}”${totalResults > 0 ? ` · ${totalResults} 条结果` : ''}`
+      : totalResults > 0
+        ? `找到 ${totalResults} 条结果`
+        : '联网搜索已完成',
+    webSearch: groups.length > 0 ? { groups, totalResults } : undefined,
   };
 }
 
@@ -405,7 +544,7 @@ export function buildToolPresentation(item: SessionUiItem): ToolPresentation {
   } else if (descriptor.kind === 'tavern') {
     details = tavernPresentation(item.toolName ?? '', input, output);
   } else if (descriptor.kind === 'web') {
-    details = webPresentation(input, output);
+    details = webPresentation(item.toolName ?? '', input, output, outputValue);
   } else if (descriptor.kind === 'context') {
     const summary = text(output, 'summary') ?? text(input, 'summary');
     details = {

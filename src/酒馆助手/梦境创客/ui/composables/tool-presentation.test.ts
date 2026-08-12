@@ -130,8 +130,135 @@ describe('tool presentation', () => {
 
     expect(worldbook).toMatchObject({ kind: 'worldbook', summary: '主世界书 · 克隆完成' });
     expect(tavern).toMatchObject({ kind: 'tavern', preview: { content: '继续这个故事', mode: 'text' } });
-    expect(web).toMatchObject({ kind: 'web', summary: '搜索“梦境创客”' });
-    expect(web.rows[0]).toMatchObject({ label: '项目主页', meta: 'example.test' });
+    expect(web).toMatchObject({ kind: 'web', summary: '搜索“梦境创客” · 1 条结果' });
+    expect(web.webSearch?.groups[0]?.results[0]).toMatchObject({
+      domain: 'example.test',
+      faviconUrl: 'https://example.test/favicon.ico',
+      title: '项目主页',
+      url: 'https://example.test/project',
+    });
+  });
+
+  it('把 DeepSeek 多查询原生返回转换为紧凑搜索结果组', () => {
+    const web = buildToolPresentation(
+      tool({
+        content: JSON.stringify([
+          {
+            query: '哈基米是什么梗',
+            results: [
+              {
+                publish_date: '2023-07-03 16:00:00',
+                snippet: '哈基米一词出自日本动漫《赛马娘》。',
+                title: '哈基米是什么梗？',
+                url: 'https://henan.china.com/m/example',
+              },
+              { title: '第二条结果', url: 'javascript:alert(1)' },
+            ],
+          },
+        ]),
+        providerTool: true,
+        toolInput: JSON.stringify({ queries: ['哈基米是什么梗'] }),
+        toolName: 'web_search',
+      }),
+    );
+
+    expect(web).toMatchObject({ kind: 'web', summary: '找到 2 条结果' });
+    expect(web.webSearch).toMatchObject({ totalResults: 2 });
+    expect(web.webSearch?.groups[0]).toMatchObject({ query: '哈基米是什么梗' });
+    expect(web.webSearch?.groups[0]?.results).toEqual([
+      {
+        domain: 'henan.china.com',
+        faviconUrl: 'https://henan.china.com/favicon.ico',
+        publishDate: '2023-07-03 16:00:00',
+        snippet: '哈基米一词出自日本动漫《赛马娘》。',
+        title: '哈基米是什么梗？',
+        url: 'https://henan.china.com/m/example',
+      },
+      {
+        domain: undefined,
+        faviconUrl: undefined,
+        publishDate: undefined,
+        snippet: undefined,
+        title: '第二条结果',
+        url: undefined,
+      },
+    ]);
+  });
+
+  it('在 DeepSeek 只公开联网动作时显示真实查询并忽略内部调用 ID', () => {
+    const searched = buildToolPresentation(
+      tool({
+        content: JSON.stringify({
+          action: { queries: ['哈基米是什么梗', 'ws_call_id=call_123'], type: 'search' },
+        }),
+        providerTool: true,
+        toolName: 'web_search',
+      }),
+    );
+    const opened = buildToolPresentation(
+      tool({
+        content: JSON.stringify({
+          action: { type: 'openPage', url: 'https://example.test/article' },
+        }),
+        providerTool: true,
+        toolName: 'web_search',
+      }),
+    );
+
+    expect(searched).toMatchObject({ kind: 'web', summary: '搜索“哈基米是什么梗”' });
+    expect(searched.webSearch).toBeUndefined();
+    expect(opened).toMatchObject({ kind: 'web', summary: 'example.test · 网页已打开' });
+    expect(opened.webSearch?.groups[0]?.results[0]).toMatchObject({
+      faviconUrl: 'https://example.test/favicon.ico',
+      snippet: '网页已打开并交给模型阅读',
+      url: 'https://example.test/article',
+    });
+  });
+
+  it('复用来源卡展示 DeepSeek 打开网页、页内查找与错误结果', () => {
+    const opened = buildToolPresentation(
+      tool({
+        content: JSON.stringify({
+          content: '## 哈基米是什么梗\n\n清洗后的网页正文',
+          title: '哈基米是什么梗？',
+          url: 'https://example.test/article',
+        }),
+        providerTool: true,
+        toolInput: JSON.stringify({ url: 'https://example.test/article' }),
+        toolName: 'open_page',
+      }),
+    );
+    const found = buildToolPresentation(
+      tool({
+        content: JSON.stringify({
+          matches: [{ context: '名字是东海帝王，她特别喜欢蜂蜜水。' }],
+          pattern: '东海帝王',
+          total_matches: 1,
+          url: 'https://example.test/article',
+        }),
+        providerTool: true,
+        toolName: 'find_in_page',
+      }),
+    );
+    const unavailable = buildToolPresentation(
+      tool({
+        content: JSON.stringify({ error_code: 'unavailable', message: 'STATUS_403' }),
+        providerTool: true,
+        toolName: 'open_page',
+      }),
+    );
+
+    expect(opened).toMatchObject({ kind: 'web', summary: '哈基米是什么梗？ · 网页正文已读取' });
+    expect(opened.webSearch?.groups[0]?.results[0]).toMatchObject({
+      domain: 'example.test',
+      snippet: '## 哈基米是什么梗',
+    });
+    expect(found).toMatchObject({ kind: 'web', summary: '查找“东海帝王” · 1 处匹配' });
+    expect(found.webSearch?.groups[0]?.results[0]).toMatchObject({
+      snippet: '名字是东海帝王，她特别喜欢蜂蜜水。',
+      title: '第 1 处匹配',
+    });
+    expect(unavailable).toMatchObject({ summary: '网页暂不可用 · STATUS_403', tone: 'warning' });
   });
 
   it('失败、运行中和未知旧数据都有安全回退', () => {

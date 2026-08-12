@@ -45,6 +45,14 @@ describe('DeepSeek Responses adapter', () => {
     })).toEqual({ reasoning: { effort: 'none' }, temperature: 0.7, top_p: 0.8 });
   });
 
+  it('只保留 DeepSeek 支持的联网结果 include', () => {
+    expect(
+      transformDeepSeekResponsesRequest({
+        include: ['reasoning.encrypted_content', 'web_search_call.results'],
+      }),
+    ).toEqual({ include: ['web_search_call.results'] });
+  });
+
   it('把 reasoning_text 流翻译为 AI SDK 可识别事件，并在工具后保留完整正文', () => {
     const streamState = state();
     expect(translateDeepSeekResponsesEvent({
@@ -260,6 +268,18 @@ describe('DeepSeek Responses adapter', () => {
             type: 'search',
           },
           id: 'search-1',
+          results: [
+            {
+              query: 'SillyTavern',
+              results: [
+                {
+                  snippet: '本地优先的 LLM 前端。',
+                  title: 'SillyTavern',
+                  url: 'https://example.test/result',
+                },
+              ],
+            },
+          ],
           status: 'completed',
           type: 'web_search_call',
         },
@@ -311,11 +331,24 @@ describe('DeepSeek Responses adapter', () => {
       });
       expect(started).toHaveBeenCalledWith(expect.objectContaining({ toolCallId: 'search-1', toolName: 'web_search' }));
       expect(completed).toHaveBeenCalledWith(expect.objectContaining({ toolCallId: 'search-1', toolName: 'web_search' }));
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          output: [
+            expect.objectContaining({
+              query: 'SillyTavern',
+              results: [expect.objectContaining({ title: 'SillyTavern' })],
+            }),
+          ],
+        }),
+      );
       expect(result.providerToolCalls).toEqual([
         expect.objectContaining({ providerExecuted: true, toolCallId: 'search-1', toolName: 'web_search' }),
       ]);
       const requestBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
-      expect(requestBody).toMatchObject({ reasoning: { effort: 'none' } });
+      expect(requestBody).toMatchObject({
+        include: ['web_search_call.results'],
+        reasoning: { effort: 'none' },
+      });
     } finally {
       fetchMock.mockRestore();
     }

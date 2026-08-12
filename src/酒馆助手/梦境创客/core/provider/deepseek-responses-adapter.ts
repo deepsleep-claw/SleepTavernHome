@@ -2,13 +2,15 @@ type JsonRecord = Record<string, unknown>;
 
 export type DeepSeekResponsesStreamState = {
   reasoningByItemId: Map<string, string>;
+  webSearchResultsByItemId?: Map<string, unknown>;
 };
+
+const completedWebSearchResults = new Map<string, unknown>();
 
 const UNSUPPORTED_REQUEST_FIELDS = [
   'background',
   'context_management',
   'conversation',
-  'include',
   'max_tool_calls',
   'metadata',
   'parallel_tool_calls',
@@ -62,6 +64,13 @@ export function transformDeepSeekResponsesRequest(input: unknown): unknown {
       ? metadata.dream_card_agent_reasoning_effort
       : undefined;
   UNSUPPORTED_REQUEST_FIELDS.forEach(field => delete body[field]);
+  if (Array.isArray(body.include)) {
+    const include = body.include.filter(value => value === 'web_search_call.results');
+    if (include.length > 0) body.include = include;
+    else delete body.include;
+  } else {
+    delete body.include;
+  }
 
   if (Array.isArray(body.input)) {
     body.input = body.input.map(item => {
@@ -101,6 +110,40 @@ function itemId(event: JsonRecord): string | undefined {
   return typeof item?.id === 'string' ? item.id : undefined;
 }
 
+function webSearchEventResult(event: JsonRecord): unknown {
+  for (const key of ['result', 'results', 'search_results', 'output', 'data', 'content']) {
+    if (event[key] !== undefined) return event[key];
+  }
+  const item = record(event.item);
+  if (item) {
+    for (const key of ['result', 'results', 'search_results', 'output', 'data', 'content']) {
+      if (item[key] !== undefined) return item[key];
+    }
+    const action = record(item.action);
+    if (action) {
+      for (const key of ['result', 'results', 'search_results']) {
+        if (action[key] !== undefined) return action[key];
+      }
+    }
+  }
+  return undefined;
+}
+
+function rememberWebSearchResult(id: string, value: unknown, state: DeepSeekResponsesStreamState): void {
+  (state.webSearchResultsByItemId ??= new Map()).set(id, value);
+  completedWebSearchResults.set(id, value);
+  if (completedWebSearchResults.size > 128) {
+    completedWebSearchResults.delete(completedWebSearchResults.keys().next().value as string);
+  }
+}
+
+/** 取走 DeepSeek 原生联网事件里 AI SDK 没有公开的服务端结果。 */
+export function takeDeepSeekWebSearchResult(toolCallId: string): unknown {
+  const result = completedWebSearchResults.get(toolCallId);
+  completedWebSearchResults.delete(toolCallId);
+  return result;
+}
+
 /** 将 DeepSeek 的 reasoning_text 事件翻译为当前 AI SDK OpenAI Provider 可识别的 reasoning summary 事件。 */
 export function translateDeepSeekResponsesEvent(
   input: unknown,
@@ -110,6 +153,16 @@ export function translateDeepSeekResponsesEvent(
   if (!source || typeof source.type !== 'string') return input;
   const event = structuredClone(source);
   const id = itemId(event);
+
+  const eventItem = record(event.item);
+  if (
+    id &&
+    typeof event.type === 'string' &&
+    (event.type.startsWith('response.web_search_call.') || eventItem?.type === 'web_search_call')
+  ) {
+    const result = webSearchEventResult(event);
+    if (result !== undefined) rememberWebSearchResult(id, result, state);
+  }
 
   if (event.type === 'response.output_item.added') {
     const item = record(event.item);
@@ -181,7 +234,7 @@ export function createDeepSeekResponsesFetch(fetchImpl: typeof fetch = globalThi
     const response = await fetchImpl(input, nextInit);
     if (!response.body || !response.headers.get('content-type')?.includes('text/event-stream')) return response;
 
-    const state: DeepSeekResponsesStreamState = { reasoningByItemId: new Map() };
+    const state: DeepSeekResponsesStreamState = { reasoningByItemId: new Map(), webSearchResultsByItemId: new Map() };
     const decoder = new TextDecoder();
     const encoder = new TextEncoder();
     let pending = '';

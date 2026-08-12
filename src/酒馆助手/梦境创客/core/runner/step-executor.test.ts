@@ -123,6 +123,7 @@ describe('AiSdkModelStepExecutor', () => {
     })).toEqual({
       openai: {
         forceReasoning: false,
+        include: ['web_search_call.results'],
         metadata: { dream_card_agent_reasoning_effort: 'none' },
         reasoningEffort: undefined,
         store: false,

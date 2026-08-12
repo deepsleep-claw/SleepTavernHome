@@ -111,6 +111,45 @@ describe('timeline cards', () => {
     expect(root.querySelector('.dca-tool-raw-panel pre')?.textContent).toContain('"view": "1 | title');
   });
 
+  it('把 DeepSeek 网页搜索结果渲染为可展开的紧凑来源列表', async () => {
+    const results = Array.from({ length: 4 }, (_, index) => ({
+      publish_date: `2023-07-0${index + 1} 16:00:00`,
+      snippet: `第 ${index + 1} 条摘要`,
+      title: `第 ${index + 1} 条结果`,
+      url: `https://example${index + 1}.test/result`,
+    }));
+    const root = mount(ToolGroup, {
+      items: [
+        {
+          at: 1,
+          content: JSON.stringify([{ query: '哈基米是什么梗', results }]),
+          id: 'tool:web-search',
+          kind: 'tool',
+          providerTool: true,
+          status: 'completed',
+          toolInput: JSON.stringify({ queries: ['哈基米是什么梗'] }),
+          toolName: 'web_search',
+        },
+      ] satisfies SessionUiItem[],
+    });
+
+    expect(root.querySelector('.dca-web-search-query')?.textContent).toContain('哈基米是什么梗');
+    expect(root.querySelectorAll('.dca-web-search-list > li')).toHaveLength(3);
+    expect(root.querySelector<HTMLAnchorElement>('.dca-web-search-result-title a')?.href).toBe(
+      'https://example1.test/result',
+    );
+    expect(root.querySelector<HTMLImageElement>('.dca-web-search-favicon img')?.src).toBe(
+      'https://example1.test/favicon.ico',
+    );
+
+    const expand = [...root.querySelectorAll<HTMLButtonElement>('button')].find(button =>
+      button.textContent?.includes('展开其余 1 条'),
+    );
+    expand?.click();
+    await nextTick();
+    expect(root.querySelectorAll('.dca-web-search-list > li')).toHaveLength(4);
+  });
+
   it('把工具审批嵌入对应工具卡并自动展开，决定通过事件上送', async () => {
     const resolveConfirmation = vi.fn();
     const items: SessionUiItem[] = [

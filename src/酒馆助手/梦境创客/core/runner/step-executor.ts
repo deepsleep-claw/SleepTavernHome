@@ -6,6 +6,7 @@ import {
   type ProviderRuntime,
 } from '../provider-probe';
 import { normalizeProviderFailure, withApiRuntime, type ApiProfile } from '../provider/profiles';
+import { takeDeepSeekWebSearchResult } from '../provider/deepseek-responses-adapter';
 import type { RunnerTool } from './tools';
 
 export type RunnerToolCall = {
@@ -120,6 +121,7 @@ export function requestProviderOptions(
         return {
           openai: {
             forceReasoning: effort !== 'none',
+            include: settings.webSearch ? ['web_search_call.results'] : undefined,
             metadata: effort === 'none' ? { dream_card_agent_reasoning_effort: 'none' } : undefined,
             reasoningEffort: effort === 'none' ? undefined : effort,
             store: false,
@@ -170,6 +172,8 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
     }
     const tools = Object.fromEntries(entries) as ToolSet;
     let streamError: unknown;
+    const providerOutputByCallId = new Map<string, unknown>();
+    const supplementedProviderCalls = new Set<string>();
     const result = streamText({
       abortSignal: request.abortSignal,
       allowSystemInMessages: true,
@@ -188,9 +192,16 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
           });
         }
         if (chunk.chunk.type === 'tool-result' && chunk.chunk.providerExecuted) {
+          const supplemental =
+            request.modelSettings?.compatibilityMode === 'deepseek' && chunk.chunk.toolName === 'web_search'
+              ? takeDeepSeekWebSearchResult(chunk.chunk.toolCallId)
+              : undefined;
+          const output = supplemental ?? sanitizeProviderOutput(chunk.chunk.output);
+          providerOutputByCallId.set(chunk.chunk.toolCallId, output);
+          if (supplemental !== undefined) supplementedProviderCalls.add(chunk.chunk.toolCallId);
           await request.onProviderToolCompleted?.({
             input: undefined,
-            output: sanitizeProviderOutput(chunk.chunk.output),
+            output,
             providerExecuted: true,
             toolCallId: chunk.chunk.toolCallId,
             toolName: chunk.chunk.toolName,
@@ -249,6 +260,16 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
     const invalidLocalCalls = localCalls.filter(call => call.dynamic === true && call.invalid === true);
     const executableLocalCalls = localCalls.filter(call => !(call.dynamic === true && call.invalid === true));
     const providerCalls = toolCalls.filter(call => call.providerExecuted);
+    for (const call of providerCalls) {
+      if (request.modelSettings?.compatibilityMode !== 'deepseek' || call.toolName !== 'web_search') continue;
+      const supplemental = takeDeepSeekWebSearchResult(call.toolCallId);
+      if (supplemental === undefined) continue;
+      providerOutputByCallId.set(call.toolCallId, supplemental);
+      if (!supplementedProviderCalls.has(call.toolCallId)) {
+        supplementedProviderCalls.add(call.toolCallId);
+        await request.onProviderToolCompleted?.({ ...call, output: supplemental, providerExecuted: true });
+      }
+    }
     return {
       assistantMessages: assistantMessages as ModelMessage[],
       finishReason,
@@ -262,7 +283,8 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
       outputTokens: usage.outputTokens,
       providerToolCalls: providerCalls.map(call => ({
         input: call.input,
-        output: sanitizeProviderOutput(resultByCallId.get(call.toolCallId)?.output),
+        output:
+          providerOutputByCallId.get(call.toolCallId) ?? sanitizeProviderOutput(resultByCallId.get(call.toolCallId)?.output),
         providerExecuted: true,
         toolCallId: call.toolCallId,
         toolName: call.toolName,
