@@ -58,23 +58,29 @@ describe('global Tavern bridge', () => {
     expect(vi.mocked(setChatLorebook)).toHaveBeenCalledWith('新书');
   });
 
-  it('用原始角色卡和显式字段构造FormData，且不手动发送Content-Type', async () => {
+  it('通过部分合并原样保存世界书绑定、深度提示词和未知字段', async () => {
     const source = new FakeTavernBridge().raw!;
     source.data.alternate_greetings = ['g2', 'g3'];
     source.talkativeness = 0.75;
     source.fav = true;
-    source.data.extensions = { ...source.data.extensions, world: '主世界书' };
+    source.data.extensions = {
+      ...source.data.extensions,
+      depth_prompt: { depth: 7, prompt: '保留这段深度提示词', role: 'assistant' },
+      world: '主世界书',
+    };
     const bridge = createGlobalTavernBridge();
     await bridge.saveRawCharacter(source);
     const [_url, init] = vi.mocked(fetch).mock.calls[0];
-    expect(_url).toBe('/api/characters/edit');
-    expect((init?.headers as Record<string, string>)['Content-Type']).toBeUndefined();
-    const form = init?.body as FormData;
-    expect(form.get('personality')).toBe('base personality');
-    expect(form.getAll('alternate_greetings')).toEqual(['g2', 'g3']);
-    expect(form.get('world')).toBeNull();
-    expect(form.get('extensions')).toContain('主世界书');
-    expect(form.get('json_data')).toContain('unknown_server_field');
+    expect(_url).toBe('/api/characters/merge-attributes');
+    const payload = JSON.parse(String(init?.body)) as RawCharacterData;
+    expect(payload.data.personality).toBe('base personality');
+    expect(payload.data.alternate_greetings).toEqual(['g2', 'g3']);
+    expect(payload.data.extensions).toMatchObject({
+      depth_prompt: { depth: 7, prompt: '保留这段深度提示词', role: 'assistant' },
+      world: '主世界书',
+    });
+    expect(payload.unknown_server_field).toEqual({ keep: true });
+    expect(payload.json_data).toBeUndefined();
     expect(calls.getCharacters).toHaveBeenCalled();
   });
 
@@ -89,11 +95,9 @@ describe('global Tavern bridge', () => {
     const bridge = createGlobalTavernBridge();
     await bridge.setCharacterBindings({ additional: [], primary: '新书' });
 
-    const form = vi.mocked(fetch).mock.calls[0][1]?.body as FormData;
-    const json = JSON.parse(String(form.get('json_data'))) as RawCharacterData;
-    expect(form.get('world')).toBeNull();
+    const json = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)) as RawCharacterData;
     expect(json.data.extensions?.world).toBe('新书');
-    expect(json.data.character_book).toBeUndefined();
+    expect(json.data.character_book).toBe('__@@UNSET@@__');
     expect(rebindCharWorldbooks).not.toHaveBeenCalled();
   });
 
@@ -108,7 +112,7 @@ describe('global Tavern bridge', () => {
     await expect(bridge.deleteWorldbook('不存在')).rejects.toThrow('删除失败');
   });
 
-  it('旧卡字段缺省时仍提交完整、明确的空值', async () => {
+  it('旧卡字段缺省时保留原有V1字段而不虚构缺省值', async () => {
     const bridge = createGlobalTavernBridge();
     await bridge.saveRawCharacter({
       avatar: 'legacy.png',
@@ -120,11 +124,11 @@ describe('global Tavern bridge', () => {
       scenario: 'v1 scenario',
       tags: ['v1'],
     });
-    const form = vi.mocked(fetch).mock.calls[0][1]?.body as FormData;
-    expect(form.get('description')).toBe('v1 description');
-    expect(form.get('personality')).toBe('v1 personality');
-    expect(form.get('system_prompt')).toBe('');
-    expect(form.get('tags')).toBe('v1');
-    expect(form.getAll('alternate_greetings')).toEqual([]);
+    const payload = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)) as RawCharacterData;
+    expect(payload.description).toBe('v1 description');
+    expect(payload.personality).toBe('v1 personality');
+    expect(payload.data.system_prompt).toBeUndefined();
+    expect(payload.tags).toEqual(['v1']);
+    expect(payload.data.alternate_greetings).toBeUndefined();
   });
 });

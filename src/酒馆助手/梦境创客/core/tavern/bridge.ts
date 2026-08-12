@@ -104,42 +104,23 @@ async function refreshRegexDisplay(): Promise<void> {
   await context.eventSource.emit(context.eventTypes.CHAT_CHANGED, context.chatId);
 }
 
-function append(form: FormData, key: string, value: unknown): void {
-  if (value !== undefined && value !== null) {
-    form.append(key, typeof value === 'string' ? value : String(value));
-  }
-}
-
 async function saveRawCharacter(character: RawCharacterData): Promise<void> {
   const raw = klona(character);
   delete raw.json_data;
-  const data = raw.data;
-  const form = new FormData();
-  append(form, 'ch_name', raw.name);
-  append(form, 'avatar_url', raw.avatar);
-  append(form, 'chat', raw.chat);
-  append(form, 'create_date', raw.create_date);
-  append(form, 'description', data.description ?? raw.description ?? '');
-  append(form, 'personality', data.personality ?? raw.personality ?? '');
-  append(form, 'scenario', data.scenario ?? raw.scenario ?? '');
-  append(form, 'first_mes', data.first_mes ?? raw.first_mes ?? '');
-  append(form, 'mes_example', data.mes_example ?? raw.mes_example ?? '');
-  append(form, 'creator_notes', data.creator_notes ?? raw.creatorcomment ?? '');
-  append(form, 'system_prompt', data.system_prompt ?? '');
-  append(form, 'post_history_instructions', data.post_history_instructions ?? '');
-  append(form, 'creator', data.creator ?? '');
-  append(form, 'character_version', data.character_version ?? '');
-  append(form, 'talkativeness', raw.talkativeness ?? (data.extensions?.talkativeness as number | undefined));
-  append(form, 'fav', raw.fav ?? data.extensions?.fav);
-  append(form, 'tags', (data.tags ?? raw.tags ?? []).join(','));
-  append(form, 'extensions', JSON.stringify(data.extensions ?? {}));
-  append(form, 'json_data', JSON.stringify(raw));
-  for (const greeting of data.alternate_greetings ?? []) {
-    form.append('alternate_greetings', greeting);
+  const current = getCharData('current') as RawCharacterData | null;
+  if (current?.data.character_book !== undefined && raw.data.character_book === undefined) {
+    // merge-attributes 使用显式哨兵删除字段；这用于清理由旧的 primary 绑定流程生成的内嵌镜像。
+    raw.data.character_book = '__@@UNSET@@__';
   }
-  const headers = { ...SillyTavern.getRequestHeaders() } as Record<string, string>;
-  delete headers['Content-Type'];
-  const response = await fetch('/api/characters/edit', { body: form, cache: 'no-cache', headers, method: 'POST' });
+
+  // /api/characters/edit 会根据缺省表单字段重置 world/depth_prompt，并在携带 world 时
+  // 额外生成 character_book 镜像。部分合并接口可以原样保存完整角色数据，避免这两种副作用。
+  const response = await fetch('/api/characters/merge-attributes', {
+    body: JSON.stringify(raw),
+    cache: 'no-cache',
+    headers: SillyTavern.getRequestHeaders(),
+    method: 'POST',
+  });
   if (!response.ok) {
     throw new Error(`角色卡写入失败：(${response.status}) ${await response.text()}`);
   }
@@ -242,7 +223,7 @@ export function createGlobalTavernBridge(): TavernBridge {
         raw.data.extensions.world = bindings.primary ?? '';
         // SillyTavern 会在角色编辑表单携带 `world` 时生成同名 character_book 副本。
         // 梦境创客绑定的是外部世界书；若发现这种同名镜像则一并清掉，避免再次提示导入并覆盖外部书。
-        if (mirroredEmbeddedBook) delete raw.data.character_book;
+        if (mirroredEmbeddedBook) raw.data.character_book = '__@@UNSET@@__';
         await saveRawCharacter(raw);
       }
 
