@@ -46,6 +46,98 @@
       </span>
     </div>
 
+    <section
+      v-if="presentation.webAction?.type === 'search' && presentation.webAction.queries?.length"
+      class="dca-web-action dca-web-action-search"
+    >
+      <header>
+        <span><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>搜索查询</span>
+        <small>{{ presentation.webAction.queries.length }} 项</small>
+      </header>
+      <div class="dca-web-query-list">
+        <span v-for="(query, index) in presentation.webAction.queries" :key="`${index}:${query}`">
+          <small>{{ index + 1 }}</small>{{ query }}
+        </span>
+      </div>
+      <p v-if="!presentation.webAction.resultsReturned">
+        <i class="fa-regular fa-circle-info" aria-hidden="true"></i>
+        服务端未向界面返回来源明细
+      </p>
+    </section>
+
+    <section v-if="presentation.webAction?.type === 'open'" class="dca-web-action dca-web-action-open">
+      <header>
+        <span><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>目标网页</span>
+        <small>{{ presentation.webAction.contentPreview ? '正文已返回' : '已交给模型阅读' }}</small>
+      </header>
+      <a
+        v-if="presentation.webAction.target"
+        class="dca-web-target"
+        :href="presentation.webAction.target.url"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <span class="dca-web-search-favicon" aria-hidden="true">
+          <i class="fa-solid fa-globe"></i>
+          <img
+            :src="faviconUrl(presentation.webAction.target)"
+            :data-fallback="presentation.webAction.target.faviconFallbackUrl"
+            alt=""
+            decoding="async"
+            loading="lazy"
+            referrerpolicy="no-referrer"
+            @error="handleFaviconError"
+          />
+        </span>
+        <span>
+          <strong>{{ presentation.webAction.target.domain }}</strong>
+          <small>{{ presentation.webAction.target.displayUrl }}</small>
+        </span>
+        <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
+      </a>
+      <p v-if="presentation.webAction.contentPreview" class="dca-web-content-preview">
+        {{ presentation.webAction.contentPreview }}
+      </p>
+    </section>
+
+    <section v-if="presentation.webAction?.type === 'find'" class="dca-web-action dca-web-action-find">
+      <header>
+        <span><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>页内关键词</span>
+        <small>
+          {{
+            presentation.webAction.totalMatches === undefined
+              ? '结果明细未返回'
+              : `${presentation.webAction.totalMatches} 处匹配`
+          }}
+        </small>
+      </header>
+      <strong class="dca-web-find-pattern">{{ presentation.webAction.pattern }}</strong>
+      <a
+        v-if="presentation.webAction.target"
+        class="dca-web-target dca-web-target-compact"
+        :href="presentation.webAction.target.url"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <span class="dca-web-search-favicon" aria-hidden="true">
+          <i class="fa-solid fa-globe"></i>
+          <img
+            :src="faviconUrl(presentation.webAction.target)"
+            :data-fallback="presentation.webAction.target.faviconFallbackUrl"
+            alt=""
+            decoding="async"
+            loading="lazy"
+            referrerpolicy="no-referrer"
+            @error="handleFaviconError"
+          />
+        </span>
+        <span><strong>{{ presentation.webAction.target.domain }}</strong><small>{{ presentation.webAction.target.displayUrl }}</small></span>
+      </a>
+      <ol v-if="presentation.webAction.matches?.length" class="dca-web-find-matches">
+        <li v-for="(match, index) in presentation.webAction.matches" :key="`${index}:${match}`">{{ match }}</li>
+      </ol>
+    </section>
+
     <section v-if="presentation.webSearch" class="dca-web-search-results">
       <section v-for="(group, groupIndex) in visibleWebSearchGroups" :key="`${groupIndex}:${group.query ?? ''}`">
         <header class="dca-web-search-query">
@@ -61,13 +153,14 @@
             <span class="dca-web-search-favicon" aria-hidden="true">
               <i class="fa-solid fa-globe"></i>
               <img
-                v-if="result.faviconUrl"
-                :src="result.faviconUrl"
+                v-if="result.faviconDarkUrl || result.faviconLightUrl"
+                :src="faviconUrl(result)"
+                :data-fallback="result.faviconFallbackUrl"
                 alt=""
                 decoding="async"
                 loading="lazy"
                 referrerpolicy="no-referrer"
-                @error="hideBrokenFavicon"
+                @error="handleFaviconError"
               />
             </span>
             <div class="dca-web-search-result-main">
@@ -187,10 +280,15 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref } from 'vue';
 import type { ToolConfirmation } from '../../../../core/runner/tools';
 import type { SessionUiItem } from '../../../../core/session/types';
-import { buildToolPresentation } from '../../../composables/tool-presentation';
+import {
+  buildToolPresentation,
+  type ToolWebSearchResult,
+  type ToolWebTarget,
+} from '../../../composables/tool-presentation';
+import type { ActiveThemeDetail } from '../../../theme/runtime';
 import { toolStatusLabel } from '../../../composables/timeline';
 
 const props = defineProps<{ confirmation?: ToolConfirmation; tool: SessionUiItem }>();
@@ -200,6 +298,7 @@ const copied = ref(false);
 const expanded = ref(false);
 const rawOpen = ref(false);
 const rawTab = ref<'input' | 'output'>(props.tool.toolInput ? 'input' : 'output');
+const colorScheme = ref<'dark' | 'light'>('dark');
 const presentation = computed(() => buildToolPresentation(props.tool));
 const previewLines = computed(() => presentation.value.preview?.content.split(/\r?\n/u) ?? []);
 const visibleWebSearchGroups = computed(() =>
@@ -246,9 +345,38 @@ function compactDate(value: string): string {
   return value.match(/\d{4}-\d{2}-\d{2}/u)?.[0] ?? value;
 }
 
-function hideBrokenFavicon(event: Event): void {
-  if (event.currentTarget instanceof HTMLImageElement) event.currentTarget.hidden = true;
+function faviconUrl(target: ToolWebSearchResult | ToolWebTarget): string {
+  return colorScheme.value === 'dark'
+    ? (target.faviconDarkUrl ?? target.faviconLightUrl ?? '')
+    : (target.faviconLightUrl ?? target.faviconDarkUrl ?? '');
 }
+
+function handleFaviconError(event: Event): void {
+  if (!(event.currentTarget instanceof HTMLImageElement)) return;
+  const image = event.currentTarget;
+  const fallback = image.dataset.fallback;
+  if (fallback && image.src !== fallback) {
+    image.src = fallback;
+    return;
+  }
+  image.hidden = true;
+}
+
+function detectColorScheme(): 'dark' | 'light' {
+  return document.querySelector<HTMLElement>('.dca-app')?.dataset.dcaColorScheme === 'light' ? 'light' : 'dark';
+}
+
+function onThemeChange(event: Event): void {
+  const detail = (event as CustomEvent<ActiveThemeDetail>).detail;
+  colorScheme.value = detail?.colorScheme === 'light' ? 'light' : 'dark';
+}
+
+onMounted(() => {
+  colorScheme.value = detectColorScheme();
+  window.addEventListener('dca-theme-change', onThemeChange);
+});
+
+onUnmounted(() => window.removeEventListener('dca-theme-change', onThemeChange));
 
 async function copyRaw(): Promise<void> {
   try {
@@ -443,6 +571,156 @@ async function copyRaw(): Promise<void> {
   background: color-mix(in srgb, var(--dca-canvas) 82%, transparent);
 }
 
+.dca-web-action {
+  margin-top: 0.45rem;
+  overflow: hidden;
+  border: 1px solid var(--dca-border);
+  border-radius: 0.4rem;
+  background: color-mix(in srgb, var(--dca-canvas) 82%, transparent);
+}
+
+.dca-web-action > header {
+  display: flex;
+  min-height: 2rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.7rem;
+  padding: 0.35rem 0.55rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--dca-border) 78%, transparent);
+  background: color-mix(in srgb, var(--dca-surface) 72%, transparent);
+}
+
+.dca-web-action > header > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.38rem;
+  color: var(--dca-text-secondary);
+  font-size: 0.72rem;
+  font-weight: 550;
+}
+
+.dca-web-action > header i,
+.dca-web-action > p > i {
+  color: var(--dca-tool-tone);
+}
+
+.dca-web-action > header > small,
+.dca-web-action > p {
+  color: var(--dca-text-muted);
+  font-size: 0.65rem;
+}
+
+.dca-web-action > p {
+  margin: 0;
+  padding: 0.42rem 0.55rem;
+}
+
+.dca-web-query-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.32rem;
+  padding: 0.5rem 0.55rem;
+}
+
+.dca-web-query-list > span {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid color-mix(in srgb, var(--dca-tool-tone) 24%, var(--dca-border));
+  border-radius: 999px;
+  padding: 0.2rem 0.45rem 0.2rem 0.25rem;
+  background: color-mix(in srgb, var(--dca-tool-tone) 7%, transparent);
+  color: var(--dca-text-secondary);
+  font-size: 0.68rem;
+}
+
+.dca-web-query-list small {
+  display: grid;
+  width: 1rem;
+  height: 1rem;
+  place-items: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--dca-tool-tone) 14%, transparent);
+  color: var(--dca-tool-tone);
+  font: 9px/1 var(--dca-font-mono);
+}
+
+.dca-web-target {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 1.35rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 0.55rem;
+  color: var(--dca-text);
+  text-decoration: none;
+}
+
+.dca-web-target:hover {
+  background: color-mix(in srgb, var(--dca-tool-tone) 6%, transparent);
+}
+
+.dca-web-target > span:nth-child(2) {
+  display: grid;
+  min-width: 0;
+  gap: 0.08rem;
+}
+
+.dca-web-target strong,
+.dca-web-target small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dca-web-target strong {
+  font-size: 0.72rem;
+}
+
+.dca-web-target small,
+.dca-web-target > i {
+  color: var(--dca-text-muted);
+  font-size: 0.63rem;
+}
+
+.dca-web-target-compact {
+  border-top: 1px solid color-mix(in srgb, var(--dca-border) 65%, transparent);
+}
+
+.dca-web-find-pattern {
+  display: block;
+  padding: 0.5rem 0.55rem;
+  color: var(--dca-text);
+  font: 0.72rem/1.4 var(--dca-font-mono);
+}
+
+.dca-web-find-matches {
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--dca-border);
+  list-style: none;
+}
+
+.dca-web-find-matches li {
+  padding: 0.4rem 0.55rem;
+  color: var(--dca-text-muted);
+  font-size: 0.67rem;
+}
+
+.dca-web-find-matches li + li {
+  border-top: 1px solid color-mix(in srgb, var(--dca-border) 65%, transparent);
+}
+
+.dca-web-content-preview {
+  display: -webkit-box;
+  overflow: hidden;
+  border-top: 1px solid var(--dca-border);
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
 .dca-web-search-results > section + section {
   border-top: 1px solid var(--dca-border);
 }
@@ -522,7 +800,9 @@ async function copyRaw(): Promise<void> {
   height: 1.15rem;
   place-items: center;
   overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--dca-text) 10%, transparent);
   border-radius: 0.25rem;
+  background: color-mix(in srgb, var(--dca-text) 5%, transparent);
   color: var(--dca-tool-tone);
   font-size: 0.68rem;
 }
@@ -533,7 +813,7 @@ async function copyRaw(): Promise<void> {
   width: calc(100% - 0.16rem);
   height: calc(100% - 0.16rem);
   border-radius: 0.16rem;
-  background: var(--dca-surface);
+  background: transparent;
   object-fit: contain;
 }
 

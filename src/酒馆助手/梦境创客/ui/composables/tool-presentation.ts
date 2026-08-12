@@ -1,4 +1,5 @@
 import type { SessionUiItem } from '../../core/session/types';
+import { resolveWebsiteFavicon } from './website-favicon';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -25,11 +26,33 @@ export type ToolCardPreview = {
 
 export type ToolWebSearchResult = {
   domain?: string;
-  faviconUrl?: string;
+  faviconDarkUrl?: string;
+  faviconFallbackUrl?: string;
+  faviconLightUrl?: string;
   publishDate?: string;
   snippet?: string;
   title: string;
   url?: string;
+};
+
+export type ToolWebTarget = {
+  displayUrl: string;
+  domain: string;
+  faviconDarkUrl: string;
+  faviconFallbackUrl?: string;
+  faviconLightUrl: string;
+  url: string;
+};
+
+export type ToolWebActionPresentation = {
+  contentPreview?: string;
+  matches?: string[];
+  pattern?: string;
+  queries?: string[];
+  resultsReturned?: boolean;
+  target?: ToolWebTarget;
+  totalMatches?: number;
+  type: 'find' | 'open' | 'search';
 };
 
 export type ToolWebSearchGroup = {
@@ -55,6 +78,7 @@ export type ToolPresentation = {
   summary: string;
   title: string;
   tone: ToolCardTone;
+  webAction?: ToolWebActionPresentation;
   webSearch?: ToolWebSearchPresentation;
 };
 
@@ -148,10 +172,24 @@ function domain(value: string): string {
 function safeWebUrl(value: string): URL | undefined {
   try {
     const url = new URL(value);
-    return ['http:', 'https:'].includes(url.protocol) ? url : undefined;
+    if (!['http:', 'https:'].includes(url.protocol)) return undefined;
+    if (/^#?ws_call_id=/u.test(url.hash)) url.hash = '';
+    return url;
   } catch {
     return undefined;
   }
+}
+
+function webTarget(url: URL): ToolWebTarget {
+  const favicon = resolveWebsiteFavicon(url);
+  return {
+    displayUrl: `${url.hostname}${url.pathname === '/' ? '' : url.pathname}${url.search}`,
+    domain: domain(url.href),
+    faviconDarkUrl: favicon.darkUrl,
+    faviconFallbackUrl: favicon.fallbackUrl,
+    faviconLightUrl: favicon.lightUrl,
+    url: url.href,
+  };
 }
 
 function webSearchResult(value: JsonRecord): ToolWebSearchResult | undefined {
@@ -161,7 +199,9 @@ function webSearchResult(value: JsonRecord): ToolWebSearchResult | undefined {
   if (!title && !url) return undefined;
   return {
     domain: url ? domain(url.href) : undefined,
-    faviconUrl: url ? new URL('/favicon.ico', url.origin).href : undefined,
+    faviconDarkUrl: url ? resolveWebsiteFavicon(url).darkUrl : undefined,
+    faviconFallbackUrl: url ? resolveWebsiteFavicon(url).fallbackUrl : undefined,
+    faviconLightUrl: url ? resolveWebsiteFavicon(url).lightUrl : undefined,
     publishDate: text(value, 'publish_date', 'publishDate', 'published_at', 'date'),
     snippet: text(value, 'snippet', 'description', 'content'),
     title: title ?? '搜索结果',
@@ -403,7 +443,10 @@ function webPresentation(
   output: JsonRecord,
   outputValue: unknown,
 ): Partial<
-  Pick<ToolPresentation, 'expandable' | 'metrics' | 'preview' | 'rows' | 'summary' | 'tone' | 'webSearch'>
+  Pick<
+    ToolPresentation,
+    'expandable' | 'icon' | 'metrics' | 'preview' | 'rows' | 'summary' | 'title' | 'tone' | 'webAction' | 'webSearch'
+  >
 > {
   const action = record(output.action);
   const actionQueries = Array.isArray(action.queries)
@@ -440,18 +483,29 @@ function webPresentation(
     const pattern = text(action, 'pattern') ?? text(output, 'pattern') ?? text(input, 'pattern') ?? '页内内容';
     const results = pageMatches.map((match, index): ToolWebSearchResult => ({
       domain: pageUrlValue ? domain(pageUrlValue.href) : undefined,
-      faviconUrl: pageUrlValue ? new URL('/favicon.ico', pageUrlValue.origin).href : undefined,
+      faviconDarkUrl: pageUrlValue ? resolveWebsiteFavicon(pageUrlValue).darkUrl : undefined,
+      faviconFallbackUrl: pageUrlValue ? resolveWebsiteFavicon(pageUrlValue).fallbackUrl : undefined,
+      faviconLightUrl: pageUrlValue ? resolveWebsiteFavicon(pageUrlValue).lightUrl : undefined,
       snippet: text(match, 'context'),
       title: `第 ${index + 1} 处匹配`,
       url: pageUrlValue?.href,
     }));
-    const totalResults = number(output, 'total_matches') ?? results.length;
+    const explicitTotal = number(output, 'total_matches');
+    const totalResults = explicitTotal ?? results.length;
     return {
       expandable: results.length > 3,
+      icon: 'fa-solid fa-magnifying-glass',
       metrics: [],
       rows: [],
-      summary: `查找“${pattern}” · ${totalResults} 处匹配`,
-      webSearch: { groups: [{ query: pattern, results }], totalResults },
+      summary: `查找“${pattern}” · ${explicitTotal !== undefined || results.length > 0 ? `${totalResults} 处匹配` : '结果明细未返回'}`,
+      title: '页内查找',
+      webAction: {
+        matches: results.map(result => result.snippet).filter((value): value is string => Boolean(value)),
+        pattern,
+        target: pageUrlValue ? webTarget(pageUrlValue) : undefined,
+        totalMatches: explicitTotal ?? (results.length > 0 ? results.length : undefined),
+        type: 'find',
+      },
     };
   }
 
@@ -463,19 +517,18 @@ function webPresentation(
     (pageUrlValue && pageContent)
   ) {
     const title = text(output, 'title') ?? (pageUrlValue ? domain(pageUrlValue.href) : '网页内容');
-    const result: ToolWebSearchResult = {
-      domain: pageUrlValue ? domain(pageUrlValue.href) : undefined,
-      faviconUrl: pageUrlValue ? new URL('/favicon.ico', pageUrlValue.origin).href : undefined,
-      snippet: pageContent ? compactLine(pageContent, '网页正文已读取') : '网页已打开并交给模型阅读',
-      title,
-      url: pageUrlValue?.href,
-    };
     return {
       expandable: false,
+      icon: 'fa-solid fa-arrow-up-right-from-square',
       metrics: [],
       rows: [],
       summary: `${title} · ${pageContent ? '网页正文已读取' : '网页已打开'}`,
-      webSearch: { groups: [{ results: [result] }], totalResults: 1 },
+      title: '打开网页',
+      webAction: {
+        contentPreview: pageContent ? compactLine(pageContent, '网页正文已读取') : undefined,
+        target: pageUrlValue ? webTarget(pageUrlValue) : undefined,
+        type: 'open',
+      },
     };
   }
 
@@ -504,6 +557,17 @@ function webPresentation(
       : totalResults > 0
         ? `找到 ${totalResults} 条结果`
         : '联网搜索已完成',
+    webAction: {
+      queries: [
+        ...new Set([
+          ...actionQueries,
+          ...groups.map(group => group.query).filter((value): value is string => Boolean(value)),
+          ...(fallbackQuery ? [fallbackQuery] : []),
+        ]),
+      ],
+      resultsReturned: totalResults > 0,
+      type: 'search',
+    },
     webSearch: groups.length > 0 ? { groups, totalResults } : undefined,
   };
 }

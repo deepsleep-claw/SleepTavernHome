@@ -133,7 +133,8 @@ describe('tool presentation', () => {
     expect(web).toMatchObject({ kind: 'web', summary: '搜索“梦境创客” · 1 条结果' });
     expect(web.webSearch?.groups[0]?.results[0]).toMatchObject({
       domain: 'example.test',
-      faviconUrl: 'https://example.test/favicon.ico',
+      faviconDarkUrl: 'https://example.test/favicon.ico',
+      faviconLightUrl: 'https://example.test/favicon.ico',
       title: '项目主页',
       url: 'https://example.test/project',
     });
@@ -168,7 +169,9 @@ describe('tool presentation', () => {
     expect(web.webSearch?.groups[0]?.results).toEqual([
       {
         domain: 'henan.china.com',
-        faviconUrl: 'https://henan.china.com/favicon.ico',
+        faviconDarkUrl: 'https://henan.china.com/favicon.ico',
+        faviconFallbackUrl: undefined,
+        faviconLightUrl: 'https://henan.china.com/favicon.ico',
         publishDate: '2023-07-03 16:00:00',
         snippet: '哈基米一词出自日本动漫《赛马娘》。',
         title: '哈基米是什么梗？',
@@ -176,7 +179,9 @@ describe('tool presentation', () => {
       },
       {
         domain: undefined,
-        faviconUrl: undefined,
+        faviconDarkUrl: undefined,
+        faviconFallbackUrl: undefined,
+        faviconLightUrl: undefined,
         publishDate: undefined,
         snippet: undefined,
         title: '第二条结果',
@@ -206,12 +211,19 @@ describe('tool presentation', () => {
     );
 
     expect(searched).toMatchObject({ kind: 'web', summary: '搜索“哈基米是什么梗”' });
+    expect(searched.webAction).toEqual({
+      queries: ['哈基米是什么梗'],
+      resultsReturned: false,
+      type: 'search',
+    });
     expect(searched.webSearch).toBeUndefined();
-    expect(opened).toMatchObject({ kind: 'web', summary: 'example.test · 网页已打开' });
-    expect(opened.webSearch?.groups[0]?.results[0]).toMatchObject({
-      faviconUrl: 'https://example.test/favicon.ico',
-      snippet: '网页已打开并交给模型阅读',
-      url: 'https://example.test/article',
+    expect(opened).toMatchObject({ kind: 'web', summary: 'example.test · 网页已打开', title: '打开网页' });
+    expect(opened.webAction).toMatchObject({
+      target: {
+        faviconDarkUrl: 'https://example.test/favicon.ico',
+        url: 'https://example.test/article',
+      },
+      type: 'open',
     });
   });
 
@@ -249,14 +261,17 @@ describe('tool presentation', () => {
     );
 
     expect(opened).toMatchObject({ kind: 'web', summary: '哈基米是什么梗？ · 网页正文已读取' });
-    expect(opened.webSearch?.groups[0]?.results[0]).toMatchObject({
-      domain: 'example.test',
-      snippet: '## 哈基米是什么梗',
+    expect(opened.webAction).toMatchObject({
+      contentPreview: '## 哈基米是什么梗',
+      target: { domain: 'example.test' },
+      type: 'open',
     });
     expect(found).toMatchObject({ kind: 'web', summary: '查找“东海帝王” · 1 处匹配' });
-    expect(found.webSearch?.groups[0]?.results[0]).toMatchObject({
-      snippet: '名字是东海帝王，她特别喜欢蜂蜜水。',
-      title: '第 1 处匹配',
+    expect(found.webAction).toMatchObject({
+      matches: ['名字是东海帝王，她特别喜欢蜂蜜水。'],
+      pattern: '东海帝王',
+      totalMatches: 1,
+      type: 'find',
     });
     expect(unavailable).toMatchObject({ summary: '网页暂不可用 · STATUS_403', tone: 'warning' });
   });

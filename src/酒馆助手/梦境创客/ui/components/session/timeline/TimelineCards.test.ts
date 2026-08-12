@@ -134,6 +134,7 @@ describe('timeline cards', () => {
     });
 
     expect(root.querySelector('.dca-web-search-query')?.textContent).toContain('哈基米是什么梗');
+    expect(root.querySelector('.dca-web-query-list')?.textContent).toContain('哈基米是什么梗');
     expect(root.querySelectorAll('.dca-web-search-list > li')).toHaveLength(3);
     expect(root.querySelector<HTMLAnchorElement>('.dca-web-search-result-title a')?.href).toBe(
       'https://example1.test/result',
@@ -148,6 +149,66 @@ describe('timeline cards', () => {
     expand?.click();
     await nextTick();
     expect(root.querySelectorAll('.dca-web-search-list > li')).toHaveLength(4);
+  });
+
+  it('分别展示搜索 Query、打开网页与无计数的页内查找', () => {
+    const root = mount(ToolGroup, {
+      items: [
+        {
+          at: 1,
+          content: JSON.stringify({
+            action: {
+              queries: ['SillyTavern 最新版本', 'Deep Sleep 梦境创客', 'ws_call_id=call_1'],
+              type: 'search',
+            },
+          }),
+          id: 'tool:search-actions',
+          kind: 'tool',
+          providerTool: true,
+          status: 'completed',
+          toolName: 'web_search',
+        },
+        {
+          at: 2,
+          content: JSON.stringify({
+            action: { type: 'openPage', url: 'https://github.com/SillyTavern/SillyTavern/releases/tag/1.17.0#ws_call_id=call_2' },
+          }),
+          id: 'tool:open-action',
+          kind: 'tool',
+          providerTool: true,
+          status: 'completed',
+          toolName: 'web_search',
+        },
+        {
+          at: 3,
+          content: JSON.stringify({
+            action: {
+              pattern: 'New features',
+              type: 'findInPage',
+              url: 'https://github.com/SillyTavern/SillyTavern/releases/tag/1.17.0#ws_call_id=call_3',
+            },
+          }),
+          id: 'tool:find-action',
+          kind: 'tool',
+          providerTool: true,
+          status: 'completed',
+          toolName: 'web_search',
+        },
+      ] satisfies SessionUiItem[],
+    });
+
+    expect(root.querySelector('.dca-web-query-list')?.textContent).toContain('Deep Sleep 梦境创客');
+    expect(root.querySelector('.dca-web-query-list')?.textContent).not.toContain('ws_call_id');
+    expect(root.querySelector('.dca-web-action-open')?.textContent).toContain('github.com');
+    expect(root.querySelector<HTMLAnchorElement>('.dca-web-action-open .dca-web-target')?.href).not.toContain(
+      'ws_call_id',
+    );
+    expect(root.querySelector('.dca-web-action-find')?.textContent).toContain('New features');
+    expect(root.querySelector('.dca-web-action-find')?.textContent).toContain('结果明细未返回');
+    expect(root.querySelector('.dca-web-action-find')?.textContent).not.toContain('0 处匹配');
+    expect(root.querySelector<HTMLImageElement>('.dca-web-action-open img')?.src).toBe(
+      'https://github.githubassets.com/favicons/favicon-dark.svg',
+    );
   });
 
   it('把工具审批嵌入对应工具卡并自动展开，决定通过事件上送', async () => {
