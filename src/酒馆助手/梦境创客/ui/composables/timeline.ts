@@ -190,7 +190,13 @@ export function toolGroupHasFailure(items: SessionUiItem[]): boolean {
 }
 
 export function toolGroupLabel(items: SessionUiItem[]): string {
-  if (items.some(item => item.status === 'running')) return `正在调用工具 · ${items.length}`;
+  if (items.some(item => item.status === 'running' && item.toolPhase === 'executing')) {
+    return `正在调用工具 · ${items.length}`;
+  }
+  if (items.some(item => item.status === 'running' && item.toolPhase === 'ready')) {
+    return `工具参数已就绪 · ${items.length}`;
+  }
+  if (items.some(item => item.status === 'running')) return `正在生成工具调用 · ${items.length}`;
   if (toolGroupHasFailure(items)) return `工具调用出现失败 · ${items.length}`;
   return `已调用 ${items.length} 个工具`;
 }
@@ -201,7 +207,12 @@ export function toolGroupSummary(items: SessionUiItem[]): string {
   return [...counts].map(([name, count]) => (count > 1 ? `${name} ×${count}` : name)).join(' · ');
 }
 
-export function toolStatusLabel(status: SessionUiItem['status']): string {
+export function toolStatusLabel(
+  status: SessionUiItem['status'],
+  phase?: SessionUiItem['toolPhase'],
+): string {
+  if (status === 'running' && phase === 'generating') return '生成中';
+  if (status === 'running' && phase === 'ready') return '待执行';
   return { completed: '完成', failed: '失败', running: '运行中' }[status ?? 'completed'];
 }
 

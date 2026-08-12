@@ -2,7 +2,7 @@
   <details
     class="dca-step dca-step-tools dca-step-card dca-tool-group"
     :class="{ 'awaiting-confirmation': hasPendingConfirmation, 'has-failure': toolGroupHasFailure(items), running: hasRunning }"
-    :open="hasPendingConfirmation || toolGroupHasFailure(items)"
+    :open="hasRunning || hasPendingConfirmation || toolGroupHasFailure(items)"
   >
     <summary>
       <i class="fa-solid fa-terminal" aria-hidden="true"></i>
@@ -17,7 +17,7 @@
           <span class="dca-tool-track-item" :class="`dca-tool-track-${tool.status ?? 'completed'}`">
             <i :class="toolTrackIcon(tool)" aria-hidden="true"></i>
             <span>{{ toolDisplayTitle(tool) }}</span>
-            <small>{{ toolStatusLabel(tool.status) }}</small>
+            <small>{{ toolStatusLabel(tool.status, tool.toolPhase) }}</small>
           </span>
         </template>
       </div>

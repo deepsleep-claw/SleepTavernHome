@@ -15,9 +15,10 @@
       </div>
       <small class="dca-tool-result-status" :class="`dca-tool-${tool.status ?? 'completed'}`">
         <i :class="statusIcon" aria-hidden="true"></i>
-        {{ toolStatusLabel(tool.status) }}
+        {{ toolStatusLabel(tool.status, tool.toolPhase) }}
       </small>
       <button
+        v-if="tool.toolPhase !== 'generating'"
         class="dca-tool-raw-toggle"
         type="button"
         :aria-expanded="rawOpen"

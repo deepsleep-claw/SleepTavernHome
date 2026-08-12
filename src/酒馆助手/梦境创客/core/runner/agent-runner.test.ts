@@ -108,6 +108,38 @@ describe('AgentRunner', () => {
     expect(executor.requests).toHaveLength(1);
   });
 
+  it('把工具参数生命周期实时转发给界面且不改变执行顺序', async () => {
+    const call: RunnerToolCall = { input: { path: '/a.md' }, toolCallId: 'streamed', toolName: 'read' };
+    const executor = new QueueExecutor([
+      async request => {
+        request.onToolInputStarted?.({ toolCallId: call.toolCallId, toolName: call.toolName });
+        request.onToolInputDelta?.({ delta: '{"path":"/a', toolCallId: call.toolCallId });
+        request.onToolInputDelta?.({ delta: '.md"}', toolCallId: call.toolCallId });
+        request.onToolInputReady?.(call);
+        return modelStep([call]);
+      },
+      modelStep(),
+    ]);
+    const updates: string[] = [];
+    const journal = new MemoryRunnerJournal();
+    const runner = new AgentRunner({
+      executor,
+      journal,
+      onToolInputDelta: update => updates.push(`delta:${update.delta}`),
+      onToolInputReady: update => updates.push(`ready:${update.toolCallId}`),
+      onToolInputStarted: update => updates.push(`start:${update.toolCallId}`),
+      tools: [runnerTool('read', true, async () => ({ ok: true }))],
+    });
+
+    expect((await runner.start('read')).status).toBe('completed');
+    expect(updates).toEqual(['start:streamed', 'delta:{"path":"/a', 'delta:.md"}', 'ready:streamed']);
+    expect(
+      journal.events
+        .filter(event => 'call' in event && event.call.toolCallId === call.toolCallId)
+        .map(event => event.type),
+    ).toEqual(['tool-started', 'tool-executing', 'tool-completed']);
+  });
+
   it('批次含写入时，读取与写入全部严格按调用顺序执行', async () => {
     const calls: RunnerToolCall[] = [
       { input: {}, toolCallId: '1', toolName: 'read' },

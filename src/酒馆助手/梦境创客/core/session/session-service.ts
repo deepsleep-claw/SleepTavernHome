@@ -8,7 +8,12 @@ import { DreamCreatorWorkspaceFileStore } from '../persistence/workspace-file-st
 import { AgentRunner, type PendingRunnerStep, type RunnerEvent, type RunnerStatus } from '../runner/agent-runner';
 import { measureContext } from '../runner/context';
 import { recoverPendingRunnerStep } from '../runner/recovery';
-import type { ModelStepExecutor } from '../runner/step-executor';
+import type {
+  ModelStepExecutor,
+  RunnerToolCall,
+  RunnerToolInputDelta,
+  RunnerToolInputStart,
+} from '../runner/step-executor';
 import { createWorkspaceRunnerTools, type ToolConfirmation } from '../runner/tools';
 import { createTavernChatRunnerTools } from '../runner/tavern-chat-tools';
 import { createWorldbookRunnerTools } from '../runner/worldbook-tools';
@@ -145,6 +150,7 @@ export class CardAgentSessionService {
   private events: RunnerEvent[] = [];
   private headerMessageCount: number;
   private hasStreamedReasoningInCurrentStep = false;
+  private hasStreamedTextInCurrentStep = false;
   private lastError?: string;
   private manualEditGroup?: ManualEditGroup;
   private mode: SessionMode;
@@ -919,6 +925,9 @@ export class CardAgentSessionService {
       now: this.now,
       onReasoningDelta: delta => this.appendStreamingReasoning(delta),
       onTextDelta: delta => this.appendStreamingText(delta),
+      onToolInputDelta: update => this.appendStreamingToolInput(update),
+      onToolInputReady: call => this.completeStreamingToolInput(call),
+      onToolInputStarted: call => this.startStreamingToolInput(call),
       requestApproval: request =>
         this.requestToolApproval?.({ ...request, sessionId: this.sessionId }) ?? Promise.resolve(false),
       prepareMessages: this.attachmentStore
@@ -1100,6 +1109,7 @@ export class CardAgentSessionService {
   }
 
   private appendStreamingText(delta: string): void {
+    this.hasStreamedTextInCurrentStep = true;
     let item = [...this.ui]
       .reverse()
       .find(
@@ -1198,6 +1208,61 @@ export class CardAgentSessionService {
     }
   }
 
+  private startStreamingToolInput(call: RunnerToolInputStart): void {
+    const at = this.now();
+    // 一拿到稳定调用ID，工具卡就成为文本与思考之后的新时间线边界。
+    this.completeStreamingReasoning(at);
+    this.completeStreamingText(at);
+    const id = `tool:${call.toolCallId}`;
+    const existing = this.ui.find(message => message.id === id);
+    if (existing) {
+      existing.status = 'running';
+      existing.toolName = call.toolName;
+      existing.providerTool = call.providerExecuted === true;
+      existing.toolPhase = 'generating';
+      existing.toolInput = '';
+      existing.content = '';
+    } else {
+      this.ui.push({
+        at,
+        checkpointId: this.activeCheckpointId,
+        content: '',
+        id,
+        kind: 'tool',
+        status: 'running',
+        toolCallId: call.toolCallId,
+        toolInput: '',
+        toolName: call.toolName,
+        toolPhase: 'generating',
+        providerTool: call.providerExecuted === true,
+      });
+    }
+    this.notifyStreaming();
+  }
+
+  private appendStreamingToolInput(update: RunnerToolInputDelta): void {
+    const item = this.ui.find(message => message.id === `tool:${update.toolCallId}`);
+    if (!item || item.kind !== 'tool' || item.status !== 'running') return;
+    item.toolInput = `${item.toolInput ?? ''}${update.delta}`;
+    item.toolPhase = 'generating';
+    this.notifyStreaming();
+  }
+
+  private completeStreamingToolInput(call: RunnerToolCall): void {
+    let item = this.ui.find(message => message.id === `tool:${call.toolCallId}`);
+    if (!item) {
+      this.startStreamingToolInput(call);
+      item = this.ui.find(message => message.id === `tool:${call.toolCallId}`);
+    }
+    if (!item) return;
+    item.status = 'running';
+    item.toolInput = canonicalStringify(call.input);
+    item.toolName = call.toolName;
+    item.toolPhase = 'ready';
+    item.providerTool = call.providerExecuted === true;
+    this.notifyStreaming();
+  }
+
   private consumeLatestEvent(event: RunnerEvent): void {
     if (event.type === 'model-completed') {
       const text = assistantText(event.messages);
@@ -1206,27 +1271,45 @@ export class CardAgentSessionService {
         this.hasStreamedReasoningInCurrentStep ? '' : assistantReasoning(event.messages),
       );
       this.hasStreamedReasoningInCurrentStep = false;
-      this.completeStreamingText(event.at, text);
+      this.completeStreamingText(event.at, this.hasStreamedTextInCurrentStep ? '' : text);
+      this.hasStreamedTextInCurrentStep = false;
     } else if (event.type === 'tool-started') {
       // 工具调用是可见时间线的硬边界；它之后的新文本与思考必须创建新的过程片段。
       this.completeStreamingReasoning(event.at);
       this.completeStreamingText(event.at);
-      this.ui.push({
-        at: event.at,
-        checkpointId: this.activeCheckpointId,
-        content: canonicalStringify(event.call.input),
-        id: `tool:${event.call.toolCallId}`,
-        kind: 'tool',
-        status: 'running',
-        toolCallId: event.call.toolCallId,
-        toolInput: canonicalStringify(event.call.input),
-        toolName: event.call.toolName,
-        providerTool: event.call.providerExecuted === true,
-      });
+      const id = `tool:${event.call.toolCallId}`;
+      const existing = this.ui.find(message => message.id === id);
+      const input = canonicalStringify(event.call.input);
+      if (existing) {
+        existing.content = '';
+        existing.status = 'running';
+        existing.toolInput = input;
+        existing.toolName = event.call.toolName;
+        existing.toolPhase = event.call.providerExecuted === true ? 'executing' : 'ready';
+        existing.providerTool = event.call.providerExecuted === true;
+      } else {
+        this.ui.push({
+          at: event.at,
+          checkpointId: this.activeCheckpointId,
+          content: '',
+          id,
+          kind: 'tool',
+          status: 'running',
+          toolCallId: event.call.toolCallId,
+          toolInput: input,
+          toolName: event.call.toolName,
+          toolPhase: event.call.providerExecuted === true ? 'executing' : 'ready',
+          providerTool: event.call.providerExecuted === true,
+        });
+      }
+    } else if (event.type === 'tool-executing') {
+      const item = this.ui.find(message => message.id === `tool:${event.call.toolCallId}`);
+      if (item) item.toolPhase = 'executing';
     } else if (event.type === 'tool-completed' || event.type === 'tool-failed') {
       const item = this.ui.find(message => message.id === `tool:${event.call.toolCallId}`);
       if (item) {
         item.status = event.type === 'tool-completed' ? 'completed' : 'failed';
+        item.toolPhase = undefined;
         item.content = event.type === 'tool-completed' ? canonicalStringify(event.output) : event.error;
       }
     } else if (event.type === 'guidance-injected') {
@@ -1243,6 +1326,7 @@ export class CardAgentSessionService {
         this.completeStreamingReasoning(event.at);
         this.hasStreamedReasoningInCurrentStep = false;
         this.completeStreamingText(event.at);
+        this.hasStreamedTextInCurrentStep = false;
         if (['completed', 'context-exhausted', 'failed', 'stopped'].includes(event.status)) {
           this.completeRunUi(event.status as 'completed' | 'context-exhausted' | 'failed' | 'stopped', event.at);
         }

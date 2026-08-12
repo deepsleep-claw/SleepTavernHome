@@ -40,6 +40,7 @@ export type SessionUiItem = {
   toolCallId?: string;
   toolInput?: string;
   toolName?: string;
+  toolPhase?: 'executing' | 'generating' | 'ready';
   providerTool?: boolean;
 };
 

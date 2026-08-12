@@ -39,6 +39,8 @@ describe('AiSdkModelStepExecutor', () => {
     });
     const delta = vi.fn();
     const reasoningDelta = vi.fn();
+    const toolInputReady = vi.fn();
+    const toolInputStarted = vi.fn();
     const executor = new AiSdkModelStepExecutor(async () => model);
     const result = await executor.execute({
       abortSignal: new AbortController().signal,
@@ -53,6 +55,8 @@ describe('AiSdkModelStepExecutor', () => {
       },
       onReasoningDelta: reasoningDelta,
       onTextDelta: delta,
+      onToolInputReady: toolInputReady,
+      onToolInputStarted: toolInputStarted,
       tools: [runnerTool('read_file'), runnerTool('search_files')],
     });
     expect(result).toMatchObject({
@@ -64,6 +68,12 @@ describe('AiSdkModelStepExecutor', () => {
     });
     expect(delta).toHaveBeenCalledWith('hello');
     expect(reasoningDelta).toHaveBeenCalledWith('先读取文件');
+    expect(toolInputStarted).toHaveBeenCalledWith(
+      expect.objectContaining({ toolCallId: 'call-1', toolName: 'read_file' }),
+    );
+    expect(toolInputReady).toHaveBeenCalledWith(
+      expect.objectContaining({ input: { value: 'x' }, toolCallId: 'call-1', toolName: 'read_file' }),
+    );
     expect(model.doStreamCalls).toHaveLength(1);
     expect(model.doStreamCalls[0]).toMatchObject({
       maxOutputTokens: 4096,
@@ -97,6 +107,47 @@ describe('AiSdkModelStepExecutor', () => {
     ]);
     expect(result.invalidToolCalls?.[0].error).toContain('Invalid input for tool read_file');
     expect(result.assistantMessages.some(message => message.role === 'tool')).toBe(true);
+  });
+
+  it('在模型仍生成参数时转发工具ID和输入增量', async () => {
+    const model = new MockLanguageModelV3({
+      doStream: {
+        stream: simulateReadableStream({
+          chunks: [
+            { id: 'stream-1', toolName: 'read_file', type: 'tool-input-start' },
+            { delta: '{"value":"', id: 'stream-1', type: 'tool-input-delta' },
+            { delta: 'hello"}', id: 'stream-1', type: 'tool-input-delta' },
+            { id: 'stream-1', type: 'tool-input-end' },
+            { input: '{"value":"hello"}', toolCallId: 'stream-1', toolName: 'read_file', type: 'tool-call' },
+            { finishReason: { raw: 'tool_calls', unified: 'tool-calls' }, type: 'finish', usage },
+          ],
+        }),
+      },
+    });
+    const started = vi.fn();
+    const delta = vi.fn();
+    const ready = vi.fn();
+    const result = await new AiSdkModelStepExecutor(async () => model).execute({
+      abortSignal: new AbortController().signal,
+      messages: [{ content: 'go', role: 'user' }],
+      onToolInputDelta: delta,
+      onToolInputReady: ready,
+      onToolInputStarted: started,
+      tools: [runnerTool('read_file')],
+    });
+
+    expect(started).toHaveBeenCalledOnce();
+    expect(started).toHaveBeenCalledWith(expect.objectContaining({ toolCallId: 'stream-1', toolName: 'read_file' }));
+    expect(delta.mock.calls.map(call => call[0])).toEqual([
+      { delta: '{"value":"', toolCallId: 'stream-1' },
+      { delta: 'hello"}', toolCallId: 'stream-1' },
+    ]);
+    expect(ready).toHaveBeenCalledWith(
+      expect.objectContaining({ input: { value: 'hello' }, toolCallId: 'stream-1', toolName: 'read_file' }),
+    );
+    expect(result.toolCalls).toEqual([
+      expect.objectContaining({ input: { value: 'hello' }, toolCallId: 'stream-1', toolName: 'read_file' }),
+    ]);
   });
 
   it('按六种适配组合映射推理参数，自动档不额外指定强度', () => {

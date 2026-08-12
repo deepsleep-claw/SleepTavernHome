@@ -26,6 +26,13 @@ export type ProviderToolCall = RunnerToolCall & {
   providerExecuted: true;
 };
 
+export type RunnerToolInputStart = Omit<RunnerToolCall, 'input'>;
+
+export type RunnerToolInputDelta = {
+  delta: string;
+  toolCallId: string;
+};
+
 export type ModelRequestControls = {
   reasoningEffort: 'auto' | 'off' | string;
   webSearch: boolean;
@@ -49,6 +56,9 @@ export type ModelStepRequest = {
   onProviderToolStarted?: (call: ProviderToolCall) => Promise<void> | void;
   onReasoningDelta?: (delta: string) => void;
   onTextDelta?: (delta: string) => void;
+  onToolInputDelta?: (update: RunnerToolInputDelta) => void;
+  onToolInputReady?: (call: RunnerToolCall) => void;
+  onToolInputStarted?: (call: RunnerToolInputStart) => void;
   tools: RunnerTool[];
 };
 
@@ -174,6 +184,7 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
     let streamError: unknown;
     const providerOutputByCallId = new Map<string, unknown>();
     const supplementedProviderCalls = new Set<string>();
+    const streamedToolCalls = new Set<string>();
     const result = streamText({
       abortSignal: request.abortSignal,
       allowSystemInMessages: true,
@@ -183,6 +194,31 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
       onChunk: async chunk => {
         if (chunk.chunk.type === 'text-delta') request.onTextDelta?.(chunk.chunk.text);
         if (chunk.chunk.type === 'reasoning-delta') request.onReasoningDelta?.(chunk.chunk.text);
+        if (chunk.chunk.type === 'tool-input-start') {
+          streamedToolCalls.add(chunk.chunk.id);
+          request.onToolInputStarted?.({
+            providerExecuted: chunk.chunk.providerExecuted,
+            toolCallId: chunk.chunk.id,
+            toolName: chunk.chunk.toolName,
+          });
+        }
+        if (chunk.chunk.type === 'tool-input-delta') {
+          request.onToolInputDelta?.({ delta: chunk.chunk.delta, toolCallId: chunk.chunk.id });
+        }
+        if (chunk.chunk.type === 'tool-call') {
+          const call: RunnerToolCall = {
+            input: chunk.chunk.input,
+            providerExecuted: chunk.chunk.providerExecuted,
+            toolCallId: chunk.chunk.toolCallId,
+            toolName: chunk.chunk.toolName,
+          };
+          // 有些兼容渠道只发完整tool-call；仍要在执行前创建同一张流式卡片。
+          if (!streamedToolCalls.has(call.toolCallId)) {
+            streamedToolCalls.add(call.toolCallId);
+            request.onToolInputStarted?.(call);
+          }
+          request.onToolInputReady?.(call);
+        }
         if (chunk.chunk.type === 'tool-call' && chunk.chunk.providerExecuted) {
           await request.onProviderToolStarted?.({
             input: chunk.chunk.input,

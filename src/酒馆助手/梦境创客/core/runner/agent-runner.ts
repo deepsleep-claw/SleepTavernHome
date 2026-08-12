@@ -6,7 +6,13 @@ import {
   type ApiUsageBaseline,
   type ContextUsage,
 } from './context';
-import type { ModelRequestControls, ModelStepExecutor, RunnerToolCall } from './step-executor';
+import type {
+  ModelRequestControls,
+  ModelStepExecutor,
+  RunnerToolCall,
+  RunnerToolInputDelta,
+  RunnerToolInputStart,
+} from './step-executor';
 import { COMPACT_CONTEXT_TOOL, type RunnerTool, type ToolConfirmation } from './tools';
 import { isRichToolOutput, type ToolResultOutput } from './tool-output';
 
@@ -16,6 +22,7 @@ export type RunnerStatus =
 export type RunnerEvent =
   | { at: number; messages: ModelMessage[]; type: 'model-completed' }
   | { at: number; call: RunnerToolCall; type: 'tool-started' }
+  | { at: number; call: RunnerToolCall; type: 'tool-executing' }
   | { at: number; call: RunnerToolCall; output: unknown; type: 'tool-completed' }
   | { at: number; call: RunnerToolCall; error: string; type: 'tool-failed' }
   | { at: number; message: string; type: 'guidance-injected' }
@@ -59,6 +66,9 @@ export type AgentRunnerOptions = {
   now?: () => number;
   onReasoningDelta?: (delta: string) => void;
   onTextDelta?: (delta: string) => void;
+  onToolInputDelta?: (update: RunnerToolInputDelta) => void;
+  onToolInputReady?: (call: RunnerToolCall) => void;
+  onToolInputStarted?: (call: RunnerToolInputStart) => void;
   prepareMessages?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
   refreshCompactionHeader?: () => Promise<ModelMessage[]>;
   requestApproval?: (request: ToolConfirmation) => Promise<boolean>;
@@ -136,6 +146,9 @@ export class AgentRunner {
   private readonly now: () => number;
   private readonly onReasoningDelta?: (delta: string) => void;
   private readonly onTextDelta?: (delta: string) => void;
+  private readonly onToolInputDelta?: (update: RunnerToolInputDelta) => void;
+  private readonly onToolInputReady?: (call: RunnerToolCall) => void;
+  private readonly onToolInputStarted?: (call: RunnerToolInputStart) => void;
   private readonly prepareMessages?: (messages: ModelMessage[]) => Promise<ModelMessage[]>;
   private readonly refreshCompactionHeader?: () => Promise<ModelMessage[]>;
   private readonly requestApproval?: (request: ToolConfirmation) => Promise<boolean>;
@@ -154,6 +167,9 @@ export class AgentRunner {
     this.now = options.now ?? Date.now;
     this.onReasoningDelta = options.onReasoningDelta;
     this.onTextDelta = options.onTextDelta;
+    this.onToolInputDelta = options.onToolInputDelta;
+    this.onToolInputReady = options.onToolInputReady;
+    this.onToolInputStarted = options.onToolInputStarted;
     this.prepareMessages = options.prepareMessages;
     this.refreshCompactionHeader = options.refreshCompactionHeader;
     this.requestApproval = options.requestApproval;
@@ -268,6 +284,9 @@ export class AgentRunner {
           },
           onReasoningDelta: this.onReasoningDelta,
           onTextDelta: this.onTextDelta,
+          onToolInputDelta: this.onToolInputDelta,
+          onToolInputReady: this.onToolInputReady,
+          onToolInputStarted: this.onToolInputStarted,
           tools: this.tools,
         });
       } catch (error) {
@@ -404,6 +423,7 @@ export class AgentRunner {
       await this.setStatus('running');
       if (!approved) return { approved: false, message: '用户拒绝了这次高危操作。' };
     }
+    await this.journal.append({ at: this.now(), call, type: 'tool-executing' });
     this.toolController = new AbortController();
     if (this.stopRequested) this.toolController.abort();
     try {

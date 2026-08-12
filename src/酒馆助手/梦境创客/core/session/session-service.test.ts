@@ -63,6 +63,64 @@ function createService(input: {
 }
 
 describe('card agent realtime session service', () => {
+  it('按toolCallId流式建立工具卡并在正式执行时原地更新', async () => {
+    const call = writeDescription('第一行\n第二行', 'stream-write');
+    let stepIndex = 0;
+    const executor: ModelStepExecutor = {
+      execute: async request => {
+        stepIndex += 1;
+        if (stepIndex > 1) return step();
+        request.onTextDelta?.('先说明再写入。');
+        request.onToolInputStarted?.({ toolCallId: call.toolCallId, toolName: call.toolName });
+        request.onToolInputDelta?.({
+          delta: '{"path":"/character/description.md","content":"第一行\\n第二',
+          toolCallId: call.toolCallId,
+        });
+        await new Promise(resolve => setTimeout(resolve, 5));
+        request.onToolInputReady?.(call);
+        return {
+          assistantMessages: [
+            {
+              content: [
+                { text: '先说明再写入。', type: 'text' },
+                { ...call, type: 'tool-call' as const },
+              ],
+              role: 'assistant',
+            },
+          ],
+          finishReason: 'tool-calls',
+          text: '先说明再写入。',
+          toolCalls: [call],
+        };
+      },
+    };
+    const updates: PersistedSessionRuntime['ui'][] = [];
+    const service = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      executor,
+      lock: new GlobalAgentTaskLock(),
+      mode: 'full',
+      onUpdate: view => updates.push(structuredClone(view.ui)),
+      scheduleStreamingUpdate: callback => {
+        const timer = setTimeout(callback, 0);
+        return () => clearTimeout(timer);
+      },
+    });
+
+    const completed = await service.send('写两行');
+    expect(updates.some(ui => ui.some(item => item.toolCallId === call.toolCallId && item.toolPhase === 'generating')))
+      .toBe(true);
+    const cards = completed.ui.filter(item => item.toolCallId === call.toolCallId);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ status: 'completed', toolPhase: undefined, toolName: 'write_file' });
+    expect(JSON.parse(cards[0].toolInput ?? '{}')).toEqual(call.input);
+    expect(
+      completed.ui
+        .filter(item => item.kind === 'assistant' || item.kind === 'tool')
+        .map(item => item.kind === 'tool' ? 'tool' : item.content),
+    ).toEqual(['先说明再写入。', 'tool', '完成啦']);
+  });
+
   it('普通发送固定Skill头部，压缩时使用当前配置重新编译', async () => {
     const oldSkill: AgentSkill = {
       body: 'OLD_SKILL_BODY', builtin: false, description: '测试', directories: [], id: 'dynamic-skill',

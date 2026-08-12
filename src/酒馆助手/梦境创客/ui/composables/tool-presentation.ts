@@ -222,6 +222,90 @@ function compactLine(value: string, fallback: string): string {
   );
 }
 
+function lineCount(value: string): number {
+  return value.length === 0 ? 0 : value.split(/\r\n|[\n\r]/u).length;
+}
+
+/**
+ * 工具参数流还是未闭合JSON时，只提取卡片需要的字符串字段。
+ * 这不是执行参数解析器；正式执行始终使用AI SDK完成校验后的input。
+ */
+function decodePartialJsonString(value: string, start: number): { closed: boolean; end: number; value: string } {
+  let index = start + 1;
+  let result = '';
+  while (index < value.length) {
+    const character = value[index];
+    if (character === '"') return { closed: true, end: index, value: result };
+    if (character !== '\\') {
+      result += character;
+      index += 1;
+      continue;
+    }
+    const escaped = value[index + 1];
+    if (escaped === undefined) break;
+    const simpleEscapes: Record<string, string> = {
+      '"': '"',
+      '\\': '\\',
+      '/': '/',
+      b: '\b',
+      f: '\f',
+      n: '\n',
+      r: '\r',
+      t: '\t',
+    };
+    if (escaped === 'u') {
+      const code = value.slice(index + 2, index + 6);
+      if (!/^[\da-fA-F]{4}$/u.test(code)) break;
+      result += String.fromCharCode(Number.parseInt(code, 16));
+      index += 6;
+      continue;
+    }
+    result += simpleEscapes[escaped] ?? escaped;
+    index += 2;
+  }
+  return { closed: false, end: value.length, value: result };
+}
+
+function partialJsonString(value: string | undefined, key: string): string | undefined {
+  if (!value) return undefined;
+  let depth = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === '{' || character === '[') {
+      depth += 1;
+      continue;
+    }
+    if (character === '}' || character === ']') {
+      depth -= 1;
+      continue;
+    }
+    if (character !== '"') continue;
+    const parsedKey = decodePartialJsonString(value, index);
+    if (!parsedKey.closed) return undefined;
+    index = parsedKey.end;
+    if (depth !== 1) continue;
+    let cursor = parsedKey.end + 1;
+    while (/\s/u.test(value[cursor] ?? '')) cursor += 1;
+    if (value[cursor] !== ':') continue;
+    cursor += 1;
+    while (/\s/u.test(value[cursor] ?? '')) cursor += 1;
+    if (parsedKey.value !== key || value[cursor] !== '"') continue;
+    return decodePartialJsonString(value, cursor).value;
+  }
+  return undefined;
+}
+
+function patchMetrics(patch: string): ToolCardMetric[] {
+  const lines = patch.split(/\r?\n/u);
+  const additions = lines.filter(line => line.startsWith('+') && !line.startsWith('+++')).length;
+  const deletions = lines.filter(line => line.startsWith('-') && !line.startsWith('---')).length;
+  return [
+    { label: '补丁', value: `${lineCount(patch)} 行` },
+    { label: '新增', tone: 'success', value: `+${additions}` },
+    { label: '删除', tone: 'danger', value: `-${deletions}` },
+  ];
+}
+
 function descriptorFor(item: SessionUiItem): ToolDescriptor {
   const name = item.toolName ?? 'tool';
   const known = TOOL_DESCRIPTORS[name];
@@ -281,16 +365,9 @@ function filePresentation(
   }
   if (name === 'apply_patch') {
     const patch = text(input, 'patch');
-    const additions =
-      patch?.split(/\r?\n/u).filter(line => line.startsWith('+') && !line.startsWith('+++')).length ?? 0;
-    const deletions =
-      patch?.split(/\r?\n/u).filter(line => line.startsWith('-') && !line.startsWith('---')).length ?? 0;
     return {
       expandable: Boolean(patch && patch.split(/\r?\n/u).length > 5),
-      metrics: [
-        { label: '新增', tone: 'success', value: `+${additions}` },
-        { label: '删除', tone: 'danger', value: `-${deletions}` },
-      ],
+      metrics: patch ? patchMetrics(patch) : [],
       path,
       preview: patch ? { content: patch, mode: 'diff' } : undefined,
       summary: output.idempotent === true ? '补丁已经应用过' : '补丁已精确应用',
@@ -300,7 +377,12 @@ function filePresentation(
     const content = text(input, 'content');
     return {
       expandable: Boolean(content && content.split(/\r?\n/u).length > 5),
-      metrics: content ? [{ label: '字符', value: String(content.length) }] : [],
+      metrics: content
+        ? [
+            { label: '行', value: String(lineCount(content)) },
+            { label: '字符', value: String(content.length) },
+          ]
+        : [],
       path,
       preview: content ? { content, mode: 'code' } : undefined,
       summary: output.idempotent === true ? '内容已经写入过' : '文件内容已写入',
@@ -319,6 +401,41 @@ function filePresentation(
   }
   if (name === 'delete_path') return { path, summary: '路径已删除' };
   return { path, summary: '文件操作已完成' };
+}
+
+function streamingFilePresentation(
+  item: SessionUiItem,
+  input: JsonRecord,
+): Partial<Pick<ToolPresentation, 'metrics' | 'path' | 'summary'>> {
+  const rawInput = item.toolInput;
+  const path = text(input, 'path') ?? partialJsonString(rawInput, 'path');
+  const waiting = item.toolPhase === 'ready';
+  const executing = item.toolPhase === 'executing';
+  if (item.toolName === 'write_file') {
+    const content = text(input, 'content') ?? partialJsonString(rawInput, 'content');
+    return {
+      metrics: content === undefined
+        ? []
+        : [
+            { label: '已编写', value: `${lineCount(content)} 行` },
+            { label: '字符', value: String(content.length) },
+          ],
+      path,
+      summary: executing ? '正在写入文件…' : waiting ? '写入参数已就绪' : '正在编写文件内容…',
+    };
+  }
+  if (item.toolName === 'apply_patch') {
+    const patch = text(input, 'patch') ?? partialJsonString(rawInput, 'patch');
+    return {
+      metrics: patch === undefined ? [] : patchMetrics(patch),
+      path,
+      summary: executing ? '正在应用补丁…' : waiting ? '补丁参数已就绪' : '正在生成补丁…',
+    };
+  }
+  return {
+    path,
+    summary: executing ? '正在执行工具…' : waiting ? '参数已就绪，等待执行…' : '正在生成调用参数…',
+  };
 }
 
 function fileSearchPresentation(
@@ -598,7 +715,16 @@ export function buildToolPresentation(item: SessionUiItem): ToolPresentation {
       tone: 'danger',
     };
   } else if (item.status === 'running') {
-    details = { summary: '正在执行工具…' };
+    details = descriptor.kind === 'file'
+      ? streamingFilePresentation(item, input)
+      : {
+          summary:
+            item.toolPhase === 'generating'
+              ? '正在生成调用参数…'
+              : item.toolPhase === 'ready'
+                ? '参数已就绪，等待执行…'
+                : '正在执行工具…',
+        };
   } else if (descriptor.kind === 'file') {
     details = filePresentation(item.toolName ?? '', input, output, outputValue);
   } else if (descriptor.kind === 'search') {
@@ -621,7 +747,14 @@ export function buildToolPresentation(item: SessionUiItem): ToolPresentation {
     expandable: false,
     metrics: [],
     rawInput: formatToolRaw(item.toolInput),
-    rawOutput: item.status === 'running' ? '等待工具返回…' : formatToolRaw(item.content),
+    rawOutput:
+      item.status !== 'running'
+        ? formatToolRaw(item.content)
+        : item.toolPhase === 'generating'
+          ? '正在生成调用参数…'
+          : item.toolPhase === 'ready'
+            ? '参数已就绪，等待执行…'
+            : '等待工具返回…',
     rows: [],
     summary: item.status === 'running' ? '正在执行工具…' : '工具执行完成',
     ...details,

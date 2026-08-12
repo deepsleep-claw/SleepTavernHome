@@ -95,9 +95,65 @@ describe('tool presentation', () => {
 
     expect(presentation.preview).toMatchObject({ mode: 'diff' });
     expect(presentation.metrics).toEqual([
+      { label: '补丁', value: '3 行' },
       { label: '新增', tone: 'success', value: '+1' },
       { label: '删除', tone: 'danger', value: '-1' },
     ]);
+  });
+
+  it('从未闭合的流式参数中提取写入与补丁进度', () => {
+    const writing = buildToolPresentation(
+      tool({
+        content: '',
+        status: 'running',
+        toolInput: '{"path":"/character/live.md","content":"第一行\\n第二行\\n第三',
+        toolName: 'write_file',
+        toolPhase: 'generating',
+      }),
+    );
+    const patching = buildToolPresentation(
+      tool({
+        content: '',
+        status: 'running',
+        toolInput: '{"path":"/character/live.md","patch":"@@ -1,2 +1,3 @@\\n-old\\n+new\\n+extra',
+        toolName: 'apply_patch',
+        toolPhase: 'generating',
+      }),
+    );
+    const contentBeforePath = buildToolPresentation(
+      tool({
+        content: '',
+        status: 'running',
+        toolInput: '{"content":"正文里的\\"path\\":\\"/fake.md\\"","path":"/character/real.md',
+        toolName: 'write_file',
+        toolPhase: 'generating',
+      }),
+    );
+
+    expect(writing).toMatchObject({ path: '/character/live.md', summary: '正在编写文件内容…' });
+    expect(writing.metrics).toEqual([
+      { label: '已编写', value: '3 行' },
+      { label: '字符', value: '10' },
+    ]);
+    expect(patching).toMatchObject({ path: '/character/live.md', summary: '正在生成补丁…' });
+    expect(patching.metrics).toEqual([
+      { label: '补丁', value: '4 行' },
+      { label: '新增', tone: 'success', value: '+2' },
+      { label: '删除', tone: 'danger', value: '-1' },
+    ]);
+    expect(contentBeforePath.path).toBe('/character/real.md');
+  });
+
+  it('通用工具在参数生成与就绪阶段使用统一状态', () => {
+    const generating = buildToolPresentation(
+      tool({ content: '', status: 'running', toolInput: '{"path":"/', toolName: 'read_file', toolPhase: 'generating' }),
+    );
+    const ready = buildToolPresentation(
+      tool({ content: '', status: 'running', toolInput: '{"path":"/"}', toolName: 'read_file', toolPhase: 'ready' }),
+    );
+
+    expect(generating).toMatchObject({ rawOutput: '正在生成调用参数…', summary: '正在生成调用参数…' });
+    expect(ready).toMatchObject({ rawOutput: '参数已就绪，等待执行…', summary: '参数已就绪，等待执行…' });
   });
 
   it('分别生成世界书、酒馆会话和联网搜索卡片', () => {

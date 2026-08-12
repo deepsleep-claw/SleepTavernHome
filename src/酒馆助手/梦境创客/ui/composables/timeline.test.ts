@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionUiItem } from '../../core/session/types';
-import { buildTimelineBlocks, defaultRunCollapsed, itemKindLabel } from './timeline';
+import {
+  buildTimelineBlocks,
+  defaultRunCollapsed,
+  itemKindLabel,
+  toolGroupLabel,
+  toolStatusLabel,
+} from './timeline';
 
 describe('timeline', () => {
   it('使用调用方提供的当前时间持续计算运行耗时', () => {
@@ -112,5 +118,23 @@ describe('timeline', () => {
     expect(runs.map(run => run.items.map(item => item.id))).toEqual([['tool:before'], ['tool:after']]);
     expect(runs.every(defaultRunCollapsed)).toBe(true);
     expect(itemKindLabel('guidance')).toBe('你 · 中途引导');
+  });
+
+  it('区分工具参数生成、就绪与执行状态', () => {
+    const item = (toolPhase: SessionUiItem['toolPhase']): SessionUiItem => ({
+      at: 1,
+      content: '',
+      id: `tool:${toolPhase}`,
+      kind: 'tool',
+      status: 'running',
+      toolPhase,
+    });
+
+    expect(toolGroupLabel([item('generating')])).toBe('正在生成工具调用 · 1');
+    expect(toolGroupLabel([item('ready')])).toBe('工具参数已就绪 · 1');
+    expect(toolGroupLabel([item('executing')])).toBe('正在调用工具 · 1');
+    expect(toolStatusLabel('running', 'generating')).toBe('生成中');
+    expect(toolStatusLabel('running', 'ready')).toBe('待执行');
+    expect(toolStatusLabel('running', 'executing')).toBe('运行中');
   });
 });
