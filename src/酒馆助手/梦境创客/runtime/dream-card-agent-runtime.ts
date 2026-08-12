@@ -1080,6 +1080,7 @@ export class DreamCardAgentRuntime {
             candidateSnapshot: pending.candidateSnapshot,
             conflicts: klona(pending.preparation.conflicts),
             fileChanges: klona(pending.fileChanges ?? []),
+            midRun: pending.midRun === true,
             skillChanges: klona(pending.skillChanges ?? []),
             stateChanges: klona(
               pending.preparation.agentChanges.filter(

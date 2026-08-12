@@ -86,6 +86,10 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
         });
       }
     }
+    for (const directory of this.virtualDirectories()) {
+      if (parentWorkspacePath(directory.path) !== path || children.has(directory.path)) continue;
+      children.set(directory.path, directory);
+    }
     if (path !== '/' && children.size === 0 && !this.hasDirectory(path)) {
       throw new WorkspaceError('NOT_FOUND', `目录不存在：${path}`, path);
     }
@@ -308,6 +312,32 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
   }
 
   private hasDirectory(path: string): boolean {
-    return [...this.current.keys()].some(filePath => parentWorkspacePath(filePath) === path || isSameOrDescendant(filePath, path));
+    return (
+      this.virtualDirectories().some(directory => directory.path === path) ||
+      [...this.current.keys()].some(
+        filePath => parentWorkspacePath(filePath) === path || isSameOrDescendant(filePath, path),
+      )
+    );
+  }
+
+  /** 世界书的 entries 是结构目录，即使书中暂时没有条目也应该可见、可列出。 */
+  private virtualDirectories(): WorkspaceEntry[] {
+    const directories = new Map<string, WorkspaceEntry>();
+    for (const file of this.current.values()) {
+      if (!file.path.endsWith('/book.yaml')) continue;
+      const root = parentWorkspacePath(file.path);
+      if (!/^\/(?:worldbooks|worldbooks-global-readonly)\/[^/]+$/u.test(root) &&
+          !/^\/library\/worldbooks\/[^/]+$/u.test(root)) {
+        continue;
+      }
+      const path = `${root}/entries`;
+      directories.set(path, {
+        kind: 'directory',
+        name: 'entries',
+        path,
+        readonly: file.readonly || this.isReadonly(path),
+      });
+    }
+    return [...directories.values()];
   }
 }

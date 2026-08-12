@@ -406,6 +406,7 @@ export class CardAgentSessionService {
           conflicts: klona(this.pending.preparation.conflicts),
           error: this.lastError,
           fileChanges: klona(this.pending.fileChanges),
+          midRun: this.pending.midRun === true,
           skillChanges: klona(this.pending.skillChanges),
           stateChanges: klona(
             this.pending.preparation.agentChanges.filter(
@@ -717,6 +718,20 @@ export class CardAgentSessionService {
 
   stop(): void {
     this.runner?.stop();
+    if (this.midRunCheckpointResolve) {
+      // 生成工具正在等待角色卡检查点时，AbortSignal无法直接打断这个本地Promise。
+      // 主动给工具返回拒绝结果，Runner会在当前工具结束后观察stopRequested并正常收束本轮。
+      this.midRunCheckpointOutcome = false;
+      this.flushMidRunCheckpoint();
+    } else if (this.pending?.midRun) {
+      // 刷新恢复后原等待Promise已经不存在：取消酒馆生成，并把已有改动保留为普通停止候选。
+      this.pending.midRun = false;
+      this.pending.stopped = true;
+      this.status = 'awaiting-approval';
+      this.lastError = undefined;
+      this.notify();
+      void this.persist();
+    }
   }
 
   enqueueGuidance(message: string): void {

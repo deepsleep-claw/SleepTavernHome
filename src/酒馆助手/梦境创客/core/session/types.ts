@@ -77,6 +77,8 @@ export type SessionApproval = {
   conflicts: MergeConflict[];
   error?: string;
   fileChanges: WorkspaceApprovalChange[];
+  /** true 表示Runner正在等待这次生成前检查点，处理后会继续当前工具链。 */
+  midRun: boolean;
   skillChanges: SkillChange[];
   stateChanges: StateOperation[];
   warnings: string[];

@@ -48,6 +48,12 @@ describe('agent skills', () => {
     expect(files.find(file => file.path.endsWith('/builtin/card-workspace-io/SKILL.md'))).toMatchObject({
       readonly: true,
     });
+    expect(files.find(file => file.path.endsWith('/builtin/card-workspace-io/references/worldbooks.md'))).toMatchObject({
+      readonly: true,
+    });
+    expect(
+      files.find(file => file.path.endsWith('/builtin/card-workspace-io/references/worldbooks.md'))?.content,
+    ).toContain('position`、`strategy`、`recursion`、`effect` 都是对象');
     expect(files.find(file => file.path === '/skills/user/academy-writer/notes/style.md')?.content).toBe(
       '保持轻快文风。',
     );

@@ -36,6 +36,26 @@ describe('MemoryWorkspaceRepository', () => {
     expect(workspace.changes()).toMatchObject([{ kind: 'create', path: '/greetings/001-初见.md' }]);
   });
 
+  it('空世界书仍显示并允许列出固定entries目录', async () => {
+    const workspace = new MemoryWorkspaceRepository({
+      files: [
+        {
+          content: 'name: 空世界书',
+          mediaType: 'text/yaml',
+          path: '/worldbooks/空世界书/book.yaml',
+          readonly: false,
+          resourceId: 'empty-book',
+        },
+      ],
+    });
+
+    expect(await workspace.list('/worldbooks/空世界书')).toEqual([
+      expect.objectContaining({ kind: 'directory', name: 'entries', path: '/worldbooks/空世界书/entries' }),
+      expect.objectContaining({ kind: 'file', name: 'book.yaml' }),
+    ]);
+    expect(await workspace.list('/worldbooks/空世界书/entries')).toEqual([]);
+  });
+
   it('用统一Diff精确修改且工具调用幂等', async () => {
     const workspace = new MemoryWorkspaceRepository({ files });
     const patch = '@@ -1,3 +1,3 @@\n-旧标题\n+新标题\n 第二行\n 结尾';

@@ -35,7 +35,7 @@
       >
     </div>
     <div v-if="state.activeSessionAccess === 'live'" class="dca-row-actions">
-      <button class="dca-btn-primary" type="button" :disabled="state.busy" @click="approve">
+      <button class="dca-btn-primary" type="button" :disabled="applying" @click="approve">
         {{ state.active.approval.error ? '重新应用已选修改' : '应用已选修改' }}
       </button>
     </div>
@@ -44,7 +44,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue';
+import { computed, reactive, ref, watch } from 'vue';
 import { useDreamCardAgent } from '../../../composables/runtime';
 
 const emit = defineEmits<{ 'open-diff': [] }>();
@@ -52,6 +52,7 @@ const emit = defineEmits<{ 'open-diff': [] }>();
 const { action, runtime, state } = useDreamCardAgent();
 
 const decisions = reactive<Record<string, 'agent' | 'current' | undefined>>({});
+const applying = ref(false);
 
 const approvalChanges = computed(() => [
   ...(state.value.active?.approval?.stateChanges ?? []),
@@ -72,11 +73,20 @@ watch(
 );
 
 async function approve() {
-  await action(() =>
-    runtime.approve(
-      Object.fromEntries(Object.entries(decisions).filter(([, value]) => value)) as Record<string, 'agent' | 'current'>,
-    ),
-  );
+  if (applying.value) return;
+  applying.value = true;
+  try {
+    await action(() =>
+      runtime.approve(
+        Object.fromEntries(Object.entries(decisions).filter(([, value]) => value)) as Record<
+          string,
+          'agent' | 'current'
+        >,
+      ),
+    );
+  } finally {
+    applying.value = false;
+  }
 }
 </script>
 

@@ -542,6 +542,39 @@ describe('card agent session service', () => {
     );
   });
 
+  it('生成前检查点等待中可以停止，不会永久卡住Runner', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const chatBridge = new FakeTavernChatBridge();
+    const service = await CardAgentSessionService.create({
+      adapter,
+      executor: new QueueExecutor([
+        step([writeDescription('停止前候选', 'stop-before-chat')]),
+        step([
+          {
+            input: { chatId: 'c01', message: '开始测试' },
+            toolCallId: 'stop-waiting-generate',
+            toolName: 'send_tavern_message',
+          },
+        ]),
+      ]),
+      lock: new GlobalAgentTaskLock(),
+      requestToolApproval: async () => true,
+      snapshots: snapshots(),
+      tavernChatBridge: chatBridge,
+    });
+
+    const running = service.send('修改后尝试生成');
+    await vi.waitFor(() => expect(service.view().status).toBe('awaiting-approval'));
+    expect(service.view().approval?.midRun).toBe(true);
+
+    service.stop();
+    const stopped = await running;
+
+    expect(stopped.status).toBe('awaiting-approval');
+    expect(stopped.approval?.midRun).toBe(false);
+    expect(chatBridge.calls).not.toContain('generate-reply');
+  });
+
   it('页面中断后仍能恢复生成前检查点，拒绝结果会传回原工具步骤', async () => {
     const adapter = new MemoryCardStateAdapter(transactionState());
     const chatBridge = new FakeTavernChatBridge();
@@ -603,6 +636,25 @@ describe('card agent session service', () => {
         expect.objectContaining({ error: expect.stringContaining('CHECKPOINT_REJECTED'), type: 'tool-failed' }),
       ]),
     );
+
+    const cancelledAfterRestore = await CardAgentSessionService.restore(
+      {
+        adapter,
+        executor: new QueueExecutor([]),
+        lock: new GlobalAgentTaskLock(),
+        requestToolApproval: async () => true,
+        snapshots: snapshots(),
+        tavernChatBridge: chatBridge,
+      },
+      persistedRuntime,
+      persistedFiles,
+    );
+    expect(cancelledAfterRestore.view().approval?.midRun).toBe(true);
+    cancelledAfterRestore.stop();
+    expect(cancelledAfterRestore.view()).toMatchObject({
+      approval: { midRun: false },
+      status: 'awaiting-approval',
+    });
   });
 
   it('流式展示模型思考，并在模型步骤结束后记录耗时和折叠状态', async () => {

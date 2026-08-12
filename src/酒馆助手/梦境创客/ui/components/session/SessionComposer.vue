@@ -173,7 +173,12 @@ const reasoningOptions = computed(() => [
   ...reasoningEfforts.value.map(effort => ({ label: `推理：${effort.name}`, value: effort.id })),
 ]);
 
-const isRunning = computed(() => ['running', 'waiting-approval'].includes(state.value.active?.status ?? ''));
+const isWaitingForMidRunApproval = computed(
+  () => state.value.active?.status === 'awaiting-approval' && state.value.active.approval?.midRun === true,
+);
+const isRunning = computed(
+  () => ['running', 'waiting-approval'].includes(state.value.active?.status ?? '') || isWaitingForMidRunApproval.value,
+);
 const canResume = computed(
   () =>
     ['abnormal', 'failed', 'stopped', 'context-exhausted'].includes(state.value.active?.status ?? '') &&

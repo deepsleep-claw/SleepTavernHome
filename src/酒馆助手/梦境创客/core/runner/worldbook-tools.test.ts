@@ -41,6 +41,10 @@ describe('世界书Runner工具', () => {
   it('新建空世界书并拒绝重名', async () => {
     const { base, repository, tools } = fixture();
     await tools.get('create_worldbook')!.execute({ name: '新版本' }, 'create');
+    expect(await repository.list('/worldbooks/新版本/entries')).toEqual([]);
+    expect(await repository.list('/worldbooks/新版本')).toEqual(
+      expect.arrayContaining([expect.objectContaining({ kind: 'directory', name: 'entries' })]),
+    );
     const result = materializeCardWorkspace(base, repository.snapshot()).state;
     expect(result.worldbooks.find(book => book.name === '新版本')).toMatchObject({ entries: [], writable: true });
     await expect(tools.get('create_worldbook')!.execute({ name: '资料库' }, 'duplicate')).rejects.toThrow(
