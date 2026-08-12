@@ -268,6 +268,51 @@ describe('ProductionCardStateAdapter', () => {
     }
   });
 
+  it('修改既有条目时接受酒馆补齐的未知字段，但拒绝语义写入被忽略', async () => {
+    const bridge = new FakeTavernBridge();
+    const originalUpdate = bridge.updateWorldbook.bind(bridge);
+    bridge.updateWorldbook = async (name, updater) => {
+      await originalUpdate(name, updater);
+      const entries = bridge.books.get(name)!;
+      entries[0].vendor_default = '修改后由酒馆补齐';
+      return klona(entries);
+    };
+    const adapter = new ProductionCardStateAdapter(bridge);
+    const base = await adapter.read();
+    const working = klona(base);
+    working.worldbooks[0].entries[0].content = '确认写入的新正文';
+    const changes = diffCardStates(base, working);
+    const result = await commitWorkingCopy({
+      adapter,
+      base,
+      decisions: Object.fromEntries(changes.map(change => [change.path, 'agent' as const])),
+      working,
+    });
+    expect(result.status).toBe('committed');
+    if (result.status === 'committed') {
+      expect(result.state.worldbooks[0].entries[0]).toMatchObject({
+        content: '确认写入的新正文',
+        unknownFields: { vendor_default: '修改后由酒馆补齐', vendor_field: 'preserve' },
+      });
+    }
+
+    const ignoredBridge = new FakeTavernBridge();
+    ignoredBridge.updateWorldbook = async name => ignoredBridge.getWorldbook(name);
+    const ignoredAdapter = new ProductionCardStateAdapter(ignoredBridge);
+    const ignoredBase = await ignoredAdapter.read();
+    const ignoredWorking = klona(ignoredBase);
+    ignoredWorking.worldbooks[0].entries[0].content = '不会落盘';
+    const ignoredChanges = diffCardStates(ignoredBase, ignoredWorking);
+    const ignoredResult = await commitWorkingCopy({
+      adapter: ignoredAdapter,
+      base: ignoredBase,
+      decisions: Object.fromEntries(ignoredChanges.map(change => [change.path, 'agent' as const])),
+      working: ignoredWorking,
+    });
+    expect(ignoredResult.status).toBe('rolled-back');
+    if (ignoredResult.status === 'rolled-back') expect(ignoredResult.error.message).toContain('语义不一致');
+  });
+
   it('覆盖角色元数据、空开场白和世界书元数据/排序分支', async () => {
     const bridge = new FakeTavernBridge();
     const adapter = new ProductionCardStateAdapter(bridge);
@@ -369,6 +414,56 @@ describe('ProductionCardStateAdapter', () => {
     await expect(
       adapter.apply(operation('/resources/scripts/preset-current', base.resources.scripts['preset-current'], changedPreset)),
     ).rejects.toThrow('TARGET_SCOPE_CHANGED');
+  });
+
+  it('正则与脚本写入后以酒馆真实回读结果刷新缓存', async () => {
+    const bridge = new FakeTavernBridge();
+    bridge.regexes.set('character', [
+      { disabled: false, findRegex: '/old/u', id: 'r1', placement: [1], replaceString: '', scriptName: '旧正则' },
+    ]);
+    const originalRegexWrite = bridge.replaceRawRegexes.bind(bridge);
+    bridge.replaceRawRegexes = async (scope, regexes) => {
+      await originalRegexWrite(scope, regexes);
+      bridge.regexes.get(scope)![0].vendor_default = '酒馆正则默认值';
+    };
+    const adapter = new ProductionCardStateAdapter(bridge);
+    const base = await adapter.read();
+    const regexScope = klona(base.resources.regexes.character);
+    regexScope.regexes[0].name = '新正则';
+    const normalizedRegex = await adapter.apply(
+      operation('/resources/regexes/character', base.resources.regexes.character, regexScope),
+    );
+    expect(normalizedRegex?.after).toMatchObject({
+      regexes: [expect.objectContaining({ name: '新正则', unknownFields: { vendor_default: '酒馆正则默认值' } })],
+    });
+
+    bridge.scripts.set('character', [
+      {
+        button: { buttons: [], enabled: false },
+        content: 'old',
+        data: {},
+        enabled: true,
+        export_with: { button: true, data: true },
+        id: 's1',
+        info: '',
+        name: '脚本',
+        type: 'script',
+      },
+    ]);
+    const originalScriptWrite = bridge.replaceRawScriptTrees.bind(bridge);
+    bridge.replaceRawScriptTrees = async (scope, trees) => {
+      await originalScriptWrite(scope, trees);
+      bridge.scripts.get(scope)![0].vendor_default = '酒馆脚本默认值';
+    };
+    const refreshed = await adapter.read();
+    const scriptScope = klona(refreshed.resources.scripts.character);
+    scriptScope.scripts[0].content = 'new';
+    const normalizedScript = await adapter.apply(
+      operation('/resources/scripts/character', refreshed.resources.scripts.character, scriptScope),
+    );
+    expect(normalizedScript?.after).toMatchObject({
+      scripts: [expect.objectContaining({ content: 'new', unknownFields: { vendor_default: '酒馆脚本默认值' } })],
+    });
   });
 
   it('一次事务内同一资源作用域无论多少语义字段都只写酒馆一次', async () => {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { canonicalEqual } from '../transaction/canonical';
 import { FakeTavernBridge } from './test-bridge';
 import { readTavernState } from './state-reader';
 
@@ -160,5 +161,21 @@ describe('readTavernState', () => {
 
     expect(keyword).toBeInstanceOf(RegExp);
     expect(keyword).toEqual(/位置|效果/iu);
+  });
+
+  it('跨realm正则出现在世界书未知字段时仍可稳定参与快照比较', async () => {
+    const bridge = new FakeTavernBridge();
+    const foreignRegex = {
+      [Symbol.toStringTag]: 'RegExp',
+      flags: 'giu',
+      source: '未知字段',
+    } as unknown as RegExp;
+    bridge.books.get('主世界书')![0].vendor_regex = foreignRegex;
+    bridge.getWorldbook = async name => bridge.books.get(name) ?? [];
+
+    const result = await readTavernState(bridge);
+    expect(
+      canonicalEqual(result.state.worldbooks[0].entries[0].unknownFields.vendor_regex, /未知字段/giu),
+    ).toBe(true);
   });
 });

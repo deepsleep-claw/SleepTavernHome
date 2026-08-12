@@ -1,10 +1,11 @@
 import { klona } from 'klona';
 import type { CardWorkspaceState, WorldbookData, WorldbookEntryData } from '../mapping/types';
 import type { CardStateAdapter } from '../transaction/adapter';
-import { applyStateOperation, type StateOperation } from '../transaction/state-diff';
+import { canonicalEqual } from '../transaction/canonical';
+import { applyStateOperation, readStatePath, type StateOperation } from '../transaction/state-diff';
 import type { RawCharacterData, TavernBridge, TavernWorldbookEntry } from './bridge';
 import { readStandaloneWorldbook, readTavernState } from './state-reader';
-import { writeRegexScope, writeScriptScope } from './resource-reader';
+import { readRegexScope, readScriptScope, writeRegexScope, writeScriptScope } from './resource-reader';
 
 function decodePath(path: string): string[] {
   return path
@@ -77,6 +78,31 @@ function tavernEntryResourceId(bookId: string, entry: TavernWorldbookEntry): str
   return typeof cardAgent.resource_id === 'string' ? cardAgent.resource_id : `${bookId}:uid:${entry.uid}`;
 }
 
+function acceptHostNormalizedEntry(
+  expected: WorldbookEntryData,
+  actual: WorldbookEntryData,
+  action: string,
+): WorldbookEntryData {
+  const expectedSemantic = { ...expected, extra: expected.extra ?? {}, uid: undefined, unknownFields: undefined };
+  const actualSemantic = { ...actual, extra: actual.extra ?? {}, uid: undefined, unknownFields: undefined };
+  if (!canonicalEqual(expectedSemantic, actualSemantic)) {
+    throw new Error(`${action}后酒馆返回的条目语义不一致：${expected.name}`);
+  }
+  return actual;
+}
+
+function acceptHostNormalizedBook(expected: WorldbookData, actual: WorldbookData, action: string): WorldbookData {
+  if (expected.name !== actual.name || expected.resourceId !== actual.resourceId || expected.entries.length !== actual.entries.length) {
+    throw new Error(`${action}后酒馆返回的世界书结构不一致：${expected.name}`);
+  }
+  for (const expectedEntry of expected.entries) {
+    const actualEntry = actual.entries.find(entry => entry.resourceId === expectedEntry.resourceId);
+    if (!actualEntry) throw new Error(`${action}后酒馆缺少条目：${expected.name}/${expectedEntry.name}`);
+    acceptHostNormalizedEntry(expectedEntry, actualEntry, action);
+  }
+  return actual;
+}
+
 export class ProductionCardStateAdapter implements CardStateAdapter {
   private cached?: CardWorkspaceState;
   private warnings: string[] = [];
@@ -121,9 +147,12 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
       }
       if (kind === 'regexes') {
         await this.bridge.replaceRawRegexes(scope, writeRegexScope(next.resources.regexes[scope]));
+        next.resources.regexes[scope] = readRegexScope(this.bridge.getRawRegexes(scope), afterTarget);
       } else {
         await this.bridge.replaceRawScriptTrees(scope, writeScriptScope(next.resources.scripts[scope]));
+        next.resources.scripts[scope] = readScriptScope(this.bridge.getRawScriptTrees(scope), afterTarget);
       }
+      normalized = { ...operation, after: klona(readStatePath(next, operation.path)) };
     }
     this.cached = next;
     return normalized;
@@ -147,10 +176,15 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
     if (current.resources[kind][scope].targetId !== next.resources[kind][scope].targetId) {
       throw new Error(`TARGET_SCOPE_CHANGED：${scope}作用域目标已经切换，请重新读取工作区后再修改。`);
     }
-    if (kind === 'regexes') await this.bridge.replaceRawRegexes(scope, writeRegexScope(next.resources.regexes[scope]));
-    else await this.bridge.replaceRawScriptTrees(scope, writeScriptScope(next.resources.scripts[scope]));
+    if (kind === 'regexes') {
+      await this.bridge.replaceRawRegexes(scope, writeRegexScope(next.resources.regexes[scope]));
+      next.resources.regexes[scope] = readRegexScope(this.bridge.getRawRegexes(scope), next.resources.regexes[scope].targetId);
+    } else {
+      await this.bridge.replaceRawScriptTrees(scope, writeScriptScope(next.resources.scripts[scope]));
+      next.resources.scripts[scope] = readScriptScope(this.bridge.getRawScriptTrees(scope), next.resources.scripts[scope].targetId);
+    }
     this.cached = next;
-    return operations.map(() => undefined);
+    return operations.map(operation => ({ ...operation, after: klona(readStatePath(next, operation.path)) }));
   }
 
   private async applyWorldbook(
@@ -178,7 +212,7 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
         if (!normalized.roundTripSafe) {
           throw new Error(`创建世界书后无法重新读取：${after.name}`);
         }
-        return { ...operation, after: normalized };
+        return { ...operation, after: acceptHostNormalizedBook(after, normalized, '创建世界书') };
       }
       return undefined;
     }
@@ -195,6 +229,15 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
         writable: afterBook.writable,
       });
       if (!normalizedBook.roundTripSafe) throw new Error(`重命名世界书后无法重新读取：${afterBook.name}`);
+      for (const beforeEntry of beforeBook.entries) {
+        const copiedEntry = normalizedBook.entries.find(entry => entry.resourceId === beforeEntry.resourceId);
+        if (
+          !copiedEntry ||
+          !canonicalEqual({ ...beforeEntry, uid: undefined }, { ...copiedEntry, uid: undefined })
+        ) {
+          throw new Error(`重命名世界书后条目复制不完整：${afterBook.name}/${beforeEntry.name}`);
+        }
+      }
       afterBook.entries = normalizedBook.entries;
       afterBook.unknownFields = normalizedBook.unknownFields;
       return undefined;
@@ -211,6 +254,12 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
           return (order.get(leftId) ?? Number.MAX_SAFE_INTEGER) - (order.get(rightId) ?? Number.MAX_SAFE_INTEGER);
         }),
       );
+      const normalizedBook = await readStandaloneWorldbook(this.bridge, afterBook.name, {
+        resourceId: afterBook.resourceId,
+        writable: afterBook.writable,
+      });
+      if (!normalizedBook.roundTripSafe) throw new Error(`调整世界书条目顺序后无法重新读取：${afterBook.name}`);
+      afterBook.entries = normalizedBook.entries;
       return undefined;
     }
     const before = operation.before as WorldbookEntryData | undefined;
@@ -227,11 +276,20 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
       if (!normalizedBook.roundTripSafe || !normalizedAfter) {
         throw new Error(`创建世界书条目后无法重新读取：${afterBook.name}/${after.name}`);
       }
-      return { ...operation, after: normalizedAfter };
+      return { ...operation, after: acceptHostNormalizedEntry(after, normalizedAfter, '创建世界书条目') };
     }
     if (before && !after) {
       const uid = entryUid(beforeBook.entries.find(entry => entry.resourceId === before.resourceId) ?? before);
       await this.bridge.updateWorldbook(afterBook.name, entries => entries.filter(entry => entry.uid !== uid));
+      const normalizedBook = await readStandaloneWorldbook(this.bridge, afterBook.name, {
+        resourceId: afterBook.resourceId,
+        writable: afterBook.writable,
+      });
+      if (!normalizedBook.roundTripSafe) throw new Error(`删除世界书条目后无法重新读取：${afterBook.name}`);
+      if (normalizedBook.entries.some(entry => entry.resourceId === before.resourceId)) {
+        throw new Error(`删除世界书条目后目标仍然存在：${afterBook.name}/${before.name}`);
+      }
+      afterBook.entries = normalizedBook.entries;
       return undefined;
     }
     if (before && after) {
@@ -247,7 +305,7 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
       if (!normalizedBook.roundTripSafe || !normalizedAfter) {
         throw new Error(`修改世界书条目后无法重新读取：${afterBook.name}/${after.name}`);
       }
-      return { ...operation, after: normalizedAfter };
+      return { ...operation, after: acceptHostNormalizedEntry(after, normalizedAfter, '修改世界书条目') };
     }
     return undefined;
   }
