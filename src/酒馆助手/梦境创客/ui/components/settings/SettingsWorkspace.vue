@@ -111,6 +111,7 @@ const navItems: { icon: string; label: string; section: SettingsSection }[] = [
 .dca-settings-content {
   min-height: 0;
   overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .dca-settings-content-inner {

@@ -139,6 +139,7 @@ function recentIcon(index: number) {
   height: 100%;
   overflow: auto;
   background: var(--dca-home-background);
+  scrollbar-gutter: stable;
 }
 .dca-home::before {
   position: absolute;

@@ -156,6 +156,7 @@ function toggleRunBlock(block: RunTimelineBlock) {
   overflow: auto;
   overflow-anchor: none;
   padding: 0.75rem 0.75rem 0.35rem;
+  scrollbar-gutter: stable;
 }
 
 .dca-timeline-column {
