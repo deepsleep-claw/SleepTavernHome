@@ -10,17 +10,30 @@
     <div class="dca-provider-layout">
       <aside class="dca-provider-list">
         <header><strong>Providers</strong><small>{{ state.providers.length }}</small></header>
-        <button
+        <button class="dca-provider-new" type="button" @click="newProvider">
+          <i class="fa-solid fa-plus" aria-hidden="true"></i><span>新建 Provider</span>
+        </button>
+        <div
           v-for="provider in state.providers"
           :key="provider.id"
-          type="button"
+          class="dca-provider-item"
           :class="{ active: selectedProviderId === provider.id, disabled: !provider.enabled }"
-          @click="selectProvider(provider.id)"
         >
-          <i class="fa-solid fa-server" aria-hidden="true"></i>
-          <span><strong>{{ provider.name }}</strong><small>{{ provider.models.length }} 个模型</small></span>
-          <i v-if="!provider.enabled" class="fa-solid fa-ban" title="已禁用" aria-label="已禁用"></i>
-        </button>
+          <button class="dca-provider-select" type="button" @click="selectProvider(provider.id)">
+            <i class="fa-solid fa-server" aria-hidden="true"></i>
+            <span><strong>{{ provider.name }}</strong><small>{{ provider.models.length }} 个模型</small></span>
+            <i v-if="!provider.enabled" class="fa-solid fa-ban" title="已禁用" aria-label="已禁用"></i>
+          </button>
+          <button
+            class="dca-provider-delete dca-btn-danger"
+            type="button"
+            :title="`删除 Provider ${provider.name}`"
+            :aria-label="`删除 Provider ${provider.name}`"
+            @click="requestProviderDelete(provider)"
+          >
+            <i class="fa-solid fa-trash" aria-hidden="true"></i>
+          </button>
+        </div>
         <div v-if="state.providers.length === 0" class="dca-empty">还没有 Provider。</div>
       </aside>
 
@@ -31,12 +44,11 @@
             <small>{{ providerForm.id ? `${selectedProvider?.models.length ?? 0} 个模型` : '保存连接后即可添加模型' }}</small>
           </div>
           <div class="dca-row-actions">
-            <button type="button" @click="newProvider">新建</button>
             <button v-if="providerForm.id" type="button" @click="copyProvider">复制</button>
             <button type="button" @click="importInput?.click()">导入</button>
             <input ref="importInput" hidden accept="application/json,.json" type="file" @change="importProvider" />
             <button v-if="providerForm.id" type="button" @click="exportChoiceOpen = true">导出</button>
-            <button v-if="providerForm.id" class="dca-btn-danger" type="button" @click="deleteTarget = 'provider'">删除</button>
+            <button v-if="providerForm.id" class="dca-btn-danger" type="button" @click="selectedProvider && requestProviderDelete(selectedProvider)">删除</button>
             <button class="dca-btn-primary" type="button" @click="saveProvider">保存 Provider</button>
           </div>
         </div>
@@ -153,7 +165,7 @@
 
     <div v-if="deleteTarget" class="dca-modal-backdrop" role="presentation">
       <section class="dca-modal dca-provider-confirm" role="dialog" aria-modal="true">
-        <header><div><h3>确认删除</h3><p>{{ deleteTarget === 'provider' ? '删除 Provider 会同时删除其中全部模型；历史会话不会逐条扫描。' : `删除模型“${deletingModel?.name}”？` }}</p></div></header>
+        <header><div><h3>确认删除</h3><p>{{ deleteTarget === 'provider' ? `删除 Provider“${deletingProvider?.name}”会同时删除其中全部模型；历史会话不会逐条扫描。` : `删除模型“${deletingModel?.name}”？` }}</p></div></header>
         <footer><button type="button" @click="cancelDelete">取消</button><button class="dca-btn-danger" type="button" @click="confirmDelete">确认删除</button></footer>
       </section>
     </div>
@@ -183,6 +195,7 @@ const remoteAdding = ref('');
 const exportChoiceOpen = ref(false);
 const deleteTarget = ref<'model' | 'provider'>();
 const deletingModel = ref<ApiModel>();
+const deletingProvider = ref<ApiProvider>();
 
 type ProviderForm = {
   apiKey: string; baseURL: string; enabled: boolean; extraFormat: AdvancedRequestFormat; extraText: string;
@@ -241,12 +254,18 @@ function providerInput(): ApiProviderInput {
 async function saveProvider() {
   let saved: ApiProvider | undefined;
   const succeeded = await action(async () => { saved = await runtime.saveProvider(providerInput()); });
-  if (succeeded && saved) { selectedProviderId.value = saved.id; providerForm.id = saved.id; providerForm.apiKey = ''; }
+  if (succeeded && saved) {
+    selectedProviderId.value = saved.id; providerForm.id = saved.id; providerForm.apiKey = '';
+    toastr.success(`Provider“${saved.name}”已保存。`, '梦境创客');
+  }
 }
 async function copyProvider() {
   if (!providerForm.id) return;
   let copied: ApiProvider | undefined;
-  if (await action(async () => { copied = await runtime.copyProvider(providerForm.id); })) selectedProviderId.value = copied!.id;
+  if (await action(async () => { copied = await runtime.copyProvider(providerForm.id); })) {
+    selectedProviderId.value = copied!.id;
+    toastr.success(`已复制为 Provider“${copied!.name}”。`, '梦境创客');
+  }
 }
 async function convertExtraFormat(value: string) {
   if (value !== 'yaml' && value !== 'json') return;
@@ -278,25 +297,43 @@ async function addRemoteModel(modelId: string) {
       appliedModelTemplate: template ? { id: template.id, revision: template.revision, source: template.source } : null,
       compatibilityMode: template?.compatibilityMode ?? 'standard', enabled: true, modelId, modelSettings: settings, name: uniqueModelName(modelId),
     });
+    toastr.success(`模型“${modelId}”已添加。`, '梦境创客');
   } catch (error) { toastr.error(error instanceof Error ? error.message : String(error), '梦境创客'); }
   finally { remoteAdding.value = ''; }
 }
 
 function openModelEditor(model?: ApiModel, copy = false) { editingModel.value = model; copyingModel.value = copy; modelEditorOpen.value = true; }
-function modelSaved() { modelEditorOpen.value = false; editingModel.value = undefined; copyingModel.value = false; }
+function modelSaved(model: ApiModel) {
+  const verb = copyingModel.value ? '已复制' : editingModel.value ? '已保存' : '已添加';
+  modelEditorOpen.value = false; editingModel.value = undefined; copyingModel.value = false;
+  toastr.success(`模型“${model.name}”${verb}。`, '梦境创客');
+}
+function requestProviderDelete(provider: ApiProvider) { deletingProvider.value = provider; deleteTarget.value = 'provider'; }
 function requestModelDelete(model: ApiModel) { deletingModel.value = model; deleteTarget.value = 'model'; }
-function cancelDelete() { deleteTarget.value = undefined; deletingModel.value = undefined; }
+function cancelDelete() { deleteTarget.value = undefined; deletingModel.value = undefined; deletingProvider.value = undefined; }
 async function confirmDelete() {
   const target = deleteTarget.value;
-  if (target === 'provider' && providerForm.id) {
-    if (await action(() => runtime.removeProvider(providerForm.id))) newProvider();
+  if (target === 'provider' && deletingProvider.value) {
+    const provider = deletingProvider.value;
+    if (await action(() => runtime.removeProvider(provider.id))) {
+      if (selectedProviderId.value === provider.id) newProvider();
+      toastr.success(`Provider“${provider.name}”已删除。`, '梦境创客');
+    }
   } else if (target === 'model' && providerForm.id && deletingModel.value) {
-    await action(() => runtime.removeModel(providerForm.id, deletingModel.value!.id));
+    const model = deletingModel.value;
+    if (await action(() => runtime.removeModel(providerForm.id, model.id))) {
+      toastr.success(`模型“${model.name}”已删除。`, '梦境创客');
+    }
   }
   cancelDelete();
 }
 
-async function setDefault(modelId: string) { if (selectedProvider.value) await action(() => runtime.selectDefaultModel({ providerId: selectedProvider.value!.id, modelId })); }
+async function setDefault(modelId: string) {
+  const model = selectedProvider.value?.models.find(item => item.id === modelId);
+  if (selectedProvider.value && await action(() => runtime.selectDefaultModel({ providerId: selectedProvider.value!.id, modelId }))) {
+    toastr.success(`“${model?.name ?? '模型'}”已设为新会话默认。`, '梦境创客');
+  }
+}
 function isDefaultModel(modelId: string) { return state.value.defaultModelSelection?.providerId === selectedProvider.value?.id && state.value.defaultModelSelection.modelId === modelId; }
 
 async function exportProvider(includeSecrets: boolean) {
@@ -308,13 +345,17 @@ async function exportProvider(includeSecrets: boolean) {
     const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
     anchor.href = url; anchor.download = `${providerForm.name || 'provider'}.dream-provider.json`; anchor.click();
     queueMicrotask(() => URL.revokeObjectURL(url));
+    toastr.success(`Provider“${providerForm.name}”已导出。`, '梦境创客');
   } catch (error) { toastr.error(error instanceof Error ? error.message : String(error), '梦境创客'); }
 }
 async function importProvider(event: Event) {
   const input = event.target as HTMLInputElement; const file = input.files?.[0]; input.value = '';
   if (!file) return;
   let imported: ApiProvider | undefined;
-  if (await action(async () => { imported = await runtime.importProviderBundle(await file.text()); })) selectedProviderId.value = imported!.id;
+  if (await action(async () => { imported = await runtime.importProviderBundle(await file.text()); })) {
+    selectedProviderId.value = imported!.id;
+    toastr.success(`Provider“${imported!.name}”已导入。`, '梦境创客');
+  }
 }
 
 function compatibilityLabel(value: ApiModel['compatibilityMode']) { return value === 'deepseek' ? 'DeepSeek 模式' : '标准模式'; }
@@ -326,12 +367,16 @@ function formatTokens(value: number) { if (!value) return '自动'; if (value >=
 .dca-provider-list { display: flex; min-width: 0; flex-direction: column; gap: .25rem; border-right: 1px solid var(--dca-border); padding-right: .65rem; }
 .dca-provider-list > header { display: flex; align-items: center; justify-content: space-between; padding: .35rem .45rem; }
 .dca-provider-list > header small { color: var(--dca-text-muted); }
-.dca-provider-list > button { display: grid; grid-template-columns: 1.2rem minmax(0, 1fr) auto; align-items: center; gap: .45rem; border-color: transparent; padding: .55rem; background: transparent; text-align: left; }
-.dca-provider-list > button.active { border-color: var(--dca-border); background: var(--dca-accent-soft); color: var(--dca-accent); }
-.dca-provider-list > button.disabled { opacity: .62; }
-.dca-provider-list > button span { display: flex; min-width: 0; flex-direction: column; }
-.dca-provider-list > button strong, .dca-provider-list > button small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dca-provider-list > button small { color: var(--dca-text-muted); font-size: .68rem; }
+.dca-app .dca-provider-new { display: flex; width: 100%; align-items: center; justify-content: flex-start; gap: .45rem; margin-bottom: .2rem; padding: .52rem .58rem; text-align: left; }
+.dca-provider-item { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) 2rem; align-items: stretch; gap: .2rem; border: 1px solid transparent; border-radius: var(--dca-radius-md); background: transparent; }
+.dca-provider-item.active { border-color: var(--dca-border); background: var(--dca-accent-soft); color: var(--dca-accent); }
+.dca-provider-item.disabled { opacity: .62; }
+.dca-app .dca-provider-select { display: grid; min-width: 0; grid-template-columns: 1.2rem minmax(0, 1fr) auto; align-items: center; justify-content: stretch; justify-items: start; gap: .45rem; border: 0; padding: .55rem; background: transparent; color: inherit; text-align: left; }
+.dca-provider-select span { display: flex; min-width: 0; align-items: flex-start; flex-direction: column; text-align: left; }
+.dca-provider-select strong, .dca-provider-select small { max-width: 100%; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
+.dca-provider-select small { color: var(--dca-text-muted); font-size: .68rem; }
+.dca-app .dca-provider-delete { width: 1.9rem; min-width: 1.9rem; align-self: center; border-color: transparent; padding: .35rem 0; opacity: .72; }
+.dca-app .dca-provider-delete:hover { border-color: color-mix(in srgb, var(--dca-danger) 45%, transparent); background: var(--dca-danger-soft); opacity: 1; }
 .dca-provider-main { display: flex; min-width: 0; flex-direction: column; gap: .75rem; }
 .dca-api-provider-toolbar { position: sticky; z-index: 5; top: 0; justify-content: space-between; border: 1px solid var(--dca-border); border-radius: var(--dca-radius-md); padding: .55rem; background: color-mix(in srgb, var(--dca-surface) 94%, transparent); backdrop-filter: blur(10px); }
 .dca-api-provider-toolbar > div:first-child { display: flex; min-width: 0; flex-direction: column; }
