@@ -21,6 +21,20 @@
         "enabled": true,
         "info": "为 SillyTavern 提供现代化布局，并支持在设置面板中手动检查和安装稳定版更新。"
       }
+    },
+    "dream-card-agent": {
+      "name": "梦境创客",
+      "version": "0.1.0",
+      "tagPrefix": "dream-card-agent-v",
+      "entry": "dist/酒馆助手/梦境创客/index.js",
+      "installer": {
+        "template": "release/模板/酒馆助手脚本-脚本模板.json",
+        "output": "release/梦境创客/酒馆助手脚本-梦境创客.json",
+        "releaseAsset": "tavern-helper-dream-card-agent.json",
+        "id": "dream-card-agent",
+        "enabled": true,
+        "info": "在 SillyTavern 中辅助创作角色卡、世界书与测试会话，并支持在设置页检查和安装稳定版更新。"
+      }
     }
   }
 }
