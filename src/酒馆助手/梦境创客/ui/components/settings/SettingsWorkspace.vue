@@ -21,7 +21,8 @@
         <ApiSettings v-else-if="settingsSection === 'api'" />
         <SkillSettings v-else-if="settingsSection === 'skills'" />
         <StorageSettings v-else-if="settingsSection === 'storage'" />
-        <DiagnosticsSettings v-else />
+        <DiagnosticsSettings v-else-if="settingsSection === 'diagnostics'" />
+        <UpdateSettings v-else />
       </div>
     </div>
   </section>
@@ -37,6 +38,7 @@ import GeneralSettings from './GeneralSettings.vue';
 import PresetSettings from './PresetSettings.vue';
 import SkillSettings from './SkillSettings.vue';
 import StorageSettings from './StorageSettings.vue';
+import UpdateSettings from './UpdateSettings.vue';
 
 const ThemeSettings = defineAsyncComponent(() => import('./ThemeSettings.vue'));
 
@@ -51,6 +53,7 @@ const navItems: { icon: string; label: string; section: SettingsSection }[] = [
   { icon: 'fa-solid fa-wand-magic-sparkles', label: 'Skill', section: 'skills' },
   { icon: 'fa-solid fa-hard-drive', label: '文件与存储', section: 'storage' },
   { icon: 'fa-solid fa-stethoscope', label: '诊断', section: 'diagnostics' },
+  { icon: 'fa-solid fa-circle-arrow-up', label: '更新', section: 'update' },
 ];
 </script>
 

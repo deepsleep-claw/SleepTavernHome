@@ -126,13 +126,21 @@ const mock = vi.hoisted(() => {
         id: 'provider',
         interfaceType: 'openai-chat',
         name: '本地',
-        models: [{
-          compatibilityMode: 'standard', enabled: true, id: 'model-config', modelId: 'model', name: '模型',
-          modelSettings: {
-            capabilities: { reasoning: 'enabled', toolCalling: 'enabled', vision: 'enabled', webSearch: 'disabled' },
-            contextWindow: 128_000, maxOutputTokens: 8_000, reasoningEfforts: [],
+        models: [
+          {
+            compatibilityMode: 'standard',
+            enabled: true,
+            id: 'model-config',
+            modelId: 'model',
+            name: '模型',
+            modelSettings: {
+              capabilities: { reasoning: 'enabled', toolCalling: 'enabled', vision: 'enabled', webSearch: 'disabled' },
+              contextWindow: 128_000,
+              maxOutputTokens: 8_000,
+              reasoningEfforts: [],
+            },
           },
-        }],
+        ],
       },
     ],
     presetProfiles: [
@@ -275,7 +283,9 @@ describe('WorkspaceWindow', () => {
     expect(root.querySelector<HTMLImageElement>('.dca-message-user img')?.src).toBe('https://example.com/preview.png');
     expect(root.querySelector('.dca-message-assistant h3')?.textContent).toBe('完成');
     expect(root.querySelector('.dca-header')).toBeNull();
-    expect(root.querySelector('.dca-sidebar-brand strong')).toBeNull();
+    expect(root.querySelector('.dca-sidebar-brand strong')?.textContent).toBe('梦境创客');
+    expect(root.querySelector('.dca-character-group.current .dca-character-copy strong')?.textContent).toBe('测试角色');
+    expect(root.querySelector('.dca-version-tab')?.textContent).toContain('v0.1.0');
     expect(root.querySelector<HTMLImageElement>('.dca-character-avatar img')?.getAttribute('src')).toBe(
       '/thumbnail?type=avatar&file=avatar',
     );
@@ -325,6 +335,13 @@ describe('WorkspaceWindow', () => {
 
     (root.querySelector('.dca-settings-tab') as HTMLButtonElement).click();
     await nextTick();
+    const updateSection = [...root.querySelectorAll<HTMLButtonElement>('.dca-settings-nav button')].find(button =>
+      button.textContent?.includes('更新'),
+    )!;
+    updateSection.click();
+    await nextTick();
+    expect(root.querySelector('.dca-update-settings')?.textContent).toContain('当前版本 v0.1.0');
+    expect(root.querySelector('.dca-update-settings')?.textContent).toContain('首次加载后静默检查更新');
     const skillSection = [...root.querySelectorAll<HTMLButtonElement>('.dca-settings-nav button')].find(button =>
       button.textContent?.includes('Skill'),
     )!;

@@ -1,6 +1,10 @@
 <template>
   <aside class="dca-primary-sidebar" :class="{ collapsed: collapsed }">
     <header class="dca-sidebar-brand">
+      <div v-if="!collapsed" class="dca-sidebar-brand-identity">
+        <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
+        <strong>{{ isMobile ? '角色与会话' : '梦境创客' }}</strong>
+      </div>
       <button
         v-if="isMobile"
         class="dca-icon-btn"
@@ -8,7 +12,7 @@
         title="返回工作区"
         @click="mobileSurface = 'workspace'"
       >
-        <i class="fa-solid fa-arrow-left" aria-hidden="true"></i>
+        <i class="fa-solid fa-angles-left" aria-hidden="true"></i>
       </button>
       <button
         v-if="!isMobile"
@@ -43,7 +47,7 @@
         v-for="group in groups"
         :key="group.bindingId"
         class="dca-character-group"
-        :class="{ unavailable: !group.available }"
+        :class="{ current: group.current, unavailable: !group.available }"
       >
         <div class="dca-character-heading">
           <button class="dca-character-toggle" type="button" @click="toggleGroup(group.bindingId)">
@@ -169,17 +173,12 @@ const activeAgentName = computed(
   () =>
     state.value.agentConfigurations.find(item => item.id === state.value.activeAgentConfigurationId)?.name ?? '未配置',
 );
-const activeProfileName = computed(
-  () => {
-    const selected = findSelectedModel(state.value.providers ?? [], state.value.active?.modelSelection);
-    return selected ? `${selected.provider.name} · ${selected.model.name}` : '未选择模型';
-  },
-);
+const activeProfileName = computed(() => {
+  const selected = findSelectedModel(state.value.providers ?? [], state.value.active?.modelSelection);
+  return selected ? `${selected.provider.name} · ${selected.model.name}` : '未选择模型';
+});
 const statusLabel = computed(
-  () =>
-    ({ running: '运行中', 'waiting-approval': '等待确认' })[
-      state.value.active?.status ?? ''
-    ] ?? '就绪',
+  () => ({ running: '运行中', 'waiting-approval': '等待确认' })[state.value.active?.status ?? ''] ?? '就绪',
 );
 
 watch(
@@ -231,13 +230,28 @@ function relativeTime(timestamp: number): string {
 }
 .dca-sidebar-brand {
   display: flex;
-  height: 3.35rem;
+  height: 2.8rem;
   flex: 0 0 auto;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: space-between;
   gap: 0.35rem;
   padding: 0 0.75rem;
   border-bottom: 1px solid var(--dca-border);
+}
+.dca-sidebar-brand-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.55rem;
+}
+.dca-sidebar-brand-identity > i {
+  color: var(--dca-accent-strong);
+}
+.dca-sidebar-brand-identity > strong {
+  overflow: hidden;
+  font-size: 0.86rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dca-sidebar-collapse {
   margin-left: 0;
@@ -282,6 +296,14 @@ function relativeTime(timestamp: number): string {
 }
 .dca-character-heading {
   position: relative;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: var(--dca-radius-sm);
+}
+.dca-character-group.current .dca-character-heading {
+  border-color: color-mix(in srgb, var(--dca-accent) 28%, var(--dca-border));
+  background: var(--dca-sidebar-active);
+  box-shadow: inset 2px 0 0 var(--dca-accent);
 }
 .dca-character-toggle {
   display: flex;
@@ -488,14 +510,12 @@ function relativeTime(timestamp: number): string {
 }
 @media (max-width: 720px) {
   .dca-primary-sidebar {
-    border-right: 0;
+    width: min(84vw, 22rem);
+    border-right: 1px solid var(--dca-border-strong);
+    box-shadow: var(--dca-shadow-3);
   }
   .dca-character-new {
     opacity: 1;
-  }
-  .dca-sidebar-brand {
-    justify-content: space-between;
-    padding-left: 0.6rem;
   }
 }
 </style>

@@ -1,5 +1,6 @@
 import { checkMinimumVersion } from '@util/common';
 import { teleportStyle } from '@util/script';
+import type { PluginActivationContext, PluginRuntime } from '../../公共模块/脚本更新器/contracts';
 import { createProbeModel, createProbeStream } from './core/provider-probe';
 import { getDreamCardAgentRuntime } from './runtime/dream-card-agent-runtime';
 import {
@@ -14,9 +15,12 @@ import {
 } from './ui/floating-anchor';
 import { destroyDreamCardAgentWindow, openDreamCardAgentWindow } from './ui/popup';
 import { applyThemeToHost } from './ui/theme/runtime';
+import { configureDreamCardAgentUpdater, createStandaloneActivationContext } from './ui/updater';
+import { DREAM_CARD_AGENT_ID, DREAM_CARD_AGENT_NAME, DREAM_CARD_AGENT_VERSION } from './version';
 
-export const DREAM_CARD_AGENT_ID = 'dream-card-agent';
-export const DREAM_CARD_AGENT_NAME = '梦境创客';
+export { DREAM_CARD_AGENT_ID, DREAM_CARD_AGENT_NAME, DREAM_CARD_AGENT_VERSION } from './version';
+export const PLUGIN_ID = DREAM_CARD_AGENT_ID;
+export const PLUGIN_VERSION = DREAM_CARD_AGENT_VERSION;
 export const dreamCardAgentProbe = createProbeStream;
 
 const WAND_CONTAINER_ID = 'dream-card-agent-wand-container';
@@ -40,7 +44,10 @@ function setHostRuntime(runtime: HostRuntime | undefined): void {
 }
 
 function refreshExtensionsMenuButton(): void {
-  const visible = $('#extensionsMenu').children().filter((_, item) => $(item).css('display') !== 'none').length > 0;
+  const visible =
+    $('#extensionsMenu')
+      .children()
+      .filter((_, item) => $(item).css('display') !== 'none').length > 0;
   $('#extensionsMenuButton').toggle(visible);
 }
 
@@ -87,7 +94,13 @@ function mountWandEntry(owner: string): { destroy: () => void } {
     $('#extensionsMenuButton').css('display', 'flex');
     return true;
   };
-  if (!append()) timer = window.setInterval(() => { if (append() && timer !== undefined) { window.clearInterval(timer); timer = undefined; } }, 1000);
+  if (!append())
+    timer = window.setInterval(() => {
+      if (append() && timer !== undefined) {
+        window.clearInterval(timer);
+        timer = undefined;
+      }
+    }, 1000);
   return {
     destroy: () => {
       if (timer !== undefined) window.clearInterval(timer);
@@ -133,11 +146,7 @@ function mountFloatingButton(owner: string): { destroy: () => void } {
     const position = floatingButtonPosition(anchor, floatingViewport(), buttonSize(), offset);
     $button.css({ bottom: 'auto', left: `${position.x}px`, right: 'auto', top: `${position.y}px` });
   };
-  const persistPlacement = (
-    nextAnchor: FloatingButtonAnchor,
-    nextOffset: FloatingButtonOffset,
-    apply = true,
-  ) => {
+  const persistPlacement = (nextAnchor: FloatingButtonAnchor, nextOffset: FloatingButtonOffset, apply = true) => {
     anchor = nextAnchor;
     offset = nextOffset;
     if (apply) setPlacement(nextAnchor, nextOffset);
@@ -172,14 +181,8 @@ function mountFloatingButton(owner: string): { destroy: () => void } {
       moved = true;
       const view = floatingViewport();
       const size = buttonSize();
-      const x = Math.min(
-        view.width - view.insets.right - size.width,
-        Math.max(view.insets.left, origin.x + dx),
-      );
-      const y = Math.min(
-        view.height - view.insets.bottom - size.height,
-        Math.max(view.insets.top, origin.y + dy),
-      );
+      const x = Math.min(view.width - view.insets.right - size.width, Math.max(view.insets.left, origin.x + dx));
+      const y = Math.min(view.height - view.insets.bottom - size.height, Math.max(view.insets.top, origin.y + dy));
       $button.css({ bottom: 'auto', left: `${x}px`, right: 'auto', top: `${y}px` });
     };
     const end = () => {
@@ -196,12 +199,7 @@ function mountFloatingButton(owner: string): { destroy: () => void } {
         { x: current.left + current.width / 2, y: current.top + current.height / 2 },
         view,
       );
-      const nextOffset = floatingButtonOffsetForPosition(
-        nextAnchor,
-        { x: current.left, y: current.top },
-        view,
-        size,
-      );
+      const nextOffset = floatingButtonOffsetForPosition(nextAnchor, { x: current.left, y: current.top }, view, size);
       // 九宫格只决定后续缩放参照，松手时保留用户拖到的自由位置。
       persistPlacement(nextAnchor, nextOffset, false);
     };
@@ -239,7 +237,7 @@ function mountFloatingButton(owner: string): { destroy: () => void } {
   };
 }
 
-$(() => {
+function initializeDreamCardAgent(context: PluginActivationContext): PluginRuntime {
   const owner = crypto.randomUUID();
   try {
     hostRuntime()?.destroy();
@@ -254,10 +252,13 @@ $(() => {
     model: 'probe',
   });
   const runtime = getDreamCardAgentRuntime();
+  const destroyUpdater = configureDreamCardAgentUpdater(context);
   const style = teleportStyle();
   const floating = mountFloatingButton(owner);
   const wand = mountWandEntry(owner);
-  const refresh = () => { void runtime.refreshCharacter().catch(() => undefined); };
+  const refresh = () => {
+    void runtime.refreshCharacter().catch(() => undefined);
+  };
   const events = [
     eventOn(tavern_events.CHAT_CHANGED, refresh),
     eventOn(tavern_events.CHARACTER_EDITED, refresh),
@@ -274,10 +275,29 @@ $(() => {
     floating.destroy();
     wand.destroy();
     runtime.destroy();
+    destroyUpdater();
     style.destroy();
     if (hostRuntime()?.owner === owner) setHostRuntime(undefined);
   };
   setHostRuntime({ destroy, owner });
   $(window).one('pagehide', destroy);
-  console.info(`[${DREAM_CARD_AGENT_NAME}] 已启动。`);
-});
+  console.info(`[${DREAM_CARD_AGENT_NAME}] 已启动 v${context.release.version}。`);
+  return { dispose: destroy };
+}
+
+let activationRequested = false;
+
+export async function activate(context: PluginActivationContext): Promise<PluginRuntime> {
+  activationRequested = true;
+  await new Promise<void>(resolve => $(resolve));
+  return initializeDreamCardAgent(context);
+}
+
+// 兼容开发阶段一直沿用的 `import dist/.../index.js`。正式更新器在动态导入后会
+// 立即调用 activate，因此会先把 activationRequested 置为 true，不会重复启动。
+setTimeout(() => {
+  if (activationRequested) return;
+  void activate(createStandaloneActivationContext()).catch(error => {
+    console.error(`[${DREAM_CARD_AGENT_NAME}] 本地直接导入启动失败。`, error);
+  });
+}, 0);

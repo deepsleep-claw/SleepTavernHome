@@ -16,53 +16,40 @@
 }
 
 .dca-floating-titlebar {
+  position: absolute;
+  z-index: 4;
+  top: 0;
+  right: 0;
+  left: 0;
   display: flex;
-  flex: 0 0 auto;
-  height: 2.6rem;
+  height: 2.8rem;
   align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--dca-border);
-  padding: 0 0.5rem 0 0.85rem;
-  background: var(--dca-surface);
+  justify-content: flex-end;
+  padding: 0 0.45rem;
+  pointer-events: none;
   color: var(--dca-text);
-  cursor: move;
   font-size: 0.86rem;
   font-weight: 600;
   letter-spacing: 0.02em;
-  touch-action: none;
   user-select: none;
 }
 
-.dca-floating-title-identity {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 0.35rem;
-}
-
-.dca-floating-title-identity > i {
-  margin-right: 0.35rem;
-  color: var(--dca-accent);
-}
-
-.dca-floating-title-identity > strong {
-  flex: 0 0 auto;
-}
-
-.dca-floating-title-identity > small {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--dca-text-secondary);
-  font-size: 0.76rem;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.dca-floating-drag-surface {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(17.5rem - 3rem);
+  cursor: move;
+  pointer-events: auto;
+  touch-action: none;
 }
 
 .dca-floating-title-actions {
   display: flex;
   align-items: center;
   gap: 0.15rem;
+  pointer-events: auto;
 }
 
 .dca-floating-titlebar button {
@@ -193,6 +180,11 @@
 
 .dca-floating-window-fullscreen .dca-floating-titlebar {
   cursor: default;
+}
+
+.dca-floating-window-fullscreen .dca-floating-drag-surface,
+.dca-floating-window-mobile .dca-floating-drag-surface {
+  width: 0 !important;
 }
 
 .dca-floating-window-fullscreen .dca-floating-resize {

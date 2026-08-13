@@ -17,10 +17,10 @@
 }
 
 .dca-app.mobile {
+  position: relative;
   display: block;
 }
 
-.dca-app.mobile > .dca-primary-sidebar,
 .dca-app.mobile > .dca-workspace-surface {
   width: 100%;
   height: 100%;

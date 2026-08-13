@@ -1,11 +1,7 @@
 <template>
-  <div
-    ref="appRoot"
-    class="dca-app"
-    :class="{ 'sidebar-collapsed': sidebarCollapsed && !isMobile, mobile: isMobile }"
-  >
-    <PrimarySidebar v-if="!isMobile || mobileSurface === 'navigation'" />
-    <section v-if="!isMobile || mobileSurface === 'workspace'" class="dca-workspace-surface">
+  <div ref="appRoot" class="dca-app" :class="{ 'sidebar-collapsed': sidebarCollapsed && !isMobile, mobile: isMobile }">
+    <PrimarySidebar v-if="!isMobile" />
+    <section class="dca-workspace-surface">
       <div v-if="state.error" class="dca-alert dca-alert-error dca-app-alert">
         <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
         <span>{{ state.error }}</span>
@@ -20,6 +16,15 @@
         </section>
       </main>
     </section>
+    <div v-if="isMobile && mobileSurface === 'navigation'" class="dca-mobile-navigation-layer">
+      <button
+        class="dca-mobile-navigation-scrim"
+        type="button"
+        aria-label="关闭角色与会话侧栏"
+        @click="mobileSurface = 'workspace'"
+      ></button>
+      <PrimarySidebar />
+    </div>
     <CharacterSwitchDialog />
     <SkillEditorDialog />
     <OnboardingDialog />
@@ -46,6 +51,15 @@ const appRoot = ref<HTMLElement>();
 const themeStore = getThemeStore();
 let themeRuntime: MountedThemeRuntime | undefined;
 let unsubscribeThemes = () => {};
+
+function publishWindowLayout() {
+  const HostCustomEvent = window.parent.CustomEvent;
+  window.parent.dispatchEvent(
+    new HostCustomEvent('dream-card-agent:window-layout', {
+      detail: { collapsed: sidebarCollapsed.value, mobile: isMobile.value },
+    }),
+  );
+}
 
 async function applyActiveTheme(id = state.value.activeThemeId) {
   try {
@@ -77,6 +91,8 @@ watch(
   id => void applyActiveTheme(id),
 );
 
+watch([sidebarCollapsed, isMobile], publishWindowLayout, { immediate: true });
+
 onBeforeUnmount(() => {
   unsubscribeThemes();
   themeRuntime?.destroy();
@@ -100,6 +116,30 @@ onBeforeUnmount(() => {
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
+}
+
+.dca-mobile-navigation-layer {
+  position: absolute;
+  z-index: 50;
+  display: flex;
+  overflow: hidden;
+  inset: 2.8rem 0 0;
+}
+
+.dca-mobile-navigation-scrim {
+  position: absolute;
+  min-height: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  background: var(--dca-scrim) !important;
+  inset: 0;
+}
+
+.dca-mobile-navigation-layer > .dca-primary-sidebar {
+  position: relative;
+  z-index: 1;
+  height: 100%;
 }
 
 .dca-app-alert {

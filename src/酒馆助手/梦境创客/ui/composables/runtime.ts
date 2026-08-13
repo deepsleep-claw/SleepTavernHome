@@ -10,7 +10,7 @@ import {
 } from '../../runtime/dream-card-agent-runtime';
 
 export type WorkspaceView = 'home' | 'session' | 'settings';
-export type SettingsSection = 'agent' | 'api' | 'diagnostics' | 'general' | 'preset' | 'skills' | 'storage' | 'theme';
+export type SettingsSection = 'agent' | 'api' | 'diagnostics' | 'general' | 'preset' | 'skills' | 'storage' | 'theme' | 'update';
 export type SidebarTab = 'context' | 'diff' | 'files';
 
 export type SkillEditorRequest = { builtin?: boolean; deleting: boolean; skill?: AgentSkill };

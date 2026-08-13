@@ -1,6 +1,5 @@
 import { teleportStyle } from '@util/script';
 import { createApp } from 'vue';
-import { getDreamCardAgentRuntime } from '../runtime/dream-card-agent-runtime';
 import WorkspaceWindow from './WorkspaceWindow.vue';
 import {
   isolateDocumentDoubleClick,
@@ -17,6 +16,7 @@ let popup: Popup | undefined;
 const MARGIN = 10;
 const WINDOW_ID = 'dream-card-agent-window';
 const WINDOW_PREFERENCES_KEY = 'dream-card-agent:window-layout:v1';
+const WINDOW_LAYOUT_EVENT = 'dream-card-agent:window-layout';
 const RESIZE_DIRECTIONS: ResizeDirection[] = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'];
 
 function viewport() {
@@ -147,10 +147,12 @@ export function openDreamCardAgentWindow(): void {
     .addClass('dca-floating-window')
     .appendTo('body');
   const $title = $('<header>').addClass('dca-floating-titlebar').appendTo($window);
-  const $titleIdentity = $('<span>').addClass('dca-floating-title-identity').appendTo($title);
-  $('<i>').addClass('fa-solid fa-wand-magic-sparkles').appendTo($titleIdentity);
-  $('<strong>').text('梦境创客').appendTo($titleIdentity);
-  const $titleCharacter = $('<small>').appendTo($titleIdentity);
+  const $dragSurface = $('<div>').addClass('dca-floating-drag-surface').attr('aria-hidden', 'true').appendTo($title);
+  const updateDragSurface = (event: Event) => {
+    const detail = (event as CustomEvent<{ collapsed?: boolean; mobile?: boolean }>).detail;
+    $dragSurface.css('width', detail?.collapsed || detail?.mobile ? '0' : 'calc(17.5rem - 3rem)');
+  };
+  host.addEventListener(WINDOW_LAYOUT_EVENT, updateDragSurface);
   const $titleActions = $('<div>').addClass('dca-floating-title-actions').appendTo($title);
   const $mode = $('<button>')
     .addClass('dca-floating-mode')
@@ -188,7 +190,6 @@ export function openDreamCardAgentWindow(): void {
   frame.style.zIndex = '6000';
 
   $window.css({ background: 'transparent', pointerEvents: 'none', zIndex: 6001 });
-  $title.css('pointer-events', 'auto');
 
   document.documentElement.style.height = '100%';
   document.body.style.height = '100%';
@@ -209,18 +210,14 @@ export function openDreamCardAgentWindow(): void {
   document.body.append(mountPoint);
   const app = createApp(WorkspaceWindow);
   app.mount(mountPoint);
-  const unsubscribeTitle = getDreamCardAgentRuntime().subscribe(state => {
-    const characterName = state.currentCharacter?.name ?? '未打开角色卡';
-    $titleCharacter.text(`· ${characterName}`);
-    $title.attr('title', `梦境创客 · ${characterName}`);
-  });
   const $resizeHandles = $(
-    RESIZE_DIRECTIONS.map(direction =>
-      $('<div>')
-        .addClass(`dca-floating-resize dca-floating-resize-${direction}`)
-        .attr({ 'aria-hidden': 'true', 'data-direction': direction, title: '拖拽调整大小' })
-        .css('pointer-events', 'auto')
-        .appendTo($window)[0],
+    RESIZE_DIRECTIONS.map(
+      direction =>
+        $('<div>')
+          .addClass(`dca-floating-resize dca-floating-resize-${direction}`)
+          .attr({ 'aria-hidden': 'true', 'data-direction': direction, title: '拖拽调整大小' })
+          .css('pointer-events', 'auto')
+          .appendTo($window)[0],
     ),
   );
   const style = teleportStyle();
@@ -237,11 +234,10 @@ export function openDreamCardAgentWindow(): void {
     fullscreen = viewport().mobile || nextFullscreen;
     applyFrame($window, value, fullscreen);
     const actual = readFrame($window);
-    const titleHeight = $title.outerHeight() ?? 43;
     $(frame).css({
-      height: `${Math.max(1, actual.height - titleHeight)}px`,
+      height: `${Math.max(1, actual.height)}px`,
       left: `${actual.x}px`,
-      top: `${actual.y + titleHeight}px`,
+      top: `${actual.y}px`,
       width: `${actual.width}px`,
     });
     updateModeButton();
@@ -260,7 +256,6 @@ export function openDreamCardAgentWindow(): void {
     destroyed = true;
     removePointer();
     removeDoubleClickIsolation();
-    unsubscribeTitle();
     app.unmount();
     mountPoint.remove();
     if (originalClass === null) frame.removeAttribute('class');
@@ -273,6 +268,7 @@ export function openDreamCardAgentWindow(): void {
     else frame.setAttribute('aria-label', originalAriaLabel);
     $window.remove();
     style.destroy();
+    host.removeEventListener(WINDOW_LAYOUT_EVENT, updateDragSurface);
     host.removeEventListener('resize', keepVisible);
     popup = undefined;
   };
@@ -309,7 +305,7 @@ export function openDreamCardAgentWindow(): void {
       );
     };
     const end = (next?: Event) => {
-      if (ended || next && 'pointerId' in next && (next as PointerEvent).pointerId !== pointerId) return;
+      if (ended || (next && 'pointerId' in next && (next as PointerEvent).pointerId !== pointerId)) return;
       ended = true;
       host.document.removeEventListener('pointermove', move);
       host.document.removeEventListener('pointerup', end);
@@ -328,7 +324,9 @@ export function openDreamCardAgentWindow(): void {
     host.document.addEventListener('pointercancel', end);
     captureTarget.addEventListener('lostpointercapture', end);
   };
-  $title.on('pointerdown', event => track(event.originalEvent as PointerEvent, $title[0], { type: 'move' }));
+  $dragSurface.on('pointerdown', event =>
+    track(event.originalEvent as PointerEvent, $dragSurface[0], { type: 'move' }),
+  );
   $resizeHandles.on('pointerdown', function (event) {
     const direction = $(this).attr('data-direction') as ResizeDirection;
     track(event.originalEvent as PointerEvent, this, { direction, type: 'resize' });
