@@ -2,8 +2,14 @@ import { teleportStyle } from '@util/script';
 import { createApp } from 'vue';
 import { getDreamCardAgentRuntime } from '../runtime/dream-card-agent-runtime';
 import WorkspaceWindow from './WorkspaceWindow.vue';
+import {
+  isolateDocumentDoubleClick,
+  resizeFrame,
+  type Frame,
+  type ResizeBounds,
+  type ResizeDirection,
+} from './window-interaction';
 
-type Frame = { height: number; width: number; x: number; y: number };
 type Popup = { connected: () => boolean; destroy: () => void; focus: () => void };
 type WindowPreferences = { desktopMode: 'fullscreen' | 'windowed'; windowedFrame?: Frame };
 
@@ -11,6 +17,7 @@ let popup: Popup | undefined;
 const MARGIN = 10;
 const WINDOW_ID = 'dream-card-agent-window';
 const WINDOW_PREFERENCES_KEY = 'dream-card-agent:window-layout:v1';
+const RESIZE_DIRECTIONS: ResizeDirection[] = ['n', 'ne', 'e', 'se', 's', 'sw', 'w', 'nw'];
 
 function viewport() {
   const host = window.parent;
@@ -28,6 +35,22 @@ function viewport() {
     scrollX: host.scrollX,
     scrollY: host.scrollY,
     width: host.innerWidth,
+  };
+}
+
+function resizeBounds(): ResizeBounds {
+  const view = viewport();
+  const left = view.insets.left + view.scrollX + MARGIN;
+  const top = view.insets.top + view.scrollY + MARGIN;
+  const right = view.scrollX + view.width - view.insets.right - MARGIN;
+  const bottom = view.scrollY + view.height - view.insets.bottom - MARGIN;
+  return {
+    bottom,
+    left,
+    minHeight: Math.min(380, bottom - top),
+    minWidth: Math.min(420, right - left),
+    right,
+    top,
   };
 }
 
@@ -150,6 +173,7 @@ export function openDreamCardAgentWindow(): void {
   const originalClass = frame.getAttribute('class');
   const originalTitle = frame.getAttribute('title');
   const originalAriaLabel = frame.getAttribute('aria-label');
+  const removeDoubleClickIsolation = isolateDocumentDoubleClick(document);
 
   // Vue在酒馆助手自己的iframe里创建节点。直接把这些节点挂到父页面会发生
   // 跨document采用，第三方焦点监听和动态事件都会变得不可靠。iframe本身也
@@ -190,8 +214,15 @@ export function openDreamCardAgentWindow(): void {
     $titleCharacter.text(`· ${characterName}`);
     $title.attr('title', `梦境创客 · ${characterName}`);
   });
-  const $resize = $('<div>').addClass('dca-floating-resize').attr('title', '拖拽调整大小').appendTo($window);
-  $resize.css('pointer-events', 'auto');
+  const $resizeHandles = $(
+    RESIZE_DIRECTIONS.map(direction =>
+      $('<div>')
+        .addClass(`dca-floating-resize dca-floating-resize-${direction}`)
+        .attr({ 'aria-hidden': 'true', 'data-direction': direction, title: '拖拽调整大小' })
+        .css('pointer-events', 'auto')
+        .appendTo($window)[0],
+    ),
+  );
   const style = teleportStyle();
   let preferences = readPreferences();
   let fullscreen = viewport().mobile || preferences.desktopMode === 'fullscreen';
@@ -200,7 +231,7 @@ export function openDreamCardAgentWindow(): void {
     $mode.toggle(!mobile);
     $mode.attr('title', fullscreen ? '切换到窗口模式' : '填满酒馆可用区域');
     $mode.find('i').attr('class', fullscreen ? 'fa-regular fa-window-restore' : 'fa-solid fa-expand');
-    $resize.toggle(!fullscreen && !mobile);
+    $resizeHandles.toggle(!fullscreen && !mobile);
   };
   const placeFrame = (value: Frame, nextFullscreen = fullscreen) => {
     fullscreen = viewport().mobile || nextFullscreen;
@@ -228,6 +259,7 @@ export function openDreamCardAgentWindow(): void {
     if (destroyed) return;
     destroyed = true;
     removePointer();
+    removeDoubleClickIsolation();
     unsubscribeTitle();
     app.unmount();
     mountPoint.remove();
@@ -244,34 +276,63 @@ export function openDreamCardAgentWindow(): void {
     host.removeEventListener('resize', keepVisible);
     popup = undefined;
   };
-  const track = (event: PointerEvent, resize: boolean) => {
+  const track = (
+    event: PointerEvent,
+    captureTarget: HTMLElement,
+    operation: { direction: ResizeDirection; type: 'resize' } | { type: 'move' },
+  ) => {
     if (event.button !== 0 || viewport().mobile || fullscreen) return;
     event.preventDefault();
+    event.stopPropagation();
+    removePointer();
     const start = readFrame($window);
     const startX = event.clientX;
     const startY = event.clientY;
-    const move = (next: PointerEvent) =>
+    const pointerId = event.pointerId;
+    const previousUserSelect = host.document.body.style.userSelect;
+    const interactionCursor = host.getComputedStyle(captureTarget).cursor;
+    let ended = false;
+    host.document.body.style.userSelect = 'none';
+    $window.css({ cursor: interactionCursor, pointerEvents: 'auto' });
+    try {
+      captureTarget.setPointerCapture(pointerId);
+    } catch {
+      // 透明窗口外壳仍会覆盖 iframe，作为不支持指针捕获时的退路。
+    }
+    const move = (next: PointerEvent) => {
+      if (next.pointerId !== pointerId) return;
+      next.preventDefault();
       placeFrame(
-        resize
-          ? { ...start, height: start.height + next.clientY - startY, width: start.width + next.clientX - startX }
+        operation.type === 'resize'
+          ? resizeFrame(start, operation.direction, next.clientX - startX, next.clientY - startY, resizeBounds())
           : { ...start, x: start.x + next.clientX - startX, y: start.y + next.clientY - startY },
       );
-    const end = () => {
+    };
+    const end = (next?: Event) => {
+      if (ended || next && 'pointerId' in next && (next as PointerEvent).pointerId !== pointerId) return;
+      ended = true;
       host.document.removeEventListener('pointermove', move);
       host.document.removeEventListener('pointerup', end);
       host.document.removeEventListener('pointercancel', end);
+      captureTarget.removeEventListener('lostpointercapture', end);
+      if (captureTarget.hasPointerCapture(pointerId)) captureTarget.releasePointerCapture(pointerId);
+      host.document.body.style.userSelect = previousUserSelect;
+      $window.css({ cursor: '', pointerEvents: 'none' });
       removePointer = () => {};
       preferences = { ...preferences, windowedFrame: clamp(readFrame($window)) };
       savePreferences(preferences);
     };
-    removePointer();
     removePointer = end;
     host.document.addEventListener('pointermove', move);
     host.document.addEventListener('pointerup', end);
     host.document.addEventListener('pointercancel', end);
+    captureTarget.addEventListener('lostpointercapture', end);
   };
-  $title.on('pointerdown', event => track(event.originalEvent as PointerEvent, false));
-  $resize.on('pointerdown', event => track(event.originalEvent as PointerEvent, true));
+  $title.on('pointerdown', event => track(event.originalEvent as PointerEvent, $title[0], { type: 'move' }));
+  $resizeHandles.on('pointerdown', function (event) {
+    const direction = $(this).attr('data-direction') as ResizeDirection;
+    track(event.originalEvent as PointerEvent, this, { direction, type: 'resize' });
+  });
   $mode
     .on('pointerdown', event => event.stopPropagation())
     .on('click', () => {

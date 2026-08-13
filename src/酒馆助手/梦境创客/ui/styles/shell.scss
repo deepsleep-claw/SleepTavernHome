@@ -29,6 +29,7 @@
   font-size: 0.86rem;
   font-weight: 600;
   letter-spacing: 0.02em;
+  touch-action: none;
   user-select: none;
 }
 
@@ -107,28 +108,73 @@
 
 .dca-floating-resize {
   position: absolute;
+  z-index: 3;
+  touch-action: none;
+  user-select: none;
+}
+
+.dca-floating-resize-n,
+.dca-floating-resize-s {
+  right: 12px;
+  left: 12px;
+  height: 7px;
+  cursor: ns-resize;
+}
+
+.dca-floating-resize-e,
+.dca-floating-resize-w {
+  top: 12px;
+  bottom: 12px;
+  width: 7px;
+  cursor: ew-resize;
+}
+
+.dca-floating-resize-n {
+  top: 0;
+}
+
+.dca-floating-resize-e {
+  right: 0;
+}
+
+.dca-floating-resize-s {
+  bottom: 0;
+}
+
+.dca-floating-resize-w {
+  left: 0;
+}
+
+.dca-floating-resize-ne,
+.dca-floating-resize-nw,
+.dca-floating-resize-se,
+.dca-floating-resize-sw {
+  width: 12px;
+  height: 12px;
+}
+
+.dca-floating-resize-ne {
+  top: 0;
+  right: 0;
+  cursor: nesw-resize;
+}
+
+.dca-floating-resize-se {
   right: 0;
   bottom: 0;
-  width: 18px;
-  height: 18px;
   cursor: nwse-resize;
 }
 
-.dca-floating-resize::after {
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 8px;
-  height: 8px;
-  border-right: 2px solid var(--dca-accent);
-  border-bottom: 2px solid var(--dca-accent);
-  border-radius: 0 0 2px;
-  content: '';
-  opacity: 0.8;
+.dca-floating-resize-sw {
+  bottom: 0;
+  left: 0;
+  cursor: nesw-resize;
 }
 
-.dca-floating-resize:hover::after {
-  opacity: 1;
+.dca-floating-resize-nw {
+  top: 0;
+  left: 0;
+  cursor: nwse-resize;
 }
 
 .dca-floating-window-mobile {
