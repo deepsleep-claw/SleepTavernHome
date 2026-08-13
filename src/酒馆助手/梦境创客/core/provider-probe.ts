@@ -2,6 +2,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { streamText, type LanguageModel, type ModelMessage, type Tool } from 'ai';
+import { createAdvancedRequestFetch } from './provider/advanced-request';
 import { createDeepSeekResponsesFetch } from './provider/deepseek-responses-adapter';
 
 export type ProviderInterfaceType = 'anthropic' | 'openai-chat' | 'openai-responses';
@@ -44,6 +45,7 @@ export type ProviderProbeProfile = {
   apiKey: string;
   baseURL: string;
   compatibilityMode?: ProviderCompatibilityMode;
+  extraParameters?: Record<string, unknown>;
   headers?: Record<string, string>;
   interfaceType: ProviderInterfaceType;
   model: string;
@@ -61,6 +63,10 @@ export function createProviderRuntime(profile: ProviderProbeProfile, webSearchMa
   const options = {
     apiKey: profile.apiKey,
     baseURL: profile.baseURL,
+    fetch:
+      profile.interfaceType === 'openai-responses' && compatibilityMode === 'deepseek'
+        ? createAdvancedRequestFetch(profile.extraParameters ?? {}, createDeepSeekResponsesFetch())
+        : createAdvancedRequestFetch(profile.extraParameters ?? {}),
     headers: profile.headers,
   };
 
@@ -82,7 +88,6 @@ export function createProviderRuntime(profile: ProviderProbeProfile, webSearchMa
     case 'openai-responses': {
       const provider = createOpenAI({
         ...options,
-        fetch: compatibilityMode === 'deepseek' ? createDeepSeekResponsesFetch() : undefined,
       });
       return {
         capabilities,

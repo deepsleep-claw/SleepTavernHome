@@ -25,12 +25,12 @@
           </button>
         </div>
         <button
-          v-if="state.currentCharacter && state.profiles.length === 0"
+          v-if="state.currentCharacter && availableModelCount === 0"
           class="dca-configure-api"
           type="button"
           @click="openSettings('api')"
         >
-          还没有 API Profile，先去完成配置 <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
+          还没有可用的 Provider 模型，先去完成配置 <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
         </button>
       </div>
 
@@ -97,13 +97,14 @@ const currentSessions = computed(() =>
   state.value.sessions.filter(item => item.bindingId === state.value.currentCharacter?.bindingId),
 );
 const recentSessions = computed(() => currentSessions.value.slice(0, 5));
-const canCreateSession = computed(() => Boolean(state.value.currentCharacter && state.value.profiles.length));
+const availableModelCount = computed(() => (state.value.providers ?? [])
+  .filter(provider => provider.enabled)
+  .reduce((total, provider) => total + provider.models.filter(model => model.enabled).length, 0));
+const canCreateSession = computed(() => Boolean(state.value.currentCharacter));
 const createTitle = computed(() =>
   !state.value.currentCharacter
     ? '请先在酒馆中打开一张角色卡'
-    : state.value.profiles.length === 0
-      ? '请先配置 API Profile'
-      : '新建会话',
+    : '新建会话',
 );
 const activeAgentName = computed(
   () =>

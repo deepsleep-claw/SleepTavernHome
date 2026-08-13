@@ -42,6 +42,7 @@ export type ModelTemplate = {
   id: string;
   interfaceType?: ProviderInterfaceType;
   name: string;
+  match: ModelTemplateMatchRules;
   patterns: string[];
   provider: string;
   revision: string;
@@ -49,6 +50,13 @@ export type ModelTemplate = {
   source: ModelTemplateSource;
   sourceUrl?: string;
   status?: 'active' | 'preview' | 'unverified';
+};
+
+export type ModelTemplateMatchRules = {
+  contains: string[];
+  exact: string[];
+  prefix: string[];
+  suffix: string[];
 };
 
 export type ModelTemplateMatch = {
@@ -125,6 +133,29 @@ function reasoningEfforts(value: unknown): ReasoningEffort[] {
   });
 }
 
+function parseMatchRules(value: unknown, id: string, aliases: string[], patterns: string[]): ModelTemplateMatchRules {
+  const input = record(value);
+  const result: ModelTemplateMatchRules = {
+    contains: strings(input?.contains),
+    exact: [id, ...aliases, ...strings(input?.exact)],
+    prefix: strings(input?.prefix),
+    suffix: strings(input?.suffix),
+  };
+  for (const pattern of patterns) {
+    const starts = pattern.startsWith('*');
+    const ends = pattern.endsWith('*');
+    const value = pattern.replace(/^\*+/u, '').replace(/\*+$/u, '');
+    if (!value || value.includes('*')) continue;
+    if (starts && ends) result.contains.push(value);
+    else if (starts) result.suffix.push(value);
+    else if (ends) result.prefix.push(value);
+    else result.exact.push(value);
+  }
+  return Object.fromEntries(
+    Object.entries(result).map(([key, values]) => [key, [...new Set(values.map(normalizeId).filter(Boolean))]]),
+  ) as ModelTemplateMatchRules;
+}
+
 function parseBuiltinSource(source: string): ModelTemplate[] {
   const root = record(parse(source));
   const revision = typeof root?.revision === 'string' ? root.revision : 'unknown';
@@ -144,8 +175,10 @@ function parseBuiltinSource(source: string): ModelTemplate[] {
     if (!id || !name || !provider) return [];
     const settings = record(value.settings);
     const capabilities = record(settings?.capabilities);
+    const aliases = strings(value.aliases);
+    const patterns = strings(value.patterns);
     return [{
-      aliases: strings(value.aliases),
+      aliases,
       compatibilityMode:
         value.compatibilityMode === 'deepseek'
           ? 'deepseek'
@@ -159,7 +192,8 @@ function parseBuiltinSource(source: string): ModelTemplate[] {
           ? value.interfaceType
           : rootInterfaceType,
       name,
-      patterns: strings(value.patterns),
+      match: parseMatchRules(value.match, id, aliases, patterns),
+      patterns,
       provider,
       revision,
       settings: {
@@ -218,30 +252,14 @@ function normalizeId(value: string): string {
   return value.trim().toLocaleLowerCase().replace(/[\\_\s]+/gu, '-').replace(/-{2,}/gu, '-');
 }
 
-function globMatches(value: string, pattern: string): boolean {
-  const escaped = normalizeId(pattern).replace(/[.+?^${}()|[\]\\]/gu, '\\$&').replace(/\*/gu, '.*');
-  return new RegExp(`^${escaped}$`, 'u').test(value);
-}
-
-function trigrams(value: string): Set<string> {
-  const padded = `  ${value}  `;
-  return new Set(Array.from({ length: Math.max(0, padded.length - 2) }, (_, index) => padded.slice(index, index + 3)));
-}
-
-function similarity(left: string, right: string): number {
-  const a = trigrams(left);
-  const b = trigrams(right);
-  let intersection = 0;
-  for (const item of a) if (b.has(item)) intersection += 1;
-  return a.size + b.size === 0 ? 0 : (2 * intersection) / (a.size + b.size);
-}
-
-function matchScore(modelId: string, template: ModelTemplate): number {
+function matchScore(modelId: string, template: ModelTemplate): { length: number; rank: number; score: number } | undefined {
   const normalized = normalizeId(modelId);
-  const ids = [template.id, ...template.aliases].map(normalizeId);
-  if (ids.includes(normalized)) return 1;
-  if (template.patterns.some(pattern => globMatches(normalized, pattern))) return 0.9;
-  return Math.max(...ids.map(candidate => similarity(normalized, candidate)), 0) * 0.85;
+  const candidates: Array<{ length: number; rank: number; score: number }> = [];
+  for (const value of template.match.exact) if (normalized === value) candidates.push({ length: value.length, rank: 4, score: 1 });
+  for (const value of template.match.prefix) if (normalized.startsWith(value)) candidates.push({ length: value.length, rank: 3, score: 0.9 });
+  for (const value of template.match.suffix) if (normalized.endsWith(value)) candidates.push({ length: value.length, rank: 3, score: 0.9 });
+  for (const value of template.match.contains) if (normalized.includes(value)) candidates.push({ length: value.length, rank: 2, score: 0.8 });
+  return candidates.sort((left, right) => right.rank - left.rank || right.length - left.length)[0];
 }
 
 export function matchModelTemplates(
@@ -253,14 +271,15 @@ export function matchModelTemplates(
   const available = scope ? filterModelTemplatesForScope(templates, scope) : templates;
   if (!modelId.trim()) return available.slice(0, limit).map(template => ({ score: 0, template }));
   return available
-    .map(template => ({ score: matchScore(modelId, template), template }))
-    .filter(match => match.score >= 0.66)
+    .map((template, order) => ({ match: matchScore(modelId, template), order, template }))
+    .filter((item): item is typeof item & { match: NonNullable<typeof item.match> } => Boolean(item.match))
     .sort(
       (left, right) =>
-        right.score - left.score ||
-        Number(right.template.interfaceType !== undefined) - Number(left.template.interfaceType !== undefined) ||
-        left.template.name.localeCompare(right.template.name, 'zh-CN'),
+        right.match.rank - left.match.rank ||
+        right.match.length - left.match.length ||
+        left.order - right.order,
     )
+    .map(item => ({ score: item.match.score, template: item.template }))
     .slice(0, limit);
 }
 
@@ -268,10 +287,7 @@ export function filterModelTemplatesForScope(
   templates: ModelTemplate[],
   scope: ModelTemplateScope,
 ): ModelTemplate[] {
-  return templates.filter(template => {
-    if (template.interfaceType === undefined && template.compatibilityMode === undefined) return true;
-    return template.interfaceType === scope.interfaceType && template.compatibilityMode === scope.compatibilityMode;
-  });
+  return templates.filter(template => template.interfaceType === undefined || template.interfaceType === scope.interfaceType);
 }
 
 function modalitySupportsText(model: Record<string, unknown>): boolean {
@@ -332,6 +348,7 @@ export function parseModelsDevCatalog(payload: unknown): ModelTemplate[] {
         confidence: 'medium',
         id: `models.dev:${providerId}:${modelId}`,
         name: typeof model.name === 'string' ? model.name : modelId,
+        match: parseMatchRules(undefined, modelId, [modelId], []),
         patterns: [],
         provider: providerId,
         revision: typeof model.last_updated === 'string' ? model.last_updated : 'cloud',
@@ -361,7 +378,7 @@ export function templateSettings(template: ModelTemplate): ModelSettings {
   return normalizeModelSettings(template.settings);
 }
 
-/** 云端聚合目录只补充协议无关的可靠字段，不能覆盖推理档位、原生联网与采样细节。 */
+/** 云端聚合目录只补充协议无关的可靠字段；不覆盖推理档位、原生联网与采样细节。 */
 export function settingsForAppliedTemplate(template: ModelTemplate, current: ModelSettings): ModelSettings {
   const next = templateSettings(template);
   if (template.source !== 'cloud') return next;
@@ -370,6 +387,7 @@ export function settingsForAppliedTemplate(template: ModelTemplate, current: Mod
     ...preserved,
     capabilities: {
       ...preserved.capabilities,
+      reasoning: next.capabilities.reasoning,
       toolCalling: next.capabilities.toolCalling,
       vision: next.capabilities.vision,
     },

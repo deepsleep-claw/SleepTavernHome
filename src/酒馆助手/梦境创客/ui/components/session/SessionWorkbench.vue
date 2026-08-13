@@ -90,6 +90,7 @@ watch(
 
 <style lang="scss">
 .dca-workbench {
+  position: relative;
   display: grid;
   height: 100%;
   min-height: 0;
@@ -169,8 +170,22 @@ watch(
 
 @media (max-width: 720px) {
   .dca-workbench:not(.sidebar-collapsed) {
-    grid-template-columns: 1fr;
-    grid-template-rows: minmax(0, 62%) minmax(14rem, 38%);
+    display: block;
+  }
+
+  .dca-workbench:not(.sidebar-collapsed) > .dca-session-panel {
+    height: 100%;
+  }
+
+  .dca-workbench:not(.sidebar-collapsed) > .dca-session-sidebar {
+    position: absolute;
+    z-index: 30;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border-left: 0;
+    background: var(--dca-surface);
+    box-shadow: var(--dca-shadow-3);
   }
 
   .dca-sidebar-resizer {

@@ -38,12 +38,12 @@ describe('AgentWindow', () => {
     const apiTab = [...root.querySelectorAll('button')].find(button => button.textContent?.trim() === 'API');
     apiTab?.click();
     await nextTick();
-    expect(root.textContent).toContain('接口格式决定请求结构');
+    expect(root.textContent).toContain('Provider 保存连接');
     expect(root.textContent).toContain('兼容模式');
-    expect(root.textContent).toContain('获取模型');
+    expect(root.textContent).toContain('拉取模型');
     expect(root.textContent).not.toContain('保存（不测试连接）');
-    expect([...root.querySelectorAll('button')].some(button => button.textContent?.trim() === '保存')).toBe(true);
-    expect(root.querySelector('.dca-api-profile-toolbar')).not.toBeNull();
+    expect([...root.querySelectorAll('button')].some(button => button.textContent?.trim() === '保存 Provider')).toBe(true);
+    expect(root.querySelector('.dca-api-provider-toolbar')).not.toBeNull();
     expect((root.querySelector('textarea') as HTMLTextAreaElement).value).toBe('{}');
     app.unmount();
   });

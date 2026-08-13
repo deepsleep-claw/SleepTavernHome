@@ -270,10 +270,16 @@ const tab = computed({
 });
 
 const files = computed(() => state.value.active?.workingFiles ?? []);
-const activeProfile = computed(() => state.value.profiles.find(profile => profile.id === state.value.activeProfileId));
+const activeModel = computed(() => {
+  const selection = state.value.active?.modelSelection;
+  if (!selection) return undefined;
+  return (state.value.providers ?? [])
+    .find(provider => provider.id === selection.providerId)
+    ?.models.find(model => model.id === selection.modelId);
+});
 const contextSourceLabel = computed(() => {
   const source = state.value.active?.contextUsage.measurement === 'api' ? 'API 用量 + 增量估算' : '本地估算';
-  return activeProfile.value?.modelSettings?.contextWindow ? source : `${source}（默认 128K）`;
+  return activeModel.value?.modelSettings?.contextWindow ? source : `${source}（默认 128K）`;
 });
 const visibleFileTreeRows = computed<FileTreeRow[]>(() => {
   const directories = new Set<string>();

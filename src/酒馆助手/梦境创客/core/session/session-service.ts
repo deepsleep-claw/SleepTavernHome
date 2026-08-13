@@ -57,6 +57,7 @@ import type {
   SessionUiItem,
   SessionView,
 } from './types';
+import type { ModelSelection } from '../provider/provider-config';
 
 type SessionServiceOptions = {
   adapter: CardStateAdapter;
@@ -66,6 +67,7 @@ type SessionServiceOptions = {
   executor: ModelStepExecutor;
   lock?: GlobalAgentTaskLock;
   mode?: SessionMode;
+  modelSelection?: ModelSelection;
   now?: () => number;
   onPersist?: (runtime: PersistedSessionRuntime) => Promise<void>;
   onSkillsCommit?: (skills: AgentSkill[], previouslyMountedSkillIds: string[]) => Promise<AgentSkill[]>;
@@ -156,6 +158,8 @@ export class CardAgentSessionService {
   private mode: SessionMode;
   private modelMessages: ModelMessage[];
   private modelControls: SessionModelControls;
+  private modelSelection?: ModelSelection;
+  private runModelSelection?: ModelSelection;
   private mutationActor: 'agent' | 'user' = 'agent';
   private preset: StructuredPreset;
   private readonly operationLog: WorkspaceOperationLog;
@@ -209,6 +213,8 @@ export class CardAgentSessionService {
     this.mode = restored?.runtime.mode ?? options.mode ?? 'normal';
     this.modelMessages = klona(restored?.runtime.modelMessages ?? compiled.messages);
     this.modelControls = klona(restored?.runtime.modelControls ?? { reasoningEffort: 'auto', webSearch: false });
+    this.modelSelection = klona(restored?.runtime.modelSelection ?? options.modelSelection);
+    this.runModelSelection = klona(restored?.runtime.runModelSelection);
     this.now = options.now ?? Date.now;
     this.onPersist = options.onPersist;
     this.onSkillsCommit = options.onSkillsCommit;
@@ -290,6 +296,8 @@ export class CardAgentSessionService {
       events: klona(this.events),
       mode: this.mode,
       modelControls: klona(this.modelControls),
+      modelSelection: this.modelSelection ? klona(this.modelSelection) : undefined,
+      runModelSelection: this.runModelSelection ? klona(this.runModelSelection) : undefined,
       operationLog: this.operationLog.export(),
       operationReplay: this.pendingOperationReplay
         ? {
@@ -331,9 +339,6 @@ export class CardAgentSessionService {
 
   /** 只更新内存视图；由Runtime合并短时间内的连续切换并负责持久化。 */
   updateModelControls(controls: Partial<SessionModelControls>): boolean {
-    if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status)) {
-      throw new Error('Agent运行期间不能修改本轮模型选项。');
-    }
     const next = {
       reasoningEffort: controls.reasoningEffort ?? this.modelControls.reasoningEffort,
       webSearch: controls.webSearch ?? this.modelControls.webSearch,
@@ -342,6 +347,18 @@ export class CardAgentSessionService {
     this.modelControls = next;
     this.notify();
     return true;
+  }
+
+  updateModelSelection(selection?: ModelSelection): boolean {
+    const next = selection ? klona(selection) : undefined;
+    if (canonicalEqual(next, this.modelSelection)) return false;
+    this.modelSelection = next;
+    this.notify();
+    return true;
+  }
+
+  updateRunModelSelection(selection?: ModelSelection): void {
+    this.runModelSelection = selection ? klona(selection) : undefined;
   }
 
   async save(): Promise<void> {
@@ -896,6 +913,7 @@ export class CardAgentSessionService {
       }
     }
     this.activeCheckpointId = undefined;
+    this.runModelSelection = undefined;
     // 消息回退会移除该轮Agent上下文，不能只重做文件而留下缺失的Agent消息。
     this.operationLog.discardRedo(turnId);
     this.runner = undefined;
@@ -1089,6 +1107,7 @@ export class CardAgentSessionService {
     const current = await this.adapter.read();
     this.assertBinding(current);
     this.activeCheckpointId = undefined;
+    this.runModelSelection = undefined;
     this.status = stopped ? 'stopped' : 'completed';
     this.lastError = undefined;
     this.repository = await this.createRepository(current);
@@ -1360,6 +1379,8 @@ export class CardAgentSessionService {
       manualEditGroup: this.manualEditGroup ? klona(this.manualEditGroup) : undefined,
       mode: this.mode,
       modelControls: klona(this.modelControls),
+      modelSelection: this.modelSelection ? klona(this.modelSelection) : undefined,
+      runModelSelection: this.runModelSelection ? klona(this.runModelSelection) : undefined,
       modelMessages: klona(this.modelMessages),
       operationLog: this.operationLog.export(),
       preset: klona(this.preset),

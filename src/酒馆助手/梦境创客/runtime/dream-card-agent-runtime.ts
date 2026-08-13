@@ -25,15 +25,30 @@ import {
 import { cloneStructuredPreset, compilePreset, DEFAULT_PRESET, type StructuredPreset } from '../core/preset/compiler';
 import { DEFAULT_CONTEXT_WINDOW } from '../core/provider/model-catalog';
 import {
-  ApiProfileRegistry,
-  createApiProfile,
-  listApiModels,
+  createApiModel,
+  createApiProvider,
+  exportApiProviderBundle,
+  findSelectedModel,
+  listProviderModels,
+  parseApiProviderBundle,
+  revealApiModel,
+  revealApiProvider,
+  updateApiModel,
+  updateApiProvider,
+  type ApiModel,
+  type ApiModelInput,
+  type ApiProvider,
+  type ApiProviderInput,
+  type ModelSelection,
+} from '../core/provider/provider-config';
+import {
   normalizeProviderFailure,
-  updateApiProfile,
-  type ApiProfile,
-  type ApiProfileInput,
 } from '../core/provider/profiles';
-import { ProfileModelStepExecutor, type ModelStepExecutor } from '../core/runner/step-executor';
+import {
+  ProviderModelStepExecutor,
+  UnavailableModelStepExecutor,
+  type ModelStepExecutor,
+} from '../core/runner/step-executor';
 import { measureContext } from '../core/runner/context';
 import type { ToolConfirmation } from '../core/runner/tools';
 import { CardAgentSessionService } from '../core/session/session-service';
@@ -63,7 +78,7 @@ export type DreamCardAgentRuntimeState = {
   activeSessionAccess: 'live' | 'readonly-history';
   activeThemeId: string;
   activeAgentConfigurationId: string;
-  activeProfileId?: string;
+  defaultModelSelection?: ModelSelection;
   activePresetId: string;
   agentConfigurations: AgentConfiguration[];
   busy: boolean;
@@ -79,7 +94,7 @@ export type DreamCardAgentRuntimeState = {
   floatingButtonOffset: FloatingButtonOffset;
   loadedSessionIds: string[];
   onboardingDone: boolean;
-  profiles: ApiProfile[];
+  providers: ApiProvider[];
   presetProfiles: StructuredPreset[];
   sendWithCtrlEnter: boolean;
   skills: AgentSkill[];
@@ -109,7 +124,7 @@ type RuntimeOptions = {
   adapterFactory?: () => CardStateAdapter;
   bridge?: TavernBridge;
   chatBridge?: TavernChatBridge;
-  executorFactory?: (profile: ApiProfile) => ModelStepExecutor;
+  executorFactory?: (provider: ApiProvider, model: ApiModel) => ModelStepExecutor;
   fileClient?: TavernFileClient;
   now?: () => number;
   settingsStore?: AgentSettingsStore;
@@ -135,7 +150,7 @@ export class DreamCardAgentRuntime {
   private readonly bridge: TavernBridge;
   private readonly chatBridge?: TavernChatBridge;
   private readonly characterStore: CharacterMetadataStore;
-  private readonly executorFactory: (profile: ApiProfile) => ModelStepExecutor;
+  private readonly executorFactory: (provider: ApiProvider, model: ApiModel) => ModelStepExecutor;
   private readonly fileClient: TavernFileClient;
   private readonly workspaceFileStore: DreamCreatorWorkspaceFileStore;
   private readonly globalSkillStore: GlobalSkillStore;
@@ -145,6 +160,7 @@ export class DreamCardAgentRuntime {
   private readonly now: () => number;
   private readonly settingsStore: AgentSettingsStore;
   private readonly services = new Map<string, CardAgentSessionService>();
+  private readonly serviceModelSelections = new Map<string, string>();
   private readonly historyViews = new Map<string, SessionView>();
   private readonly settingsUnsubscribe?: () => void;
   private readonly subscribers = new Set<Subscriber>();
@@ -156,6 +172,7 @@ export class DreamCardAgentRuntime {
   };
   private busyCount = 0;
   private localDeferredSaveDepth = 0;
+  private providerSettingsSignature = '';
   private skillIndexSignature = '';
   private skillLoadPromise?: Promise<void>;
   private state: DreamCardAgentRuntimeState;
@@ -170,7 +187,7 @@ export class DreamCardAgentRuntime {
     this.chatBridge =
       options.chatBridge ?? (!options.bridge && hasTavernChatGlobals ? createGlobalTavernChatBridge() : undefined);
     this.adapterFactory = options.adapterFactory ?? (() => new ProductionCardStateAdapter(bridge));
-    this.executorFactory = options.executorFactory ?? (profile => new ProfileModelStepExecutor(profile));
+    this.executorFactory = options.executorFactory ?? ((provider, model) => new ProviderModelStepExecutor(provider, model));
     this.fileClient = options.fileClient ?? new GlobalTavernFileClient();
     this.now = options.now ?? Date.now;
     this.log = new PageDebugLog(this.now);
@@ -184,7 +201,7 @@ export class DreamCardAgentRuntime {
       activeSessionAccess: 'live',
       activeThemeId: settings.activeThemeId,
       activeAgentConfigurationId: settings.activeAgentConfigurationId,
-      activeProfileId: settings.activeProfileId,
+      defaultModelSelection: settings.defaultModelSelection,
       activePresetId: settings.activePresetId,
       agentConfigurations: settings.agentConfigurations,
       busy: false,
@@ -198,7 +215,7 @@ export class DreamCardAgentRuntime {
       floatingButtonOffset: settings.floatingButtonOffset,
       loadedSessionIds: [],
       onboardingDone: settings.onboardingDone,
-      profiles: settings.profiles,
+      providers: settings.providers,
       presetProfiles: settings.presetProfiles,
       sendWithCtrlEnter: settings.sendWithCtrlEnter,
       skills: [],
@@ -298,11 +315,18 @@ export class DreamCardAgentRuntime {
     return result;
   }
 
-  async createSession(input: { mode?: SessionMode; profileId?: string; title?: string } = {}): Promise<SessionView> {
+  async createSession(
+    input: { mode?: SessionMode; modelSelection?: ModelSelection; title?: string } = {},
+  ): Promise<SessionView> {
     await this.run(async () => {
       await this.activeService?.finalizeManualEdits();
       await this.reloadSkills();
-      const profile = this.requireProfile(input.profileId);
+      const settings = this.settingsStore.load();
+      const requestedSelection =
+        input.modelSelection ??
+        settings.defaultModelSelection;
+      const resolvedModel = findSelectedModel(settings.providers, requestedSelection);
+      const modelSelection = resolvedModel ? requestedSelection : undefined;
       const agentConfiguration = this.selectedAgentConfiguration();
       const mountedSkills = this.skillsForConfiguration(agentConfiguration);
       const adapter = this.adapterFactory();
@@ -324,10 +348,13 @@ export class DreamCardAgentRuntime {
         adapter,
         attachmentStore,
         agentConfiguration,
-        executor: this.executorFactory(profile),
-        contextWindow: this.profileContextWindow(profile),
+        executor: resolvedModel
+          ? this.executorFactory(resolvedModel.provider, resolvedModel.model)
+          : new UnavailableModelStepExecutor(),
+        contextWindow: resolvedModel ? this.modelContextWindow(resolvedModel.model) : DEFAULT_CONTEXT_WINDOW,
         lock: this.lock,
         mode: input.mode ?? this.state.approvalMode,
+        modelSelection,
         canWriteNonCharacterResources: () => this.canWriteNonCharacterResources(),
         now: this.now,
         onPersist: async runtime => {
@@ -348,6 +375,7 @@ export class DreamCardAgentRuntime {
       });
       await service.save();
       this.services.set(service.sessionId, service);
+      if (modelSelection) this.serviceModelSelections.set(service.sessionId, this.modelSelectionKey(modelSelection));
       this.historyViews.delete(service.sessionId);
       this.activeService = service;
       this.state.activeSessionAccess = 'live';
@@ -385,7 +413,6 @@ export class DreamCardAgentRuntime {
         this.updateService(loaded.view());
         return;
       }
-      const profile = this.requireProfile();
       const adapter = this.adapterFactory();
       const current = await adapter.read();
       const metadata = await this.characterStore.load(current.character.bindingId, {
@@ -403,6 +430,8 @@ export class DreamCardAgentRuntime {
         store: revisionStore,
       });
       const revision = await persistence.load(sessionId);
+      const storedSelection = revision.runtime.modelSelection;
+      const resolvedModel = findSelectedModel(this.settingsStore.load().providers, storedSelection);
       const attachmentStore = new ExternalSessionAttachmentStore(
         current.character.bindingId,
         this.workspaceFileStore,
@@ -412,8 +441,10 @@ export class DreamCardAgentRuntime {
         {
           adapter,
           attachmentStore,
-          executor: this.executorFactory(profile),
-          contextWindow: this.profileContextWindow(profile),
+          executor: resolvedModel
+            ? this.executorFactory(resolvedModel.provider, resolvedModel.model)
+            : new UnavailableModelStepExecutor(),
+          contextWindow: resolvedModel ? this.modelContextWindow(resolvedModel.model) : DEFAULT_CONTEXT_WINDOW,
           lock: this.lock,
           now: this.now,
           canWriteNonCharacterResources: () => this.canWriteNonCharacterResources(),
@@ -433,6 +464,9 @@ export class DreamCardAgentRuntime {
       );
       service.setMode(this.state.approvalMode);
       this.services.set(service.sessionId, service);
+      if (storedSelection && resolvedModel) {
+        this.serviceModelSelections.set(service.sessionId, this.modelSelectionKey(storedSelection));
+      }
       this.activeService = service;
       this.state.activeSessionAccess = 'live';
       this.state.currentCharacter = {
@@ -465,6 +499,7 @@ export class DreamCardAgentRuntime {
     await this.flushDeferredSessionSave(loaded);
     await loaded.finalizeManualEdits();
     this.services.delete(sessionId);
+    this.serviceModelSelections.delete(sessionId);
     delete this.state.sessionStatuses[sessionId];
     if (this.activeService?.sessionId === sessionId) {
       this.activeService = undefined;
@@ -476,9 +511,9 @@ export class DreamCardAgentRuntime {
 
   async send(message: string, attachments: SessionAttachmentInput[] = []): Promise<SessionView> {
     return this.runActiveView(async service => {
-      const profile = this.requireProfile();
-      if (attachments.some(isImageAttachment) && profile.modelSettings.capabilities.vision === 'disabled') {
-        throw new Error('当前API Profile明确标记为不支持视觉，无法发送图片附件。');
+      const selected = await this.prepareServiceModel(service, service.view().modelSelection);
+      if (attachments.some(isImageAttachment) && selected.model.modelSettings.capabilities.vision === 'disabled') {
+        throw new Error('当前模型明确标记为不支持视觉，无法发送图片附件。');
       }
       await this.reloadSkills();
       const sessionConfiguration = this.settingsStore
@@ -498,13 +533,26 @@ export class DreamCardAgentRuntime {
   }
 
   async resume(): Promise<SessionView> {
-    return this.runActiveView(service => service.resume());
+    return this.runActiveView(async service => {
+      const view = service.view();
+      await this.prepareServiceModel(service, view.runModelSelection ?? view.modelSelection, false);
+      return service.resume();
+    });
   }
 
   async setModelControls(controls: Partial<SessionModelControls>): Promise<SessionView> {
     const service = this.requireService();
     if (service.updateModelControls(controls)) this.scheduleDeferredSessionSave(service);
     return service.view();
+  }
+
+  async selectSessionModel(selection?: ModelSelection): Promise<SessionView> {
+    const service = this.requireService();
+    if (selection && !findSelectedModel(this.settingsStore.load().providers, selection)) {
+      throw new Error('所选模型不存在或已被禁用。');
+    }
+    if (service.updateModelSelection(selection)) this.scheduleDeferredSessionSave(service);
+    return this.effectiveSessionView(service.view());
   }
 
   async undo(): Promise<SessionView> {
@@ -561,6 +609,7 @@ export class DreamCardAgentRuntime {
       if (!removed) throw new Error(`会话不存在：${sessionId}`);
       await this.workspaceFileStore.releaseSession(bindingId, sessionId);
       this.services.delete(sessionId);
+      this.serviceModelSelections.delete(sessionId);
       this.historyViews.delete(sessionId);
       delete this.state.sessionStatuses[sessionId];
       if (this.activeService?.sessionId === sessionId || this.state.active?.sessionId === sessionId) {
@@ -590,7 +639,10 @@ export class DreamCardAgentRuntime {
       await this.characterStore.removeCharacter(character.bindingId);
       await this.workspaceFileStore.resetCharacter(character.bindingId);
       for (const [id, service] of this.services) {
-        if (service.view().bindingId === character.bindingId) this.services.delete(id);
+        if (service.view().bindingId === character.bindingId) {
+          this.services.delete(id);
+          this.serviceModelSelections.delete(id);
+        }
       }
       if (this.activeService?.view().bindingId === character.bindingId) {
         this.activeService = undefined;
@@ -890,38 +942,20 @@ export class DreamCardAgentRuntime {
     this.emit();
   }
 
-  async saveProfile(input: ApiProfileInput): Promise<ApiProfile> {
-    this.assertProfileSwitchAllowed();
-    const name = input.name.trim().normalize('NFC');
-    if (!name) throw new Error('API Profile名称不能为空。');
-    const registry = new ApiProfileRegistry(this.settingsStore.load().profiles);
-    const source = input.id ? registry.get(input.id) : undefined;
-    const sameName = registry.getByName(name);
-    let profile: ApiProfile;
-    if (sameName) {
-      profile = await updateApiProfile(sameName, { ...input, id: sameName.id, name });
-    } else if (source) {
-      profile = { ...(await updateApiProfile(source, { ...input, name })), id: crypto.randomUUID() };
-    } else {
-      profile = await createApiProfile({ ...input, id: undefined, name });
-    }
-    registry.save(profile);
-    const settings = this.settingsStore.load();
-    settings.profiles = registry.list();
-    settings.activeProfileId = profile.id;
-    await this.settingsStore.save(settings);
-    await this.updateActiveExecutor(profile);
-    this.reloadSettingsState();
-    return profile;
-  }
-
-  async listModels(input: ApiProfileInput): Promise<string[]> {
+  async listModels(input: ApiProviderInput | string): Promise<string[]> {
     let models: string[] = [];
     await this.run(async () => {
-      const existing = input.id ? new ApiProfileRegistry(this.settingsStore.load().profiles).get(input.id) : undefined;
-      const profile = existing ? await updateApiProfile(existing, input) : await createApiProfile(input);
+      let provider: ApiProvider;
+      if (typeof input === 'string') {
+        const existing = this.settingsStore.load().providers.find(item => item.id === input);
+        if (!existing) throw new Error(`Provider不存在：${input}`);
+        provider = existing;
+      } else {
+        const existing = input.id ? this.settingsStore.load().providers.find(item => item.id === input.id) : undefined;
+        provider = existing ? await updateApiProvider(existing, input) : await createApiProvider(input);
+      }
       try {
-        models = await listApiModels(profile);
+        models = await listProviderModels(provider);
       } catch (error) {
         throw new Error(normalizeProviderFailure(error).message, { cause: error });
       }
@@ -929,25 +963,143 @@ export class DreamCardAgentRuntime {
     return models;
   }
 
-  async removeProfile(id: string): Promise<void> {
-    this.assertProfileSwitchAllowed();
+  async saveProvider(input: ApiProviderInput): Promise<ApiProvider> {
     const settings = this.settingsStore.load();
-    settings.profiles = settings.profiles.filter(profile => profile.id !== id);
-    if (settings.activeProfileId === id) settings.activeProfileId = settings.profiles[0]?.id;
+    const name = input.name.trim().normalize('NFC');
+    if (!name) throw new Error('Provider名称不能为空。');
+    if (settings.providers.some(item => item.id !== input.id && item.name.normalize('NFC') === name)) {
+      throw new Error(`Provider名称已存在：${name}`);
+    }
+    const existing = input.id ? settings.providers.find(item => item.id === input.id) : undefined;
+    const provider = existing
+      ? await updateApiProvider(existing, { ...input, id: existing.id, name })
+      : await createApiProvider({ ...input, id: undefined, name });
+    settings.providers = existing
+      ? settings.providers.map(item => item.id === provider.id ? provider : item)
+      : [...settings.providers, provider];
     await this.settingsStore.save(settings);
-    const next = settings.profiles.find(profile => profile.id === settings.activeProfileId);
-    if (next) await this.updateActiveExecutor(next);
+    this.reloadSettingsState();
+    return provider;
+  }
+
+  async saveModel(providerId: string, input: ApiModelInput): Promise<ApiModel> {
+    const settings = this.settingsStore.load();
+    const provider = settings.providers.find(item => item.id === providerId);
+    if (!provider) throw new Error(`Provider不存在：${providerId}`);
+    const name = input.name.trim().normalize('NFC');
+    if (!name) throw new Error('模型显示名称不能为空。');
+    if (provider.models.some(item => item.id !== input.id && item.name.normalize('NFC') === name)) {
+      throw new Error(`该Provider下已有同名模型：${name}`);
+    }
+    const existing = input.id ? provider.models.find(item => item.id === input.id) : undefined;
+    const model = existing
+      ? await updateApiModel(existing, { ...input, id: existing.id, name })
+      : await createApiModel({ ...input, id: undefined, name });
+    provider.models = existing
+      ? provider.models.map(item => item.id === model.id ? model : item)
+      : [...provider.models, model];
+    settings.providers = settings.providers.map(item => item.id === providerId ? provider : item);
+    if (!settings.defaultModelSelection && provider.enabled && model.enabled) {
+      settings.defaultModelSelection = { modelId: model.id, providerId };
+    }
+    await this.settingsStore.save(settings);
+    this.reloadSettingsState();
+    return model;
+  }
+
+  async removeProvider(providerId: string): Promise<void> {
+    const settings = this.settingsStore.load();
+    if (!settings.providers.some(item => item.id === providerId)) return;
+    settings.providers = settings.providers.filter(item => item.id !== providerId);
+    if (settings.defaultModelSelection?.providerId === providerId) settings.defaultModelSelection = undefined;
+    await this.settingsStore.save(settings);
     this.reloadSettingsState();
   }
 
-  async selectProfile(id: string): Promise<void> {
+  async removeModel(providerId: string, modelId: string): Promise<void> {
     const settings = this.settingsStore.load();
-    if (!settings.profiles.some(profile => profile.id === id)) throw new Error(`API Profile不存在：${id}`);
-    this.assertProfileSwitchAllowed();
-    settings.activeProfileId = id;
+    const provider = settings.providers.find(item => item.id === providerId);
+    if (!provider) return;
+    provider.models = provider.models.filter(item => item.id !== modelId);
+    settings.providers = settings.providers.map(item => item.id === providerId ? provider : item);
+    if (settings.defaultModelSelection?.providerId === providerId && settings.defaultModelSelection.modelId === modelId) {
+      settings.defaultModelSelection = undefined;
+    }
     await this.settingsStore.save(settings);
-    await this.updateActiveExecutor(settings.profiles.find(profile => profile.id === id)!);
     this.reloadSettingsState();
+  }
+
+  async selectDefaultModel(selection?: ModelSelection): Promise<void> {
+    const settings = this.settingsStore.load();
+    if (selection && !findSelectedModel(settings.providers, selection)) throw new Error('所选模型不存在或已禁用。');
+    settings.defaultModelSelection = selection ? klona(selection) : undefined;
+    await this.settingsStore.save(settings);
+    this.reloadSettingsState();
+  }
+
+  async copyProvider(providerId: string): Promise<ApiProvider> {
+    return this.importProviderBundle(await this.exportProviderBundle(providerId, true));
+  }
+
+  async exportProviderBundle(providerId: string, includeSecrets = false): Promise<string> {
+    const provider = this.settingsStore.load().providers.find(item => item.id === providerId);
+    if (!provider) throw new Error(`Provider不存在：${providerId}`);
+    return JSON.stringify(await exportApiProviderBundle(provider, includeSecrets), null, 2);
+  }
+
+  async importProviderBundle(source: string): Promise<ApiProvider> {
+    const bundle = parseApiProviderBundle(source);
+    const settings = this.settingsStore.load();
+    const uniqueName = (base: string, used: Set<string>) => {
+      const normalized = base.trim() || '导入的Provider';
+      if (!used.has(normalized.normalize('NFC'))) return normalized;
+      let index = 2;
+      while (used.has(`${normalized} ${index}`.normalize('NFC'))) index += 1;
+      return `${normalized} ${index}`;
+    };
+    const providerNames = new Set(settings.providers.map(item => item.name.normalize('NFC')));
+    const providerRequest = bundle.provider.request;
+    const provider = await createApiProvider({
+      apiKey: providerRequest?.apiKey ?? bundle.provider.apiKey ?? '',
+      baseURL: bundle.provider.baseURL,
+      enabled: bundle.provider.enabled,
+      extraParameters: providerRequest?.extraParameters ?? bundle.provider.extraParameters,
+      headers: providerRequest?.headers ?? bundle.provider.headers,
+      interfaceType: bundle.provider.interfaceType,
+      name: uniqueName(bundle.provider.name, providerNames),
+    });
+    const modelNames = new Set<string>();
+    for (const sourceModel of bundle.models) {
+      const request = sourceModel.request;
+      const name = uniqueName(sourceModel.name || sourceModel.modelId, modelNames);
+      modelNames.add(name.normalize('NFC'));
+      provider.models.push(await createApiModel({
+        appliedModelTemplate: sourceModel.appliedModelTemplate,
+        compatibilityMode: sourceModel.compatibilityMode,
+        enabled: sourceModel.enabled,
+        extraParameters: request?.extraParameters ?? sourceModel.extraParameters,
+        headers: request?.headers ?? sourceModel.headers,
+        modelId: sourceModel.modelId,
+        modelSettings: sourceModel.modelSettings,
+        name,
+      }));
+    }
+    settings.providers.push(provider);
+    await this.settingsStore.save(settings);
+    this.reloadSettingsState();
+    return provider;
+  }
+
+  async revealProvider(providerId: string) {
+    const provider = this.settingsStore.load().providers.find(item => item.id === providerId);
+    if (!provider) throw new Error(`Provider不存在：${providerId}`);
+    return revealApiProvider(provider);
+  }
+
+  async revealModel(providerId: string, modelId: string) {
+    const model = this.settingsStore.load().providers.find(item => item.id === providerId)?.models.find(item => item.id === modelId);
+    if (!model) throw new Error(`模型不存在：${modelId}`);
+    return revealApiModel(model);
   }
 
   async updateSettings(input: {
@@ -1058,6 +1210,10 @@ export class DreamCardAgentRuntime {
       events: klona(runtime.events),
       mode: runtime.mode,
       modelControls: klona(runtime.modelControls ?? { reasoningEffort: 'auto', webSearch: false }),
+      modelSelection: findSelectedModel(this.settingsStore.load().providers, runtime.modelSelection)
+        ? klona(runtime.modelSelection)
+        : undefined,
+      runModelSelection: klona(runtime.runModelSelection),
       operationLog: klona(runtime.operationLog ?? { records: [], turns: [], version: 1 }),
       operationReplay: undefined,
       preset: cloneStructuredPreset(runtime.preset),
@@ -1194,11 +1350,38 @@ export class DreamCardAgentRuntime {
     this.emit();
   }
 
-  private requireProfile(id = this.settingsStore.load().activeProfileId): ApiProfile {
-    if (!id) throw new Error('请先保存并选择一套API设置。');
-    const profile = this.settingsStore.load().profiles.find(item => item.id === id);
-    if (!profile) throw new Error(`API Profile不存在：${id}`);
-    return profile;
+  private async prepareServiceModel(
+    service: CardAgentSessionService,
+    selection?: ModelSelection,
+    markRun = true,
+  ): Promise<{ model: ApiModel; provider: ApiProvider }> {
+    const selected = findSelectedModel(this.settingsStore.load().providers, selection);
+    if (!selected) throw new Error('当前会话尚未选择可用模型。');
+    const effort = service.view().modelControls.reasoningEffort;
+    if (
+      effort !== 'auto' &&
+      effort !== 'off' &&
+      !selected.model.modelSettings.reasoningEfforts.some(item => item.id === effort)
+    ) {
+      service.updateModelControls({ reasoningEffort: 'auto' });
+    }
+    if (markRun) service.updateRunModelSelection(selection as ModelSelection);
+    const key = this.modelSelectionKey(selection as ModelSelection);
+    if (this.serviceModelSelections.get(service.sessionId) !== key) {
+      await service.setExecutor(this.executorFactory(selected.provider, selected.model), this.modelContextWindow(selected.model));
+      this.serviceModelSelections.set(service.sessionId, key);
+    }
+    return selected;
+  }
+
+  private modelSelectionKey(selection: ModelSelection): string {
+    return `${selection.providerId}\u0000${selection.modelId}`;
+  }
+
+  private effectiveSessionView(view: SessionView): SessionView {
+    const result = klona(view);
+    if (!findSelectedModel(this.settingsStore.load().providers, result.modelSelection)) result.modelSelection = undefined;
+    return result;
   }
 
   private selectedAgentConfiguration(): AgentConfiguration {
@@ -1293,6 +1476,7 @@ export class DreamCardAgentRuntime {
       if (service.view().bindingId !== bindingId) continue;
       await this.discardDeferredSessionSave(service);
       this.services.delete(sessionId);
+      this.serviceModelSelections.delete(sessionId);
       delete this.state.sessionStatuses[sessionId];
     }
     if (this.activeService?.view().bindingId === bindingId) {
@@ -1302,29 +1486,8 @@ export class DreamCardAgentRuntime {
     this.updateLoadedSessionIds();
   }
 
-  private assertProfileSwitchAllowed(): void {
-    if ([...this.services.values()].some(service => ['running', 'waiting-approval'].includes(service.view().status))) {
-      throw new Error('Agent运行期间不能切换API Profile。');
-    }
-  }
-
-  private async updateActiveExecutor(profile: ApiProfile): Promise<void> {
-    for (const service of this.services.values()) {
-      await this.flushDeferredSessionSave(service);
-      const effort = service.view().modelControls.reasoningEffort;
-      if (
-        effort !== 'auto' &&
-        effort !== 'off' &&
-        !profile.modelSettings.reasoningEfforts.some(item => item.id === effort)
-      ) {
-        await service.setModelControls({ reasoningEffort: 'auto' });
-      }
-      await service.setExecutor(this.executorFactory(profile), this.profileContextWindow(profile));
-    }
-  }
-
-  private profileContextWindow(profile: ApiProfile): number {
-    return profile.modelSettings.contextWindow || DEFAULT_CONTEXT_WINDOW;
+  private modelContextWindow(model: ApiModel): number {
+    return model.modelSettings.contextWindow || DEFAULT_CONTEXT_WINDOW;
   }
 
   private requireService(): CardAgentSessionService {
@@ -1347,6 +1510,7 @@ export class DreamCardAgentRuntime {
   }
 
   private updateService(view: SessionView): void {
+    const effectiveView = this.effectiveSessionView(view);
     this.state.sessionStatuses[view.sessionId] = view.status;
     // 会话正文、当前标题、角色索引和已打开页签是同一份会话的不同投影。
     // rename/send 会先更新运行中的 SessionView；在下一次索引回读前也要立即
@@ -1361,7 +1525,7 @@ export class DreamCardAgentRuntime {
     }
     this.updateLoadedSessionIds();
     if (this.activeService?.sessionId === view.sessionId) {
-      this.state.active = view;
+      this.state.active = effectiveView;
       this.state.activeSessionAccess = 'live';
     }
     this.emit();
@@ -1373,9 +1537,14 @@ export class DreamCardAgentRuntime {
 
   private reloadSettingsState(): void {
     const settings = this.settingsStore.load();
+    const providerSettingsSignature = JSON.stringify(settings.providers);
+    if (this.providerSettingsSignature && this.providerSettingsSignature !== providerSettingsSignature) {
+      this.serviceModelSelections.clear();
+    }
+    this.providerSettingsSignature = providerSettingsSignature;
     this.state.activeThemeId = settings.activeThemeId;
     this.state.activeAgentConfigurationId = settings.activeAgentConfigurationId;
-    this.state.activeProfileId = settings.activeProfileId;
+    this.state.defaultModelSelection = settings.defaultModelSelection;
     this.state.activePresetId = settings.activePresetId;
     this.state.approvalMode = settings.approvalMode;
     this.state.agentConfigurations = settings.agentConfigurations;
@@ -1386,7 +1555,7 @@ export class DreamCardAgentRuntime {
     this.state.floatingButtonAnchor = settings.floatingButtonAnchor;
     this.state.floatingButtonOffset = settings.floatingButtonOffset;
     this.state.onboardingDone = settings.onboardingDone;
-    this.state.profiles = settings.profiles;
+    this.state.providers = settings.providers;
     this.state.presetProfiles = settings.presetProfiles;
     this.state.sendWithCtrlEnter = settings.sendWithCtrlEnter;
     this.state.storage.globalSkillBytes = Object.values(settings.files)

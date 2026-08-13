@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PRESET } from '../preset/compiler';
+import { createApiProfile } from '../provider/profiles';
 import { DEFAULT_BUILTIN_AGENT } from './builtin-agent';
 import {
   DEFAULT_DREAM_CARD_AGENT_SETTINGS,
@@ -115,5 +116,24 @@ describe('settings cross-window merge', () => {
     ]);
     expect(normalized.activeAgentConfigurationId).toBe('agent:preserved-default');
     expect(normalized.agentConfigurations[1]).toMatchObject({ name: '我的默认Agent（已保留）', skillIds: ['writer'] });
+  });
+
+  it('把旧API Profile一次性迁移成一个Provider和一个模型并保留默认选择', async () => {
+    const profile = await createApiProfile({
+      apiKey: 'key', baseURL: 'https://example.invalid/v1', compatibilityMode: 'deepseek',
+      interfaceType: 'openai-responses', model: 'deepseek-v4', name: '旧配置',
+    });
+    const raw = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS);
+    raw.version = 3 as 4;
+    raw.profiles = [profile];
+    raw.activeProfileId = profile.id;
+    raw.providers = [];
+    const normalized = normalizeSettings(raw);
+    expect(normalized.profiles).toEqual([]);
+    expect(normalized.providers).toHaveLength(1);
+    expect(normalized.providers[0]).toMatchObject({
+      baseURL: profile.baseURL, id: `provider:${profile.id}`, models: [{ id: profile.id, modelId: profile.model }],
+    });
+    expect(normalized.defaultModelSelection).toEqual({ providerId: `provider:${profile.id}`, modelId: profile.id });
   });
 });

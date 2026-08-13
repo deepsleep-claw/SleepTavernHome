@@ -65,16 +65,20 @@ function modelStep(tool = false): ModelStepResult {
   };
 }
 
-async function addProfile(runtime: DreamCardAgentRuntime): Promise<void> {
-  await runtime.saveProfile({
+async function addProfile(runtime: DreamCardAgentRuntime, modelSettings?: Parameters<DreamCardAgentRuntime['saveModel']>[1]['modelSettings']) {
+  const provider = await runtime.saveProvider({
     apiKey: 'secret',
     baseURL: 'https://example.invalid/v1',
-    compatibilityMode: 'standard',
     headers: {},
+    enabled: true,
     interfaceType: 'openai-chat',
-    model: 'model',
     name: '本地接口',
   });
+  const model = await runtime.saveModel(provider.id, {
+    compatibilityMode: 'standard', enabled: true, modelId: 'model', modelSettings, name: 'model',
+  });
+  await runtime.selectDefaultModel({ providerId: provider.id, modelId: model.id });
+  return { model, provider };
 }
 
 describe('DreamCardAgentRuntime', () => {
@@ -378,7 +382,7 @@ describe('DreamCardAgentRuntime', () => {
     runtime.destroy();
   });
 
-  it('Profile与轻量设置保存到extension settings模型，不发测试请求', async () => {
+  it('Provider、模型与轻量设置保存到extension settings模型，不发测试请求', async () => {
     const settings = new MemoryAgentSettingsStore();
     const runtime = new DreamCardAgentRuntime({
       adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
@@ -386,68 +390,50 @@ describe('DreamCardAgentRuntime', () => {
       fileClient: new MemoryTavernFileClient(),
       settingsStore: settings,
     });
-    await addProfile(runtime);
-    const profile = runtime.snapshot().profiles[0];
+    const { model, provider } = await addProfile(runtime);
     await runtime.updateSettings({ developerMode: true, floatingButton: false, sendWithCtrlEnter: true });
     expect(runtime.snapshot()).toMatchObject({ developerMode: true, floatingButton: false, sendWithCtrlEnter: true });
-    await runtime.selectProfile(profile.id);
-    await runtime.removeProfile(profile.id);
-    expect(runtime.snapshot().profiles).toEqual([]);
-    await expect(runtime.createSession()).rejects.toThrow('API设置');
+    await runtime.selectDefaultModel({ providerId: provider.id, modelId: model.id });
+    await runtime.removeProvider(provider.id);
+    expect(runtime.snapshot().providers).toEqual([]);
+    expect((await runtime.createSession()).modelSelection).toBeUndefined();
+    await expect(runtime.send('测试')).rejects.toThrow('尚未选择可用模型');
     runtime.destroy();
   });
 
-  it('API Profile按名称覆盖，修改名称保存时保留旧项并创建新项', async () => {
+  it('Provider与模型编辑保留ID，复制Provider时创建整套新ID', async () => {
     const runtime = new DreamCardAgentRuntime({
       adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
       executorFactory: () => new QueueExecutor([]),
       fileClient: new MemoryTavernFileClient(),
       settingsStore: new MemoryAgentSettingsStore(),
     });
-    await addProfile(runtime);
-    const original = runtime.snapshot().profiles[0];
-    const overwritten = await runtime.saveProfile({
-      apiKey: '',
-      baseURL: original.baseURL,
-      compatibilityMode: original.compatibilityMode,
-      id: original.id,
-      interfaceType: original.interfaceType,
-      model: 'model-v2',
-      name: original.name,
+    const { model, provider } = await addProfile(runtime);
+    const updatedProvider = await runtime.saveProvider({
+      apiKey: '', baseURL: provider.baseURL, enabled: true, id: provider.id,
+      interfaceType: provider.interfaceType, name: '本地接口新版',
     });
-    expect(overwritten.id).toBe(original.id);
-    expect(runtime.snapshot().profiles).toHaveLength(1);
-    const copied = await runtime.saveProfile({
-      apiKey: '',
-      baseURL: original.baseURL,
-      compatibilityMode: original.compatibilityMode,
-      id: original.id,
-      interfaceType: original.interfaceType,
-      model: 'model-v3',
-      name: '本地接口副本',
+    const updatedModel = await runtime.saveModel(provider.id, {
+      compatibilityMode: 'deepseek', enabled: true, id: model.id, modelId: 'model-v2', name: '模型新版',
     });
-    expect(copied.id).not.toBe(original.id);
-    expect(runtime.snapshot().profiles.map(profile => profile.name)).toEqual(['本地接口', '本地接口副本']);
+    expect(updatedProvider.id).toBe(provider.id);
+    expect(updatedModel.id).toBe(model.id);
+    const copied = await runtime.copyProvider(provider.id);
+    expect(copied.id).not.toBe(provider.id);
+    expect(copied.models[0].id).not.toBe(model.id);
+    expect(runtime.snapshot().providers.map(item => item.name)).toEqual(['本地接口新版', '本地接口新版 2']);
     runtime.destroy();
   });
 
-  it('API Profile明确关闭视觉时拒绝图片附件', async () => {
+  it('会话绑定模型明确关闭视觉时拒绝图片附件', async () => {
     const runtime = new DreamCardAgentRuntime({
       adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
       executorFactory: () => new QueueExecutor([]),
       fileClient: new MemoryTavernFileClient(),
       settingsStore: new MemoryAgentSettingsStore(),
     });
-    await runtime.saveProfile({
-      apiKey: 'secret',
-      baseURL: 'https://example.invalid/v1',
-      compatibilityMode: 'standard',
-      interfaceType: 'openai-chat',
-      model: 'text-only',
-      modelSettings: {
+    await addProfile(runtime, {
         capabilities: { reasoning: 'auto', toolCalling: 'auto', vision: 'disabled', webSearch: 'auto' },
-      },
-      name: '纯文本接口',
     });
     await runtime.createSession();
     await expect(

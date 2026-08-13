@@ -8,6 +8,7 @@ import type { AgentSkill } from '../skills/types';
 import type { WorkspaceFile } from '../workspace/types';
 import type { TavernChatWorkspaceRuntime } from '../tavern/chat-workspace';
 import type { SessionAttachmentSummary, StoredSessionAttachment } from './attachments';
+import type { ModelSelection } from '../provider/provider-config';
 
 export type SessionMode = 'full' | 'normal' | 'yolo';
 
@@ -71,6 +72,8 @@ export type PersistedSessionRuntime = {
   manualEditGroup?: ManualEditGroup;
   mode: SessionMode;
   modelControls?: SessionModelControls;
+  modelSelection?: ModelSelection;
+  runModelSelection?: ModelSelection;
   modelMessages: ModelMessage[];
   operationLog?: PersistedOperationLog;
   preset: StructuredPreset;
@@ -94,6 +97,8 @@ export type SessionView = {
   events: RunnerEvent[];
   mode: SessionMode;
   modelControls: SessionModelControls;
+  modelSelection?: ModelSelection;
+  runModelSelection?: ModelSelection;
   operationLog: PersistedOperationLog;
   operationReplay?: {
     conflicts: OperationReplayConflict[];

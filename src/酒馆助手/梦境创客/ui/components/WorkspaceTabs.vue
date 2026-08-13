@@ -52,9 +52,7 @@
       :disabled="!canCreateSession || state.busy"
       :title="
         state.currentCharacter
-          ? state.profiles.length
-            ? '新建会话'
-            : '请先配置 API Profile'
+          ? '新建会话'
           : '请先在酒馆中打开一张角色卡'
       "
       @click="createSession"
@@ -116,7 +114,7 @@ const openedSessions = computed(() =>
       item.sessionId === state.value.active?.sessionId ? { ...item, title: state.value.active.title } : item,
     ),
 );
-const canCreateSession = computed(() => Boolean(state.value.currentCharacter && state.value.profiles.length));
+const canCreateSession = computed(() => Boolean(state.value.currentCharacter));
 const closingSessionId = ref('');
 
 function requestClose(sessionId: string) {

@@ -5,7 +5,8 @@ import {
   type ProviderInterfaceType,
   type ProviderRuntime,
 } from '../provider-probe';
-import { normalizeProviderFailure, withApiRuntime, type ApiProfile } from '../provider/profiles';
+import { normalizeProviderFailure } from '../provider/profiles';
+import { withProviderModelRuntime, type ApiModel, type ApiProvider } from '../provider/provider-config';
 import { takeDeepSeekWebSearchResult } from '../provider/deepseek-responses-adapter';
 import type { RunnerTool } from './tools';
 
@@ -335,23 +336,27 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
   }
 }
 
-export class ProfileModelStepExecutor implements ModelStepExecutor {
-  constructor(private readonly profile: ApiProfile) {}
+export class ProviderModelStepExecutor implements ModelStepExecutor {
+  constructor(
+    private readonly provider: ApiProvider,
+    private readonly model: ApiModel,
+  ) {}
 
   async execute(request: ModelStepRequest): Promise<ModelStepResult> {
     try {
-      const modelSettings = this.profile.modelSettings;
+      const modelSettings = this.model.modelSettings;
       const reasoningEffort = request.modelSettings?.reasoningEffort ?? 'auto';
       const reasoningActive = reasoningEffort !== 'off';
-      const suppressSampling = this.profile.compatibilityMode === 'deepseek' && reasoningActive;
-      const webSearch =
-        request.modelSettings?.webSearch === true && modelSettings.capabilities.webSearch === 'enabled';
-      return await withApiRuntime(this.profile, runtime =>
-        new AiSdkModelStepExecutor(async () => runtime).execute({
+      const suppressSampling = this.model.compatibilityMode === 'deepseek' && reasoningActive;
+      const webSearch = request.modelSettings?.webSearch === true && modelSettings.capabilities.webSearch !== 'disabled';
+      return await withProviderModelRuntime(
+        this.provider,
+        this.model,
+        runtime => new AiSdkModelStepExecutor(async () => runtime).execute({
           ...request,
           modelSettings: {
-            compatibilityMode: this.profile.compatibilityMode,
-            interfaceType: this.profile.interfaceType,
+            compatibilityMode: this.model.compatibilityMode,
+            interfaceType: this.provider.interfaceType,
             maxOutputTokens: modelSettings.maxOutputTokens || undefined,
             reasoningEffort,
             temperature: suppressSampling ? undefined : modelSettings.temperature,
@@ -365,5 +370,11 @@ export class ProfileModelStepExecutor implements ModelStepExecutor {
     } catch (error) {
       throw new Error(normalizeProviderFailure(error).message, { cause: error });
     }
+  }
+}
+
+export class UnavailableModelStepExecutor implements ModelStepExecutor {
+  async execute(): Promise<ModelStepResult> {
+    throw new Error('当前会话尚未选择可用模型。');
   }
 }

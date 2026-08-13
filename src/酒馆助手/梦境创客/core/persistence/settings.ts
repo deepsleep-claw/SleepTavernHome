@@ -1,4 +1,12 @@
 import { normalizeApiProfile, type ApiProfile } from '../provider/profiles';
+import {
+  findSelectedModel,
+  legacySelectionForProfile,
+  migrateLegacyProfiles,
+  normalizeApiProvider,
+  type ApiProvider,
+  type ModelSelection,
+} from '../provider/provider-config';
 import { cloneStructuredPreset, DEFAULT_PRESET, type StructuredPreset } from '../preset/compiler';
 import {
   DEFAULT_BUILTIN_AGENT,
@@ -122,11 +130,14 @@ export type DreamCardAgentSettings = {
   floatingButtonOffset: FloatingButtonOffset;
   globalSkills: Record<string, GlobalSkillIndexEntry>;
   onboardingDone: boolean;
+  defaultModelSelection?: ModelSelection;
+  providers: ApiProvider[];
+  /** @deprecated 只在读取旧设置时使用；v4保存结果始终为空数组。 */
   profiles: ApiProfile[];
   presetProfiles: StructuredPreset[];
   sendWithCtrlEnter: boolean;
   syncRevision: number;
-  version: 3;
+  version: 4;
   workspaceFiles: Record<string, DreamCreatorWorkspaceFileReference>;
 };
 
@@ -148,11 +159,12 @@ export const DEFAULT_DREAM_CARD_AGENT_SETTINGS: DreamCardAgentSettings = {
   floatingButtonOffset: { x: 18, y: 0 },
   globalSkills: {},
   onboardingDone: false,
+  providers: [],
   profiles: [],
   presetProfiles: [cloneStructuredPreset(DEFAULT_PRESET)],
   sendWithCtrlEnter: false,
   syncRevision: 0,
-  version: 3,
+  version: 4,
   workspaceFiles: {},
 };
 
@@ -183,7 +195,7 @@ export class MemoryAgentSettingsStore implements AgentSettingsStore {
 }
 
 const SETTINGS_KEY = 'dream-card-agent';
-const SHARED_CACHE_KEY = 'dream-card-agent:settings:v3';
+const SHARED_CACHE_KEY = 'dream-card-agent:settings:v4';
 const SETTINGS_CHANNEL = 'dream-card-agent:settings';
 
 async function saveTavernSettingsImmediately(): Promise<void> {
@@ -265,6 +277,12 @@ export function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamC
   const activeAgentConfigurationId = agentConfigurations.some(configuration => configuration.id === requestedActiveId)
     ? requestedActiveId!
     : DEFAULT_AGENT_CONFIGURATION_ID;
+  const legacyProfiles = (raw?.profiles ?? []).map(normalizeApiProfile);
+  const providers = (raw?.providers?.length ? raw.providers : migrateLegacyProfiles(legacyProfiles)).map(normalizeApiProvider);
+  const requestedModelSelection = raw?.defaultModelSelection ?? legacySelectionForProfile(raw?.activeProfileId);
+  const defaultModelSelection = findSelectedModel(providers, requestedModelSelection)
+    ? structuredClone(requestedModelSelection as ModelSelection)
+    : undefined;
   return {
     ...structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS),
     ...structuredClone(raw ?? {}),
@@ -286,11 +304,13 @@ export function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamC
       y: Number.isFinite(offset?.y) ? offset!.y : defaultOffset.y,
     },
     globalSkills: structuredClone(raw?.globalSkills ?? {}),
-    profiles: (raw?.profiles ?? []).map(normalizeApiProfile),
+    defaultModelSelection,
+    providers,
+    profiles: [],
     presetProfiles,
     sendWithCtrlEnter: raw?.sendWithCtrlEnter === true,
     syncRevision: Number.isFinite(raw?.syncRevision) ? Math.max(0, raw!.syncRevision!) : 0,
-    version: 3,
+    version: 4,
     workspaceFiles: structuredClone(raw?.workspaceFiles ?? {}),
   };
 }
@@ -334,11 +354,13 @@ export function mergeSettingsChanges(
     floatingButtonOffset: choose('floatingButtonOffset'),
     globalSkills: applyRecordChanges(base.globalSkills, incoming.globalSkills, latest.globalSkills),
     onboardingDone: choose('onboardingDone'),
+    defaultModelSelection: choose('defaultModelSelection'),
+    providers: choose('providers'),
     profiles: choose('profiles'),
     presetProfiles: choose('presetProfiles'),
     sendWithCtrlEnter: choose('sendWithCtrlEnter'),
     syncRevision: Math.max(base.syncRevision, incoming.syncRevision, latest.syncRevision) + 1,
-    version: 3,
+    version: 4,
     workspaceFiles: applyRecordChanges(base.workspaceFiles, incoming.workspaceFiles, latest.workspaceFiles),
   };
 }

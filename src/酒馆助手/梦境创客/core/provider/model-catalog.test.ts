@@ -17,12 +17,12 @@ describe('model catalog', () => {
     expect(match.template.settings.contextWindow).toBe(1_050_000);
   });
 
-  it('支持显式Glob和低门槛模糊候选，但不会为无关ID硬匹配', () => {
+  it('支持由旧Glob迁移出的显式前后缀规则，但不会为无关ID硬匹配', () => {
     expect(matchModelTemplates('openai/gpt-5.6-sol-2026-08-01')[0]?.template.id).toBe('openai:gpt-5.6-sol');
     expect(matchModelTemplates('totally-unrelated-model')).toEqual([]);
   });
 
-  it('模型模板按接口格式与兼容模式隔离，切换渠道不会串用模板', () => {
+  it('先按接口格式过滤，兼容模式由命中的模型模板提供', () => {
     const templates = builtinModelTemplates();
     expect(matchModelTemplates('deepseek-v4-flash', templates, 1, {
       compatibilityMode: 'deepseek',
@@ -35,7 +35,7 @@ describe('model catalog', () => {
     expect(matchModelTemplates('deepseek-v4-flash', templates, 1, {
       compatibilityMode: 'standard',
       interfaceType: 'openai-chat',
-    })).toEqual([]);
+    })[0]?.template).toMatchObject({ compatibilityMode: 'deepseek', id: 'deepseek:chat:v4-flash' });
   });
 
   it('解析models.dev目录并排除非文本生成模型', () => {
@@ -76,7 +76,7 @@ describe('model catalog', () => {
     expect(templateSettings(template)).not.toBe(template.settings);
   });
 
-  it('云端补充只应用协议无关字段，不覆盖推理档位、联网与采样设置', () => {
+  it('云端补充应用可靠能力字段，但不覆盖推理档位、联网与采样设置', () => {
     const cloud = parseModelsDevCatalog({
       vendor: {
         models: {
@@ -99,7 +99,7 @@ describe('model catalog', () => {
       topP: 0.8,
     });
     expect(applied).toMatchObject({
-      capabilities: { reasoning: 'disabled', toolCalling: 'enabled', vision: 'enabled', webSearch: 'enabled' },
+      capabilities: { reasoning: 'enabled', toolCalling: 'enabled', vision: 'enabled', webSearch: 'enabled' },
       contextWindow: 200_000,
       maxOutputTokens: 16_000,
       reasoningEfforts: [{ id: 'custom', name: '自定义' }],

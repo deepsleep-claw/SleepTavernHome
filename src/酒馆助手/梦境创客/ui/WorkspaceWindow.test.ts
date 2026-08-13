@@ -23,6 +23,8 @@ const mock = vi.hoisted(() => {
       },
       events: [],
       mode: 'normal',
+      modelControls: { reasoningEffort: 'auto', webSearch: false },
+      modelSelection: { providerId: 'provider', modelId: 'model-config' },
       preset: {
         id: 'preset',
         name: '默认',
@@ -104,7 +106,7 @@ const mock = vi.hoisted(() => {
     },
     activeAgentConfigurationId: 'agent:default',
     activeSessionAccess: 'live',
-    activeProfileId: 'profile',
+    approvalMode: 'normal',
     activePresetId: 'preset',
     agentConfigurations: [{ id: 'agent:default', name: '梦境创客默认 Agent', presetId: 'preset', skillIds: [] }],
     busy: false,
@@ -117,14 +119,20 @@ const mock = vi.hoisted(() => {
     floatingButtonOffset: { x: 18, y: 0 },
     loadedSessionIds: ['session-1'],
     onboardingDone: true,
-    profiles: [
+    providers: [
       {
         baseURL: 'http://localhost/v1',
-        compatibilityMode: 'standard',
-        id: 'profile',
+        enabled: true,
+        id: 'provider',
         interfaceType: 'openai-chat',
-        model: 'model',
         name: '本地',
+        models: [{
+          compatibilityMode: 'standard', enabled: true, id: 'model-config', modelId: 'model', name: '模型',
+          modelSettings: {
+            capabilities: { reasoning: 'enabled', toolCalling: 'enabled', vision: 'enabled', webSearch: 'disabled' },
+            contextWindow: 128_000, maxOutputTokens: 8_000, reasoningEfforts: [],
+          },
+        }],
       },
     ],
     presetProfiles: [

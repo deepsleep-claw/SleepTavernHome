@@ -145,6 +145,7 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
+import { findSelectedModel } from '../../../core/provider/provider-config';
 import { useDreamCardAgent } from '../../composables/runtime';
 import AllSessionsDialog from './AllSessionsDialog.vue';
 
@@ -169,7 +170,10 @@ const activeAgentName = computed(
     state.value.agentConfigurations.find(item => item.id === state.value.activeAgentConfigurationId)?.name ?? '未配置',
 );
 const activeProfileName = computed(
-  () => state.value.profiles.find(item => item.id === state.value.activeProfileId)?.name ?? '未配置',
+  () => {
+    const selected = findSelectedModel(state.value.providers ?? [], state.value.active?.modelSelection);
+    return selected ? `${selected.provider.name} · ${selected.model.name}` : '未选择模型';
+  },
 );
 const statusLabel = computed(
   () =>
