@@ -26,6 +26,20 @@
           }
         }
       }
+    },
+    "dream-card-agent": {
+      "name": "梦境创客",
+      "channels": {
+        "stable": {
+          "version": "0.1.0",
+          "tag": "dream-card-agent-v0.1.0",
+          "entry": "dist/酒馆助手/梦境创客/index.js",
+          "updaterApiMajor": 1,
+          "minimum": {
+            "tavernHelper": "4.0.0"
+          }
+        }
+      }
     }
   }
 }
