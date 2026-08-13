@@ -112,6 +112,8 @@ function linePrefix(kind: Exclude<OperationDiffRow['kind'], 'fold'>): string {
 <style lang="scss">
 .dca-unified-file {
   min-width: 0;
+  // Diff 文档本身负责纵向滚动；文件卡不能为适配视口而压缩，否则正文会被 overflow 裁掉。
+  flex: 0 0 auto;
   scroll-margin-top: 0.5rem;
   overflow: hidden;
   border: 1px solid var(--dca-border);
