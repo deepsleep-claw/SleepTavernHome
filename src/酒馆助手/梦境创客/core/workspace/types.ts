@@ -21,6 +21,16 @@ export type WorkspaceFile = {
   path: string;
   readonly: boolean;
   resourceId: string;
+  /**
+   * 酒馆原生二进制资源的惰性引用。文件节点存在于VFS，但正文不会复制进梦境创客存储；
+   * 读取、下载、复制或设为头像时才从真实URL取回字节。
+   */
+  virtualBinary?: {
+    mediaType: string;
+    size?: number;
+    source: 'character-avatar' | 'persona-avatar';
+    url: string;
+  };
   /** Skill二进制资源只投影元信息；内容由全局Skill存储保管。 */
   skillResource?: {
     sha256: string;
@@ -82,13 +92,14 @@ export interface WorkspaceRepository {
   write(path: string, content: string, toolCallId: string, options?: WorkspaceWriteOptions): Promise<void>;
   patch(path: string, patch: string, toolCallId: string): Promise<void>;
   move(from: string, to: string, toolCallId: string): Promise<void>;
+  copy(from: string, to: string, toolCallId: string, options?: WorkspaceWriteOptions): Promise<void>;
   remove(path: string, toolCallId: string): Promise<void>;
   search(query: SearchQuery): Promise<SearchResult>;
   mutationResult?(toolCallId: string): WorkspaceMutationResult | undefined;
 }
 
 export function isBinaryWorkspaceFile(file: WorkspaceFile): boolean {
-  return Boolean((file.external || file.skillResource) && !file.mediaType.startsWith('text/'));
+  return Boolean((file.external || file.skillResource || file.virtualBinary) && !file.mediaType.startsWith('text/'));
 }
 
 export class WorkspaceError extends Error {

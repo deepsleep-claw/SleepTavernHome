@@ -66,4 +66,23 @@ describe('ExternalSessionAttachmentStore', () => {
       ]),
     );
   });
+
+  it('非视觉模型只在请求副本中把图片替换为工作区路径，持久消息仍保留图片引用', async () => {
+    const settings = new MemoryAgentSettingsStore();
+    const files = new DreamCreatorWorkspaceFileStore(new MemoryTavernFileClient(), settings);
+    const store = new ExternalSessionAttachmentStore('role', files, settings);
+    const [attachment] = await store.save('session', [
+      { data: 'AQID', filename: 'portrait.png', mediaType: 'image/png', size: 3 },
+    ]);
+    const messages: ModelMessage[] = [
+      { content: userContentWithAttachments('只当文件保存', [attachment]), role: 'user' },
+    ];
+    const prepared = await store.prepareMessages('session', messages, { sendImages: false });
+    expect(prepared).toMatchObject([{ content: [
+      { text: '只当文件保存', type: 'text' },
+      { text: expect.stringContaining('/character/files/portrait.png'), type: 'text' },
+    ] }]);
+    expect(JSON.stringify(prepared)).not.toContain('AQID');
+    expect(JSON.stringify(messages)).toContain('dreamcreator-file://');
+  });
 });

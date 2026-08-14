@@ -63,6 +63,9 @@ export type TavernCharacterSummary = {
   name: string;
 };
 
+export type TavernPersonaData = Persona;
+export type TavernPresetData = Preset;
+
 export interface TavernBridge {
   closeCurrentChat(): Promise<void>;
   createWorldbook(name: string): Promise<void>;
@@ -77,6 +80,14 @@ export interface TavernBridge {
   getGlobalWorldbooks(): string[];
   getGroupId(): string;
   getLoadedPresetName(): string;
+  getPreset(name: 'in_use' | string): TavernPresetData;
+  getPresetNames(): string[];
+  getCurrentPersonaId(): string | null;
+  getCurrentPersonaName(): string | null;
+  getPersona(name: 'current' | string): TavernPersonaData;
+  getPersonaAvatarPath(name: 'current' | string): string | null;
+  getPersonaNames(): string[];
+  getCharacterAvatarPath(): string | null;
   getWorldbookNames(): string[];
   listCharacters(): TavernCharacterSummary[];
   getRawCharacter(): RawCharacterData | null;
@@ -84,6 +95,14 @@ export interface TavernBridge {
   getRawScriptTrees(scope: TavernResourceScope): RawTavernScriptTree[];
   getWorldbook(name: string): Promise<TavernWorldbookEntry[]>;
   saveRawCharacter(character: RawCharacterData): Promise<void>;
+  createPersona(name: string, persona?: Partial<TavernPersonaData>): Promise<void>;
+  deletePersona(name: string): Promise<void>;
+  replacePersona(name: string, persona: Partial<TavernPersonaData>): Promise<void>;
+  loadPreset(name: string): Promise<void>;
+  replacePreset(name: 'in_use' | string, preset: TavernPresetData): Promise<void>;
+  createPreset(name: string, preset: TavernPresetData, overwrite?: boolean): Promise<void>;
+  setCharacterAvatar(bytes: Uint8Array, mediaType: string): Promise<void>;
+  setPersonaAvatar(name: string, bytes: Uint8Array, mediaType: string): Promise<void>;
   selectCharacterById(index: number): Promise<void>;
   replaceRawRegexes(scope: TavernResourceScope, regexes: RawTavernRegex[]): Promise<void>;
   replaceRawScriptTrees(scope: TavernResourceScope, trees: RawTavernScriptTree[]): Promise<void>;
@@ -176,7 +195,22 @@ export function createGlobalTavernBridge(): TavernBridge {
     getCurrentCharacterName: () => (typeof getCurrentCharacterName === 'function' ? getCurrentCharacterName() : null),
     getGlobalWorldbooks: () => getGlobalWorldbookNames(),
     getGroupId: () => (typeof SillyTavern === 'undefined' ? '' : SillyTavern.groupId),
-    getLoadedPresetName: () => getLoadedPresetName(),
+    getLoadedPresetName: () => (typeof getLoadedPresetName === 'function' ? getLoadedPresetName() : ''),
+    getPreset: name => {
+      if (typeof getPreset !== 'function') throw new Error('当前酒馆助手版本不提供预设读取接口。');
+      return klona(getPreset(name));
+    },
+    getPresetNames: () => (typeof getPresetNames === 'function' ? getPresetNames() : []),
+    getCurrentPersonaId: () => (typeof getCurrentPersonaId === 'function' ? getCurrentPersonaId() : null),
+    getCurrentPersonaName: () => (typeof getCurrentPersonaName === 'function' ? getCurrentPersonaName() : null),
+    getPersona: name => {
+      if (typeof getPersona !== 'function') throw new Error('当前酒馆助手版本不提供User Persona读取接口。');
+      return klona(getPersona(name));
+    },
+    getPersonaAvatarPath: name =>
+      typeof getPersonaAvatarPath === 'function' ? getPersonaAvatarPath(name) : null,
+    getPersonaNames: () => (typeof getPersonaNames === 'function' ? getPersonaNames() : []),
+    getCharacterAvatarPath: () => (typeof getCharAvatarPath === 'function' ? getCharAvatarPath('current') : null),
     getWorldbookNames: () => getWorldbookNames(),
     listCharacters: () =>
       (typeof SillyTavern === 'undefined' ? [] : (SillyTavern.characters ?? [])).map((character, index) => ({
@@ -204,6 +238,47 @@ export function createGlobalTavernBridge(): TavernBridge {
     },
     getWorldbook: async name => (await getWorldbook(name)) as TavernWorldbookEntry[],
     saveRawCharacter,
+    createPersona: async (name, persona) => {
+      if (typeof createPersona !== 'function') throw new Error('当前酒馆助手版本不提供User Persona写入接口。');
+      if (!(await createPersona(name, persona, { render: 'immediate' }))) throw new Error(`User已存在：${name}`);
+    },
+    deletePersona: async name => {
+      if (typeof deletePersona !== 'function') throw new Error('当前酒馆助手版本不提供User Persona删除接口。');
+      if (!(await deletePersona(name))) throw new Error(`删除User失败：${name}`);
+    },
+    replacePersona: async (name, persona) => {
+      if (typeof replacePersona !== 'function') throw new Error('当前酒馆助手版本不提供User Persona写入接口。');
+      await replacePersona(name, persona, { render: 'immediate' });
+    },
+    loadPreset: async name => {
+      if (typeof loadPreset !== 'function') throw new Error('当前酒馆助手版本不提供预设切换接口。');
+      if (!loadPreset(name)) throw new Error(`切换预设失败：${name}`);
+    },
+    replacePreset: async (name, preset) => {
+      if (typeof replacePreset !== 'function') throw new Error('当前酒馆助手版本不提供预设写入接口。');
+      await replacePreset(name, klona(preset), { render: name === 'in_use' ? 'immediate' : 'none' });
+    },
+    createPreset: async (name, preset, overwrite = false) => {
+      if (typeof createPreset !== 'function') throw new Error('当前酒馆助手版本不提供预设创建接口。');
+      if (overwrite) {
+        if (typeof createOrReplacePreset !== 'function') throw new Error('当前酒馆助手版本不提供预设覆盖接口。');
+        await createOrReplacePreset(name, klona(preset), { render: 'none' });
+      } else if (!(await createPreset(name, klona(preset)))) {
+        throw new Error(`预设已存在：${name}`);
+      }
+    },
+    setCharacterAvatar: async (bytes, mediaType) => {
+      await updateCharacterWith('current', character => ({
+        ...character,
+        avatar: new Blob([bytes.slice().buffer as ArrayBuffer], { type: mediaType }),
+      }));
+    },
+    setPersonaAvatar: async (name, bytes, mediaType) => {
+      await updatePersonaWith(name, persona => ({
+        ...persona,
+        avatar: new Blob([bytes.slice().buffer as ArrayBuffer], { type: mediaType }),
+      }), { render: 'immediate' });
+    },
     selectCharacterById: async index => {
       await SillyTavern.selectCharacterById(index, { switchMenu: false });
     },

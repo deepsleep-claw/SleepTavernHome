@@ -61,7 +61,7 @@ import type {
   SessionModelControls,
   SessionView,
 } from '../core/session/types';
-import { isImageAttachment, type SessionAttachmentInput } from '../core/session/attachments';
+import type { SessionAttachmentInput } from '../core/session/attachments';
 import { ExternalSessionAttachmentStore } from '../core/session/attachment-store';
 import { GlobalSkillStore } from '../core/skills/global-skill-store';
 import {
@@ -683,10 +683,7 @@ export class DreamCardAgentRuntime {
 
   async send(message: string, attachments: SessionAttachmentInput[] = []): Promise<SessionView> {
     return this.runActiveView(async service => {
-      const selected = await this.prepareServiceModel(service, service.view().modelSelection);
-      if (attachments.some(isImageAttachment) && selected.model.modelSettings.capabilities.vision === 'disabled') {
-        throw new Error('当前模型明确标记为不支持视觉，无法发送图片附件。');
-      }
+      await this.prepareServiceModel(service, service.view().modelSelection);
       await this.reloadSkills();
       const sessionConfiguration = this.settingsStore
         .load()
@@ -795,6 +792,14 @@ export class DreamCardAgentRuntime {
 
   async deleteWorkingPath(path: string): Promise<SessionView> {
     return this.runActiveView(service => service.deleteWorkingPath(path));
+  }
+
+  async uploadWorkspaceFiles(targetDirectory: string, inputs: SessionAttachmentInput[]): Promise<SessionView> {
+    return this.runActiveView(service => service.uploadWorkspaceFiles(targetDirectory, inputs));
+  }
+
+  async setWorkspaceAvatar(sourcePath: string, target: 'character' | { userName: string }): Promise<SessionView> {
+    return this.runActiveView(service => service.setWorkspaceAvatar(sourcePath, target));
   }
 
   async deleteSession(sessionId: string): Promise<void> {
@@ -1688,8 +1693,15 @@ export class DreamCardAgentRuntime {
     if (markRun) service.updateRunModelSelection(selection as ModelSelection);
     const key = this.modelSelectionKey(selection as ModelSelection);
     if (this.serviceModelSelections.get(service.sessionId) !== key) {
-      await service.setExecutor(this.executorFactory(selected.provider, selected.model), this.modelContextWindow(selected.model));
+      await service.setExecutor(
+        this.executorFactory(selected.provider, selected.model),
+        this.modelContextWindow(selected.model),
+        selected.model.modelSettings.capabilities.vision !== 'disabled',
+      );
       this.serviceModelSelections.set(service.sessionId, key);
+    } else {
+      // 同一个模型的能力配置也可能被用户实时修改；无需重建Provider，只更新请求转换策略。
+      service.setModelVisionEnabled(selected.model.modelSettings.capabilities.vision !== 'disabled');
     }
     return selected;
   }

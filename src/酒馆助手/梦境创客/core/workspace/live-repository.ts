@@ -1,6 +1,7 @@
 import { klona } from 'klona';
 import { normalizeWorkspacePath } from './path';
 import { MemoryWorkspaceRepository } from './memory-repository';
+import { isBinaryWorkspaceFile } from './types';
 import type {
   SearchQuery,
   SearchResult,
@@ -61,6 +62,10 @@ export class LiveWorkspaceRepository extends MemoryWorkspaceRepository implement
     this.rebase(await this.source.load());
   }
 
+  async reload(): Promise<void> {
+    await this.refresh();
+  }
+
   async list(path: string): Promise<WorkspaceEntry[]> {
     await this.refresh();
     return super.list(path);
@@ -86,6 +91,48 @@ export class LiveWorkspaceRepository extends MemoryWorkspaceRepository implement
 
   async move(from: string, to: string, toolCallId: string): Promise<void> {
     await this.mutate(toolCallId, localToolCallId => super.move(from, to, localToolCallId));
+  }
+
+  async copy(from: string, to: string, toolCallId: string, options: WorkspaceWriteOptions = {}): Promise<void> {
+    await this.mutate(toolCallId, localToolCallId => super.copy(from, to, localToolCallId, options));
+  }
+
+  /** 玩家上传二进制文件专用；文件正文通过external惰性引用，写入仍走实时Source与操作日志。 */
+  async stageFile(file: WorkspaceFile, toolCallId: string): Promise<void> {
+    await this.mutate(toolCallId, localToolCallId => super.stageFiles([file], localToolCallId));
+  }
+
+  /** set_avatar专用：目标虚拟头像节点保持只读，只有显式头像工具可以替换其二进制来源。 */
+  async replaceReadonlyBinary(targetPath: string, sourcePath: string, toolCallId: string): Promise<void> {
+    if (!toolCallId) throw new Error('工具调用必须包含稳定的toolCallId。');
+    if (this.committedToolCalls.has(toolCallId)) {
+      this.outcomes.set(toolCallId, { changes: [], idempotent: true, status: 'success' });
+      return;
+    }
+    await this.refresh();
+    const [before, source] = await Promise.all([super.read(targetPath), super.read(sourcePath)]);
+    if (!isBinaryWorkspaceFile(source)) throw new Error(`头像来源必须是二进制图片：${sourcePath}`);
+    if (!source.mediaType.startsWith('image/')) throw new Error(`头像来源必须是图片：${sourcePath}`);
+    const after: WorkspaceFile = {
+      ...klona(before),
+      // 目标投影的稳定文本指纹不随头像二进制变化；真实新图片仍由external/virtualBinary提供。
+      content: before.content,
+      external: source.external ? klona(source.external) : undefined,
+      mediaType: source.mediaType,
+      skillResource: source.skillResource ? klona(source.skillResource) : undefined,
+      virtualBinary: source.virtualBinary ? klona(source.virtualBinary) : undefined,
+    };
+    const applied = await this.source.apply({ changes: [{ after, before, kind: 'modify', path: before.path }], toolCallId });
+    this.rebase(applied.files);
+    this.restoreTransientProjections();
+    const outcome: WorkspaceMutationResult = {
+      changes: klona(applied.changes),
+      status: applied.status,
+      warning: applied.warning,
+    };
+    this.outcomes.set(toolCallId, outcome);
+    this.committedToolCalls.add(toolCallId);
+    await this.onCommitted?.(klona(outcome), toolCallId);
   }
 
   async remove(path: string, toolCallId: string): Promise<void> {
@@ -117,6 +164,10 @@ export class LiveWorkspaceRepository extends MemoryWorkspaceRepository implement
    * 把它与原始模型工具调用区分开。冲突检查由operation-replayer在调用前完成。
    */
   async replay(payload: FileOperationPayload, toolCallId: string): Promise<void> {
+    if (payload.kind === 'modify' && isBinaryWorkspaceFile(payload.after)) {
+      await this.applyDirect([{ after: payload.after, before: payload.before, kind: 'modify', path: payload.path }], toolCallId);
+      return;
+    }
     await this.mutate(toolCallId, async localToolCallId => {
       if (payload.kind === 'create') {
         await super.stageFiles([{ ...klona(payload.file), path: payload.path }], localToolCallId);
@@ -128,6 +179,17 @@ export class LiveWorkspaceRepository extends MemoryWorkspaceRepository implement
         await super.move(payload.from, payload.path, localToolCallId);
       }
     });
+  }
+
+  private async applyDirect(changes: WorkspaceChange[], toolCallId: string): Promise<void> {
+    await this.refresh();
+    const applied = await this.source.apply({ changes: klona(changes), toolCallId });
+    this.rebase(applied.files);
+    this.restoreTransientProjections();
+    const outcome = { changes: klona(applied.changes), status: applied.status, warning: applied.warning };
+    this.outcomes.set(toolCallId, outcome);
+    this.committedToolCalls.add(toolCallId);
+    await this.onCommitted?.(klona(outcome), toolCallId);
   }
 
   private async refresh(): Promise<void> {

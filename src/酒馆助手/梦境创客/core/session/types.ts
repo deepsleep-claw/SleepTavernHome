@@ -69,6 +69,7 @@ export type PersistedSessionRuntime = {
   lastError?: string;
   manualEditGroup?: ManualEditGroup;
   mountedWorldbooks: string[];
+  mountedPresets?: string[];
   mode: SessionMode;
   modelControls?: SessionModelControls;
   modelSelection?: ModelSelection;

@@ -83,7 +83,11 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
           name,
           path: childPath,
           readonly: file.readonly || this.isReadonly(childPath),
-          size: file.external?.size ?? file.skillResource?.size ?? new TextEncoder().encode(file.content).byteLength,
+          size:
+            file.external?.size ??
+            file.skillResource?.size ??
+            file.virtualBinary?.size ??
+            new TextEncoder().encode(file.content).byteLength,
         });
       }
     }
@@ -187,6 +191,45 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
             content: movedWorldbookMetadata.content,
           });
         }
+      }
+    });
+  }
+
+  async copy(
+    inputFrom: string,
+    inputTo: string,
+    toolCallId: string,
+    options: { overwrite?: boolean } = {},
+  ): Promise<void> {
+    await this.once(toolCallId, () => {
+      const from = normalizeWorkspacePath(inputFrom);
+      const to = normalizeWorkspacePath(inputTo);
+      if (from === '/' || to === '/' || isSameOrDescendant(to, from)) {
+        throw new WorkspaceError('INVALID_PATH', `不能将${from}复制到${to}。`, from);
+      }
+      const targets = [...this.current.values()].filter(file => isSameOrDescendant(file.path, from));
+      if (targets.length === 0) throw new WorkspaceError('NOT_FOUND', `路径不存在：${from}`, from);
+      const candidates = targets.map(source => ({
+        path: `${to}${source.path.slice(from.length)}`,
+        source,
+      }));
+
+      // 权限、冲突和完整目标集合必须全部预检通过，之后才开始写入，避免递归复制留下半棵目录。
+      for (const candidate of candidates) {
+        const existing = this.current.get(candidate.path);
+        this.assertWritable(candidate.path, existing);
+        if (existing && options.overwrite !== true) {
+          throw new WorkspaceError('ALREADY_EXISTS', `目标路径已经存在：${candidate.path}`, candidate.path);
+        }
+      }
+      for (const candidate of candidates) {
+        const existing = this.current.get(candidate.path);
+        this.current.set(candidate.path, {
+          ...cloneFile(candidate.source),
+          path: candidate.path,
+          readonly: existing?.readonly ?? false,
+          resourceId: existing?.resourceId ?? crypto.randomUUID(),
+        });
       }
     });
   }
@@ -295,7 +338,8 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
         after.content !== before.content ||
         after.mediaType !== before.mediaType ||
         JSON.stringify(after.external) !== JSON.stringify(before.external) ||
-        JSON.stringify(after.skillResource) !== JSON.stringify(before.skillResource)
+        JSON.stringify(after.skillResource) !== JSON.stringify(before.skillResource) ||
+        JSON.stringify(after.virtualBinary) !== JSON.stringify(before.virtualBinary)
       ) {
         changes.push({ after: cloneFile(after), before: cloneFile(before), kind: 'modify', path });
       }

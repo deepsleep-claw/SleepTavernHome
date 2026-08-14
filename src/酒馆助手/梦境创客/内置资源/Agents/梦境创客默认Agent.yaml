@@ -1,6 +1,6 @@
 id: agent:default
 name: 梦境创客默认 Agent
-version: 3
+version: 4
 preset: dream-card-agent-default
 skills:
   - id: card-workspace-io
@@ -30,8 +30,11 @@ tools:
   - write_file
   - apply_patch
   - move_path
+  - copy_path
   - delete_path
   - search_files
+  - set_avatar
+  - manage_preset
   - search_worldbooks
   - manage_worldbook
   - manage_tavern_chat

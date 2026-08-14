@@ -3,6 +3,7 @@ import greetingReferenceSource from '../../内置资源/Skills/references/greeti
 import resourceReferenceSource from '../../内置资源/Skills/references/regex-and-scripts.md?raw';
 import tavernChatReferenceSource from '../../内置资源/Skills/references/tavern-chat.md?raw';
 import worldbookReferenceSource from '../../内置资源/Skills/references/worldbooks.md?raw';
+import presetReferenceSource from '../../内置资源/Skills/references/presets.md?raw';
 import { parseFrontmatter } from '../mapping/serde';
 import { WorkspaceError } from '../workspace/types';
 import type { AgentSkill, SkillResource } from './types';
@@ -22,6 +23,7 @@ const BUILTIN_REFERENCES: Record<string, SkillResource> = {
   'references/regex-and-scripts.md': textResource(resourceReferenceSource),
   'references/tavern-chat.md': textResource(tavernChatReferenceSource),
   'references/worldbooks.md': textResource(worldbookReferenceSource),
+  'references/presets.md': textResource(presetReferenceSource),
 };
 
 function requiredString(value: unknown, field: string, path: string): string {

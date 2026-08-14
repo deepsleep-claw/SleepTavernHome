@@ -82,6 +82,12 @@ export function userContentWithAttachments(
 
 export type ResolvedModelFile = { data: string; mediaType: string };
 
+export type ModelFileResolveOptions = {
+  /** 非视觉模型仍保存图片引用，但请求时用可读路径说明替代二进制内容。 */
+  sendImages?: boolean;
+  describeFile?: (fileId: string) => { mediaType?: string; path?: string } | undefined;
+};
+
 export function dreamCreatorFileReference(fileId: string): { text: string; type: 'text' } {
   // 这里故意使用AI SDK支持的tagged text形态保存内部引用，而不是URL对象。
   // URL无法被所有浏览器/Node的structuredClone稳定复制；真正发请求前会转换成data形态。
@@ -104,13 +110,23 @@ export function dreamCreatorFileId(value: unknown): string | undefined {
 async function resolveValue(
   value: unknown,
   resolver: (fileId: string) => Promise<ResolvedModelFile>,
+  options: ModelFileResolveOptions,
 ): Promise<unknown> {
-  if (Array.isArray(value)) return Promise.all(value.map(item => resolveValue(item, resolver)));
+  if (Array.isArray(value)) return Promise.all(value.map(item => resolveValue(item, resolver, options)));
   if (!value || typeof value !== 'object') return value;
   const record = value as Record<string, unknown>;
   if (record.type === 'file') {
     const fileId = dreamCreatorFileId(record.data);
     if (fileId) {
+      const description = options.describeFile?.(fileId);
+      const mediaType = description?.mediaType ?? (typeof record.mediaType === 'string' ? record.mediaType : '');
+      if (options.sendImages === false && mediaType.toLocaleLowerCase().startsWith('image/')) {
+        const path = description?.path ?? (typeof record.filename === 'string' ? record.filename : fileId);
+        return {
+          text: `<workspace_file path="${path}" media_type="${mediaType}" model_content="not_sent">图片已保存在工作区；当前模型不支持视觉，本次请求未发送图片内容。</workspace_file>`,
+          type: 'text',
+        };
+      }
       const resolved = await resolver(fileId);
       return {
         ...record,
@@ -120,15 +136,16 @@ async function resolveValue(
     }
   }
   return Object.fromEntries(
-    await Promise.all(Object.entries(record).map(async ([key, item]) => [key, await resolveValue(item, resolver)])),
+    await Promise.all(Object.entries(record).map(async ([key, item]) => [key, await resolveValue(item, resolver, options)])),
   );
 }
 
 export async function resolveModelMessageFiles(
   messages: ModelMessage[],
   resolver: (fileId: string) => Promise<ResolvedModelFile>,
+  options: ModelFileResolveOptions = {},
 ): Promise<ModelMessage[]> {
-  return (await resolveValue(messages, resolver)) as ModelMessage[];
+  return (await resolveValue(messages, resolver, options)) as ModelMessage[];
 }
 
 export function isImageAttachment(attachment: Pick<SessionAttachmentInput, 'mediaType'>): boolean {

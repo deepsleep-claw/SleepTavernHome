@@ -1,6 +1,7 @@
 import { klona } from 'klona';
 import type { ModelMessage } from 'ai';
 import { projectCardWorkspace } from '../mapping/card-workspace-mapper';
+import { encodeWorkspaceSegment } from '../mapping/serde';
 import type { CardWorkspaceState } from '../mapping/types';
 import { compilePreset, DEFAULT_PRESET, type CompiledPreset, type StructuredPreset } from '../preset/compiler';
 import { PersistentRunnerJournal } from '../persistence/journal';
@@ -21,6 +22,8 @@ import { createProjectRunnerTools } from '../runner/project-tools';
 import { createPlaygroundRunnerTools, type PreparedRender } from '../runner/playground-tools';
 import { isAgentToolId } from '../runner/tool-catalog';
 import { createCharacterRunnerTools } from '../runner/character-tools';
+import { createPresetRunnerTools } from '../runner/preset-tools';
+import { createAvatarRunnerTools } from '../runner/avatar-tools';
 import { createWorkspaceOperationRecord } from '../operations/file-operation';
 import { WorkspaceOperationLog } from '../operations/operation-log';
 import {
@@ -40,6 +43,7 @@ import { canonicalEqual, canonicalStringify } from '../transaction/canonical';
 import { CardWorkspaceLiveSource } from '../workspace/card-live-source';
 import { LiveWorkspaceRepository } from '../workspace/live-repository';
 import { SessionWorkspaceLiveSource } from '../workspace/session-live-source';
+import { TavernWorkspaceLiveSource } from '../workspace/tavern-workspace-source';
 import { maskSecretsForModel } from '../workspace/secret-protection';
 import type { WorkspaceFile } from '../workspace/types';
 import type { SessionAttachmentStore } from './attachment-store';
@@ -75,6 +79,7 @@ type SessionServiceOptions = {
   mode?: SessionMode;
   modelSelection?: ModelSelection;
   mountedWorldbooks?: Set<string>;
+  mountedPresets?: Set<string>;
   now?: () => number;
   onPersist?: (runtime: PersistedSessionRuntime) => Promise<void>;
   onSkillsCommit?: (skills: AgentSkill[], previouslyMountedSkillIds: string[]) => Promise<AgentSkill[]>;
@@ -203,7 +208,9 @@ export class CardAgentSessionService {
   private modelMessages: ModelMessage[];
   private modelControls: SessionModelControls;
   private modelSelection?: ModelSelection;
+  private modelVisionEnabled = true;
   private readonly mountedWorldbooks: Set<string>;
+  private readonly mountedPresets: Set<string>;
   private runModelSelection?: ModelSelection;
   private mutationActor: 'agent' | 'user' = 'agent';
   private preset: StructuredPreset;
@@ -256,6 +263,7 @@ export class CardAgentSessionService {
     this.modelControls = klona(restored?.runtime.modelControls ?? { reasoningEffort: 'auto', webSearch: false });
     this.modelSelection = klona(restored?.runtime.modelSelection ?? options.modelSelection);
     this.mountedWorldbooks = options.mountedWorldbooks ?? new Set(restored?.runtime.mountedWorldbooks ?? []);
+    this.mountedPresets = options.mountedPresets ?? new Set(restored?.runtime.mountedPresets ?? []);
     this.runModelSelection = klona(restored?.runtime.runModelSelection);
     this.now = options.now ?? Date.now;
     this.onPersist = options.onPersist;
@@ -527,16 +535,25 @@ export class CardAgentSessionService {
     await this.persist();
   }
 
-  async setExecutor(executor: ModelStepExecutor, contextWindow = this.contextWindow): Promise<void> {
+  async setExecutor(
+    executor: ModelStepExecutor,
+    contextWindow = this.contextWindow,
+    visionEnabled = this.modelVisionEnabled,
+  ): Promise<void> {
     if (this.runner && ['running', 'waiting-approval'].includes(this.runner.state.status)) {
       throw new Error('Agent运行期间不能切换API Profile。');
     }
     this.executor = executor;
     this.contextWindow = contextWindow;
+    this.modelVisionEnabled = visionEnabled;
     if (this.runner && ['failed', 'stopped', 'context-exhausted'].includes(this.runner.state.status)) {
       this.buildRunner(this.runner.state.status, this.runner.state.pending);
     }
     await this.persist();
+  }
+
+  setModelVisionEnabled(enabled: boolean): void {
+    this.modelVisionEnabled = enabled;
   }
 
   async setSkills(skills: AgentSkill[]): Promise<void> {
@@ -556,6 +573,63 @@ export class CardAgentSessionService {
     await this.refreshCompiledHeader();
     if (this.runner) this.buildRunner(this.runner.state.status, this.runner.state.pending);
     await this.persist();
+  }
+
+  async uploadWorkspaceFiles(targetDirectory: string, inputs: SessionAttachmentInput[]): Promise<SessionView> {
+    if (!this.workspaceStore || !this.repository) throw new Error('当前环境没有可用的梦境创客文件存储。');
+    if (!/^\/(?:files|character\/files)(?:\/|$)/u.test(targetDirectory)) {
+      throw new Error('玩家上传只能保存到/files或/character/files。');
+    }
+    await this.finalizeManualEdits();
+    this.mutationActor = 'user';
+    try {
+      for (const input of inputs) {
+        const staging = await this.workspaceStore.putTemp({
+          bindingId: this.storageBindingId(),
+          bytes: Uint8Array.from(atob(input.data), character => character.charCodeAt(0)),
+          global: this.scope === 'global',
+          logicalPath: `_staging/${crypto.randomUUID()}/${input.filename}`,
+          mediaType: input.mediaType,
+          sessionId: this.sessionId,
+        });
+        const path = `${targetDirectory.replace(/\/$/u, '')}/${input.filename}`;
+        await this.repository.stageFile({
+          content: '',
+          external: {
+            fileId: staging.fileId,
+            mediaType: staging.mediaType,
+            scope: staging.scope,
+            sha256: staging.sha256,
+            size: staging.size,
+          },
+          mediaType: input.mediaType,
+          path,
+          readonly: false,
+          resourceId: crypto.randomUUID(),
+        }, `player-upload:${crypto.randomUUID()}`);
+      }
+    } finally {
+      this.mutationActor = 'agent';
+    }
+    this.status = 'completed';
+    await this.persist();
+    return this.view();
+  }
+
+  async setWorkspaceAvatar(sourcePath: string, target: 'character' | { userName: string }): Promise<SessionView> {
+    if (!this.repository) throw new Error('工作区尚未初始化。');
+    const targetPath = target === 'character'
+      ? '/character/avatar.png'
+      : `/users/${encodeWorkspaceSegment(target.userName)}.avatar.png`;
+    this.mutationActor = 'user';
+    try {
+      await this.repository.replaceReadonlyBinary(targetPath, sourcePath, `player-avatar:${crypto.randomUUID()}`);
+    } finally {
+      this.mutationActor = 'agent';
+    }
+    this.status = 'completed';
+    await this.persist();
+    return this.view();
   }
 
   async send(
@@ -880,6 +954,14 @@ export class CardAgentSessionService {
         this.storageFiles = klona(files);
       },
       workspaceStore: this.workspaceStore,
+      tavernSource: this.tavernBridge
+          ? new TavernWorkspaceLiveSource({
+            backupBinary: (file, toolCallId) => this.backupWorkspaceBinary(file, toolCallId),
+            bridge: this.tavernBridge,
+            mountedPresets: this.mountedPresets,
+            readBinary: file => this.readWorkspaceBinary(file),
+          })
+        : undefined,
     });
     const repository = new LiveWorkspaceRepository({
       completedToolCallIds: this.operationLog
@@ -909,12 +991,16 @@ export class CardAgentSessionService {
       '',
       `- 会话类型：${this.scope === 'global' ? '全局会话' : '角色会话'}`,
       `- 当前角色：${hasCharacter ? this.tavernBridge?.getCurrentCharacterName() ?? '未知' : '未打开'}`,
+      `- 当前User：${this.tavernBridge?.getCurrentPersonaName() ?? '未选择'}`,
+      `- 当前User文件：${this.tavernBridge?.getCurrentPersonaName() ? `/users/${this.tavernBridge.getCurrentPersonaName()}.md` : '未挂载'}`,
       `- 角色目录：${hasCharacter ? '/character' : '未挂载'}`,
       `- 已挂载世界书：${mountedWorldbooks.length > 0 ? mountedWorldbooks.join('、') : '无'}`,
       '- 全局持久文件：/files',
       `- 角色持久文件：${hasCharacter ? '/character/files' : '未挂载'}`,
       '- 正则：/regexes/{character,preset-current,global}',
       '- 酒馆助手脚本：/scripts/{character,preset-current,global}',
+      `- 当前酒馆预设：${this.tavernBridge?.getLoadedPresetName() || '未知'}（/presets/current）`,
+      `- 额外挂载预设：${this.mountedPresets.size ? [...this.mountedPresets].join('、') : '无'}（/presets/library）`,
       '',
       '角色切换、聊天切换和世界书挂载会动态改变本文件；需要最新状态时请重新读取。',
     ].join('\n');
@@ -1078,7 +1164,9 @@ export class CardAgentSessionService {
       requestApproval: request =>
         this.requestToolApproval?.({ ...request, sessionId: this.sessionId }) ?? Promise.resolve(false),
       prepareMessages: this.attachmentStore
-        ? messages => this.attachmentStore!.prepareMessages(this.sessionId, messages)
+        ? messages => this.attachmentStore!.prepareMessages(this.sessionId, messages, {
+            sendImages: this.modelVisionEnabled,
+          })
           : undefined,
       refreshCompactionHeader: () => this.compileCompactionHeader(),
       tools: [
@@ -1123,6 +1211,19 @@ export class CardAgentSessionService {
                   }
                 : undefined,
             })
+          : []),
+        ...(this.tavernBridge
+          ? [
+              ...createPresetRunnerTools(this.repository, this.tavernBridge, {
+                approvalMode: () => (this.mode === 'full' ? 'full' : this.mode === 'yolo' ? 'yolo' : 'manual'),
+                mountedPresets: this.mountedPresets,
+              }),
+              ...createAvatarRunnerTools(
+                this.repository,
+                this.tavernBridge,
+                () => (this.mode === 'full' ? 'full' : this.mode === 'yolo' ? 'yolo' : 'manual'),
+              ),
+            ]
           : []),
         ...(this.tavernChatWorkspace
           ? createTavernChatRunnerTools(this.repository, this.tavernChatWorkspace, {
@@ -1553,6 +1654,7 @@ export class CardAgentSessionService {
       modelControls: klona(this.modelControls),
       modelSelection: this.modelSelection ? klona(this.modelSelection) : undefined,
       mountedWorldbooks: [...this.mountedWorldbooks],
+      mountedPresets: [...this.mountedPresets],
       runModelSelection: this.runModelSelection ? klona(this.runModelSelection) : undefined,
       modelMessages: klona(this.modelMessages),
       operationLog: this.operationLog.export(),
@@ -1583,6 +1685,44 @@ export class CardAgentSessionService {
   private async reloadStorageFiles(): Promise<void> {
     if (!this.workspaceStore) return;
     this.storageFiles = await this.workspaceStore.project(this.storageBindingId(), this.sessionId);
+  }
+
+  private async readWorkspaceBinary(file: WorkspaceFile): Promise<Uint8Array> {
+    if (file.external?.fileId) {
+      if (!this.workspaceStore) throw new Error('当前环境没有可用的梦境创客文件存储。');
+      return this.workspaceStore.read(file.external.fileId);
+    }
+    if (file.virtualBinary?.url) {
+      const response = await fetch(file.virtualBinary.url, { cache: 'no-cache' });
+      if (!response.ok) throw new Error(`读取酒馆图片失败（HTTP ${response.status}）：${file.path}`);
+      return new Uint8Array(await response.arrayBuffer());
+    }
+    throw new Error(`文件没有可读取的二进制来源：${file.path}`);
+  }
+
+  private async backupWorkspaceBinary(file: WorkspaceFile, toolCallId: string): Promise<WorkspaceFile> {
+    if (!this.workspaceStore) throw new Error('当前环境没有可用的头像恢复存储。');
+    const bytes = await this.readWorkspaceBinary(file);
+    const safeToolCallId = toolCallId.replace(/[^a-zA-Z\d_-]/gu, '_').slice(0, 80) || crypto.randomUUID();
+    const stored = await this.workspaceStore.putTemp({
+      bindingId: this.storageBindingId(),
+      bytes,
+      global: this.scope === 'global',
+      logicalPath: `_recovery/${safeToolCallId}/${crypto.randomUUID()}.bin`,
+      mediaType: file.mediaType,
+      sessionId: this.sessionId,
+    });
+    return {
+      ...klona(file),
+      external: {
+        fileId: stored.fileId,
+        mediaType: stored.mediaType,
+        scope: stored.scope,
+        sha256: stored.sha256,
+        size: stored.size,
+      },
+      virtualBinary: undefined,
+    };
   }
 
   private async refreshTavernChatWorkspace(): Promise<void> {

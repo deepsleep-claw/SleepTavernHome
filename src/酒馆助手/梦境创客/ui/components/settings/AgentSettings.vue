@@ -263,25 +263,45 @@ async function selectConfiguration(id: string) {
   if (id) await action(() => runtime.selectAgentConfiguration(id));
 }
 
-function newConfiguration() {
+function uniqueConfigurationName(base: string): string {
+  const names = new Set(state.value.agentConfigurations.map(item => item.name));
+  if (!names.has(base)) return base;
+  for (let index = 2; ; index += 1) {
+    const candidate = `${base} ${index}`;
+    if (!names.has(candidate)) return candidate;
+  }
+}
+
+async function persistNewConfiguration(candidate: AgentConfiguration, successMessage: string) {
+  let saved: AgentConfiguration | undefined;
+  const succeeded = await action(async () => {
+    saved = await runtime.saveAgentConfiguration(structuredClone(toRaw(candidate)));
+  });
+  if (!succeeded || !saved) return;
+  draft.value = structuredClone(saved);
+  activeTab.value = 'main';
+  toastr.success(successMessage, '梦境创客');
+}
+
+async function newConfiguration() {
   const defaults = new Map(allSkills.value.map(skill => [skill.id, skill.defaultLoading]));
-  draft.value = {
+  await persistNewConfiguration({
     id: `agent:${crypto.randomUUID()}`,
-    name: '新 Agent',
+    name: uniqueConfigurationName('新 Agent'),
     presetId: draft.value?.presetId ?? state.value.activePresetId,
     skills: [...defaults].map(([id, loading]) => ({ enabled: true, id, loading })),
     toolIds: [...ALL_AGENT_TOOL_IDS],
-  };
-  activeTab.value = 'main';
+  }, '新 Agent 已创建并切换。');
 }
 
-function copyConfiguration() {
+async function copyConfiguration() {
   if (!draft.value) return;
-  draft.value = {
+  const source = structuredClone(toRaw(draft.value));
+  await persistNewConfiguration({
     ...structuredClone(toRaw(draft.value)),
     id: `agent:${crypto.randomUUID()}`,
-    name: `${draft.value.name} 副本`,
-  };
+    name: uniqueConfigurationName(`${source.name} 副本`),
+  }, 'Agent 副本已创建并切换。');
 }
 
 function skillSetting(id: string): AgentSkillSetting {

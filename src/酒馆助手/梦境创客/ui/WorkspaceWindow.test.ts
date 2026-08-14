@@ -573,11 +573,8 @@ describe('WorkspaceWindow', () => {
       button.textContent?.includes('另存为自定义 Agent'),
     )!;
     saveAsBuiltin.click();
+    await Promise.resolve();
     await nextTick();
-    const saveConfiguration = [...root.querySelectorAll<HTMLButtonElement>('.dca-resource-savebar button')].find(
-      button => button.textContent?.trim() === '保存 Agent',
-    )!;
-    saveConfiguration.click();
     expect(mock.runtime.saveAgentConfiguration).toHaveBeenCalledWith(
       expect.objectContaining({
         id: expect.stringMatching(/^agent:/u),

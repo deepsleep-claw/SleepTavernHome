@@ -138,6 +138,8 @@ export class DreamCreatorWorkspaceFileStore {
     let references = loadReferences().filter(
       file =>
         !file.orphanedAt &&
+        !file.logicalPath.startsWith('_recovery/') &&
+        !file.logicalPath.startsWith('_staging/') &&
         (file.scope === 'global-persistent' ||
           file.scope === 'character-persistent' ||
           ((file.scope === 'global-temp' || file.scope === 'character-temp') && file.sessionId === sessionId)),
@@ -165,6 +167,8 @@ export class DreamCreatorWorkspaceFileStore {
       references = loadReferences().filter(
         file =>
           !file.orphanedAt &&
+          !file.logicalPath.startsWith('_recovery/') &&
+          !file.logicalPath.startsWith('_staging/') &&
           (file.scope === 'global-persistent' ||
             file.scope === 'character-persistent' ||
             ((file.scope === 'global-temp' || file.scope === 'character-temp') && file.sessionId === sessionId)),
@@ -261,11 +265,18 @@ export class DreamCreatorWorkspaceFileStore {
           if (nowValue?.external?.fileId) await this.orphan(nowValue.external.fileId);
           continue;
         }
-        if (after.external && after.content === (before?.content ?? after.content)) {
+        if (
+          before &&
+          after.external &&
+          before.external?.fileId === after.external.fileId &&
+          after.content === before.content
+        ) {
           await this.activateExisting(after.external.fileId, logicalPath, sessionId, scope);
           continue;
         }
-        const bytes = new TextEncoder().encode(after.content);
+        const bytes = isTextMediaType(after.mediaType)
+          ? new TextEncoder().encode(after.content)
+          : await this.bytesForWorkspaceFile(after);
         await this.put({
           bindingId: scope.startsWith('global-') ? GLOBAL_WORKSPACE_BINDING_ID : bindingId,
           bytes,
@@ -463,6 +474,18 @@ export class DreamCreatorWorkspaceFileStore {
     }
     this.memory.set(fileId, Uint8Array.from(bytes));
     return cloneReference(reference);
+  }
+
+  private async bytesForWorkspaceFile(file: WorkspaceFile): Promise<Uint8Array> {
+    if (file.external?.fileId) return this.read(file.external.fileId);
+    if (file.skillResource) throw new Error(`Skill二进制资源不能直接复制到文件存储：${file.path}`);
+    const remoteUrl = file.virtualBinary?.url;
+    if (remoteUrl) {
+      const response = await fetch(remoteUrl, { cache: 'no-cache' });
+      if (!response.ok) throw new Error(`读取待复制文件失败（HTTP ${response.status}）：${file.path}`);
+      return new Uint8Array(await response.arrayBuffer());
+    }
+    return new TextEncoder().encode(file.content);
   }
 
   private uniquePath(path: string, entries: DreamCreatorWorkspaceFileReference[]): string {

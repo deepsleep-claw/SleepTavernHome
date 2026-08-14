@@ -523,20 +523,31 @@ describe('DreamCardAgentRuntime', () => {
     runtime.destroy();
   });
 
-  it('会话绑定模型明确关闭视觉时拒绝图片附件', async () => {
+  it('会话绑定非视觉模型时保留图片附件，但请求只发送工作区文件说明', async () => {
+    const executor = new QueueExecutor([modelStep(false)]);
+    const settingsStore = new MemoryAgentSettingsStore();
+    const settings = settingsStore.load();
+    const configuration = defaultBuiltinAgentConfiguration();
+    configuration.id = 'agent:vision-test';
+    configuration.name = '视觉降级测试';
+    configuration.skills = configuration.skills.filter(skill => skill.id === 'card-workspace-io');
+    settings.agentConfigurations.push(configuration);
+    settings.activeAgentConfigurationId = configuration.id;
+    await settingsStore.save(settings);
     const runtime = new DreamCardAgentRuntime({
       adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
-      executorFactory: () => new QueueExecutor([]),
+      executorFactory: () => executor,
       fileClient: new MemoryTavernFileClient(),
-      settingsStore: new MemoryAgentSettingsStore(),
+      settingsStore,
     });
     await addProfile(runtime, {
         capabilities: { reasoning: 'auto', toolCalling: 'auto', vision: 'disabled', webSearch: 'auto' },
     });
     await runtime.createSession();
-    await expect(
-      runtime.send('', [{ data: 'AQID', filename: 'image.png', mediaType: 'image/png', size: 3 }]),
-    ).rejects.toThrow('不支持视觉');
+    const view = await runtime.send('', [{ data: 'AQID', filename: 'image.png', mediaType: 'image/png', size: 3 }]);
+    expect(view.ui.find(item => item.kind === 'user')?.attachments?.[0]).toMatchObject({ mediaType: 'image/png' });
+    expect(JSON.stringify(executor.requests[0].messages)).toContain('/character/files/image.png');
+    expect(JSON.stringify(executor.requests[0].messages)).not.toContain('AQID');
     runtime.destroy();
   });
 

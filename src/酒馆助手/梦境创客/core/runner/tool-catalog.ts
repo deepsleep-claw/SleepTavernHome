@@ -9,9 +9,17 @@ export const AGENT_TOOL_GROUPS = [
       { id: 'write_file', label: '写入文件', readonly: false },
       { id: 'apply_patch', label: '应用补丁', readonly: false },
       { id: 'move_path', label: '移动路径', readonly: false },
+      { id: 'copy_path', label: '复制路径', readonly: false },
       { id: 'delete_path', label: '删除路径', readonly: false },
       { id: 'search_files', label: '搜索文件', readonly: true },
+      { id: 'set_avatar', label: '设置头像', readonly: false },
     ],
+  },
+  {
+    description: '搜索、挂载、切换和保存酒馆预设。',
+    id: 'presets',
+    label: '酒馆预设',
+    tools: [{ id: 'manage_preset', label: '管理酒馆预设', readonly: false }],
   },
   {
     description: '搜索、挂载、卸载、创建、复制和绑定世界书。',

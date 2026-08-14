@@ -1,8 +1,9 @@
-import { tool, type Tool } from 'ai';
+import { tool, type FilePart, type Tool } from 'ai';
 import { z } from 'zod';
 import { parseYamlObject } from '../mapping/serde';
 import { assessSkillMutation } from '../skills/skill-registry';
 import { dreamCreatorFileReference } from '../session/attachments';
+import { base64ForBytes } from '../persistence/workspace-file-store';
 import type { TavernChatWorkspace } from '../tavern/chat-workspace';
 import { parentWorkspacePath } from '../workspace/path';
 import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
@@ -52,7 +53,7 @@ async function listPath(repository: WorkspaceRepository, input: ListPathInput) {
       entries: [{
         path: file.path,
         readonly: file.readonly,
-        size: file.external?.size ?? file.skillResource?.size ?? new TextEncoder().encode(file.content).byteLength,
+        size: file.external?.size ?? file.skillResource?.size ?? file.virtualBinary?.size ?? new TextEncoder().encode(file.content).byteLength,
         type: 'file',
       }],
       path: file.path,
@@ -386,16 +387,29 @@ export function createWorkspaceRunnerTools(
               `BINARY_SKILL_RESOURCE_NOT_READABLE：${file.path}是二进制Skill资源（${file.mediaType}，${file.skillResource.size} bytes），当前文件工具只能列出、移动或删除它，不能把内容发送给模型。`,
             );
           }
+          let data: FilePart['data'];
+          let size = file.external?.size ?? file.virtualBinary?.size ?? 0;
+          if (file.external) {
+            data = dreamCreatorFileReference(file.external.fileId);
+          } else if (file.virtualBinary) {
+            const response = await fetch(file.virtualBinary.url, { cache: 'no-cache' });
+            if (!response.ok) throw new Error(`读取酒馆图片失败（HTTP ${response.status}）：${file.path}`);
+            const bytes = new Uint8Array(await response.arrayBuffer());
+            size = bytes.byteLength;
+            data = { data: base64ForBytes(bytes), type: 'data' };
+          } else {
+            throw new Error(`二进制文件缺少可读来源：${file.path}`);
+          }
           return richToolOutput(
             {
               type: 'content',
               value: [
                 {
-                  text: `已读取二进制文件：${file.path}（${file.mediaType}，${file.external!.size} bytes）。`,
+                  text: `已读取二进制文件：${file.path}（${file.mediaType}，${size} bytes）。`,
                   type: 'text',
                 },
                 {
-                  data: dreamCreatorFileReference(file.external!.fileId),
+                  data,
                   filename: file.path.split('/').at(-1),
                   mediaType: file.mediaType,
                   type: 'file',
@@ -406,7 +420,7 @@ export function createWorkspaceRunnerTools(
               binary: true,
               mediaType: file.mediaType,
               path: file.path,
-              size: file.external!.size,
+              size,
             },
           );
         }
@@ -551,6 +565,32 @@ export function createWorkspaceRunnerTools(
         return { from: value.from, moved: true, mutation: mutationSummary(repository, toolCallId), to: value.to };
       },
       name: 'move_path',
+      readonly: false,
+    },
+    {
+      confirmation: async (input, toolCallId) => {
+        const value = input as { from: string; overwrite?: boolean; to: string };
+        const target = await mutationConfirmation(
+          'write', value.to, input, repository, existingSkillIds, options, toolCallId, 'copy_path',
+        );
+        return target;
+      },
+      definition: tool({
+        description:
+          '复制文件或整个目录。递归复制会先检查全部来源、目标冲突与权限，通过后才开始写入；默认不覆盖已有目标。',
+        inputSchema: z.object({
+          from: pathSchema,
+          overwrite: z.boolean().optional().describe('默认false；明确需要覆盖目标时设为true'),
+          to: pathSchema,
+        }),
+      }),
+      execute: async (input, toolCallId) => {
+        const value = input as { from: string; overwrite?: boolean; to: string };
+        options.chatWorkspace?.assertNoMoveOrDelete(value.to);
+        await repository.copy(value.from, value.to, toolCallId, { overwrite: value.overwrite });
+        return { copied: true, from: value.from, mutation: mutationSummary(repository, toolCallId), to: value.to };
+      },
+      name: 'copy_path',
       readonly: false,
     },
     {

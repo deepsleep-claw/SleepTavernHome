@@ -14,7 +14,7 @@ import { compressImageForModel, type RasterImageEncoder } from './image-compress
 
 export interface SessionAttachmentStore {
   loadInput(attachment: StoredSessionAttachment): Promise<SessionAttachmentInput>;
-  prepareMessages(sessionId: string, messages: ModelMessage[]): Promise<ModelMessage[]>;
+  prepareMessages(sessionId: string, messages: ModelMessage[], options?: { sendImages?: boolean }): Promise<ModelMessage[]>;
   save(sessionId: string, inputs: SessionAttachmentInput[]): Promise<StoredSessionAttachment[]>;
 }
 
@@ -71,8 +71,20 @@ export class ExternalSessionAttachmentStore implements SessionAttachmentStore {
     };
   }
 
-  async prepareMessages(sessionId: string, messages: ModelMessage[]): Promise<ModelMessage[]> {
-    return resolveModelMessageFiles(messages, fileId => this.resolveForModel(sessionId, fileId));
+  async prepareMessages(
+    sessionId: string,
+    messages: ModelMessage[],
+    options: { sendImages?: boolean } = {},
+  ): Promise<ModelMessage[]> {
+    return resolveModelMessageFiles(messages, fileId => this.resolveForModel(sessionId, fileId), {
+      describeFile: fileId => {
+        const source = this.files.getReference(fileId);
+        if (!source) return undefined;
+        const root = source.scope.startsWith('global-') ? '/files' : '/character/files';
+        return { mediaType: source.mediaType, path: `${root}/${source.logicalPath}` };
+      },
+      sendImages: options.sendImages,
+    });
   }
 
   private async resolveForModel(sessionId: string, fileId: string): Promise<ResolvedModelFile> {

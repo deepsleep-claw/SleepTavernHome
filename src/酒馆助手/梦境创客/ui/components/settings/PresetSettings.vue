@@ -255,24 +255,51 @@ function updateNodeRole(id: string, role: string) {
   if (node && (role === 'system' || role === 'user' || role === 'assistant')) node.role = role;
 }
 
-function newPresetProfile() {
-  presetDraft.value = {
-    id: `preset:${crypto.randomUUID()}`,
-    name: '新预设',
-    nodes: [],
-    version: 1,
-  };
-  addPresetNode();
+function uniquePresetName(base: string): string {
+  const names = new Set(state.value.presetProfiles.map(item => item.name));
+  if (!names.has(base)) return base;
+  for (let index = 2; ; index += 1) {
+    const candidate = `${base} ${index}`;
+    if (!names.has(candidate)) return candidate;
+  }
 }
 
-function copyPresetProfile() {
-  if (!presetDraft.value) return;
-  presetDraft.value = {
-    ...cloneStructuredPreset(presetDraft.value),
+async function persistNewPreset(candidate: StructuredPreset, message: string) {
+  let saved: StructuredPreset | undefined;
+  const succeeded = await action(async () => {
+    saved = await runtime.savePresetProfile(cloneStructuredPreset(candidate));
+  });
+  if (!succeeded || !saved) return;
+  presetDraft.value = cloneStructuredPreset(saved);
+  toastr.success(message, '梦境创客');
+}
+
+async function newPresetProfile() {
+  const candidate: StructuredPreset = {
     id: `preset:${crypto.randomUUID()}`,
-    name: `${presetDraft.value.name} 副本`,
+    name: uniquePresetName('新预设'),
+    nodes: [{
+      content: '{{custom_instructions}}',
+      enabled: true,
+      id: crypto.randomUUID(),
+      order: 10,
+      role: 'system',
+      title: '新节点',
+    }],
     version: 1,
   };
+  await persistNewPreset(candidate, '新预设已创建并切换。');
+}
+
+async function copyPresetProfile() {
+  if (!presetDraft.value) return;
+  const source = cloneStructuredPreset(presetDraft.value);
+  await persistNewPreset({
+    ...cloneStructuredPreset(presetDraft.value),
+    id: `preset:${crypto.randomUUID()}`,
+    name: uniquePresetName(`${source.name} 副本`),
+    version: 1,
+  }, '预设副本已创建并切换。');
 }
 
 async function savePresetProfile(): Promise<StructuredPreset | undefined> {

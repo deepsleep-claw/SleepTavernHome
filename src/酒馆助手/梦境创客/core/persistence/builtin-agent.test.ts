@@ -13,7 +13,7 @@ describe('built-in agent definition', () => {
         { enabled: true, id: 'html-project', loading: 'on-demand' },
       ]),
       toolIds: expect.arrayContaining(['list_path', 'read_file', 'manage_worldbook', 'manage_character']),
-      version: 3,
+      version: 4,
     });
   });
 

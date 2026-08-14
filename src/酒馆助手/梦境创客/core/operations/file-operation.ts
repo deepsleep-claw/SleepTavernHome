@@ -16,7 +16,7 @@ async function fingerprint(file: WorkspaceFile): Promise<WorkspaceFileFingerprin
     path: file.path,
     resourceId: file.resourceId,
     sha256: await sha256(bytes),
-    size: file.external?.size ?? file.skillResource?.size ?? bytes.byteLength,
+    size: file.external?.size ?? file.skillResource?.size ?? file.virtualBinary?.size ?? bytes.byteLength,
   };
 }
 

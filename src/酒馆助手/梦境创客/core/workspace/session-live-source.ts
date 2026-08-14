@@ -7,9 +7,10 @@ import type { LiveWorkspaceApplyInput, LiveWorkspaceApplyResult, LiveWorkspaceSo
 import { MemoryWorkspaceRepository } from './memory-repository';
 import { WorkspaceError, type WorkspaceChange, type WorkspaceFile } from './types';
 
-type WorkspaceDomain = 'card' | 'chat' | 'skill' | 'storage';
+type WorkspaceDomain = 'card' | 'chat' | 'skill' | 'storage' | 'tavern';
 
 function domain(path: string): WorkspaceDomain {
+  if (path.startsWith('/users/') || path.startsWith('/presets/') || path === '/character/avatar.png') return 'tavern';
   if (path.startsWith('/skills/user/')) return 'skill';
   if (
     path.startsWith('/files/') ||
@@ -48,6 +49,7 @@ export type SessionWorkspaceLiveSourceOptions = {
   sessionId: string;
   setSkills: (skills: AgentSkill[]) => void;
   setStorageFiles: (files: WorkspaceFile[]) => void;
+  tavernSource?: LiveWorkspaceSource;
   workspaceStore?: DreamCreatorWorkspaceFileStore;
 };
 
@@ -58,6 +60,7 @@ export class SessionWorkspaceLiveSource implements LiveWorkspaceSource {
   async load(): Promise<WorkspaceFile[]> {
     const files = [
       ...(await this.options.cardSource.load()),
+      ...(this.options.tavernSource ? await this.options.tavernSource.load() : []),
       ...projectSkills(this.options.getSkills()),
       ...this.options.getStorageFiles(),
     ];
@@ -80,6 +83,7 @@ export class SessionWorkspaceLiveSource implements LiveWorkspaceSource {
     }
     let status: LiveWorkspaceApplyResult['status'] = 'success';
     let warning: string | undefined;
+    const directlyReported: WorkspaceChange[] = [];
     try {
       const cardChanges = grouped.get('card') ?? [];
       if (cardChanges.length > 0) {
@@ -95,6 +99,16 @@ export class SessionWorkspaceLiveSource implements LiveWorkspaceSource {
       if (skillChanges.length > 0) await this.applySkills(skillChanges, input.toolCallId);
       const storageChanges = grouped.get('storage') ?? [];
       if (storageChanges.length > 0) await this.applyStorage(storageChanges, input.toolCallId);
+      const tavernChanges = grouped.get('tavern') ?? [];
+      if (tavernChanges.length > 0) {
+        if (!this.options.tavernSource) throw new Error('当前环境没有可用的酒馆User/预设工作区。');
+        const result = await this.options.tavernSource.apply({ changes: tavernChanges, toolCallId: `${input.toolCallId}:tavern` });
+        directlyReported.push(...result.changes);
+        if (result.status !== 'success') {
+          status = result.status;
+          warning = result.warning;
+        }
+      }
     } catch (error) {
       const files = await this.load();
       const changes = diffRequestedWorkspaceFiles(input.changes, before, files);
@@ -107,7 +121,13 @@ export class SessionWorkspaceLiveSource implements LiveWorkspaceSource {
       };
     }
     const files = await this.load();
-    return { changes: diffRequestedWorkspaceFiles(input.changes, before, files), files, status, warning };
+    const diffed = diffRequestedWorkspaceFiles(input.changes, before, files);
+    return {
+      changes: [...directlyReported.filter(change => !diffed.some(item => item.path === change.path)), ...diffed],
+      files,
+      status,
+      warning,
+    };
   }
 
   private async applySkills(changes: WorkspaceChange[], toolCallId: string): Promise<void> {

@@ -19,8 +19,11 @@
     <section v-if="tab === 'files'" class="dca-side-files">
       <div class="dca-file-list">
         <header>
-          <strong>Card Workspace</strong>
-          <small>{{ files.length }} 个文件</small>
+          <div><strong>Card Workspace</strong><small>{{ files.length }} 个文件</small></div>
+          <label class="dca-file-upload-button" title="上传到当前文件区">
+            <i class="fa-solid fa-arrow-up-from-bracket" aria-hidden="true"></i><span>上传</span>
+            <input class="dca-hidden-input" type="file" multiple @change="uploadFiles" />
+          </label>
         </header>
         <button
           v-for="row in visibleFileTreeRows"
@@ -56,6 +59,22 @@
               <button type="button" title="导出文件" @click="exportSelectedFile">
                 <i class="fa-solid fa-download" aria-hidden="true"></i><span>导出</span>
               </button>
+              <template v-if="canUseAsAvatar">
+                <button
+                  v-if="files.some(file => file.path === '/character/avatar.png')"
+                  type="button"
+                  title="把所选图片设为当前角色头像"
+                  @click="setCharacterAvatar"
+                >
+                  <i class="fa-regular fa-address-card" aria-hidden="true"></i><span>角色头像</span>
+                </button>
+                <select v-if="personaNames.length" v-model="avatarUserName" aria-label="选择User头像目标">
+                  <option v-for="name in personaNames" :key="name" :value="name">{{ name }}</option>
+                </select>
+                <button v-if="personaNames.length" type="button" title="把所选图片设为User头像" @click="setUserAvatar">
+                  <i class="fa-regular fa-user" aria-hidden="true"></i><span>User头像</span>
+                </button>
+              </template>
               <button
                 v-if="canPlayerDelete(selectedFile.path)"
                 class="dca-btn-danger"
@@ -277,6 +296,9 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { strToU8, zipSync } from 'fflate';
 import { maskSecretsForModel } from '../../../../core/workspace/secret-protection';
+import { decodeWorkspaceSegment } from '../../../../core/mapping/serde';
+import { fileToSessionAttachment } from '../../../../core/session/attachments';
+import { isBinaryWorkspaceFile } from '../../../../core/workspace/types';
 import type { HtmlProjectCheck } from '../../../../core/projects/html-project';
 import { downloadBytes, downloadText, formatBytes, pretty } from '../../../composables/format';
 import {
@@ -324,6 +346,7 @@ const expandedDirectories = ref(
   new Set(['/character', '/files', '/greetings', '/skills', '/skills/user', '/temp', '/worldbooks']),
 );
 const fileMenu = ref<{ row: FileTreeRow; x: number; y: number }>();
+const avatarUserName = ref('');
 let secretScanTimer: number | undefined;
 let secretScanRevision = 0;
 
@@ -386,9 +409,16 @@ const visibleFileTreeRows = computed<FileTreeRow[]>(() => {
   return rows;
 });
 const selectedFile = computed(() => files.value.find(file => file.path === selectedFilePath.value));
-const isBinaryFile = computed(() =>
-  Boolean(selectedFile.value?.external && !selectedFile.value.mediaType.startsWith('text/')),
-);
+const isBinaryFile = computed(() => Boolean(selectedFile.value && isBinaryWorkspaceFile(selectedFile.value)));
+const canUseAsAvatar = computed(() => Boolean(
+  selectedFile.value &&
+  selectedFile.value.mediaType.startsWith('image/') &&
+  /^\/(?:files|character\/files)\//u.test(selectedFile.value.path),
+));
+const personaNames = computed(() => files.value
+  .filter(file => /^\/users\/[^/]+\.md$/u.test(file.path))
+  .map(file => decodeWorkspaceSegment(file.path.slice('/users/'.length, -'.md'.length)))
+  .sort((left, right) => left.localeCompare(right, 'zh-CN')));
 const isRunning = computed(() => ['running', 'waiting-approval'].includes(state.value.active?.status ?? ''));
 const canEditFile = computed(() =>
   Boolean(
@@ -443,6 +473,10 @@ watch(selectedFile, file => {
   largePreviewApproved.value = false;
   projectCheck.value = undefined;
 });
+
+watch(personaNames, names => {
+  if (!names.includes(avatarUserName.value)) avatarUserName.value = names[0] ?? '';
+}, { immediate: true });
 
 watch(
   [() => selectedFile.value?.path, fileDraft],
@@ -517,10 +551,52 @@ function canPlayerDelete(path: string): boolean {
 }
 
 async function bytesForFile(file: (typeof files.value)[number]): Promise<Uint8Array> {
+  if (file.virtualBinary?.url) {
+    const response = await fetch(file.virtualBinary.url, { cache: 'no-cache' });
+    if (!response.ok) throw new Error(`读取酒馆图片失败（HTTP ${response.status}）：${file.path}`);
+    return new Uint8Array(await response.arrayBuffer());
+  }
   if (!file.external) return strToU8(file.content);
   const managed = state.value.storage.characters.flatMap(group => group.files).find(item => item.fileId === file.external?.fileId);
   if (!managed) throw new Error(`找不到托管文件：${file.path}`);
   return new Uint8Array(await (await fetch(managed.url)).arrayBuffer());
+}
+
+function uploadTargetDirectory(): '/character/files' | '/files' | string {
+  const path = selectedFilePath.value;
+  if (/^\/(?:files|character\/files)(?:\/|$)/u.test(path)) {
+    if (files.value.some(file => file.path === path)) return path.slice(0, path.lastIndexOf('/')) || '/files';
+    return path;
+  }
+  return state.value.active?.scope === 'global' ? '/files' : '/character/files';
+}
+
+async function uploadFiles(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const selected = [...(input.files ?? [])];
+  input.value = '';
+  if (!selected.length) return;
+  try {
+    const attachments = await Promise.all(selected.map(fileToSessionAttachment));
+    await action(() => runtime.uploadWorkspaceFiles(uploadTargetDirectory(), attachments));
+    toastr.success(`已上传 ${selected.length} 个文件。`, '梦境创客');
+  } catch (error) {
+    toastr.error(error instanceof Error ? error.message : String(error), '上传失败');
+  }
+}
+
+async function setCharacterAvatar() {
+  if (!selectedFile.value || !canUseAsAvatar.value) return;
+  if (await action(() => runtime.setWorkspaceAvatar(selectedFile.value!.path, 'character'))) {
+    toastr.success('角色头像已更新，可在Diff中撤销。', '梦境创客');
+  }
+}
+
+async function setUserAvatar() {
+  if (!selectedFile.value || !canUseAsAvatar.value || !avatarUserName.value) return;
+  if (await action(() => runtime.setWorkspaceAvatar(selectedFile.value!.path, { userName: avatarUserName.value }))) {
+    toastr.success(`User“${avatarUserName.value}”头像已更新，可在Diff中撤销。`, '梦境创客');
+  }
 }
 
 async function exportFile(file: (typeof files.value)[number]) {
@@ -801,6 +877,30 @@ async function redo() {
   gap: 0.35rem;
   padding: 0.35rem 0.45rem;
   white-space: nowrap;
+}
+
+.dca-file-list header > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.dca-file-upload-button {
+  display: inline-flex;
+  min-height: 1.8rem;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.3rem;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-sm);
+  padding: 0.2rem 0.45rem;
+  color: var(--dca-text);
+  cursor: pointer;
+}
+
+.dca-file-upload-button:hover {
+  border-color: var(--dca-accent);
+  background: var(--dca-surface-hover);
 }
 
 .dca-file-list header strong {

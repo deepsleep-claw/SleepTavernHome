@@ -182,7 +182,7 @@ export function createPlaygroundRunnerTools(repository: WorkspaceRepository, opt
     {
       definition: tool({
         description:
-          '准备一个会话内HTML预览。之后在助手回复中原样输出 <dream-render id="返回的renderId"></dream-render>，完成回复后界面才会展开。',
+          '准备一个会话内HTML预览。之后必须在助手回复中把 <dream-render id="返回的renderId"></dream-render> 单独放在一整行，且不得放进Markdown代码块；完成回复后界面才会展开。',
         inputSchema: z.object({
           backgroundCss: z.string().max(20_000).optional()
             .describe('应用到预览文档html与body的背景CSS声明，例如 background: #101418; color-scheme: dark；默认透明'),
