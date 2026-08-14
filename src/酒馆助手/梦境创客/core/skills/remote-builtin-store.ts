@@ -29,9 +29,14 @@ export type RemoteBuiltinSkillStatus = RemoteSkillManifestEntry & {
 };
 
 const SUPPORTED_RESOURCE_PROTOCOL = 1;
+const RESOURCE_FILE_SUFFIX = '.zip.ds';
 
 function safeId(value: string): string {
   return value.replace(/[^a-zA-Z\d_-]/gu, '_').slice(0, 80);
+}
+
+function usesCurrentResourceSuffix(url: string): boolean {
+  return url.split(/[?#]/u, 1)[0]?.endsWith(RESOURCE_FILE_SUFFIX) === true;
 }
 
 function validManifest(value: unknown): value is RemoteSkillManifest {
@@ -40,7 +45,8 @@ function validManifest(value: unknown): value is RemoteSkillManifest {
   return manifest.protocolVersion === SUPPORTED_RESOURCE_PROTOCOL && Array.isArray(manifest.skills) &&
     manifest.skills.every(skill =>
       skill && typeof skill === 'object' && typeof skill.id === 'string' && typeof skill.name === 'string' &&
-      typeof skill.file === 'string' && typeof skill.sha256 === 'string' && Number.isFinite(skill.size) &&
+      typeof skill.file === 'string' && skill.file.endsWith(RESOURCE_FILE_SUFFIX) &&
+      typeof skill.sha256 === 'string' && Number.isFinite(skill.size) &&
       Number.isInteger(skill.version) && skill.loading === 'on-demand');
 }
 
@@ -83,7 +89,7 @@ export class RemoteBuiltinSkillStore {
     const settings = this.settingsStore.load();
     const entries = this.manifest?.skills ?? REMOTE_BUILTIN_SKILLS.map(skill => ({
       ...skill,
-      file: `${skill.id}.zip`,
+      file: `${skill.id}${RESOURCE_FILE_SUFFIX}`,
       loading: 'on-demand' as const,
       sha256: '',
       size: 0,
@@ -91,7 +97,7 @@ export class RemoteBuiltinSkillStore {
     }));
     return entries.map(entry => {
       const cached = settings.builtinSkillPackages[entry.id];
-      const current = cached && (!entry.sha256 || cached.sha256 === entry.sha256);
+      const current = cached && usesCurrentResourceSuffix(cached.url) && (!entry.sha256 || cached.sha256 === entry.sha256);
       return {
         ...entry,
         cached: Boolean(cached),
@@ -158,7 +164,8 @@ export class RemoteBuiltinSkillStore {
   private async loadOrDownload(descriptor: RemoteSkillManifestEntry, force: boolean): Promise<AgentSkill> {
     const settings = this.settingsStore.load();
     const cached = settings.builtinSkillPackages[descriptor.id];
-    if (!force && cached?.protocolVersion === SUPPORTED_RESOURCE_PROTOCOL) {
+    const currentCache = cached?.protocolVersion === SUPPORTED_RESOURCE_PROTOCOL && usesCurrentResourceSuffix(cached.url);
+    if (!force && currentCache) {
       try {
         const bytes = await this.client.download(cached.url);
         if (await sha256(bytes) === descriptor.sha256) return this.parse(descriptor, bytes);
@@ -172,7 +179,7 @@ export class RemoteBuiltinSkillStore {
       response = await fetch(sourceUrl, { cache: 'no-store' });
     } catch (error) {
       // 新资源失败时，协议兼容的旧包仍可继续使用。
-      if (cached?.protocolVersion === SUPPORTED_RESOURCE_PROTOCOL) {
+      if (currentCache) {
         try {
           return this.parse(descriptor, await this.client.download(cached.url), true);
         } catch { /* 使用原始下载错误。 */ }
@@ -185,7 +192,7 @@ export class RemoteBuiltinSkillStore {
       throw new Error(`内置Skill下载校验失败：${sourceUrl}`);
     }
     const skill = this.parse(descriptor, bytes);
-    const name = `DreamCreator--Resource--BuiltinSkill--${safeId(descriptor.id)}--${descriptor.sha256.slice(0, 12)}.zip`;
+    const name = `DreamCreator--Resource--BuiltinSkill--${safeId(descriptor.id)}--${descriptor.sha256.slice(0, 12)}${RESOURCE_FILE_SUFFIX}`;
     const url = await this.client.upload(name, bytes);
     const next = this.settingsStore.load();
     const previous = next.builtinSkillPackages[descriptor.id];

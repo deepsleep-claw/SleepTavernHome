@@ -76,7 +76,8 @@ export async function buildDreamCardAgentResources() {
     if (!files['SKILL.md']) throw new Error(`远程Skill缺少SKILL.md：${id}`);
     const metadata = frontmatter(files['SKILL.md'], id);
     const bytes = deterministicZip(files);
-    const file = `${id}.zip`;
+    // 包体仍是确定性 ZIP，只使用自定义复合后缀，避免下载管理器按 .zip 自动接管运行时请求。
+    const file = `${id}.zip.ds`;
     await writeFile(path.join(OUTPUT_ROOT, file), bytes);
     skills.push({
       description: metadata.description,
