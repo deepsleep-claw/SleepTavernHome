@@ -33,12 +33,17 @@ export function createCharacterRunnerTools(
       definition: tool({
         description:
           '全局会话中的角色导航工具。可列出角色、查看当前角色、按稳定avatar id打开角色，或关闭当前聊天。角色工作区和绑定世界书会随之动态挂载或卸载。',
-        inputSchema: z.discriminatedUnion('action', [
-          z.object({ action: z.literal('list'), query: z.string().optional() }),
-          z.object({ action: z.literal('get_active') }),
-          z.object({ action: z.literal('open'), characterId: z.string().min(1) }),
-          z.object({ action: z.literal('close') }),
-        ]),
+        inputSchema: z
+          .object({
+            action: z.enum(['list', 'get_active', 'open', 'close']),
+            characterId: z.string().min(1).optional().describe('action=open时必填的稳定avatar id'),
+            query: z.string().optional().describe('action=list时可选的名称或id筛选词'),
+          })
+          .superRefine((value, context) => {
+            if (value.action === 'open' && !value.characterId) {
+              context.addIssue({ code: 'custom', message: 'open需要characterId。', path: ['characterId'] });
+            }
+          }),
       }),
       execute: async input => {
         const value = input as {

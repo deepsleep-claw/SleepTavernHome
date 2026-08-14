@@ -119,15 +119,12 @@ export function createProjectRunnerTools(
       },
       definition: tool({
         description: '检查或编译/files、/character/files中的HTML工程。check只检查；compile写入目标正则作用域。',
-        inputSchema: z.discriminatedUnion('action', [
-          z.object({ action: z.literal('check'), project: projectPathSchema }),
-          z.object({
-            action: z.literal('compile'),
-            overwrite: z.boolean().optional(),
-            project: projectPathSchema,
-            scope: z.enum(['character', 'preset-current', 'global']).optional(),
-          }),
-        ]),
+        inputSchema: z.object({
+          action: z.enum(['check', 'compile']),
+          overwrite: z.boolean().optional().describe('compile时是否覆盖目标作用域中最后一个同名正则'),
+          project: projectPathSchema,
+          scope: z.enum(['character', 'preset-current', 'global']).optional().describe('compile时的目标作用域'),
+        }),
       }),
       execute: async (input, toolCallId, context) => {
         const { action, ...payload } = input as Record<string, unknown> & { action: 'check' | 'compile' };

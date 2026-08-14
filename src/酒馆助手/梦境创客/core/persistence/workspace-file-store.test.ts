@@ -33,6 +33,7 @@ describe('DreamCreatorWorkspaceFileStore', () => {
     expect(first.url).toBe(alias.url);
     expect(client.uploadedNames).toHaveLength(2);
     expect(client.uploadedNames.every(name => name.startsWith('DreamCreator--File--role--'))).toBe(true);
+    expect(client.uploadedNames.every(name => name.endsWith('.bin'))).toBe(true);
     expect(renamed.logicalPath).toBe('资料/a (2).bin');
     expect((await store.project('role', 's1')).map(file => file.path).sort()).toEqual([
       '/character/files/资料/a (2).bin',
@@ -98,8 +99,9 @@ describe('DreamCreatorWorkspaceFileStore', () => {
   });
 
   it('HTML工程作为角色文件保存，并且清理缓存不会删除', async () => {
+    const client = new MemoryTavernFileClient();
     const store = new DreamCreatorWorkspaceFileStore(
-      new MemoryTavernFileClient(),
+      client,
       new MemoryAgentSettingsStore(),
       () => 300,
     );
@@ -110,9 +112,18 @@ describe('DreamCreatorWorkspaceFileStore', () => {
       mediaType: 'text/yaml',
       referencedSessionId: 's1',
     });
+    await store.putPersistent({
+      bindingId: 'role',
+      bytes: new TextEncoder().encode('<main>demo</main>'),
+      logicalPath: 'demo/template.html',
+      mediaType: 'text/html',
+      referencedSessionId: 's1',
+    });
+    expect(client.uploadedNames.every(name => name.endsWith('.bin'))).toBe(true);
     expect((await store.project('role', 's1')).map(file => file.path)).toContain('/character/files/demo/project.yaml');
+    expect((await store.project('role', 's1')).map(file => file.path)).toContain('/character/files/demo/template.html');
     expect((await store.project('role', 's2')).map(file => file.path)).toContain('/character/files/demo/project.yaml');
-    expect(store.summaries()[0]).toMatchObject({ persistentBytes: 10 });
+    expect(store.summaries()[0]).toMatchObject({ persistentBytes: 27 });
     await store.clearCache('role');
     expect((await store.project('role', 's3')).map(file => file.path)).toContain('/character/files/demo/project.yaml');
   });

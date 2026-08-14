@@ -11,6 +11,7 @@ describe('playground runner tools', () => {
     const tool = createPlaygroundRunnerTools(repository, { approvalMode: () => 'yolo', prepareRender })
       .find(item => item.name === 'prepare_render')!;
     const result = await tool.execute({
+      backgroundCss: 'background: #101418; color-scheme: dark;',
       data: { theme: 'dark' },
       inputText: 'hello',
       renderer: 'plain-html',
@@ -19,7 +20,11 @@ describe('playground runner tools', () => {
     }, 'render') as { marker: string; renderId: string; sourceHash: string };
     expect(result.marker).toBe(`<dream-render id="${result.renderId}"></dream-render>`);
     expect(result.sourceHash).toHaveLength(64);
-    expect(prepareRender).toHaveBeenCalledWith(expect.objectContaining({ data: { theme: 'dark' }, renderId: result.renderId }));
+    expect(prepareRender).toHaveBeenCalledWith(expect.objectContaining({
+      backgroundCss: 'background: #101418; color-scheme: dark;',
+      data: { theme: 'dark' },
+      renderId: result.renderId,
+    }));
   });
 
   it('tavern环境仅在手动审批模式请求一次确认', async () => {

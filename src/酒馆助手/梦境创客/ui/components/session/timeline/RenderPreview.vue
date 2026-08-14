@@ -17,13 +17,14 @@
       ref="frame"
       :sandbox="preview.renderer === 'tavern-helper' ? 'allow-scripts allow-same-origin allow-forms allow-popups' : 'allow-scripts allow-forms allow-popups'"
       :srcdoc="documentSource"
+      :style="{ height: `${frameHeight}px` }"
       title="梦境创客 HTML 预览"
     ></iframe>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { parse } from 'yaml';
 import { useDreamCardAgent } from '../../../composables/runtime';
 
@@ -33,6 +34,11 @@ const opened = ref(false);
 const documentSource = ref('');
 const error = ref('');
 const frame = ref<HTMLIFrameElement>();
+const frameHeight = ref(96);
+
+const PREVIEW_HEIGHT_MESSAGE = 'dream-creator:render-height';
+const MIN_PREVIEW_HEIGHT = 72;
+const PREVIEW_HEIGHT_PADDING = 4;
 
 const preview = computed(() => state.value.active?.renderPreviews[props.renderId]);
 
@@ -64,6 +70,33 @@ function environmentScript(): string {
   return `<script>Object.defineProperty(window,'__DREAM_CREATOR_RENDER_ENV__',{value:Object.freeze(${json}),writable:false,configurable:false});${'</scr' + 'ipt>'}`;
 }
 
+function backgroundStyle(): string {
+  const declarations = preview.value?.backgroundCss?.trim() || 'background: transparent;';
+  const safeDeclarations = declarations.replace(/<\/style/giu, '<\\/style');
+  return `<style data-dream-creator-background>
+html,body{${safeDeclarations}}
+html{scrollbar-width:thin;scrollbar-color:rgba(127,127,127,.58) transparent}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{min-height:28px;border:2px solid transparent;border-radius:999px;background:rgba(127,127,127,.58);background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:rgba(127,127,127,.78);background-clip:content-box}
+</style>`;
+}
+
+function autoHeightScript(): string {
+  const renderId = JSON.stringify(preview.value!.renderId);
+  const messageType = JSON.stringify(PREVIEW_HEIGHT_MESSAGE);
+  return `<script>(()=>{let queued=false;const report=()=>{if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;const body=document.body;if(!body)return;const style=getComputedStyle(body);const margins=(parseFloat(style.marginTop)||0)+(parseFloat(style.marginBottom)||0);const rect=body.getBoundingClientRect();const height=Math.max(body.scrollHeight,body.offsetHeight,Math.ceil(rect.height+margins));parent.postMessage({type:${messageType},renderId:${renderId},height},'*')})};const setup=()=>{report();if(typeof ResizeObserver!=='undefined')new ResizeObserver(report).observe(document.body);new MutationObserver(report).observe(document.documentElement,{attributes:true,childList:true,subtree:true,characterData:true});document.fonts?.ready?.then(report).catch(()=>{})};document.readyState==='loading'?addEventListener('DOMContentLoaded',setup,{once:true}):setup();addEventListener('load',report)})();${'</scr' + 'ipt>'}`;
+}
+
+function receiveHeight(event: MessageEvent) {
+  if (event.source !== frame.value?.contentWindow) return;
+  const value = event.data as { height?: unknown; renderId?: unknown; type?: unknown } | null;
+  if (value?.type !== PREVIEW_HEIGHT_MESSAGE || value.renderId !== preview.value?.renderId) return;
+  if (typeof value.height !== 'number' || !Number.isFinite(value.height)) return;
+  frameHeight.value = Math.max(MIN_PREVIEW_HEIGHT, Math.ceil(value.height) + PREVIEW_HEIGHT_PADDING);
+}
+
 async function open() {
   const value = preview.value;
   if (!value) return;
@@ -81,7 +114,8 @@ async function open() {
       }
       html = value.inputText.replace(literalRegex(regex.find_regex), regex.replace_string);
     }
-    documentSource.value = `<!doctype html><html><head><meta charset="utf-8">${environmentScript()}</head><body>${html}</body></html>`;
+    frameHeight.value = 96;
+    documentSource.value = `<!doctype html><html><head><meta charset="utf-8">${environmentScript()}${backgroundStyle()}${autoHeightScript()}</head><body>${html}</body></html>`;
     opened.value = true;
   } catch (caught) {
     error.value = caught instanceof Error ? caught.message : String(caught);
@@ -91,10 +125,13 @@ async function open() {
 function close() {
   opened.value = false;
   documentSource.value = '';
+  frameHeight.value = 96;
   if (frame.value) frame.value.srcdoc = '';
 }
 
+onMounted(() => window.addEventListener('message', receiveHeight));
 onBeforeUnmount(close);
+onBeforeUnmount(() => window.removeEventListener('message', receiveHeight));
 </script>
 
 <style lang="scss">
@@ -119,9 +156,10 @@ onBeforeUnmount(close);
 .dca-render-preview iframe {
   display: block;
   width: 100%;
-  height: min(32rem, 60vh);
+  min-height: 4.5rem;
+  max-height: min(32rem, 60vh);
   border: 0;
   border-top: 1px solid var(--dca-border);
-  background: white;
+  background: transparent;
 }
 </style>

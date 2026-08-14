@@ -105,6 +105,20 @@ async function refreshRegexDisplay(): Promise<void> {
   await context.eventSource.emit(context.eventTypes.CHAT_CHANGED, context.chatId);
 }
 
+function allowCurrentCharacterRegexes(): void {
+  const context = SillyTavern;
+  const avatar = (getCharData('current') as RawCharacterData | null)?.avatar;
+  if (!avatar) return;
+
+  const settings = context.extensionSettings as typeof context.extensionSettings & {
+    character_allowed_regex?: string[];
+  };
+  settings.character_allowed_regex ??= [];
+  if (!settings.character_allowed_regex.includes(avatar)) {
+    settings.character_allowed_regex.push(avatar);
+  }
+}
+
 async function saveRawCharacter(character: RawCharacterData): Promise<void> {
   const raw = klona(character);
   delete raw.json_data;
@@ -202,6 +216,7 @@ export function createGlobalTavernBridge(): TavernBridge {
         raw.data.extensions ??= {};
         raw.data.extensions.regex_scripts = value;
         await saveRawCharacter(raw);
+        if (value.length > 0) allowCurrentCharacterRegexes();
       } else if (scope === 'global') {
         context.extensionSettings.regex = value;
       } else {

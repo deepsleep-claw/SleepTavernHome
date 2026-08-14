@@ -5,11 +5,19 @@ import { FakeTavernBridge } from './test-bridge';
 const calls = {
   getCharacters: vi.fn(async () => undefined),
   getRequestHeaders: vi.fn(() => ({ 'Content-Type': 'application/json', 'X-CSRF-TOKEN': 'csrf' })),
+  saveSettingsDebounced: vi.fn(async () => undefined),
 };
 
 describe('global Tavern bridge', () => {
   beforeEach(() => {
-    vi.stubGlobal('SillyTavern', { ...calls, groupId: '' });
+    vi.stubGlobal('SillyTavern', {
+      ...calls,
+      chatId: 'chat',
+      eventSource: { emit: vi.fn(async () => undefined) },
+      eventTypes: { CHAT_CHANGED: 'chat-changed' },
+      extensionSettings: { character_allowed_regex: [] },
+      groupId: '',
+    });
     vi.stubGlobal('getCharacter', vi.fn(async () => ({})));
     vi.stubGlobal('getCurrentCharacterName', vi.fn(() => '角色'));
     vi.stubGlobal('getCurrentCharacterId', vi.fn(() => 'avatar.png'));
@@ -130,5 +138,23 @@ describe('global Tavern bridge', () => {
     expect(payload.data.system_prompt).toBeUndefined();
     expect(payload.tags).toEqual(['v1']);
     expect(payload.data.alternate_greetings).toBeUndefined();
+  });
+
+  it('写入角色正则前沿用酒馆原生编辑器语义授权当前角色，避免误触发导入提示', async () => {
+    const bridge = createGlobalTavernBridge();
+
+    await bridge.replaceRawRegexes('character', [
+      {
+        disabled: false,
+        findRegex: '/demo/u',
+        id: 'demo',
+        placement: [2],
+        replaceString: 'demo',
+        scriptName: '测试正则',
+      },
+    ]);
+
+    expect(SillyTavern.extensionSettings.character_allowed_regex).toEqual(['avatar.png']);
+    expect(SillyTavern.eventSource.emit).toHaveBeenCalledWith('chat-changed', 'chat');
   });
 });

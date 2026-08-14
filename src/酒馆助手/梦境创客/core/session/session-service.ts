@@ -98,6 +98,27 @@ type SessionServiceOptions = {
 };
 
 const DEFAULT_SESSION_TITLE = '新的创作会话';
+
+const RUN_SCOPED_UI_KINDS = new Set<SessionUiItem['kind']>(['assistant', 'guidance', 'reasoning', 'tool']);
+
+/**
+ * 主动停止曾会过早清除 activeCheckpointId，随后恢复生成的过程项因此失去轮次归属。
+ * 这些项仍然严格位于对应用户消息之后，可以在载入时无歧义地补回最近用户轮次的 checkpointId。
+ */
+function repairMissingRunCheckpointIds(items: SessionUiItem[]): SessionUiItem[] {
+  const repaired = klona(items);
+  let currentCheckpointId: string | undefined;
+  for (const item of repaired) {
+    if (item.kind === 'user') {
+      currentCheckpointId = item.checkpointId;
+      continue;
+    }
+    if (!item.checkpointId && currentCheckpointId && RUN_SCOPED_UI_KINDS.has(item.kind)) {
+      item.checkpointId = currentCheckpointId;
+    }
+  }
+  return repaired;
+}
 const STREAMING_UPDATE_INTERVAL_MS = 80;
 
 function isNonCharacterResourcePath(path: string): boolean {
@@ -266,7 +287,7 @@ export class CardAgentSessionService {
     this.events = klona(restored?.runtime.events ?? []);
     this.lastError = restored?.runtime.lastError;
     this.status = restored?.runtime.status ?? 'idle';
-    this.ui = klona(restored?.runtime.ui ?? []);
+    this.ui = repairMissingRunCheckpointIds(restored?.runtime.ui ?? []);
     this.warnings = [...(restored?.runtime.warnings ?? [])];
     this.repository = undefined;
   }
@@ -619,8 +640,8 @@ export class CardAgentSessionService {
       this.modelMessages = klona(state.messages);
       this.status = state.status;
       this.lastError = state.failure;
-      if (state.status === 'completed' || state.status === 'stopped') {
-        await this.completeRealtimeTurn(state.status === 'stopped');
+      if (state.status === 'completed') {
+        await this.completeRealtimeTurn();
       }
       await this.persist();
       return this.view();
@@ -640,8 +661,8 @@ export class CardAgentSessionService {
       this.modelMessages = klona(state.messages);
       this.status = state.status;
       this.lastError = state.failure;
-      if ((state.status === 'completed' || state.status === 'stopped') && this.repository) {
-        await this.completeRealtimeTurn(state.status === 'stopped');
+      if (state.status === 'completed' && this.repository) {
+        await this.completeRealtimeTurn();
       }
       await this.persist();
       return this.view();
@@ -1253,13 +1274,13 @@ export class CardAgentSessionService {
     return this.modelMessages.length > this.headerMessageCount;
   }
 
-  private async completeRealtimeTurn(stopped: boolean): Promise<void> {
+  private async completeRealtimeTurn(): Promise<void> {
     if (!this.activeCheckpointId) throw new Error('本轮完成时缺少操作边界。');
     const current = await this.adapter.read();
     this.assertBinding(current);
     this.activeCheckpointId = undefined;
     this.runModelSelection = undefined;
-    this.status = stopped ? 'stopped' : 'completed';
+    this.status = 'completed';
     this.lastError = undefined;
     this.repository = await this.createRepository(current);
     this.manualEditGroup = undefined;

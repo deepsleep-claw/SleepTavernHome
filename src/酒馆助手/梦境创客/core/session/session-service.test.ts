@@ -310,4 +310,92 @@ describe('card agent realtime session service', () => {
     expect(executor.requests[0].modelSettings).toMatchObject({ reasoningEffort: 'high', webSearch: true });
     expect(service.view().modelControls).toEqual({ reasoningEffort: 'high', webSearch: true });
   });
+
+  it('主动停止后保留同一操作边界，恢复产生的过程项仍归入原轮次', async () => {
+    const persisted: PersistedSessionRuntime[] = [];
+    let stepIndex = 0;
+    const executor: ModelStepExecutor = {
+      execute: request => {
+        stepIndex += 1;
+        if (stepIndex === 1) {
+          return new Promise((_resolve, reject) => {
+            request.abortSignal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          });
+        }
+        if (stepIndex === 2) {
+          request.onReasoningDelta?.('恢复后的思考');
+          return Promise.resolve(step([writeDescription('恢复后写入', 'resumed-write')]));
+        }
+        return Promise.resolve(step([], '恢复完成'));
+      },
+    };
+    const service = await createService({
+      executor,
+      mode: 'full',
+      onPersist: async runtime => {
+        persisted.push(structuredClone(runtime));
+      },
+    });
+
+    const sending = service.send('先停止再继续', 'stopped-user');
+    await vi.waitFor(() => expect(stepIndex).toBe(1));
+    service.stop();
+    const stopped = await sending;
+    const checkpointId = stopped.ui.find(item => item.id === 'stopped-user')?.checkpointId;
+    expect(checkpointId).toBeTruthy();
+    expect(stopped.status).toBe('stopped');
+    expect(persisted.at(-1)?.activeCheckpointId).toBe(checkpointId);
+
+    const completed = await service.resume();
+    expect(completed.status).toBe('completed');
+    expect(
+      completed.ui
+        .filter(item => ['assistant', 'reasoning', 'tool'].includes(item.kind))
+        .every(item => item.checkpointId === checkpointId),
+    ).toBe(true);
+    expect(completed.ui.find(item => item.toolCallId === 'resumed-write')).toMatchObject({
+      checkpointId,
+      status: 'completed',
+    });
+    expect(persisted.at(-1)?.activeCheckpointId).toBeUndefined();
+  });
+
+  it('载入会话时把停止恢复后遗失归属的过程项补回最近用户轮次', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    let runtime: PersistedSessionRuntime | undefined;
+    const service = await createService({
+      adapter,
+      executor: new QueueExecutor([step([], '第一轮完成')]),
+      onPersist: async value => {
+        runtime = structuredClone(value);
+      },
+    });
+    await service.send('第一轮', 'first-user');
+    if (!runtime) throw new Error('测试会话没有持久化。');
+    const firstCheckpointId = runtime.ui.find(item => item.id === 'first-user')?.checkpointId;
+    runtime.ui
+      .filter(item => item.kind === 'assistant' || item.kind === 'reasoning' || item.kind === 'tool')
+      .forEach(item => delete item.checkpointId);
+    runtime.ui.push(
+      { at: 20, checkpointId: 'turn:second', content: '第二轮', id: 'second-user', kind: 'user' },
+      { at: 21, content: '第二轮回复', id: 'second-assistant', kind: 'assistant' },
+      { at: 22, content: '独立状态', id: 'standalone-status', kind: 'status', status: 'completed' },
+    );
+
+    const restored = await CardAgentSessionService.restore(
+      {
+        adapter,
+        agentConfiguration: defaultBuiltinAgentConfiguration(),
+        executor: new QueueExecutor([]),
+        lock: new GlobalAgentTaskLock(),
+      },
+      runtime,
+    );
+    const restoredUi = restored.view().ui;
+    expect(restoredUi.find(item => item.kind === 'assistant' && item.id !== 'second-assistant')?.checkpointId).toBe(
+      firstCheckpointId,
+    );
+    expect(restoredUi.find(item => item.id === 'second-assistant')?.checkpointId).toBe('turn:second');
+    expect(restoredUi.find(item => item.id === 'standalone-status')?.checkpointId).toBeUndefined();
+  });
 });

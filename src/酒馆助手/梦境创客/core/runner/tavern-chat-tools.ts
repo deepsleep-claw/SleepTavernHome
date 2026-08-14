@@ -250,12 +250,24 @@ export function createTavernChatRunnerTools(
     definition: tool({
       description:
         '管理酒馆聊天。list列出；create新建并切换；switch切换；truncate按酒馆语义从指定0基楼层起删除该楼层及之后全部消息。',
-      inputSchema: z.discriminatedUnion('action', [
-        z.object({ action: z.literal('list') }),
-        z.object({ action: z.literal('create'), name: z.string().min(1) }),
-        z.object({ action: z.literal('switch'), chatId: z.string().min(1) }),
-        z.object({ action: z.literal('truncate'), chatId: z.string().min(1), fromMessageId: z.number().int().min(0) }),
-      ]),
+      inputSchema: z
+        .object({
+          action: z.enum(['list', 'create', 'switch', 'truncate']),
+          chatId: z.string().min(1).optional().describe('switch、truncate时必填'),
+          fromMessageId: z.number().int().min(0).optional().describe('truncate时必填的0基楼层'),
+          name: z.string().min(1).optional().describe('create时必填且不可重名的聊天名称'),
+        })
+        .superRefine((value, context) => {
+          if (value.action === 'create' && !value.name) {
+            context.addIssue({ code: 'custom', message: 'create需要name。', path: ['name'] });
+          }
+          if ((value.action === 'switch' || value.action === 'truncate') && !value.chatId) {
+            context.addIssue({ code: 'custom', message: `${value.action}需要chatId。`, path: ['chatId'] });
+          }
+          if (value.action === 'truncate' && value.fromMessageId === undefined) {
+            context.addIssue({ code: 'custom', message: 'truncate需要fromMessageId。', path: ['fromMessageId'] });
+          }
+        }),
     }),
     execute: async (input, toolCallId, context) => {
       const { action, ...payload } = input as Record<string, unknown> & { action: keyof typeof manageTargets };
@@ -279,14 +291,17 @@ export function createTavernChatRunnerTools(
     definition: tool({
       description:
         '操作酒馆生成。mode=generate时为最新user楼层生成回复；mode=swipe时选择现有0基Swipe，或用target=generate生成新Swipe。',
-      inputSchema: z.discriminatedUnion('mode', [
-        z.object({ chatId: z.string().min(1), mode: z.literal('generate') }),
-        z.object({
+      inputSchema: z
+        .object({
           chatId: z.string().min(1),
-          mode: z.literal('swipe'),
-          target: z.union([z.number().int().min(0), z.literal('generate')]),
+          mode: z.enum(['generate', 'swipe']),
+          target: z.union([z.number().int().min(0), z.literal('generate')]).optional().describe('mode=swipe时必填'),
+        })
+        .superRefine((value, context) => {
+          if (value.mode === 'swipe' && value.target === undefined) {
+            context.addIssue({ code: 'custom', message: 'swipe需要target。', path: ['target'] });
+          }
         }),
-      ]),
     }),
     execute: async (input, toolCallId, context) => {
       const value = input as { chatId: string; mode: 'generate' | 'swipe'; target?: number | 'generate' };

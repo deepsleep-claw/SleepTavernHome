@@ -4,6 +4,7 @@ import { isBinaryWorkspaceFile, type WorkspaceRepository } from '../workspace/ty
 import type { RunnerTool, ToolConfirmation } from './tools';
 
 export type PreparedRender = {
+  backgroundCss?: string;
   createdAt: number;
   data?: unknown;
   inputText: string;
@@ -183,6 +184,8 @@ export function createPlaygroundRunnerTools(repository: WorkspaceRepository, opt
         description:
           '准备一个会话内HTML预览。之后在助手回复中原样输出 <dream-render id="返回的renderId"></dream-render>，完成回复后界面才会展开。',
         inputSchema: z.object({
+          backgroundCss: z.string().max(20_000).optional()
+            .describe('应用到预览文档html与body的背景CSS声明，例如 background: #101418; color-scheme: dark；默认透明'),
           data: z.unknown().optional().describe('注入预览环境的JSON数据，最大1MB'),
           inputText: z.string().optional().describe('正则输入文本；普通HTML也可作为预览环境参数'),
           renderer: z.enum(['plain-html', 'tavern-helper']),

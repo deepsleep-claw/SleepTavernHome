@@ -127,6 +127,26 @@ const bindingSchema = z
     '至少提供一项绑定操作。',
   );
 
+// OpenAI/DeepSeek 的 function tools 要求参数 Schema 顶层明确为 object。
+// z.discriminatedUnion 会生成顶层 anyOf，部分 Responses 实现会在请求入口直接拒绝。
+const manageWorldbookSchema = z
+  .object({
+    action: z.enum(['mount', 'unmount', 'create', 'clone', 'set_binding']),
+    binding: bindingSchema.optional().describe('action=set_binding时必填'),
+    name: z.string().min(1).optional().describe('mount、unmount、create时为世界书名；clone时为副本名称'),
+    source: z.string().min(1).optional().describe('action=clone时必填，为源世界书名称'),
+  })
+  .superRefine((value, context) => {
+    if (value.action === 'set_binding') {
+      if (!value.binding) context.addIssue({ code: 'custom', message: 'set_binding需要binding。', path: ['binding'] });
+      return;
+    }
+    if (!value.name) context.addIssue({ code: 'custom', message: `${value.action}需要name。`, path: ['name'] });
+    if (value.action === 'clone' && !value.source) {
+      context.addIssue({ code: 'custom', message: 'clone需要source。', path: ['source'] });
+    }
+  });
+
 export function createWorldbookRunnerTools(
   repository: MemoryWorkspaceRepository,
   bridge: TavernBridge,
@@ -337,13 +357,7 @@ export function createWorldbookRunnerTools(
     },
     definition: tool({
       description: '管理世界书生命周期和绑定。用action明确选择挂载、卸载、创建、复制或修改绑定。',
-      inputSchema: z.discriminatedUnion('action', [
-        z.object({ action: z.literal('mount'), name: z.string().min(1) }),
-        z.object({ action: z.literal('unmount'), name: z.string().min(1) }),
-        z.object({ action: z.literal('create'), name: z.string().min(1) }),
-        z.object({ action: z.literal('clone'), name: z.string().min(1), source: z.string().min(1) }),
-        z.object({ action: z.literal('set_binding'), binding: bindingSchema }),
-      ]),
+      inputSchema: manageWorldbookSchema,
     }),
     execute: async (input, toolCallId, context) => {
       const { action, ...payload } = input as Record<string, unknown> & { action: keyof typeof actionTargets };

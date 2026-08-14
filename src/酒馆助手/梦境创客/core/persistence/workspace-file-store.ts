@@ -31,11 +31,6 @@ function safe(value: string, limit = 80): string {
   return value.replace(/[^a-zA-Z\d_-]/gu, '_').slice(0, limit) || 'unknown';
 }
 
-function extension(name: string): string {
-  const matched = /(?:^|\/)(?:[^/]*?)(\.[a-zA-Z\d]{1,12})$/u.exec(name);
-  return matched?.[1]?.toLocaleLowerCase() ?? '.bin';
-}
-
 function normalizedRelativePath(value: string): string {
   const normalized = normalizeWorkspacePath(`/${value.replace(/^\/+/, '')}`);
   if (normalized === '/') throw new Error('文件路径不能为空。');
@@ -440,7 +435,7 @@ export class DreamCreatorWorkspaceFileStore {
     const name = targetPath.split('/').at(-1) ?? 'file';
     const physicalName = `DreamCreator--${input.scope.endsWith('-persistent') ? 'File' : 'Temp'}--${safe(
       input.scope.endsWith('-temp') ? input.sessionId ?? 'session' : input.bindingId,
-    )}--${safe(fileId)}${extension(targetPath)}`;
+    )}--${safe(fileId)}.bin`;
     let uploadedUrl: string | undefined;
     const url = identical?.url ?? (uploadedUrl = await this.client.upload(physicalName, bytes));
     const reference: DreamCreatorWorkspaceFileReference = {
