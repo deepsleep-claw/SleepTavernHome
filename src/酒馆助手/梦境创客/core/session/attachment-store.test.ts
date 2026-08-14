@@ -17,7 +17,7 @@ describe('ExternalSessionAttachmentStore', () => {
       { data: 'AQID', filename: 'card.png', mediaType: 'image/png', size: 3 },
     ]);
     expect(attachment.data).toBeUndefined();
-    expect(attachment.logicalPath).toBe('/files/card.png');
+    expect(attachment.logicalPath).toBe('/character/files/card.png');
     const persisted: ModelMessage[] = [
       { content: userContentWithAttachments('看看', [attachment]), role: 'user' },
     ];
@@ -61,8 +61,8 @@ describe('ExternalSessionAttachmentStore', () => {
     expect(second).toEqual(first);
     expect(files.listReferences('role')).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ scope: 'persistent' }),
-        expect.objectContaining({ mediaType: 'image/webp', scope: 'temp', sourceFileId: attachment.fileId }),
+        expect.objectContaining({ scope: 'character-persistent' }),
+        expect.objectContaining({ mediaType: 'image/webp', scope: 'character-temp', sourceFileId: attachment.fileId }),
       ]),
     );
   });

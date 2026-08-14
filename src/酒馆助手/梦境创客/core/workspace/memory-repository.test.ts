@@ -146,20 +146,20 @@ describe('MemoryWorkspaceRepository', () => {
 
   it('替换外部投影时不产生Working Copy变更', async () => {
     const workspace = new MemoryWorkspaceRepository({ files });
-    workspace.replaceProjection('/library/worldbooks/资料', [
+    workspace.replaceProjection('/worldbooks/资料', [
       {
         content: 'name: 资料',
         mediaType: 'text/yaml',
-        path: '/library/worldbooks/资料/book.yaml',
+        path: '/worldbooks/资料/book.yaml',
         readonly: true,
         resourceId: 'reference:book',
       },
     ]);
-    expect((await workspace.read('/library/worldbooks/资料/book.yaml')).content).toBe('name: 资料');
+    expect((await workspace.read('/worldbooks/资料/book.yaml')).content).toBe('name: 资料');
     expect(workspace.changes()).toEqual([]);
 
-    workspace.replaceProjection('/library/worldbooks/资料', []);
-    await expect(workspace.read('/library/worldbooks/资料/book.yaml')).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    workspace.replaceProjection('/worldbooks/资料', []);
+    await expect(workspace.read('/worldbooks/资料/book.yaml')).rejects.toMatchObject({ code: 'NOT_FOUND' });
     expect(workspace.changes()).toEqual([]);
   });
 

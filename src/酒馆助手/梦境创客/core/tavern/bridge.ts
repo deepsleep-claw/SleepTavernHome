@@ -64,6 +64,7 @@ export type TavernCharacterSummary = {
 };
 
 export interface TavernBridge {
+  closeCurrentChat(): Promise<void>;
   createWorldbook(name: string): Promise<void>;
   createWorldbookEntries(name: string, entries: Partial<TavernWorldbookEntry>[]): Promise<TavernWorldbookEntry[]>;
   deleteWorldbook(name: string): Promise<void>;
@@ -129,6 +130,19 @@ async function saveRawCharacter(character: RawCharacterData): Promise<void> {
 
 export function createGlobalTavernBridge(): TavernBridge {
   return {
+    closeCurrentChat: async () => {
+      if (typeof document === 'undefined') throw new Error('当前环境无法关闭酒馆聊天。');
+      const button = [...document.querySelectorAll<HTMLElement>('#option_close_chat')].find(
+        item => item.offsetParent !== null,
+      );
+      if (!button) throw new Error('酒馆没有提供可用的关闭聊天入口。');
+      button.click();
+      const started = Date.now();
+      while (getCurrentCharacterId() !== null && Date.now() - started < 5_000) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      if (getCurrentCharacterId() !== null) throw new Error('酒馆未能关闭当前聊天；请先停止正在进行的生成。');
+    },
     createWorldbook: async name => {
       if (!(await createWorldbook(name))) throw new Error(`世界书已存在：${name}`);
     },

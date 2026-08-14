@@ -189,6 +189,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
     .includes('@obfuscate');
   const script_filepath = path.parse(entry.script);
 
+  const is_dream_card_agent = entry.script.replaceAll('\\', '/').endsWith('/酒馆助手/梦境创客/index.ts');
   return (_env, argv) => ({
     experiments: {
       outputModule: true,
@@ -468,6 +469,33 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
           __VUE_PROD_DEVTOOLS__: process.env.CI !== 'true',
           __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: false,
         }),
+        ...(is_dream_card_agent
+          ? [
+              {
+                apply(compiler: webpack.Compiler) {
+                  const skillRoot = path.join(
+                    import.meta.dirname,
+                    'src/酒馆助手/梦境创客/内置资源/Skills',
+                  );
+                  compiler.hooks.afterCompile.tap('dream_card_agent_resource_watch', compilation => {
+                    compilation.contextDependencies.add(skillRoot);
+                    compilation.contextDependencies.add(path.join(import.meta.dirname, '@types'));
+                  });
+                  compiler.hooks.afterEmit.tapPromise('dream_card_agent_resources', async () => {
+                    await new Promise<void>((resolve, reject) => {
+                      const child = exec(
+                        'node util/build_dream_card_agent_resources.mjs',
+                        { cwd: import.meta.dirname },
+                        error => (error ? reject(error) : resolve()),
+                      );
+                      child.stdout?.pipe(process.stdout);
+                      child.stderr?.pipe(process.stderr);
+                    });
+                  });
+                },
+              },
+            ]
+          : []),
       )
       .concat(
         should_obfuscate

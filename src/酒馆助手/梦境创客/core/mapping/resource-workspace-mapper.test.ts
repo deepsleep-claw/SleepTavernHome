@@ -66,7 +66,7 @@ describe('tavern resource workspace mapper', () => {
     const base = transactionState();
     const repository = new MemoryWorkspaceRepository({ files: projectTavernResources(base.resources) });
     await repository.write(
-      '/tavern-helper-scripts/character/scripts/new-script/info.yaml',
+      '/scripts/character/scripts/new-script/info.yaml',
       serializeYaml({
         button: { buttons: [], enabled: false },
         enabled: false,

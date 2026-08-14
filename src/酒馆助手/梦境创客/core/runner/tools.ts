@@ -10,6 +10,7 @@ import { applyUnifiedPatch, createUnifiedPatch } from '../workspace/unified-patc
 import { maskSecretsForModel, restoreSecretsFromModel } from '../workspace/secret-protection';
 import { isBinaryWorkspaceFile, WorkspaceError, type WorkspaceRepository } from '../workspace/types';
 import { richToolOutput } from './tool-output';
+import { globToRegex } from '../workspace/search';
 
 export type ToolConfirmation = {
   description: string;
@@ -31,6 +32,96 @@ export type RunnerTool = {
 const pathSchema = z.string().min(1).describe('工作区内的POSIX路径');
 const DEFAULT_READ_LIMIT = 1_000;
 const MAX_READ_CHARACTERS = 100_000;
+const DEFAULT_LIST_RESULTS = 500;
+const MAX_LIST_RESULTS = 2_000;
+const MAX_LIST_DEPTH = 10;
+
+type ListPathInput = {
+  depth?: number;
+  glob?: string;
+  kind?: 'all' | 'directories' | 'files';
+  maxResults?: number;
+  path: string;
+  recursive?: boolean;
+};
+
+async function listPath(repository: WorkspaceRepository, input: ListPathInput) {
+  try {
+    const file = await repository.read(input.path);
+    return {
+      entries: [{
+        path: file.path,
+        readonly: file.readonly,
+        size: file.external?.size ?? file.skillResource?.size ?? new TextEncoder().encode(file.content).byteLength,
+        type: 'file',
+      }],
+      path: file.path,
+      truncated: false,
+      type: 'file',
+    };
+  } catch (error) {
+    if (!(error instanceof WorkspaceError) || error.code !== 'NOT_FOUND') throw error;
+  }
+
+  const requestedDepth = input.recursive ? (input.depth ?? 2) : 1;
+  const depth = Math.min(MAX_LIST_DEPTH, Math.max(1, requestedDepth));
+  const maxResults = Math.min(MAX_LIST_RESULTS, Math.max(1, input.maxResults ?? DEFAULT_LIST_RESULTS));
+  const pattern = input.glob ? globToRegex(input.glob.replace(/^\/+/, '')) : undefined;
+  const discovered: Array<{ depth: number; kind: 'directory' | 'file'; path: string; readonly: boolean; size?: number }> = [];
+  const queue: Array<{ depth: number; path: string }> = [{ depth: 0, path: input.path }];
+  let truncated = false;
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    const children = await repository.list(current.path);
+    for (const child of children) {
+      if (discovered.length >= MAX_LIST_RESULTS) {
+        truncated = true;
+        queue.length = 0;
+        break;
+      }
+      const item = { depth: current.depth + 1, kind: child.kind, path: child.path, readonly: child.readonly, size: child.size };
+      discovered.push(item);
+      if (child.kind === 'directory' && item.depth < MAX_LIST_DEPTH) queue.push({ depth: item.depth, path: child.path });
+    }
+  }
+
+  const directoryStats = new Map<string, { childCount: number; size: number }>();
+  for (const item of discovered) {
+    if (item.kind === 'directory') directoryStats.set(item.path, { childCount: 0, size: 0 });
+  }
+  for (const item of discovered) {
+    const parent = item.path.slice(0, item.path.lastIndexOf('/')) || '/';
+    const parentStats = directoryStats.get(parent);
+    if (parentStats) parentStats.childCount += 1;
+    if (item.kind !== 'file') continue;
+    for (const [directory, stats] of directoryStats) {
+      if (item.path.startsWith(`${directory}/`)) stats.size += item.size ?? 0;
+    }
+  }
+
+  const kind = input.kind ?? 'all';
+  const entries = discovered
+    .filter(item => item.depth <= depth)
+    .filter(item => kind === 'all' || (kind === 'files' ? item.kind === 'file' : item.kind === 'directory'))
+    .filter(item => !pattern || pattern.test(item.path.replace(/^\/+/, '')))
+    .slice(0, maxResults)
+    .map(item => ({
+      ...(item.kind === 'directory' ? directoryStats.get(item.path) : { size: item.size ?? 0 }),
+      depth: item.depth,
+      path: item.path,
+      readonly: item.readonly,
+      type: item.kind,
+    }));
+  if (entries.length < discovered.filter(item => item.depth <= depth).length) truncated = true;
+  return {
+    depth,
+    entries,
+    path: input.path,
+    recursive: input.recursive === true,
+    truncated,
+    warning: truncated ? '结果已截断，请缩小路径、Glob或递归深度后继续列出。' : undefined,
+  };
+}
 
 function mutationSummary(repository: WorkspaceRepository, toolCallId: string) {
   const result = repository.mutationResult?.(toolCallId);
@@ -119,15 +210,15 @@ export type WorkspaceRunnerToolOptions = {
 type MutationOperation = 'delete' | 'move' | 'patch' | 'write';
 
 function nonCharacterResourcePath(path: string): boolean {
-  return /^\/(?:regexes|tavern-helper-scripts)\/(?:global|preset-current)(?:\/|$)/u.test(path);
+  return /^\/(?:regexes|scripts)\/(?:global|preset-current)(?:\/|$)/u.test(path);
 }
 
 function characterScriptPath(path: string): boolean {
-  return path.startsWith('/tavern-helper-scripts/character/');
+  return path.startsWith('/scripts/character/');
 }
 
 function chatPath(path: string): boolean {
-  return path.startsWith('/context/chats/');
+  return path.startsWith('/character/chats/');
 }
 
 function chatConfirmation(
@@ -164,7 +255,7 @@ function inherentlyHighRisk(operation: MutationOperation, path: string, input: u
   if (operation === 'delete') {
     return (
       /^\/worldbooks\/[^/]+(?:\/)?$/u.test(path) ||
-      path === '/greetings' ||
+      path === '/character/greetings' ||
       path.startsWith('/files/') ||
       path.startsWith('/skills/user/')
     );
@@ -172,7 +263,7 @@ function inherentlyHighRisk(operation: MutationOperation, path: string, input: u
   if (operation === 'write' && (input as { overwrite?: boolean } | undefined)?.overwrite === true) {
     return (
       path === '/worldbooks/bindings.yaml' ||
-      path === '/greetings/index.yaml' ||
+      path === '/character/greetings/index.yaml' ||
       path.startsWith('/files/') ||
       path.startsWith('/skills/user/') ||
       nonCharacterResourcePath(path)
@@ -225,7 +316,7 @@ async function resourceConfirmation(
   if (nonCharacterResourcePath(path)) {
     if (!options.canWriteNonCharacterResources?.()) {
       throw new Error(
-        'NON_CHARACTER_RESOURCE_WRITE_DISABLED：全局与当前预设的正则/脚本默认只读。请让用户在开发者模式中显式开启危险写入权限。',
+        'NON_CHARACTER_RESOURCE_WRITE_DISABLED：全局与当前预设的正则/脚本默认只读。请让用户在常规设置中显式开启标红的危险写入权限。',
       );
     }
     return { description: `高危非角色资源操作需要确认：${operation} ${path}`, risk: 'high', toolCallId, toolName };
@@ -261,11 +352,19 @@ export function createWorkspaceRunnerTools(
   return [
     {
       definition: tool({
-        description: '列出目录的直接子项。路径使用大小写敏感的POSIX语义。',
-        inputSchema: z.object({ path: pathSchema }),
+        description:
+          '像系统ls/tree一样查看路径。文件路径返回单个文件元信息；目录可列出文件和子目录，并支持递归深度、类型、Glob与结果上限。',
+        inputSchema: z.object({
+          depth: z.number().int().min(1).max(MAX_LIST_DEPTH).optional().describe('递归深度，默认2，最大10'),
+          glob: z.string().min(1).optional().describe('可选路径Glob过滤'),
+          kind: z.enum(['all', 'files', 'directories']).optional().describe('默认all'),
+          maxResults: z.number().int().min(1).max(MAX_LIST_RESULTS).optional().describe('默认500，最大2000'),
+          path: pathSchema,
+          recursive: z.boolean().optional().describe('是否递归列出，默认false'),
+        }),
       }),
-      execute: async input => repository.list((input as { path: string }).path),
-      name: 'list_directory',
+      execute: async input => listPath(repository, input as ListPathInput),
+      name: 'list_path',
       readonly: true,
     },
     {

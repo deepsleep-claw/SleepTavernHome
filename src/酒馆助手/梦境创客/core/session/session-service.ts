@@ -17,6 +17,10 @@ import type {
 import { createWorkspaceRunnerTools, type ToolConfirmation } from '../runner/tools';
 import { createTavernChatRunnerTools } from '../runner/tavern-chat-tools';
 import { createWorldbookRunnerTools } from '../runner/worldbook-tools';
+import { createProjectRunnerTools } from '../runner/project-tools';
+import { createPlaygroundRunnerTools, type PreparedRender } from '../runner/playground-tools';
+import { isAgentToolId } from '../runner/tool-catalog';
+import { createCharacterRunnerTools } from '../runner/character-tools';
 import { createWorkspaceOperationRecord } from '../operations/file-operation';
 import { WorkspaceOperationLog } from '../operations/operation-log';
 import {
@@ -27,6 +31,7 @@ import {
 } from '../operations/operation-replayer';
 import { OperationRecoveryCoordinator, type OperationRecoveryStore } from '../operations/recovery-store';
 import type { AgentSkill } from '../skills/types';
+import type { AgentConfiguration } from '../persistence/builtin-agent';
 import type { CardStateAdapter } from '../transaction/adapter';
 import type { TavernBridge } from '../tavern/bridge';
 import type { TavernChatBridge } from '../tavern/chat-bridge';
@@ -54,6 +59,7 @@ import type {
   SessionLifecycleStatus,
   SessionModelControls,
   SessionMode,
+  SessionScope,
   SessionUiItem,
   SessionView,
 } from './types';
@@ -68,6 +74,7 @@ type SessionServiceOptions = {
   lock?: GlobalAgentTaskLock;
   mode?: SessionMode;
   modelSelection?: ModelSelection;
+  mountedWorldbooks?: Set<string>;
   now?: () => number;
   onPersist?: (runtime: PersistedSessionRuntime) => Promise<void>;
   onSkillsCommit?: (skills: AgentSkill[], previouslyMountedSkillIds: string[]) => Promise<AgentSkill[]>;
@@ -75,8 +82,10 @@ type SessionServiceOptions = {
   operationRecoveryStore?: OperationRecoveryStore;
   preset?: StructuredPreset;
   requestToolApproval?: (request: ToolConfirmation) => Promise<boolean>;
+  resourceBaseUrl?: string;
   scheduleStreamingUpdate?: (callback: () => void) => () => void;
   sessionId?: string;
+  scope?: SessionScope;
   skills?: AgentSkill[];
   tavernBridge?: TavernBridge;
   tavernChatBridge?: TavernChatBridge;
@@ -84,17 +93,19 @@ type SessionServiceOptions = {
   title?: string;
   workspaceFiles?: WorkspaceFile[];
   workspaceStore?: DreamCreatorWorkspaceFileStore;
+  storageBindingId?: () => string;
+  onCharacterChanged?: () => Promise<void>;
 };
 
 const DEFAULT_SESSION_TITLE = '新的创作会话';
 const STREAMING_UPDATE_INTERVAL_MS = 80;
 
 function isNonCharacterResourcePath(path: string): boolean {
-  return /^\/(?:regexes|tavern-helper-scripts)\/(?:global|preset-current)(?:\/|$)/u.test(path);
+  return /^\/(?:regexes|scripts)\/(?:global|preset-current)(?:\/|$)/u.test(path);
 }
 
 function isStoragePath(path: string): boolean {
-  return /^\/(?:files|temp)(?:\/|$)/u.test(path);
+  return /^\/(?:files|temp)(?:\/|$)|^\/character\/(?:files|temp)(?:\/|$)/u.test(path);
 }
 
 function sessionTitleFromMessage(message: string): string {
@@ -124,11 +135,20 @@ function assistantReasoning(messages: ModelMessage[]): string {
     .join('');
 }
 
+function mountConfiguredSkills(configuration: AgentConfiguration, availableSkills: AgentSkill[]): AgentSkill[] {
+  const settings = new Map(configuration.skills.filter(item => item.enabled).map(item => [item.id, item]));
+  return availableSkills.flatMap(skill => {
+    const configured = settings.get(skill.id);
+    return configured ? [{ ...klona(skill), loading: configured.loading }] : [];
+  });
+}
+
 export class CardAgentSessionService {
   readonly bindingId: string;
   readonly characterName: string;
   readonly createdAt: number;
   readonly sessionId: string;
+  readonly scope: SessionScope;
   private activeCheckpointId?: string;
   private agentConfiguration: SessionAgentConfiguration;
   private attachments: Record<string, StoredSessionAttachment>;
@@ -144,10 +164,13 @@ export class CardAgentSessionService {
   private readonly onSkillsCommit?: SessionServiceOptions['onSkillsCommit'];
   private readonly onUpdate?: SessionServiceOptions['onUpdate'];
   private readonly requestToolApproval?: SessionServiceOptions['requestToolApproval'];
+  private readonly resourceBaseUrl?: string;
   private readonly scheduleStreamingUpdate: (callback: () => void) => () => void;
   private readonly tavernBridge?: TavernBridge;
   private readonly tavernChatWorkspace?: TavernChatWorkspace;
   private storageFiles: WorkspaceFile[] = [];
+  private readonly storageBindingId: () => string;
+  private readonly onCharacterChanged?: () => Promise<void>;
   private readonly workspaceStore?: DreamCreatorWorkspaceFileStore;
   private events: RunnerEvent[] = [];
   private headerMessageCount: number;
@@ -159,6 +182,7 @@ export class CardAgentSessionService {
   private modelMessages: ModelMessage[];
   private modelControls: SessionModelControls;
   private modelSelection?: ModelSelection;
+  private readonly mountedWorldbooks: Set<string>;
   private runModelSelection?: ModelSelection;
   private mutationActor: 'agent' | 'user' = 'agent';
   private preset: StructuredPreset;
@@ -171,6 +195,7 @@ export class CardAgentSessionService {
     turnId: string;
   };
   private replayingOperations = false;
+  private renderPreviews: Record<string, PreparedRender> = {};
   private repository?: LiveWorkspaceRepository;
   private runner?: AgentRunner;
   private skills: AgentSkill[];
@@ -189,18 +214,13 @@ export class CardAgentSessionService {
     this.adapter = options.adapter;
     this.attachmentStore = options.attachmentStore;
     this.canWriteNonCharacterResources = options.canWriteNonCharacterResources ?? (() => false);
-    this.agentConfiguration = klona(
-      restored?.runtime.agentConfiguration ??
-        options.agentConfiguration ?? {
-          id: 'agent:legacy',
-          name: '旧版会话配置',
-          presetId: (restored?.runtime.preset ?? options.preset ?? DEFAULT_PRESET).id,
-          skillIds: (restored?.runtime.skills ?? options.skills ?? []).map(skill => skill.id),
-        },
-    );
+    const configuration = restored?.runtime.agentConfiguration ?? options.agentConfiguration;
+    if (!configuration) throw new Error('会话缺少Agent配置；旧版会话不再受支持。');
+    if (restored && restored.runtime.version !== 3) throw new Error('旧版会话不再受支持。');
+    this.agentConfiguration = klona(configuration);
     this.attachments = klona(restored?.runtime.attachments ?? {});
     this.bindingId = initial.character.bindingId;
-    this.characterName = initial.character.name;
+    this.characterName = (restored?.runtime.scope ?? options.scope) === 'global' ? '全局会话' : initial.character.name;
     this.compiledPreset = restored?.runtime.compiledPreset ?? compiled;
     this.contextWindow = options.contextWindow ?? 128_000;
     this.createdAt = restored?.runtime.createdAt ?? (options.now ?? Date.now)();
@@ -214,6 +234,7 @@ export class CardAgentSessionService {
     this.modelMessages = klona(restored?.runtime.modelMessages ?? compiled.messages);
     this.modelControls = klona(restored?.runtime.modelControls ?? { reasoningEffort: 'auto', webSearch: false });
     this.modelSelection = klona(restored?.runtime.modelSelection ?? options.modelSelection);
+    this.mountedWorldbooks = options.mountedWorldbooks ?? new Set(restored?.runtime.mountedWorldbooks ?? []);
     this.runModelSelection = klona(restored?.runtime.runModelSelection);
     this.now = options.now ?? Date.now;
     this.onPersist = options.onPersist;
@@ -221,6 +242,8 @@ export class CardAgentSessionService {
     this.onUpdate = options.onUpdate;
     this.preset = klona(restored?.runtime.preset ?? options.preset ?? DEFAULT_PRESET);
     this.requestToolApproval = options.requestToolApproval;
+    this.resourceBaseUrl = options.resourceBaseUrl;
+    this.renderPreviews = klona(restored?.runtime.renderPreviews ?? {});
     this.scheduleStreamingUpdate =
       options.scheduleStreamingUpdate ??
       (callback => {
@@ -228,12 +251,15 @@ export class CardAgentSessionService {
         return () => clearTimeout(timer);
       });
     this.sessionId = restored?.runtime.sessionId ?? options.sessionId ?? crypto.randomUUID();
+    this.scope = restored?.runtime.scope ?? options.scope ?? 'character';
     this.skills = klona(restored?.runtime.skills ?? options.skills ?? []);
     this.tavernBridge = options.tavernBridge;
     this.tavernChatWorkspace = options.tavernChatBridge
       ? new TavernChatWorkspace(options.tavernChatBridge, restored?.runtime.tavernChats)
       : undefined;
     this.workspaceStore = options.workspaceStore;
+    this.storageBindingId = options.storageBindingId ?? (() => this.bindingId);
+    this.onCharacterChanged = options.onCharacterChanged;
     this.storageFiles = klona(options.workspaceFiles ?? []);
     this.title = restored?.runtime.title ?? (options.title?.trim() || DEFAULT_SESSION_TITLE);
     this.activeCheckpointId = restored?.runtime.activeCheckpointId;
@@ -248,7 +274,12 @@ export class CardAgentSessionService {
   static async create(options: SessionServiceOptions): Promise<CardAgentSessionService> {
     const initial = await options.adapter.read();
     const preset = options.preset ?? DEFAULT_PRESET;
-    const compiled = await compilePreset(preset, defaultPresetValues(options.skills ?? []));
+    if (!options.agentConfiguration) throw new Error('创建会话必须指定Agent配置。');
+    const mountedSkills = mountConfiguredSkills(options.agentConfiguration, options.skills ?? []);
+    const compiled = await compilePreset(
+      preset,
+      defaultPresetValues(mountedSkills, options.agentConfiguration.toolIds, options.scope ?? 'character'),
+    );
     const service = new CardAgentSessionService(options, initial, compiled);
     service.repository = await service.createRepository();
     await service.refreshTavernChatWorkspace();
@@ -307,6 +338,8 @@ export class CardAgentSessionService {
           }
         : undefined,
       preset: klona(this.preset),
+      renderPreviews: klona(this.renderPreviews),
+      scope: this.scope,
       sessionId: this.sessionId,
       skills: klona(this.skills),
       status: this.status,
@@ -410,16 +443,13 @@ export class CardAgentSessionService {
     this.assertBinding(current);
     this.agentConfiguration = klona(configuration);
     this.preset = klona(preset);
-    this.skills = klona(availableSkills.filter(skill => configuration.skillIds.includes(skill.id)));
+    this.skills = mountConfiguredSkills(configuration, availableSkills);
     this.repository = await this.createRepository(current);
     await this.refreshCompiledHeader();
     await this.persist();
   }
 
-  /**
-   * 同步当前会话所绑定配置的最新版。首次发送前会重编译头部；会话已有消息后只更新
-   * 预设引用和/skills投影，等显式应用或下一次上下文压缩才替换固定头部。
-   */
+  /** 同步当前会话绑定配置的最新版；下一次模型调用直接使用新头部、Skill与工具。 */
   async syncAgentConfiguration(
     configuration: SessionAgentConfiguration,
     preset: StructuredPreset,
@@ -432,11 +462,23 @@ export class CardAgentSessionService {
       throw new Error('当前轮次结束前不能同步Agent配置。');
     }
     await this.finalizeManualEdits();
-    const mounted = availableSkills.filter(skill => configuration.skillIds.includes(skill.id));
+    const mounted = mountConfiguredSkills(configuration, availableSkills);
     const resourcesChanged = !canonicalEqual(this.skills, mounted);
     const configurationChanged = !canonicalEqual(this.agentConfiguration, configuration);
     const presetChanged = !canonicalEqual(this.preset, preset);
     if (!resourcesChanged && !configurationChanged && !presetChanged) return;
+    const previousSkillIds = new Set(this.agentConfiguration.skills.filter(skill => skill.enabled).map(skill => skill.id));
+    const nextSkillIds = new Set(configuration.skills.filter(skill => skill.enabled).map(skill => skill.id));
+    const skillChanges = new Set(
+      [...previousSkillIds].filter(id => !nextSkillIds.has(id)).concat(
+        [...nextSkillIds].filter(id => !previousSkillIds.has(id)),
+      ),
+    ).size;
+    const previousTools = new Set(this.agentConfiguration.toolIds);
+    const nextTools = new Set(configuration.toolIds);
+    const toolChanges = new Set(
+      [...previousTools].filter(id => !nextTools.has(id)).concat([...nextTools].filter(id => !previousTools.has(id))),
+    ).size;
     this.agentConfiguration = klona(configuration);
     this.preset = klona(preset);
     this.skills = klona(mounted);
@@ -445,8 +487,23 @@ export class CardAgentSessionService {
       this.assertBinding(current);
       this.repository = await this.createRepository(current);
     }
-    if (!this.hasConversationMessages()) await this.refreshCompiledHeader();
-    this.notify();
+    await this.refreshCompiledHeader();
+    if (this.runner) this.buildRunner(this.runner.state.status, this.runner.state.pending);
+    if (this.hasConversationMessages()) {
+      const details = [
+        presetChanged ? '预设' : '',
+        skillChanges > 0 ? `${skillChanges}个Skill` : '',
+        toolChanges > 0 ? `${toolChanges}个工具` : '',
+      ].filter(Boolean);
+      this.ui.push({
+        at: this.now(),
+        content: `Agent配置已更新${details.length ? ` · ${details.join('、')}发生变化` : ''}`,
+        id: `agent-configuration:${crypto.randomUUID()}`,
+        kind: 'status',
+        status: 'completed',
+      });
+    }
+    await this.persist();
   }
 
   async setExecutor(executor: ModelStepExecutor, contextWindow = this.contextWindow): Promise<void> {
@@ -469,14 +526,15 @@ export class CardAgentSessionService {
       throw new Error('当前轮次结束前不能更新全局Skill挂载。');
     }
     await this.finalizeManualEdits();
-    const mounted = skills.filter(skill => this.agentConfiguration.skillIds.includes(skill.id));
+    const mounted = mountConfiguredSkills(this.agentConfiguration, skills);
     if (canonicalEqual(this.skills, mounted)) return;
     const current = await this.adapter.read();
     this.assertBinding(current);
     this.skills = klona(mounted);
     this.repository = await this.createRepository(current);
-    if (!this.hasConversationMessages()) await this.refreshCompiledHeader();
-    this.notify();
+    await this.refreshCompiledHeader();
+    if (this.runner) this.buildRunner(this.runner.state.status, this.runner.state.pending);
+    await this.persist();
   }
 
   async send(
@@ -779,14 +837,23 @@ export class CardAgentSessionService {
   private async createRepository(_state?: CardWorkspaceState): Promise<LiveWorkspaceRepository> {
     const source = new SessionWorkspaceLiveSource({
       bindingId: this.bindingId,
-      cardSource: new CardWorkspaceLiveSource(this.adapter),
+      cardSource: new CardWorkspaceLiveSource(this.adapter, {
+        synchronizeMetadata: this.scope !== 'global',
+      }),
+      decorate: files => this.decorateWorkspace(files),
       getSkills: () => this.skills,
+      getStorageBindingId: this.storageBindingId,
       getStorageFiles: () => this.storageFiles,
       onSkillsCommit: this.onSkillsCommit,
       sessionId: this.sessionId,
       setSkills: skills => {
         this.skills = klona(skills);
-        this.agentConfiguration.skillIds = [...new Set([...this.agentConfiguration.skillIds, ...skills.map(skill => skill.id)])];
+        const configured = new Set(this.agentConfiguration.skills.map(skill => skill.id));
+        this.agentConfiguration.skills.push(
+          ...skills
+            .filter(skill => !configured.has(skill.id))
+            .map(skill => ({ enabled: true, id: skill.id, loading: skill.loading })),
+        );
       },
       setStorageFiles: files => {
         this.storageFiles = klona(files);
@@ -799,12 +866,47 @@ export class CardAgentSessionService {
         .records.filter(record => record.state === 'applied')
         .map(record => record.toolCallId),
       onCommitted: (result, toolCallId) => this.recordRealtimeMutation(result, toolCallId),
-      readonlyRoots: ['/context', '/library', '/worldbooks-global-readonly', '/skills/builtin'],
+      readonlyRoots: ['/context', '/skills/builtin'],
       source,
     });
     await repository.initialize();
     this.tavernChatWorkspace?.projectCached(repository);
     return repository;
+  }
+
+  private decorateWorkspace(files: WorkspaceFile[]): WorkspaceFile[] {
+    const hasCharacter = Boolean(this.tavernBridge?.getCurrentCharacterId() && !this.tavernBridge.getGroupId());
+    const visible =
+      this.scope === 'global' && !hasCharacter
+        ? files.filter(file => !file.path.startsWith('/character/') && file.path !== '/worldbooks/bindings.yaml')
+        : files;
+    const mountedWorldbooks = visible
+      .filter(file => /^\/worldbooks\/[^/]+\/book\.yaml$/u.test(file.path))
+      .map(file => file.path.split('/')[2]);
+    const environment = [
+      '# 当前工作区环境',
+      '',
+      `- 会话类型：${this.scope === 'global' ? '全局会话' : '角色会话'}`,
+      `- 当前角色：${hasCharacter ? this.tavernBridge?.getCurrentCharacterName() ?? '未知' : '未打开'}`,
+      `- 角色目录：${hasCharacter ? '/character' : '未挂载'}`,
+      `- 已挂载世界书：${mountedWorldbooks.length > 0 ? mountedWorldbooks.join('、') : '无'}`,
+      '- 全局持久文件：/files',
+      `- 角色持久文件：${hasCharacter ? '/character/files' : '未挂载'}`,
+      '- 正则：/regexes/{character,preset-current,global}',
+      '- 酒馆助手脚本：/scripts/{character,preset-current,global}',
+      '',
+      '角色切换、聊天切换和世界书挂载会动态改变本文件；需要最新状态时请重新读取。',
+    ].join('\n');
+    return [
+      ...visible.filter(file => file.path !== '/context/environment.md'),
+      {
+        content: environment,
+        mediaType: 'text/markdown',
+        path: '/context/environment.md',
+        readonly: true,
+        resourceId: 'context:environment',
+      },
+    ];
   }
 
   private async recordRealtimeMutation(
@@ -815,7 +917,12 @@ export class CardAgentSessionService {
     const turnId = this.activeCheckpointId ?? `manual:${crypto.randomUUID()}`;
     this.operationLog.beginTurn(turnId);
     for (const change of result.changes) {
-      if (change.path.startsWith('/temp/') || change.path.startsWith('/context/chats/')) continue;
+      if (
+        change.path.startsWith('/temp/') ||
+        change.path.startsWith('/character/temp/') ||
+        change.path.startsWith('/character/chats/')
+      )
+        continue;
       this.operationLog.append(
         await createWorkspaceOperationRecord({
           actor: this.mutationActor,
@@ -932,6 +1039,7 @@ export class CardAgentSessionService {
       this.notify();
     });
     this.runner = new AgentRunner({
+      compactionEnabled: this.agentConfiguration.toolIds.includes('compact_context'),
       contextWindow: this.contextWindow,
       executor: this.executor,
       headerMessageCount: this.headerMessageCount,
@@ -968,6 +1076,8 @@ export class CardAgentSessionService {
           ? createWorldbookRunnerTools(this.repository, this.tavernBridge, {
               approvalMode: () => (this.mode === 'full' ? 'full' : this.mode === 'yolo' ? 'yolo' : 'manual'),
               getBaseState: () => this.adapter.read(),
+              onMount: name => this.mountedWorldbooks.add(name),
+              onUnmount: name => this.mountedWorldbooks.delete(name),
               chatBindingConfirmation: (input, toolCallId) => {
                 const changesChatBinding = Boolean((input as { chat?: unknown } | undefined)?.chat);
                 if (
@@ -1001,13 +1111,48 @@ export class CardAgentSessionService {
               resolveFileUrl: fileId => this.workspaceStore?.getReference(fileId)?.url,
             })
           : []),
-      ],
+        ...(this.scope === 'global' && this.tavernBridge
+          ? createCharacterRunnerTools(this.tavernBridge, {
+              approvalMode: () => (this.mode === 'full' ? 'full' : this.mode === 'yolo' ? 'yolo' : 'manual'),
+              beforeClose: async () => {
+                const current = await this.adapter.read();
+                [current.bindings.primary, ...current.bindings.additional, current.bindings.chat]
+                  .filter((name): name is string => Boolean(name))
+                  .forEach(name => this.mountedWorldbooks.delete(name));
+              },
+              onChanged: async () => {
+                await this.onCharacterChanged?.();
+                if (!this.repository) return;
+                await this.reloadStorageFiles();
+                if (this.tavernChatWorkspace && this.tavernBridge?.getCurrentCharacterId()) {
+                  await this.tavernChatWorkspace.resetForCurrentCharacter(this.repository);
+                } else {
+                  this.repository.replaceProjection('/character/chats', []);
+                }
+                this.notify();
+              },
+            })
+          : []),
+        ...(this.resourceBaseUrl
+          ? createProjectRunnerTools(this.repository, {
+              approvalMode: () => (this.mode === 'full' ? 'full' : this.mode === 'yolo' ? 'yolo' : 'manual'),
+              canWriteNonCharacterResources: this.canWriteNonCharacterResources,
+              resourceBaseUrl: this.resourceBaseUrl,
+            })
+          : []),
+        ...createPlaygroundRunnerTools(this.repository, {
+          approvalMode: () => (this.mode === 'full' ? 'full' : this.mode === 'yolo' ? 'yolo' : 'manual'),
+          prepareRender: render => {
+            this.renderPreviews[render.renderId] = klona(render);
+          },
+        }),
+      ].filter(tool => isAgentToolId(tool.name) && this.agentConfiguration.toolIds.includes(tool.name)),
     });
   }
 
   private assertManualResourceWrite(path: string): void {
     if (isNonCharacterResourcePath(path) && !this.canWriteNonCharacterResources()) {
-      throw new Error('该路径属于全局或当前预设资源。请在开发者模式中显式启用危险写入权限后再修改。');
+      throw new Error('该路径属于全局或当前预设资源。请在常规设置中显式启用红色的危险写入权限后再修改。');
     }
   }
 
@@ -1085,14 +1230,20 @@ export class CardAgentSessionService {
   }
 
   private async refreshCompiledHeader(): Promise<void> {
-    const next = await compilePreset(this.preset, defaultPresetValues(this.skills));
+    const next = await compilePreset(
+      this.preset,
+      defaultPresetValues(this.skills, this.agentConfiguration.toolIds, this.scope),
+    );
     this.modelMessages.splice(0, this.headerMessageCount, ...klona(next.messages));
     this.headerMessageCount = next.messages.length;
     this.compiledPreset = next;
   }
 
   private async compileCompactionHeader(): Promise<ModelMessage[]> {
-    const next = await compilePreset(this.preset, defaultPresetValues(this.skills));
+    const next = await compilePreset(
+      this.preset,
+      defaultPresetValues(this.skills, this.agentConfiguration.toolIds, this.scope),
+    );
     this.headerMessageCount = next.messages.length;
     this.compiledPreset = next;
     return klona(next.messages);
@@ -1380,17 +1531,21 @@ export class CardAgentSessionService {
       mode: this.mode,
       modelControls: klona(this.modelControls),
       modelSelection: this.modelSelection ? klona(this.modelSelection) : undefined,
+      mountedWorldbooks: [...this.mountedWorldbooks],
       runModelSelection: this.runModelSelection ? klona(this.runModelSelection) : undefined,
       modelMessages: klona(this.modelMessages),
       operationLog: this.operationLog.export(),
       preset: klona(this.preset),
+      renderPreviews: klona(this.renderPreviews),
+      scope: this.scope,
       sessionId: this.sessionId,
       skills: klona(this.skills),
       status: this.status,
+      tavernChats: this.tavernChatWorkspace?.exportRuntime(),
       title: this.title,
       ui: klona(this.ui),
       updatedAt: this.now(),
-      version: 2,
+      version: 3,
       warnings: [...this.warnings],
     };
   }
@@ -1406,11 +1561,15 @@ export class CardAgentSessionService {
 
   private async reloadStorageFiles(): Promise<void> {
     if (!this.workspaceStore) return;
-    this.storageFiles = await this.workspaceStore.project(this.bindingId, this.sessionId);
+    this.storageFiles = await this.workspaceStore.project(this.storageBindingId(), this.sessionId);
   }
 
   private async refreshTavernChatWorkspace(): Promise<void> {
     if (!this.tavernChatWorkspace || !this.repository) return;
+    if (this.scope === 'global' && !this.tavernBridge?.getCurrentCharacterId()) {
+      this.repository.replaceProjection('/character/chats', []);
+      return;
+    }
     await this.tavernChatWorkspace.initialize(this.repository);
   }
 

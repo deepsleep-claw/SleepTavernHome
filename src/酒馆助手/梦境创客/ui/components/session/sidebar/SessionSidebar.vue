@@ -34,13 +34,14 @@
           :style="treeRowStyle(row)"
           :title="row.path"
           @click="row.kind === 'directory' ? toggleDirectory(row.path) : selectFile(row.path)"
+          @contextmenu.prevent="openFileMenu($event, row)"
         >
           <i
             v-if="row.kind === 'directory'"
             :class="expandedDirectories.has(row.path) ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right'"
             aria-hidden="true"
           ></i>
-          <i v-else :class="row.readonly ? 'fa-solid fa-lock' : 'fa-regular fa-file-lines'" aria-hidden="true"></i>
+          <i v-else :class="fileTreeIcon(row)" aria-hidden="true"></i>
           <span>{{ row.name }}</span>
         </button>
       </div>
@@ -52,6 +53,28 @@
               <small>{{ selectedFile.mediaType }} · {{ selectedFile.resourceId }}</small>
             </div>
             <div class="dca-editor-actions">
+              <button type="button" title="导出文件" @click="exportSelectedFile">
+                <i class="fa-solid fa-download" aria-hidden="true"></i><span>导出</span>
+              </button>
+              <button
+                v-if="canPlayerDelete(selectedFile.path)"
+                class="dca-btn-danger"
+                type="button"
+                title="删除文件"
+                @click="deleteSelectedPath(selectedFile.path)"
+              >
+                <i class="fa-regular fa-trash-can" aria-hidden="true"></i>
+              </button>
+              <template v-if="isProjectManifest">
+                <select v-model="projectScope" aria-label="正则编译目标">
+                  <option value="character">角色正则</option>
+                  <option value="preset-current">当前预设正则</option>
+                  <option value="global">全局正则</option>
+                </select>
+                <label class="dca-project-overwrite"><input v-model="projectOverwrite" type="checkbox" />覆盖末个同名</label>
+                <button type="button" :disabled="projectBusy" @click="checkProject">{{ projectBusy ? '检查中' : '检查工程' }}</button>
+                <button class="dca-btn-primary" type="button" :disabled="projectBusy" @click="compileProject">编译为正则</button>
+              </template>
               <div v-if="isMarkdownFile" class="dca-editor-view-switch" aria-label="Markdown查看方式">
                 <button type="button" :class="{ active: editorView === 'edit' }" @click="editorView = 'edit'">
                   编辑
@@ -69,6 +92,19 @@
             <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
             <span>{{ secretWarning }}</span>
           </div>
+          <section v-if="isProjectManifest && projectCheck" class="dca-project-check-result">
+            <header>
+              <strong>{{ projectCheck.projectName }}</strong>
+              <span>{{ projectErrorCount }} 错误 · {{ projectWarningCount }} 警告 · {{ formatBytes(projectCheck.outputBytes) }}</span>
+            </header>
+            <ul v-if="projectCheck.diagnostics.length">
+              <li v-for="(item, index) in projectCheck.diagnostics" :key="`${item.file}:${item.line}:${index}`" :class="item.severity">
+                <code>{{ item.file }}{{ item.line ? `:${item.line}${item.column ? `:${item.column}` : ''}` : '' }}</code>
+                {{ item.message }}
+              </li>
+            </ul>
+            <p v-else>检查通过，可以编译。</p>
+          </section>
           <div v-else-if="secretFindings.length" class="dca-secret-banner protected" role="status">
             <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
             <span>检测到 {{ secretFindings.length }} 处敏感内容；界面显示原文，Agent读取时自动遮罩。</span>
@@ -214,13 +250,35 @@
         <pre>{{ pretty(state.active?.events.filter(event => event.type === 'context-compacted') ?? []) }}</pre>
       </details>
     </section>
+
+    <div
+      v-if="fileMenu"
+      class="dca-file-context-menu"
+      :style="{ left: `${fileMenu.x}px`, top: `${fileMenu.y}px` }"
+      @click.stop
+      @pointerdown.stop
+    >
+      <button type="button" @click="exportTreeRow(fileMenu.row)">
+        <i class="fa-solid fa-download" aria-hidden="true"></i>导出{{ fileMenu.row.kind === 'directory' ? '文件夹 ZIP' : '文件' }}
+      </button>
+      <button
+        v-if="canPlayerDelete(fileMenu.row.path)"
+        class="danger"
+        type="button"
+        @click="deleteSelectedPath(fileMenu.row.path)"
+      >
+        <i class="fa-regular fa-trash-can" aria-hidden="true"></i>删除
+      </button>
+    </div>
   </aside>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { strToU8, zipSync } from 'fflate';
 import { maskSecretsForModel } from '../../../../core/workspace/secret-protection';
-import { pretty } from '../../../composables/format';
+import type { HtmlProjectCheck } from '../../../../core/projects/html-project';
+import { downloadBytes, downloadText, formatBytes, pretty } from '../../../composables/format';
 import {
   buildOperationDiffFiles,
   summarizeOperationDiffFiles,
@@ -258,9 +316,14 @@ const selectedDiffPath = ref('');
 const diffViewport = ref<HTMLElement>();
 const secretFindings = ref<Awaited<ReturnType<typeof maskSecretsForModel>>['findings']>([]);
 const secretWarning = ref('');
+const projectCheck = ref<HtmlProjectCheck>();
+const projectBusy = ref(false);
+const projectOverwrite = ref(false);
+const projectScope = ref<'character' | 'global' | 'preset-current'>('character');
 const expandedDirectories = ref(
   new Set(['/character', '/files', '/greetings', '/skills', '/skills/user', '/temp', '/worldbooks']),
 );
+const fileMenu = ref<{ row: FileTreeRow; x: number; y: number }>();
 let secretScanTimer: number | undefined;
 let secretScanRevision = 0;
 
@@ -333,6 +396,9 @@ const canEditFile = computed(() =>
   ),
 );
 const isMarkdownFile = computed(() => /\.md$/iu.test(selectedFile.value?.path ?? ''));
+const isProjectManifest = computed(() => /^\/regexes\/projects\/[^/]+\/project\.yaml$/u.test(selectedFile.value?.path ?? ''));
+const projectErrorCount = computed(() => projectCheck.value?.diagnostics.filter(item => item.severity === 'error').length ?? 0);
+const projectWarningCount = computed(() => projectCheck.value?.diagnostics.filter(item => item.severity === 'warning').length ?? 0);
 const largeMarkdownFile = computed(() => new Blob([fileDraft.value]).size > 1024 * 1024);
 const secretMarkers = computed<VfsEditorMarker[]>(() =>
   secretFindings.value.map(finding => ({
@@ -375,6 +441,7 @@ watch(selectedFile, file => {
   fileDraft.value = file?.content ?? '';
   editorView.value = 'edit';
   largePreviewApproved.value = false;
+  projectCheck.value = undefined;
 });
 
 watch(
@@ -398,6 +465,8 @@ watch(
 onBeforeUnmount(() => {
   if (secretScanTimer !== undefined) window.clearTimeout(secretScanTimer);
 });
+onMounted(() => window.addEventListener('pointerdown', closeFileMenu));
+onBeforeUnmount(() => window.removeEventListener('pointerdown', closeFileMenu));
 
 // 外部请求定位到某个文件（如 Skill 设置页的“查看挂载版本”）。
 watch(
@@ -432,6 +501,66 @@ function selectFile(path: string) {
   selectedFilePath.value = path;
 }
 
+function closeFileMenu() {
+  fileMenu.value = undefined;
+}
+
+function openFileMenu(event: MouseEvent, row: FileTreeRow) {
+  fileMenu.value = { row, x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 120) };
+}
+
+function canPlayerDelete(path: string): boolean {
+  return (
+    /^\/(?:files|temp|regexes\/projects)(?:\/|$)/u.test(path) ||
+    (/^\/skills\/user\//u.test(path) && !/\/SKILL\.md$/iu.test(path))
+  );
+}
+
+async function bytesForFile(file: (typeof files.value)[number]): Promise<Uint8Array> {
+  if (!file.external) return strToU8(file.content);
+  const managed = state.value.storage.characters.flatMap(group => group.files).find(item => item.fileId === file.external?.fileId);
+  if (!managed) throw new Error(`找不到托管文件：${file.path}`);
+  return new Uint8Array(await (await fetch(managed.url)).arrayBuffer());
+}
+
+async function exportFile(file: (typeof files.value)[number]) {
+  const name = file.path.split('/').at(-1) || 'download.txt';
+  if (!file.external) downloadText(name, file.content, file.mediaType);
+  else downloadBytes(name, await bytesForFile(file), file.mediaType);
+}
+
+async function exportSelectedFile() {
+  if (!selectedFile.value) return;
+  try { await exportFile(selectedFile.value); }
+  catch (error) { toastr.error(error instanceof Error ? error.message : String(error), '导出失败'); }
+}
+
+async function exportTreeRow(row: FileTreeRow) {
+  closeFileMenu();
+  if (row.kind === 'file') {
+    const file = files.value.find(item => item.path === row.path);
+    if (file) await exportFile(file);
+    return;
+  }
+  try {
+    const selected = files.value.filter(file => file.path.startsWith(`${row.path}/`));
+    const prefix = `${row.path}/`;
+    const entries: Record<string, Uint8Array> = {};
+    for (const file of selected) entries[file.path.slice(prefix.length)] = await bytesForFile(file);
+    downloadBytes(`${row.name}.zip`, zipSync(entries, { level: 6 }), 'application/zip');
+  } catch (error) {
+    toastr.error(error instanceof Error ? error.message : String(error), '导出失败');
+  }
+}
+
+async function deleteSelectedPath(path: string) {
+  closeFileMenu();
+  if (!canPlayerDelete(path)) return;
+  if (!window.confirm(`确定删除 ${path}？此操作会进入当前会话的操作记录。`)) return;
+  await action(() => runtime.deleteWorkingPath(path));
+  if (selectedFilePath.value === path || selectedFilePath.value.startsWith(`${path}/`)) selectedFilePath.value = '';
+}
+
 function diffAnchorId(path: string): string {
   return `dca-diff-file-${encodeURIComponent(path).replace(/%/gu, '_')}`;
 }
@@ -453,6 +582,13 @@ function diffFileIcon(path: string): string {
   if (/\.ya?ml$/iu.test(path)) return 'fa-solid fa-code';
   if (/\.md$/iu.test(path)) return 'fa-brands fa-markdown';
   return 'fa-regular fa-file-lines';
+}
+
+function fileTreeIcon(row: FileTreeRow): string {
+  if (row.path.endsWith('/project.yaml') && /^(?:\/files|\/character\/files)\//u.test(row.path)) {
+    return 'fa-solid fa-diagram-project';
+  }
+  return row.readonly ? 'fa-solid fa-lock' : 'fa-regular fa-file-lines';
 }
 
 // 树形缩进：每级 0.95rem，并为每个父级深度画一条 1px 竖向引导线。
@@ -498,6 +634,32 @@ async function saveFile() {
   }
 }
 
+async function checkProject() {
+  if (!selectedFile.value) return;
+  projectBusy.value = true;
+  try {
+    projectCheck.value = await runtime.checkHtmlProject(selectedFile.value.path);
+  } catch (error) {
+    toastr.error(error instanceof Error ? error.message : String(error), '工程检查失败');
+  } finally {
+    projectBusy.value = false;
+  }
+}
+
+async function compileProject() {
+  if (!selectedFile.value) return;
+  projectBusy.value = true;
+  try {
+    await runtime.compileHtmlProject(selectedFile.value.path, { overwrite: projectOverwrite.value, scope: projectScope.value });
+    projectCheck.value = await runtime.checkHtmlProject(selectedFile.value.path);
+    toastr.success(`工程已编译到${projectScope.value === 'character' ? '角色' : projectScope.value === 'global' ? '全局' : '当前预设'}正则。`, '梦境创客');
+  } catch (error) {
+    toastr.error(error instanceof Error ? error.message : String(error), '工程编译失败');
+  } finally {
+    projectBusy.value = false;
+  }
+}
+
 async function undo() {
   await action(() => runtime.undo());
 }
@@ -519,6 +681,30 @@ async function redo() {
   container-type: inline-size;
 }
 
+.dca-file-context-menu {
+  position: fixed;
+  z-index: 2147483646;
+  display: grid;
+  min-width: 12rem;
+  gap: 0.2rem;
+  border: 1px solid var(--dca-border-strong);
+  border-radius: var(--dca-radius-sm);
+  padding: 0.3rem;
+  background: var(--dca-raised);
+  box-shadow: var(--dca-shadow-3);
+}
+.dca-app .dca-file-context-menu > button {
+  display: flex;
+  width: 100%;
+  justify-content: flex-start;
+  gap: 0.45rem;
+  border: 0;
+  background: transparent;
+  text-align: left;
+}
+.dca-app .dca-file-context-menu > button:hover { background: var(--dca-sidebar-hover); }
+.dca-app .dca-file-context-menu > button.danger { color: var(--dca-danger); }
+
 .dca-session-sidebar > nav {
   display: flex;
   flex: 0 0 auto;
@@ -527,6 +713,30 @@ async function redo() {
   border-bottom: 1px solid var(--dca-border);
   padding: 0.35rem;
 }
+
+.dca-project-overwrite {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  color: var(--dca-text-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.dca-project-check-result {
+  margin: 0.5rem;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-sm);
+  padding: 0.55rem;
+  background: var(--dca-raised);
+}
+.dca-project-check-result > header { display: flex; justify-content: space-between; gap: 0.5rem; }
+.dca-project-check-result > header span { color: var(--dca-text-muted); font-size: 0.75rem; }
+.dca-project-check-result ul { max-height: 12rem; margin: 0.45rem 0 0; overflow: auto; padding-left: 1.2rem; }
+.dca-project-check-result li { margin: 0.2rem 0; font-size: 0.78rem; }
+.dca-project-check-result li.error { color: var(--dca-danger); }
+.dca-project-check-result li.warning { color: var(--dca-warning); }
+.dca-project-check-result li code { color: inherit; }
 
 .dca-session-sidebar > nav button:not(.dca-close-sidebar) {
   display: flex;
@@ -569,6 +779,8 @@ async function redo() {
   flex: 1 1 auto;
   min-height: 0;
   grid-template-columns: minmax(10.5rem, 42%) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .dca-file-list {
@@ -655,7 +867,17 @@ async function redo() {
   min-height: 0;
   flex-direction: column;
   gap: 0.45rem;
+  overflow: hidden;
   padding: 0.55rem;
+}
+
+// 会话侧栏需要让文本编辑器吃满标题和提示之外的剩余高度。
+// 限定在 .dca-editor 直属子级，避免影响 Skill 编辑弹窗自己的资源编辑布局。
+.dca-editor > .dca-vfs-editor {
+  display: flex;
+  min-height: 8rem;
+  flex: 1 1 0;
+  overflow: hidden;
 }
 
 .dca-editor > header {

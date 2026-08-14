@@ -7,7 +7,13 @@ const mock = vi.hoisted(() => {
   let subscriber: ((state: unknown) => void) | undefined;
   const state = {
     active: {
-      agentConfiguration: { id: 'agent:default', name: '梦境创客默认 Agent', presetId: 'preset', skillIds: [] },
+      agentConfiguration: {
+        id: 'agent:default',
+        name: '梦境创客默认 Agent',
+        presetId: 'preset',
+        skills: [],
+        toolIds: [],
+      },
       bindingId: 'binding-test',
       characterName: '测试角色',
       contextUsage: {
@@ -98,7 +104,7 @@ const mock = vi.hoisted(() => {
         {
           content: '描述',
           mediaType: 'text/markdown',
-          path: '/character/description.md',
+          path: '/character/definition/description.md',
           readonly: false,
           resourceId: 'character:description',
         },
@@ -108,7 +114,37 @@ const mock = vi.hoisted(() => {
     activeSessionAccess: 'live',
     approvalMode: 'normal',
     activePresetId: 'preset',
-    agentConfigurations: [{ id: 'agent:default', name: '梦境创客默认 Agent', presetId: 'preset', skillIds: [] }],
+    agentConfigurations: [
+      { id: 'agent:default', name: '梦境创客默认 Agent', presetId: 'preset', skills: [], toolIds: [] },
+    ],
+    builtinSkillResources: [
+      {
+        cached: true,
+        description: '拆分源码、检查与编译。',
+        file: 'html-project.zip',
+        id: 'html-project',
+        loading: 'on-demand',
+        name: 'HTML工程',
+        sha256: 'hash-html',
+        size: 2048,
+        sourceUrl: 'http://127.0.0.1:5500/resources/html-project.zip',
+        state: 'available',
+        version: 1,
+      },
+      {
+        cached: false,
+        description: '查询当前酒馆助手接口。',
+        file: 'tavern-helper-api.zip',
+        id: 'tavern-helper-api',
+        loading: 'on-demand',
+        name: '酒馆助手API参考',
+        sha256: 'hash-api',
+        size: 4096,
+        sourceUrl: 'http://127.0.0.1:5500/resources/tavern-helper-api.zip',
+        state: 'missing',
+        version: 1,
+      },
+    ],
     busy: false,
     characterGroups: [] as any[],
     currentCharacter: { avatarId: 'avatar', bindingId: 'binding-test', name: '测试角色' },
@@ -192,6 +228,9 @@ const mock = vi.hoisted(() => {
         loading: 'on-demand',
         name: '测试 Skill',
         references: {},
+        resources: {
+          'notes.md': { content: '测试资源', mediaType: 'text/markdown', size: 12 },
+        },
       },
     ],
     storage: { currentCharacterBytes: 2048, globalSkillBytes: 0 },
@@ -233,14 +272,33 @@ const mock = vi.hoisted(() => {
   ];
   const runtime = {
     closeSession: vi.fn(async () => undefined),
+    deleteCharacterSession: vi.fn(async () => undefined),
     deleteSession: vi.fn(async () => undefined),
     enqueueGuidance: vi.fn(),
+    downloadBuiltinSkillResource: vi.fn(async () => undefined),
+    loadGlobalSkill: vi.fn(async (id: string) => {
+      if (id === 'html-project') {
+        return {
+          body: '# HTML工程',
+          builtin: true,
+          description: '拆分源码、检查与编译。',
+          id,
+          loading: 'on-demand',
+          locked: true,
+          name: 'HTML工程',
+          resources: { 'guide.md': { content: '说明', mediaType: 'text/markdown', size: 6 } },
+        };
+      }
+      return structuredClone(state.skills.find(skill => skill.id === id));
+    }),
     refreshCharacter: vi.fn(async () => undefined),
+    refreshBuiltinSkillResources: vi.fn(async () => undefined),
     removeGlobalSkill: vi.fn(async () => undefined),
     saveAgentConfiguration: vi.fn(async (configuration: unknown) => configuration),
     saveGlobalSkill: vi.fn(async (skill: unknown) => skill),
     snapshot: () => structuredClone(state),
     stop: vi.fn(),
+    stopSession: vi.fn(),
     subscribe: (next: (value: unknown) => void) => {
       subscriber = next;
       next(structuredClone(state));
@@ -256,12 +314,86 @@ vi.mock('../runtime/dream-card-agent-runtime', () => ({ getDreamCardAgentRuntime
 
 describe('WorkspaceWindow', () => {
   beforeEach(() => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 });
+    localStorage.clear();
     vi.stubGlobal('toastr', { error: vi.fn(), success: vi.fn() });
   });
 
   afterEach(() => {
     document.body.innerHTML = '';
     vi.unstubAllGlobals();
+  });
+
+  it('手机端顶部只显示当前角色，并在侧栏管理已打开会话与隐藏角色', async () => {
+    Object.defineProperty(window, 'innerWidth', { configurable: true, value: 430 });
+    const { default: WorkspaceWindow } = await import('./WorkspaceWindow.vue');
+    const root = document.createElement('div');
+    document.body.append(root);
+    const app = createApp(WorkspaceWindow);
+    app.mount(root);
+    await nextTick();
+
+    expect(root.querySelector('.dca-app')?.classList).toContain('mobile');
+    expect(root.querySelector('.dca-mobile-brand strong')?.textContent).toBe('测试角色');
+    expect(root.querySelectorAll('.dca-session-tab')).toHaveLength(0);
+
+    root.querySelector<HTMLButtonElement>('.dca-mobile-navigation-tab')?.click();
+    await nextTick();
+    expect(root.querySelector('.dca-mobile-open-sessions')?.textContent).toContain('最近的创作');
+
+    const secondGroup = [...root.querySelectorAll<HTMLElement>('.dca-character-group')].find(group =>
+      group.textContent?.includes('第二角色'),
+    )!;
+    secondGroup.querySelector<HTMLButtonElement>('.dca-character-more')?.click();
+    await nextTick();
+    expect(secondGroup.querySelector('.dca-character-menu')?.textContent).toContain('删除全部会话');
+    const hideButton = [...secondGroup.querySelectorAll<HTMLButtonElement>('.dca-character-menu button')].find(button =>
+      button.textContent?.includes('隐藏角色卡'),
+    )!;
+    hideButton.click();
+    await nextTick();
+    expect(root.querySelector('.dca-character-action-dialog')?.textContent).toContain('隐藏这张角色卡');
+    const confirmHide = [...root.querySelectorAll<HTMLButtonElement>('.dca-character-action-dialog button')].find(
+      button => button.textContent?.includes('确认隐藏'),
+    )!;
+    confirmHide.click();
+    await nextTick();
+    expect(root.querySelector('.dca-character-groups')?.textContent).not.toContain('第二角色');
+    expect(localStorage.getItem('dream-card-agent:hidden-character-groups')).toContain('binding-second');
+
+    const reopenedState = structuredClone(mock.state);
+    reopenedState.currentCharacter = { avatarId: 'second.png', bindingId: 'binding-second', name: '第二角色' };
+    reopenedState.characterGroups = reopenedState.characterGroups.map(group => ({
+      ...group,
+      current: group.bindingId === 'binding-second',
+    }));
+    mock.subscriber()?.(reopenedState);
+    await nextTick();
+    expect(root.querySelector('.dca-character-groups')?.textContent).toContain('第二角色');
+    expect(localStorage.getItem('dream-card-agent:hidden-character-groups')).toBe('[]');
+
+    (root.querySelector('.dca-settings-tab') as HTMLButtonElement).click();
+    await nextTick();
+    const mobileSkillSection = [...root.querySelectorAll<HTMLButtonElement>('.dca-settings-nav button')].find(button =>
+      button.textContent?.trim() === 'Skill',
+    )!;
+    mobileSkillSection.click();
+    await nextTick();
+    const mobileUserSkill = root.querySelector('.dca-skill-card:not(.builtin)')!;
+    [...mobileUserSkill.querySelectorAll<HTMLButtonElement>('button')]
+      .find(button => button.textContent?.trim() === '编辑')!
+      .click();
+    await vi.waitFor(() => expect(root.querySelector('.dca-skill-file-list')?.textContent).toContain('notes.md'));
+    const notesButton = [...root.querySelectorAll<HTMLButtonElement>('.dca-skill-file-row')]
+      .find(button => button.textContent?.includes('notes.md'))!;
+    notesButton.click();
+    await nextTick();
+    expect(root.querySelector('.dca-skill-file-preview-layer')?.classList).toContain('open');
+    (root.querySelector('.dca-skill-mobile-preview-close') as HTMLButtonElement).click();
+    await nextTick();
+    expect(root.querySelector('.dca-skill-file-preview-layer')?.classList).not.toContain('open');
+
+    app.unmount();
   });
 
   it('默认隐藏Revision和侧栏，并折叠连续工具与思考过程', async () => {
@@ -295,8 +427,14 @@ describe('WorkspaceWindow', () => {
     expect(root.querySelector('.dca-workbench')?.classList).not.toContain('sidebar-collapsed');
     expect(root.querySelector('.dca-side-files')).not.toBeNull();
     expect(root.textContent).toContain('character');
+    const definitionRow = [...root.querySelectorAll<HTMLButtonElement>('.dca-file-tree-row.directory')]
+      .find(button => button.textContent?.includes('definition'))!;
+    definitionRow.click();
+    await nextTick();
     expect(root.textContent).toContain('description.md');
-    (root.querySelector('.dca-file-tree-row.directory') as HTMLButtonElement).click();
+    const characterRow = [...root.querySelectorAll<HTMLButtonElement>('.dca-file-tree-row.directory')]
+      .find(button => button.textContent?.includes('character'))!;
+    characterRow.click();
     await nextTick();
     expect(root.textContent).not.toContain('description.md');
 
@@ -335,6 +473,10 @@ describe('WorkspaceWindow', () => {
 
     (root.querySelector('.dca-settings-tab') as HTMLButtonElement).click();
     await nextTick();
+    const settingsLabels = [...root.querySelectorAll<HTMLButtonElement>('.dca-settings-nav button')].map(button =>
+      button.textContent?.trim(),
+    );
+    expect(settingsLabels.indexOf('API')).toBeLessThan(settingsLabels.indexOf('Agent配置'));
     const updateSection = [...root.querySelectorAll<HTMLButtonElement>('.dca-settings-nav button')].find(button =>
       button.textContent?.includes('更新'),
     )!;
@@ -347,6 +489,16 @@ describe('WorkspaceWindow', () => {
     )!;
     skillSection.click();
     await nextTick();
+    const remoteSkillCards = root.querySelectorAll('.dca-skill-card.remote');
+    expect(remoteSkillCards).toHaveLength(2);
+    const downloadedRemoteButtons = [...remoteSkillCards[0].querySelectorAll('button')].map(button => button.textContent?.trim());
+    expect(downloadedRemoteButtons).toEqual(['查看', '另存为', '导出']);
+    expect([...remoteSkillCards[1].querySelectorAll('button')].map(button => button.textContent?.trim())).toEqual(['下载']);
+    (remoteSkillCards[0].querySelector('button[aria-expanded="false"]') as HTMLButtonElement).click();
+    await nextTick();
+    expect(root.querySelector('.dca-skill-export-options')?.textContent).toContain('仅导出 MD');
+    expect(root.querySelector('.dca-skill-export-options')?.textContent).toContain('导出 ZIP');
+    expect(root.querySelector('select[aria-label*="导出格式"]')).toBeNull();
     const newSkill = [...root.querySelectorAll<HTMLButtonElement>('.dca-settings-content button')].find(button =>
       button.textContent?.includes('新建'),
     )!;
@@ -366,6 +518,7 @@ describe('WorkspaceWindow', () => {
     const saveSkill = [...root.querySelectorAll<HTMLButtonElement>('.dca-skill-editor-footer button')].find(button =>
       button.textContent?.includes('保存 Skill'),
     )!;
+    await vi.waitFor(() => expect(saveSkill.disabled).toBe(false));
     saveSkill.click();
     await nextTick();
     const confirmSave = [...root.querySelectorAll<HTMLButtonElement>('.dca-alert button')].find(button =>
@@ -390,6 +543,19 @@ describe('WorkspaceWindow', () => {
     expect(mock.runtime.removeGlobalSkill).toHaveBeenCalledWith('skill:test');
     await vi.waitFor(() => expect(root.querySelector('.dca-skill-editor')).toBeNull());
 
+    const resourcesSection = [...root.querySelectorAll<HTMLButtonElement>('.dca-settings-nav button')].find(
+      button => button.textContent?.trim() === '资源下载',
+    )!;
+    resourcesSection.click();
+    await nextTick();
+    expect(root.querySelector('.dca-download-summary')?.textContent).toContain('2 项资源');
+    expect(root.querySelector('.dca-download-summary')?.textContent).toContain('已下载 1');
+    expect(root.querySelector('.dca-download-summary')?.textContent).toContain('待下载 1');
+    expect(root.querySelectorAll('.dca-resource-download-card')).toHaveLength(2);
+    expect(root.querySelector('.dca-download-settings')?.textContent).not.toContain('127.0.0.1');
+    expect(root.querySelector('.dca-download-settings')?.textContent).not.toContain('另存为用户Skill');
+    expect(root.querySelector('.dca-download-settings')?.textContent).not.toContain('重新下载');
+
     const agentSection = [...root.querySelectorAll<HTMLButtonElement>('.dca-settings-nav button')].find(
       button => button.textContent?.trim() === 'Agent配置',
     )!;
@@ -397,19 +563,28 @@ describe('WorkspaceWindow', () => {
     await nextTick();
     expect(root.querySelector<HTMLInputElement>('input[maxlength="80"]')?.value).toBe('梦境创客默认 Agent');
     expect(root.querySelector<HTMLInputElement>('input[maxlength="80"]')?.disabled).toBe(true);
-    expect(root.querySelector('.dca-agent-skill-panel')).not.toBeNull();
+    const agentSkillTab = [...root.querySelectorAll<HTMLButtonElement>('.dca-agent-tabs button')]
+      .find(button => button.textContent?.includes('Skill'))!;
+    agentSkillTab.click();
+    await nextTick();
+    expect(root.querySelector('.dca-agent-skill-row')).not.toBeNull();
     const skillSaveCalls = mock.runtime.saveGlobalSkill.mock.calls.length;
     const saveAsBuiltin = [...root.querySelectorAll<HTMLButtonElement>('.dca-resource-savebar button')].find(button =>
-      button.textContent?.includes('另存为自定义Agent'),
+      button.textContent?.includes('另存为自定义 Agent'),
     )!;
     saveAsBuiltin.click();
     await nextTick();
     const saveConfiguration = [...root.querySelectorAll<HTMLButtonElement>('.dca-resource-savebar button')].find(
-      button => button.textContent?.trim() === '保存配置',
+      button => button.textContent?.trim() === '保存 Agent',
     )!;
     saveConfiguration.click();
     expect(mock.runtime.saveAgentConfiguration).toHaveBeenCalledWith(
-      expect.objectContaining({ id: expect.stringMatching(/^agent:/u), name: '梦境创客默认 Agent 副本', skillIds: [] }),
+      expect.objectContaining({
+        id: expect.stringMatching(/^agent:/u),
+        name: '梦境创客默认 Agent 副本',
+        skills: [],
+        toolIds: expect.any(Array),
+      }),
     );
     expect(mock.runtime.saveGlobalSkill).toHaveBeenCalledTimes(skillSaveCalls);
 

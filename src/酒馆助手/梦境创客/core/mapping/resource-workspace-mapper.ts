@@ -114,7 +114,7 @@ function projectScriptScope(
   data: ScopedScriptData,
   options: TavernResourceProjectionOptions,
 ): WorkspaceFile[] {
-  const root = `/tavern-helper-scripts/${scope}`;
+  const root = `/scripts/${scope}`;
   const writable = isWritable(scope, options);
   const files = [file(`${root}/_scope.yaml`, scopeMetadata(scope, data, writable), `script-scope:${scope}`, true)];
   if (!data.available) {
@@ -303,7 +303,7 @@ function materializeRegexScope(
 }
 
 function scriptGroups(files: Map<string, WorkspaceFile>, scope: TavernResourceScope): Map<string, WorkspaceFile[]> {
-  const root = `/tavern-helper-scripts/${scope}/scripts`;
+  const root = `/scripts/${scope}/scripts`;
   const groups = new Map<string, WorkspaceFile[]>();
   for (const input of files.values()) {
     if (!input.path.startsWith(`${root}/`)) continue;
@@ -402,7 +402,7 @@ function materializeScriptTrees(
   files: Map<string, WorkspaceFile>,
   scope: TavernResourceScope,
 ): TavernScriptTreeReference[] {
-  const path = `/tavern-helper-scripts/${scope}/tree.yaml`;
+  const path = `/scripts/${scope}/tree.yaml`;
   const input = files.get(path);
   if (!input) {
     throw new WorkspaceError('NOT_FOUND', `tree.yaml不能删除：${path}`, path);
@@ -487,4 +487,3 @@ export function materializeTavernResources(
     ) as TavernResourceState['scripts'],
   };
 }
-

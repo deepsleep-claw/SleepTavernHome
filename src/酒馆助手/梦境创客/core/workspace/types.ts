@@ -15,7 +15,7 @@ export type WorkspaceFile = {
     mediaType: string;
     sha256: string;
     size: number;
-    scope: 'persistent' | 'temp';
+    scope: 'character-persistent' | 'character-temp' | 'global-persistent' | 'global-temp';
   };
   mediaType: string;
   path: string;
@@ -34,8 +34,6 @@ export type SearchQuery = {
   contextBefore?: number;
   contextLines?: number;
   excludeGlob?: string | string[];
-  /** @deprecated 使用mode: 'literal'或mode: 'regex'。 */
-  fixedStrings?: boolean;
   glob?: string | string[];
   maxResults?: number;
   mode?: 'literal' | 'regex';

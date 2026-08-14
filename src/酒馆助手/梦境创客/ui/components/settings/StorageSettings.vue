@@ -20,6 +20,10 @@
         <span>附件与共享文件</span>
       </div>
       <div>
+        <strong>{{ formatBytes(totalProjectBytes) }}</strong>
+        <span>HTML 工程</span>
+      </div>
+      <div>
         <strong>{{ formatBytes(totalCacheBytes) }}</strong>
         <span>缓存与孤立版本</span>
       </div>
@@ -43,6 +47,7 @@
         <div class="dca-storage-role-body">
           <div class="dca-storage-breakdown">
             <span>共享文件 {{ formatBytes(group.attachmentBytes) }}</span>
+            <span>HTML 工程 {{ formatBytes(group.projectBytes) }}</span>
             <span>临时缓存 {{ formatBytes(group.cacheBytes) }}</span>
             <span>孤立版本 {{ formatBytes(group.orphanBytes) }}</span>
           </div>
@@ -142,6 +147,7 @@ const totalBytes = computed(() => groups.value.reduce((total, group) => total + 
 const totalAttachmentBytes = computed(() =>
   groups.value.reduce((total, group) => total + group.attachmentBytes, 0),
 );
+const totalProjectBytes = computed(() => groups.value.reduce((total, group) => total + group.projectBytes, 0));
 const totalCacheBytes = computed(() =>
   groups.value.reduce((total, group) => total + group.cacheBytes + group.orphanBytes, 0),
 );
@@ -163,6 +169,7 @@ function fileIcon(mediaType: string): string {
 }
 
 function fileKind(file: ManagedFileSummary): string {
+  if (file.scope === 'project') return 'HTML 工程';
   if (file.scope === 'temp') return '缓存';
   if (file.orphanedAt !== undefined) return '可回收历史版本';
   return '角色共享文件';

@@ -87,6 +87,8 @@ type ToolDescriptor = Pick<ToolPresentation, 'icon' | 'kind' | 'title' | 'tone'>
 const TOOL_DESCRIPTORS: Record<string, ToolDescriptor> = {
   apply_patch: { icon: 'fa-solid fa-code-compare', kind: 'file', title: '应用补丁', tone: 'success' },
   clone_worldbook: { icon: 'fa-solid fa-book-open', kind: 'worldbook', title: '克隆世界书', tone: 'warning' },
+  check_html_project: { icon: 'fa-solid fa-list-check', kind: 'file', title: '检查 HTML 工程', tone: 'info' },
+  compile_html_project: { icon: 'fa-solid fa-hammer', kind: 'file', title: '编译 HTML 工程', tone: 'success' },
   compact_context: { icon: 'fa-solid fa-box-archive', kind: 'context', title: '整理上下文', tone: 'accent' },
   create_tavern_chat: { icon: 'fa-solid fa-comment-medical', kind: 'tavern', title: '新建酒馆会话', tone: 'accent' },
   create_worldbook: { icon: 'fa-solid fa-book-medical', kind: 'worldbook', title: '创建世界书', tone: 'warning' },
@@ -99,6 +101,7 @@ const TOOL_DESCRIPTORS: Record<string, ToolDescriptor> = {
   },
   find_in_page: { icon: 'fa-solid fa-magnifying-glass', kind: 'web', title: '页内查找', tone: 'info' },
   list_directory: { icon: 'fa-solid fa-folder-tree', kind: 'file', title: '浏览目录', tone: 'info' },
+  list_path: { icon: 'fa-solid fa-folder-tree', kind: 'file', title: '列出路径', tone: 'info' },
   list_tavern_chats: { icon: 'fa-solid fa-comments', kind: 'tavern', title: '列出酒馆会话', tone: 'accent' },
   mount_worldbook_reference: {
     icon: 'fa-solid fa-book-bookmark',
@@ -106,8 +109,14 @@ const TOOL_DESCRIPTORS: Record<string, ToolDescriptor> = {
     title: '挂载世界书',
     tone: 'warning',
   },
+  manage_worldbook: { icon: 'fa-solid fa-book', kind: 'worldbook', title: '管理世界书', tone: 'warning' },
+  manage_tavern_chat: { icon: 'fa-solid fa-comments', kind: 'tavern', title: '管理酒馆会话', tone: 'accent' },
+  manage_character: { icon: 'fa-regular fa-address-card', kind: 'tavern', title: '管理角色', tone: 'accent' },
+  manage_html_project: { icon: 'fa-solid fa-diagram-project', kind: 'file', title: '管理 HTML 工程', tone: 'info' },
   move_path: { icon: 'fa-solid fa-arrow-right-arrow-left', kind: 'file', title: '移动路径', tone: 'info' },
   read_file: { icon: 'fa-regular fa-file-lines', kind: 'file', title: '读取文件', tone: 'info' },
+  prepare_render: { icon: 'fa-solid fa-window-maximize', kind: 'file', title: '准备交互预览', tone: 'accent' },
+  run_javascript: { icon: 'fa-brands fa-js', kind: 'generic', title: '运行 JavaScript', tone: 'accent' },
   open_page: { icon: 'fa-solid fa-arrow-up-right-from-square', kind: 'web', title: '打开网页', tone: 'info' },
   search: { icon: 'fa-solid fa-globe', kind: 'web', title: '网页搜索', tone: 'info' },
   search_files: { icon: 'fa-solid fa-magnifying-glass', kind: 'search', title: '搜索文件', tone: 'info' },
@@ -329,8 +338,8 @@ function filePresentation(
   outputValue: unknown,
 ): Partial<Pick<ToolPresentation, 'expandable' | 'metrics' | 'path' | 'preview' | 'rows' | 'summary'>> {
   const path = text(output, 'path') ?? text(input, 'path');
-  if (name === 'list_directory') {
-    const directEntries = records(outputValue);
+  if (name === 'list_directory' || name === 'list_path') {
+    const directEntries = Array.isArray(outputValue) ? records(outputValue) : records(output.entries);
     return {
       expandable: directEntries.length > 3,
       path,
@@ -469,6 +478,18 @@ function worldbookPresentation(
   output: JsonRecord,
 ): Partial<Pick<ToolPresentation, 'expandable' | 'metrics' | 'path' | 'rows' | 'summary'>> {
   const matches = records(output.matches);
+  if (name === 'manage_worldbook') {
+    const action = text(input, 'action') ?? 'manage';
+    const aliases: Record<string, string> = {
+      clone: 'clone_worldbook',
+      create: 'create_worldbook',
+      mount: 'mount_worldbook_reference',
+      set_binding: 'set_worldbook_binding',
+      unmount: 'unmount_worldbook_reference',
+    };
+    const nestedInput = action === 'set_binding' ? record(input.binding) : input;
+    return worldbookPresentation(aliases[action] ?? action, nestedInput, output);
+  }
   if (name === 'search_worldbooks') {
     return {
       expandable: matches.length > 3,
@@ -519,6 +540,30 @@ function tavernPresentation(
   input: JsonRecord,
   output: JsonRecord,
 ): Partial<Pick<ToolPresentation, 'expandable' | 'metrics' | 'preview' | 'rows' | 'summary'>> {
+  if (name === 'manage_tavern_chat') {
+    const action = text(input, 'action') ?? 'list';
+    const aliases: Record<string, string> = {
+      create: 'create_tavern_chat',
+      list: 'list_tavern_chats',
+      switch: 'switch_tavern_chat',
+      truncate: 'truncate_tavern_chat',
+    };
+    return tavernPresentation(aliases[action] ?? action, input, output);
+  }
+  if (name === 'manage_character') {
+    const characters = records(output.characters);
+    const action = text(input, 'action') ?? 'list';
+    return {
+      expandable: characters.length > 3,
+      metrics: characters.length ? [{ label: '角色', value: String(characters.length) }] : [],
+      rows: characters.map(character => ({
+        icon: 'fa-regular fa-address-card',
+        label: text(character, 'name') ?? '未命名角色',
+        meta: text(character, 'avatarId'),
+      })),
+      summary: action === 'open' ? '角色已打开' : action === 'close' ? '当前角色已关闭' : '酒馆角色已列出',
+    };
+  }
   if (name === 'list_tavern_chats') {
     const chats = records(output.chats);
     return {

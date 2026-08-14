@@ -33,7 +33,7 @@ trim_strings: []
 
 ## 酒馆助手脚本
 
-每个 `/tavern-helper-scripts/<scope>/scripts/<脚本目录>/` 包含：
+每个 `/scripts/<scope>/scripts/<脚本目录>/` 包含：
 
 - `info.yaml`：脚本身份与开关，创建脚本时必须先写。
 - `info.md`：给人的说明，可为空。

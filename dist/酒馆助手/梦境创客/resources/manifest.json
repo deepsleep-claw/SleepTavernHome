@@ -1,0 +1,82 @@
+{
+  "protocolVersion": 1,
+  "runtime": [
+    {
+      "file": "vendor/compiler-validator.js",
+      "sha256": "6e931f64355a709db700b70deb9aceda78f5ad35ace1d5a8ff3b782b86591cb5",
+      "size": 274677
+    },
+    {
+      "file": "vendor/rollup.browser.js",
+      "sha256": "00c7e102025e8ae11193e9f0f30eb6da31a1fcd34350aae94429833d4f4ea7c0",
+      "size": 418911
+    },
+    {
+      "file": "vendor/bindings_wasm_bg.wasm",
+      "sha256": "ef41a5a1868f6268a10ce5b1ca4eb92b47683a2375b86c675badf0112a165796",
+      "size": 565801
+    }
+  ],
+  "skills": [
+    {
+      "description": "使用角色绑定的HTML工程，拆分源码、检查、编译、预览与导出。",
+      "file": "html-project.zip",
+      "id": "html-project",
+      "loading": "on-demand",
+      "name": "HTML工程",
+      "sha256": "e44b3e61e322c00722d99f483e759b3bb33ad5fba0034fd15a50175a9f70c66a",
+      "size": 1930,
+      "version": 1
+    },
+    {
+      "description": "编写无需酒馆助手脚本的安全HTML替换界面。",
+      "file": "plain-html-regex.zip",
+      "id": "plain-html-regex",
+      "loading": "on-demand",
+      "name": "纯HTML正则界面",
+      "sha256": "b5b07ca9b7cb9c6658939baf7b4c9cab63d4824da8b86644b09da21a066bcbd7",
+      "size": 1256,
+      "version": 1
+    },
+    {
+      "description": "编写能调用酒馆助手接口的HTML代码块与交互界面。",
+      "file": "tavern-helper-regex.zip",
+      "id": "tavern-helper-regex",
+      "loading": "on-demand",
+      "name": "酒馆助手正则界面",
+      "sha256": "7c053c35d51799d1e28ac267d16e8fe0b3f61f896e7d1ea26c52ab0c289e93db",
+      "size": 797,
+      "version": 1
+    },
+    {
+      "description": "使用Zod定义并维护MVU角色卡的数据结构与更新规则。",
+      "file": "mvu-zod-card.zip",
+      "id": "mvu-zod-card",
+      "loading": "on-demand",
+      "name": "MVU Zod角色卡",
+      "sha256": "dac2b10dc83cffa88611a90f7787f700b36ffbb033b523dfa0c5640e1159970a",
+      "size": 1172,
+      "version": 1
+    },
+    {
+      "description": "为MVU Zod角色卡制作可预览、可销毁、响应式的前端界面。",
+      "file": "mvu-frontend.zip",
+      "id": "mvu-frontend",
+      "loading": "on-demand",
+      "name": "MVU前端界面",
+      "sha256": "c0b2d522ea4c11ea21e25d63be714932cc0da67ae675a934a7caa038c8c3f3c3",
+      "size": 1268,
+      "version": 1
+    },
+    {
+      "description": "按需查询当前酒馆助手类型定义，确认接口、参数与返回值。",
+      "file": "tavern-helper-api.zip",
+      "id": "tavern-helper-api",
+      "loading": "on-demand",
+      "name": "酒馆助手API参考",
+      "sha256": "b9e224bfd79b9919d587ebd16f0e98efce0225e856be6554851491c2106d1774",
+      "size": 61981,
+      "version": 1
+    }
+  ]
+}

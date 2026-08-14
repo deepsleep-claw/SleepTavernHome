@@ -83,15 +83,20 @@
           <details class="dca-advanced-request">
             <summary>高级请求设置（Provider 默认值）</summary>
             <div class="dca-form-grid">
-              <label class="dca-field wide"><span>自定义请求标头（JSON）</span><textarea v-model="providerForm.headers" rows="5" spellcheck="false" placeholder="{}"></textarea></label>
-              <label class="dca-field">
-                <span>附加参数格式</span>
-                <DcaSelect aria-label="Provider 附加参数格式" :model-value="providerForm.extraFormat" :options="extraFormatOptions" @update:model-value="convertExtraFormat" />
+              <label class="dca-field wide">
+                <span>包含主体参数</span>
+                <textarea v-model="providerForm.bodyParameters" rows="8" spellcheck="false" placeholder="metadata:&#10;  source: dream-card-agent"></textarea>
+                <small>模型层递归覆盖这些值；数组与标量整体覆盖，null 删除继承字段。</small>
               </label>
               <label class="dca-field wide">
-                <span>自定义附加参数</span>
-                <textarea v-model="providerForm.extraText" rows="8" spellcheck="false" placeholder="metadata:&#10;  source: dream-card-agent"></textarea>
-                <small>模型层递归覆盖这些值；数组与标量整体覆盖，null 删除继承字段。</small>
+                <span>排除主体参数</span>
+                <textarea v-model="providerForm.excludedBodyParameters" rows="5" spellcheck="false" placeholder="- frequency_penalty&#10;- presence_penalty"></textarea>
+                <small>只删除请求主体的顶层字段；Agent必需字段始终受到保护。</small>
+              </label>
+              <label class="dca-field wide">
+                <span>包含请求标头</span>
+                <textarea v-model="providerForm.requestHeaders" rows="6" spellcheck="false" placeholder="X-Custom-Header: value"></textarea>
+                <small>YAML对象中的值必须是字符串；模型层按不区分大小写的名称覆盖Provider。</small>
               </label>
             </div>
           </details>
@@ -174,7 +179,6 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
-import { convertAdvancedRequestDocument, type AdvancedRequestFormat } from '../../../core/provider/advanced-request';
 import { builtinModelTemplates, defaultModelSettings, matchModelTemplates, settingsForAppliedTemplate } from '../../../core/provider/model-catalog';
 import type { ApiModel, ApiProvider, ApiProviderInput } from '../../../core/provider/provider-config';
 import { useDreamCardAgent } from '../../composables/runtime';
@@ -198,8 +202,8 @@ const deletingModel = ref<ApiModel>();
 const deletingProvider = ref<ApiProvider>();
 
 type ProviderForm = {
-  apiKey: string; baseURL: string; enabled: boolean; extraFormat: AdvancedRequestFormat; extraText: string;
-  headers: string; id: string; interfaceType: ApiProviderInput['interfaceType']; name: string;
+  apiKey: string; baseURL: string; bodyParameters: string; enabled: boolean; excludedBodyParameters: string;
+  id: string; interfaceType: ApiProviderInput['interfaceType']; name: string; requestHeaders: string;
 };
 const providerForm = reactive<ProviderForm>(emptyProviderForm());
 const selectedProvider = computed(() => state.value.providers.find(item => item.id === selectedProviderId.value));
@@ -208,7 +212,6 @@ const interfaceOptions: SelectOption[] = [
   { label: 'OpenAI Chat / 兼容接口', value: 'openai-chat' },
   { label: 'Anthropic Messages', value: 'anthropic' },
 ];
-const extraFormatOptions: SelectOption[] = [{ label: 'YAML', value: 'yaml' }, { label: 'JSON', value: 'json' }];
 const filteredRemoteModels = computed(() => {
   const query = remoteFilter.value.trim().toLocaleLowerCase();
   return query ? remoteModels.value.filter(item => item.toLocaleLowerCase().includes(query)) : remoteModels.value;
@@ -223,31 +226,31 @@ watch(selectedProviderId, async id => {
   const provider = state.value.providers.find(item => item.id === id);
   if (!provider) { Object.assign(providerForm, emptyProviderForm()); return; }
   Object.assign(providerForm, {
-    apiKey: '', baseURL: provider.baseURL, enabled: provider.enabled, extraFormat: 'yaml', extraText: '', headers: '{}',
+    apiKey: '', baseURL: provider.baseURL, bodyParameters: '', enabled: provider.enabled, excludedBodyParameters: '',
     id: provider.id, interfaceType: provider.interfaceType, name: provider.name,
+    requestHeaders: '',
   });
   try {
     const values = await runtime.revealProvider(provider.id);
     if (selectedProviderId.value !== id) return;
-    providerForm.headers = JSON.stringify(values.headers, null, 2);
-    providerForm.extraFormat = values.extraParameters.format;
-    providerForm.extraText = values.extraParameters.text;
+    providerForm.bodyParameters = values.bodyParameters.text;
+    providerForm.excludedBodyParameters = values.excludedBodyParameters.text;
+    providerForm.requestHeaders = values.requestHeaders.text;
   } catch (error) { toastr.error(error instanceof Error ? error.message : String(error), '梦境创客'); }
 }, { immediate: true });
 
-function emptyProviderForm(): ProviderForm { return { apiKey: '', baseURL: '', enabled: true, extraFormat: 'yaml', extraText: '', headers: '{}', id: '', interfaceType: 'openai-chat', name: '' }; }
+function emptyProviderForm(): ProviderForm { return { apiKey: '', baseURL: '', bodyParameters: '', enabled: true, excludedBodyParameters: '', id: '', interfaceType: 'openai-chat', name: '', requestHeaders: '' }; }
 function selectProvider(id: string) { selectedProviderId.value = id; }
 function newProvider() { selectedProviderId.value = ''; Object.assign(providerForm, emptyProviderForm()); }
 function setInterfaceType(value: string) { if (value === 'anthropic' || value === 'openai-chat' || value === 'openai-responses') providerForm.interfaceType = value; }
 
 function providerInput(): ApiProviderInput {
-  let headers: Record<string, string>;
-  try { headers = providerForm.headers.trim() ? JSON.parse(providerForm.headers) as Record<string, string> : {}; }
-  catch (error) { throw new Error('Provider 自定义请求标头不是有效的JSON。', { cause: error }); }
   return {
     apiKey: providerForm.apiKey, baseURL: providerForm.baseURL, enabled: providerForm.enabled,
-    extraParameters: { format: providerForm.extraFormat, text: providerForm.extraText }, headers,
+    bodyParameters: { text: providerForm.bodyParameters },
+    excludedBodyParameters: { text: providerForm.excludedBodyParameters },
     id: providerForm.id || undefined, interfaceType: providerForm.interfaceType, name: providerForm.name,
+    requestHeaders: { text: providerForm.requestHeaders },
   };
 }
 
@@ -267,12 +270,6 @@ async function copyProvider() {
     toastr.success(`已复制为 Provider“${copied!.name}”。`, '梦境创客');
   }
 }
-async function convertExtraFormat(value: string) {
-  if (value !== 'yaml' && value !== 'json') return;
-  try { const result = convertAdvancedRequestDocument({ format: providerForm.extraFormat, text: providerForm.extraText }, value); providerForm.extraFormat = result.format; providerForm.extraText = result.text; }
-  catch (error) { toastr.error(error instanceof Error ? error.message : String(error), '梦境创客'); }
-}
-
 async function fetchModels() {
   modelsLoading.value = true;
   try {

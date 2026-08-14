@@ -28,13 +28,13 @@ import type {
 } from './types';
 
 const CHARACTER_FILES: Record<CharacterTextField, string> = {
-  creator_notes: '/character/creator-notes.md',
-  description: '/character/description.md',
-  mes_example: '/character/example-dialogue.md',
-  personality: '/character/personality.md',
-  post_history_instructions: '/character/post-history-instructions.md',
-  scenario: '/character/scenario.md',
-  system_prompt: '/character/system-prompt.md',
+  creator_notes: '/character/definition/creator-notes.md',
+  description: '/character/definition/description.md',
+  mes_example: '/character/definition/example-dialogue.md',
+  personality: '/character/definition/personality.md',
+  post_history_instructions: '/character/definition/post-history-instructions.md',
+  scenario: '/character/definition/scenario.md',
+  system_prompt: '/character/definition/system-prompt.md',
 };
 
 type GreetingIndexItem = { file: string; id: string; name: string };
@@ -49,8 +49,8 @@ function file(
   return { content, mediaType, path: normalizeWorkspacePath(path), readonly, resourceId };
 }
 
-function worldbookDirectory(name: string, readonly: boolean, root?: string): string {
-  const base = root ? normalizeWorkspacePath(root) : readonly ? '/worldbooks-global-readonly' : '/worldbooks';
+function worldbookDirectory(name: string, _readonly: boolean, root?: string): string {
+  const base = root ? normalizeWorkspacePath(root) : '/worldbooks';
   return `${base}/${encodeWorkspaceSegment(name)}`;
 }
 
@@ -137,20 +137,26 @@ export function projectCardWorkspace(
     files.push(file(path, state.character.fields[field], `character:${field}`));
   }
   files.push(
-    file('/character/creator.md', state.character.creator, 'character:creator'),
-    file('/character/version.md', state.character.version, 'character:version'),
-    file('/character/tags.yaml', serializeYaml({ tags: state.character.tags }), 'character:tags', false, 'text/yaml'),
+    file('/character/definition/creator.md', state.character.creator, 'character:creator'),
+    file('/character/definition/version.md', state.character.version, 'character:version'),
+    file(
+      '/character/definition/tags.yaml',
+      serializeYaml({ tags: state.character.tags }),
+      'character:tags',
+      false,
+      'text/yaml',
+    ),
   );
 
   const greetingIndex: GreetingIndexItem[] = [];
   for (const [index, greeting] of state.character.greetings.entries()) {
     const name = `${String(index + 1).padStart(3, '0')}-${slugifyFileName(greeting.name, 'greeting')}.md`;
     greetingIndex.push({ file: name, id: greeting.id, name: greeting.name });
-    files.push(file(`/greetings/${name}`, greeting.content, greeting.id));
+    files.push(file(`/character/greetings/${name}`, greeting.content, greeting.id));
   }
   files.push(
     file(
-      '/greetings/index.yaml',
+      '/character/greetings/index.yaml',
       serializeYaml({ greetings: greetingIndex }),
       'greetings:index',
       false,
@@ -167,9 +173,8 @@ export function projectCardWorkspace(
       'text/yaml',
     ),
   );
-  const globalNames = new Set(state.globalWorldbookNames);
   for (const book of state.worldbooks) {
-    const readonly = !book.writable || !book.roundTripSafe || globalNames.has(book.name);
+    const readonly = !book.writable || !book.roundTripSafe;
     files.push(...projectWorldbookFiles(book, { readonly }));
   }
   files.push(...projectTavernResources(state.resources, resourceOptions));
@@ -414,29 +419,30 @@ function materializeGreetings(
   warnings: string[],
 ): CharacterWorkspaceData['greetings'] {
   const greetingFiles = [...files.values()].filter(
-    item => parentWorkspacePath(item.path) === '/greetings' && item.path.endsWith('.md'),
+    item => parentWorkspacePath(item.path) === '/character/greetings' && item.path.endsWith('.md'),
   );
   const byId = new Map(greetingFiles.map(item => [item.resourceId, item]));
   const byName = new Map(greetingFiles.map(item => [workspaceBasename(item.path), item]));
-  const indexFile = files.get('/greetings/index.yaml');
+  const indexPath = '/character/greetings/index.yaml';
+  const indexFile = files.get(indexPath);
   const rawIndex = indexFile ? parseYamlObject(indexFile.content, indexFile.path).greetings : [];
   if (!Array.isArray(rawIndex)) {
-    throw new WorkspaceError('INVALID_PATCH', 'greetings/index.yaml中的greetings必须是数组。', '/greetings/index.yaml');
+    throw new WorkspaceError('INVALID_PATCH', 'character/greetings/index.yaml中的greetings必须是数组。', indexPath);
   }
   const result: CharacterWorkspaceData['greetings'] = [];
   const used = new Set<string>();
   for (const rawItem of rawIndex) {
-    const item = asRecord(rawItem, 'greeting index item', '/greetings/index.yaml');
-    const id = requiredString(item.id, 'greeting.id', '/greetings/index.yaml');
-    const indexedName = requiredString(item.name, 'greeting.name', '/greetings/index.yaml');
-    const indexedFile = requiredString(item.file, 'greeting.file', '/greetings/index.yaml');
+    const item = asRecord(rawItem, 'greeting index item', indexPath);
+    const id = requiredString(item.id, 'greeting.id', indexPath);
+    const indexedName = requiredString(item.name, 'greeting.name', indexPath);
+    const indexedFile = requiredString(item.file, 'greeting.file', indexPath);
     const greeting = byId.get(id) ?? byName.get(indexedFile);
     if (!greeting) {
       warnings.push(`开场白索引引用了不存在的文件：${indexedFile}`);
       continue;
     }
     if (used.has(greeting.resourceId)) {
-      throw new WorkspaceError('INVALID_PATCH', `开场白索引包含重复项：${indexedFile}`, '/greetings/index.yaml');
+      throw new WorkspaceError('INVALID_PATCH', `开场白索引包含重复项：${indexedFile}`, indexPath);
     }
     used.add(greeting.resourceId);
     result.push({ content: greeting.content, id: greeting.resourceId, name: indexedName });
@@ -544,6 +550,7 @@ function removeDanglingBindings(
 export function materializeCardWorkspace(
   base: CardWorkspaceState,
   inputs: Iterable<WorkspaceFile>,
+  options: { synchronizeMetadata?: boolean } = {},
 ): CardWorkspaceMaterialization {
   const files = new Map([...inputs].map(item => [normalizeWorkspacePath(item.path), item]));
   const state = klona(base);
@@ -555,9 +562,9 @@ export function materializeCardWorkspace(
     }
     state.character.fields[field] = input.content;
   }
-  state.character.creator = files.get('/character/creator.md')?.content ?? state.character.creator;
-  state.character.version = files.get('/character/version.md')?.content ?? state.character.version;
-  const tagsFile = files.get('/character/tags.yaml');
+  state.character.creator = files.get('/character/definition/creator.md')?.content ?? state.character.creator;
+  state.character.version = files.get('/character/definition/version.md')?.content ?? state.character.version;
+  const tagsFile = files.get('/character/definition/tags.yaml');
   if (tagsFile) {
     const tags = parseYamlObject(tagsFile.content, tagsFile.path).tags;
     if (!Array.isArray(tags) || !tags.every(tag => typeof tag === 'string')) {
@@ -585,6 +592,6 @@ export function materializeCardWorkspace(
   state.bindings = removeDanglingBindings(rewriteBindingNames(parsedBindings, base, books), books, warnings);
   state.resources = materializeTavernResources(base, files.values());
   state.worldbooks = books;
-  synchronizeCardAgentMetadata(state);
+  if (options.synchronizeMetadata !== false) synchronizeCardAgentMetadata(state);
   return { state, warnings };
 }

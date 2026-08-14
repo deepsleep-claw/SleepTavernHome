@@ -23,7 +23,7 @@ const values = Object.fromEntries(
 
 describe('structured preset compiler', () => {
   it('从内置YAML读取默认预设，并允许身份节点直接书写正文', () => {
-    expect(DEFAULT_PRESET).toMatchObject({ id: 'dream-card-agent-default', name: '梦境创客默认预设', version: 1 });
+    expect(DEFAULT_PRESET).toMatchObject({ id: 'dream-card-agent-default', name: '梦境创客默认预设', version: 2 });
     expect(DEFAULT_PRESET.nodes[0]).toMatchObject({ id: 'identity', role: 'system', title: '身份' });
     expect(DEFAULT_PRESET.nodes[0].content).toContain('你是“梦境创客”');
     expect(DEFAULT_PRESET.nodes[0].content).not.toContain('{{agent_identity}}');

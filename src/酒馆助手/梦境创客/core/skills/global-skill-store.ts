@@ -146,10 +146,8 @@ export class GlobalSkillStore {
     if (input.builtin) throw new Error('内置Skill不可修改。');
     const skill: AgentSkill = {
       ...klona(input),
-      assets: undefined,
       builtin: false,
       directories: skillDirectories(input),
-      references: undefined,
       resources: skillResources(input),
     };
     if (!skill.name.trim() || !skill.description.trim() || !skill.body.trim()) {

@@ -45,6 +45,7 @@ export type ProviderProbeProfile = {
   apiKey: string;
   baseURL: string;
   compatibilityMode?: ProviderCompatibilityMode;
+  excludedBodyParameters?: string[];
   extraParameters?: Record<string, unknown>;
   headers?: Record<string, string>;
   interfaceType: ProviderInterfaceType;
@@ -65,8 +66,12 @@ export function createProviderRuntime(profile: ProviderProbeProfile, webSearchMa
     baseURL: profile.baseURL,
     fetch:
       profile.interfaceType === 'openai-responses' && compatibilityMode === 'deepseek'
-        ? createAdvancedRequestFetch(profile.extraParameters ?? {}, createDeepSeekResponsesFetch())
-        : createAdvancedRequestFetch(profile.extraParameters ?? {}),
+        ? createAdvancedRequestFetch(
+            profile.extraParameters ?? {},
+            profile.excludedBodyParameters,
+            createDeepSeekResponsesFetch(),
+          )
+        : createAdvancedRequestFetch(profile.extraParameters ?? {}, profile.excludedBodyParameters),
     headers: profile.headers,
   };
 

@@ -1,17 +1,23 @@
 import type { ModelMessage } from 'ai';
 import { describe, expect, it } from 'vitest';
 import { MemoryTavernFileClient } from '../core/persistence/file-client';
-import { MemoryAgentSettingsStore } from '../core/persistence/settings';
+import {
+  MemoryAgentSettingsStore,
+  type DreamCardAgentSettings,
+} from '../core/persistence/settings';
 import type { ModelStepExecutor, ModelStepRequest, ModelStepResult } from '../core/runner/step-executor';
 import { MemoryCardStateAdapter } from '../core/transaction/adapter';
 import { transactionState } from '../core/transaction/test-fixture';
 import { DreamCardAgentRuntime } from './dream-card-agent-runtime';
 import type { AgentSkill } from '../core/skills/types';
 import { FakeTavernBridge } from '../core/tavern/test-bridge';
+import { defaultBuiltinAgentConfiguration, type AgentConfiguration } from '../core/persistence/builtin-agent';
 
 class QueueExecutor implements ModelStepExecutor {
+  readonly requests: ModelStepRequest[] = [];
   constructor(private readonly results: ModelStepResult[]) {}
-  async execute(_request: ModelStepRequest): Promise<ModelStepResult> {
+  async execute(request: ModelStepRequest): Promise<ModelStepResult> {
+    this.requests.push(request);
     const result = this.results.shift();
     if (!result) throw new Error('missing runtime model step');
     return result;
@@ -33,13 +39,25 @@ class DeferredExecutor implements ModelStepExecutor {
   }
 }
 
+class DeferredMemorySettingsStore extends MemoryAgentSettingsStore {
+  release!: () => void;
+  private readonly gate = new Promise<void>(resolve => {
+    this.release = resolve;
+  });
+
+  override async save(settings: DreamCardAgentSettings): Promise<void> {
+    await this.gate;
+    await super.save(settings);
+  }
+}
+
 function modelStep(tool = false): ModelStepResult {
   const messages: ModelMessage[] = tool
     ? [
         {
           content: [
             {
-              input: { content: '运行时描述', overwrite: true, path: '/character/description.md' },
+              input: { content: '运行时描述', overwrite: true, path: '/character/definition/description.md' },
               toolCallId: 'runtime-write',
               toolName: 'write_file',
               type: 'tool-call',
@@ -56,7 +74,7 @@ function modelStep(tool = false): ModelStepResult {
     toolCalls: tool
       ? [
           {
-            input: { content: '运行时描述', overwrite: true, path: '/character/description.md' },
+            input: { content: '运行时描述', overwrite: true, path: '/character/definition/description.md' },
             toolCallId: 'runtime-write',
             toolName: 'write_file',
           },
@@ -69,7 +87,6 @@ async function addProfile(runtime: DreamCardAgentRuntime, modelSettings?: Parame
   const provider = await runtime.saveProvider({
     apiKey: 'secret',
     baseURL: 'https://example.invalid/v1',
-    headers: {},
     enabled: true,
     interfaceType: 'openai-chat',
     name: '本地接口',
@@ -81,7 +98,63 @@ async function addProfile(runtime: DreamCardAgentRuntime, modelSettings?: Parame
   return { model, provider };
 }
 
+async function useAgentWithoutRemoteSkills(runtime: DreamCardAgentRuntime) {
+  const presetId = runtime.snapshot().activePresetId;
+  await runtime.saveAgentConfiguration({
+    id: 'agent:test-local',
+    name: '测试 Agent',
+    presetId,
+    skills: [],
+    toolIds: defaultBuiltinAgentConfiguration().toolIds,
+  });
+}
+
+function agentConfiguration(id: string, name: string, presetId: string, skillIds: string[]): AgentConfiguration {
+  return {
+    id,
+    name,
+    presetId,
+    skills: skillIds.map(skillId => ({ enabled: true, id: skillId, loading: 'full' })),
+    toolIds: defaultBuiltinAgentConfiguration().toolIds,
+  };
+}
+
 describe('DreamCardAgentRuntime', () => {
+  it('无需角色即可创建全局会话，角色导航工具只向全局会话暴露', async () => {
+    const globalBridge = new FakeTavernBridge();
+    globalBridge.raw = null;
+    const globalExecutor = new QueueExecutor([modelStep(false)]);
+    const globalRuntime = new DreamCardAgentRuntime({
+      bridge: globalBridge,
+      executorFactory: () => globalExecutor,
+      fileClient: new MemoryTavernFileClient(),
+      settingsStore: new MemoryAgentSettingsStore(),
+    });
+    await addProfile(globalRuntime);
+    await useAgentWithoutRemoteSkills(globalRuntime);
+    const globalSession = await globalRuntime.createSession({ scope: 'global', title: '全局工作' });
+    expect(globalSession).toMatchObject({ bindingId: 'global', characterName: '全局会话', scope: 'global' });
+    expect(globalSession.workingFiles.some(file => file.path.startsWith('/character/'))).toBe(false);
+    await globalRuntime.send('列出角色');
+    expect(globalExecutor.requests[0].tools.map(tool => tool.name)).toContain('manage_character');
+
+    const characterExecutor = new QueueExecutor([modelStep(false)]);
+    const characterRuntime = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+      bridge: new FakeTavernBridge(),
+      executorFactory: () => characterExecutor,
+      fileClient: new MemoryTavernFileClient(),
+      settingsStore: new MemoryAgentSettingsStore(),
+    });
+    await addProfile(characterRuntime);
+    await useAgentWithoutRemoteSkills(characterRuntime);
+    await characterRuntime.createSession({ scope: 'character' });
+    await characterRuntime.send('检查角色');
+    expect(characterExecutor.requests[0].tools.map(tool => tool.name)).not.toContain('manage_character');
+    globalRuntime.destroy();
+    characterRuntime.destroy();
+  });
+
   it('按稳定绑定切换角色，并可把已失效角色的会话作为只读历史打开', async () => {
     const files = new MemoryTavernFileClient();
     const settings = new MemoryAgentSettingsStore();
@@ -113,6 +186,7 @@ describe('DreamCardAgentRuntime', () => {
       settingsStore: settings,
     });
     await addProfile(runtime);
+    await useAgentWithoutRemoteSkills(runtime);
     await runtime.refreshCharacter();
     await runtime.createSession({ title: '第一角色会话' });
     current = second;
@@ -152,30 +226,36 @@ describe('DreamCardAgentRuntime', () => {
       settingsStore: new MemoryAgentSettingsStore(),
     });
     await addProfile(runtime);
+    await useAgentWithoutRemoteSkills(runtime);
     const writer: AgentSkill = {
-      assets: {},
       body: '写作流程',
       builtin: false,
       description: '写作',
+      directories: [],
       id: 'writer',
       loading: 'full',
       name: '写作',
-      references: {},
+      resources: {},
     };
     const reviewer: AgentSkill = { ...writer, body: '审阅流程', description: '审阅', id: 'reviewer', name: '审阅' };
     await runtime.saveGlobalSkill(writer);
     await runtime.saveGlobalSkill(reviewer);
     const presetId = runtime.snapshot().activePresetId;
-    await runtime.saveAgentConfiguration({ id: 'agent:writer', name: '写作Agent', presetId, skillIds: ['writer'] });
+    await runtime.saveAgentConfiguration(agentConfiguration('agent:writer', '写作Agent', presetId, ['writer']));
     const first = await runtime.createSession();
-    expect(first.agentConfiguration).toMatchObject({ id: 'agent:writer', skillIds: ['writer'] });
+    expect(first.agentConfiguration).toMatchObject({
+      id: 'agent:writer',
+      skills: [{ enabled: true, id: 'writer', loading: 'full' }],
+    });
     expect(first.skills.map(skill => skill.id)).toEqual(['writer']);
 
-    await runtime.saveAgentConfiguration({ id: 'agent:reviewer', name: '审阅Agent', presetId, skillIds: ['reviewer'] });
+    await runtime.saveAgentConfiguration(agentConfiguration('agent:reviewer', '审阅Agent', presetId, ['reviewer']));
+    expect(runtime.snapshot().active?.skills.map(skill => skill.id)).toEqual(['writer']);
+    await runtime.selectAgentConfiguration('agent:reviewer');
     expect(runtime.snapshot().active?.skills.map(skill => skill.id)).toEqual(['writer']);
     await runtime.applyAgentConfiguration('agent:reviewer');
     expect(runtime.snapshot().active).toMatchObject({
-      agentConfiguration: { id: 'agent:reviewer', skillIds: ['reviewer'] },
+      agentConfiguration: { id: 'agent:reviewer', skills: [{ id: 'reviewer' }] },
     });
     expect(runtime.snapshot().active?.skills.map(skill => skill.id)).toEqual(['reviewer']);
     runtime.destroy();
@@ -200,14 +280,14 @@ describe('DreamCardAgentRuntime', () => {
     const files = new MemoryTavernFileClient();
     const adapter = new MemoryCardStateAdapter(transactionState());
     const original: AgentSkill = {
-      assets: {},
       body: '旧版流程',
       builtin: false,
       description: '全局流程',
+      directories: [],
       id: 'global-writer',
       loading: 'full',
       name: '全局写作',
-      references: {},
+      resources: {},
     };
     const first = new DreamCardAgentRuntime({
       adapterFactory: () => adapter,
@@ -217,17 +297,16 @@ describe('DreamCardAgentRuntime', () => {
     });
     await addProfile(first);
     await first.saveGlobalSkill(original);
-    await first.saveAgentConfiguration({
-      id: 'agent:writer',
-      name: '写作Agent',
-      presetId: first.snapshot().activePresetId,
-      skillIds: [original.id],
-    });
+    await first.saveAgentConfiguration(
+      agentConfiguration('agent:writer', '写作Agent', first.snapshot().activePresetId, [original.id]),
+    );
     await first.createSession();
     await first.saveGlobalSkill({ ...original, body: '新版流程' });
     expect(first.snapshot().active?.skills[0].body).toBe('旧版流程');
     await first.send('采用最新Skill');
     expect(first.snapshot().active?.skills[0].body).toBe('新版流程');
+    const sessionId = first.snapshot().active!.sessionId;
+    await first.saveGlobalSkill({ ...original, body: '再次更新的流程' });
 
     const second = new DreamCardAgentRuntime({
       adapterFactory: () => adapter,
@@ -236,7 +315,10 @@ describe('DreamCardAgentRuntime', () => {
       settingsStore: settings,
     });
     await second.refreshCharacter();
-    expect(second.snapshot().skills).toMatchObject([{ body: '新版流程', id: 'global-writer' }]);
+    expect(second.snapshot().skills).toMatchObject([{ body: '再次更新的流程', id: 'global-writer' }]);
+    expect((await second.openSession(sessionId)).skills).toMatchObject([
+      { body: '再次更新的流程', id: 'global-writer' },
+    ]);
     first.destroy();
     second.destroy();
   });
@@ -249,6 +331,7 @@ describe('DreamCardAgentRuntime', () => {
       settingsStore: new MemoryAgentSettingsStore(),
     });
     await addProfile(runtime);
+    await useAgentWithoutRemoteSkills(runtime);
     const preset = await runtime.savePresetProfile({
       id: 'custom-preset',
       name: '世界书专家',
@@ -264,12 +347,7 @@ describe('DreamCardAgentRuntime', () => {
       ],
       version: 1,
     });
-    await runtime.saveAgentConfiguration({
-      id: 'agent:worldbook',
-      name: '世界书Agent',
-      presetId: preset.id,
-      skillIds: [],
-    });
+    await runtime.saveAgentConfiguration(agentConfiguration('agent:worldbook', '世界书Agent', preset.id, []));
     expect(runtime.snapshot()).toMatchObject({ activePresetId: preset.id, presetProfiles: expect.any(Array) });
     expect((await runtime.createSession()).preset).toMatchObject({ id: 'custom-preset', name: '世界书专家' });
     runtime.destroy();
@@ -286,6 +364,7 @@ describe('DreamCardAgentRuntime', () => {
       settingsStore: settings,
     });
     await addProfile(runtime);
+    await useAgentWithoutRemoteSkills(runtime);
     await runtime.refreshCharacter();
     expect(runtime.snapshot().currentCharacter?.name).toBe('角色');
     const created = await runtime.createSession({ mode: 'yolo', title: '塑造角色' });
@@ -321,6 +400,7 @@ describe('DreamCardAgentRuntime', () => {
       settingsStore: settings,
     });
     await addProfile(owner);
+    await useAgentWithoutRemoteSkills(owner);
     const session = await owner.createSession();
 
     const observer = new DreamCardAgentRuntime({
@@ -344,6 +424,7 @@ describe('DreamCardAgentRuntime', () => {
       settingsStore: new MemoryAgentSettingsStore(),
     });
     await addProfile(runtime);
+    await useAgentWithoutRemoteSkills(runtime);
     await runtime.createSession();
     expect((await runtime.send('请补全角色的背景故事与动机')).title).toBe('请补全角色的背景故事');
     expect((await runtime.renameSession('  我的角色创作  ')).title).toBe('我的角色创作');
@@ -361,6 +442,7 @@ describe('DreamCardAgentRuntime', () => {
       settingsStore: new MemoryAgentSettingsStore(),
     });
     await addProfile(runtime);
+    await useAgentWithoutRemoteSkills(runtime);
     const session = await runtime.createSession();
     const busyStates: boolean[] = [];
     const unsubscribe = runtime.subscribe(state => busyStates.push(state.busy));
@@ -398,6 +480,22 @@ describe('DreamCardAgentRuntime', () => {
     expect(runtime.snapshot().providers).toEqual([]);
     expect((await runtime.createSession()).modelSelection).toBeUndefined();
     await expect(runtime.send('测试')).rejects.toThrow('尚未选择可用模型');
+    runtime.destroy();
+  });
+
+  it('轻量设置与主题先更新当前页面，再等待酒馆设置落盘', async () => {
+    const settings = new DeferredMemorySettingsStore();
+    const runtime = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+      executorFactory: () => new QueueExecutor([]),
+      fileClient: new MemoryTavernFileClient(),
+      settingsStore: settings,
+    });
+
+    const saving = runtime.updateSettings({ activeThemeId: 'builtin-light', floatingButton: false });
+    expect(runtime.snapshot()).toMatchObject({ activeThemeId: 'builtin-light', floatingButton: false });
+    settings.release();
+    await saving;
     runtime.destroy();
   });
 
@@ -452,6 +550,7 @@ describe('DreamCardAgentRuntime', () => {
       settingsStore: new MemoryAgentSettingsStore(),
     });
     await addProfile(runtime);
+    await useAgentWithoutRemoteSkills(runtime);
     const first = await runtime.createSession({ title: '后台会话' });
     const running = runtime.send('运行一个任务');
     await deferred.startedPromise;

@@ -8,8 +8,12 @@ describe('built-in agent definition', () => {
       id: 'agent:default',
       name: '梦境创客默认 Agent',
       presetId: DEFAULT_PRESET.id,
-      skillIds: [],
-      version: 1,
+      skills: expect.arrayContaining([
+        { enabled: true, id: 'card-workspace-io', loading: 'full' },
+        { enabled: true, id: 'html-project', loading: 'on-demand' },
+      ]),
+      toolIds: expect.arrayContaining(['list_path', 'read_file', 'manage_worldbook', 'manage_character']),
+      version: 3,
     });
   });
 

@@ -29,8 +29,7 @@
         </button>
       </div>
       <small
-        >{{ state.active?.agentConfiguration?.name ?? '旧版会话配置' }} ·
-        {{
+        >{{ state.active?.scope === 'global' ? '全局会话' : state.active?.characterName }} · {{
           state.activeSessionAccess === 'readonly-history'
             ? '只读历史记录'
             : state.active?.mode === 'yolo'
@@ -40,6 +39,17 @@
       >
     </div>
     <div class="dca-session-controls">
+      <label v-if="state.activeSessionAccess === 'live'" class="dca-session-agent-select">
+        <span>Agent</span>
+        <DcaSelect
+          :model-value="selectedAgentId"
+          :options="agentOptions"
+          placeholder="请选择 Agent"
+          aria-label="当前会话 Agent"
+          :disabled="!state.active || isSessionTabRunning(state.active.sessionId)"
+          @update:model-value="requestAgentChange"
+        />
+      </label>
       <div v-if="deletePending" class="dca-session-delete-confirm">
         <span>删除当前会话？</span>
         <button type="button" @click="deletePending = false">取消</button>
@@ -69,12 +79,28 @@
         <span>{{ sidebarCollapsed ? '侧栏' : '收起' }}</span>
       </button>
     </div>
+    <div v-if="pendingAgentId" class="dca-modal-backdrop" role="presentation">
+      <section class="dca-modal dca-agent-change-dialog" role="dialog" aria-modal="true" @click.stop>
+        <header>
+          <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+          <div>
+            <strong>切换当前会话的 Agent？</strong>
+            <span>这个会话已经开始。新的预设、Skill 与工具会立即生效，并可能失去已有请求的缓存命中。</span>
+          </div>
+        </header>
+        <footer>
+          <button type="button" @click="pendingAgentId = ''">取消</button>
+          <button class="dca-btn-primary" type="button" @click="confirmAgentChange">仍然切换</button>
+        </footer>
+      </section>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useDreamCardAgent } from '../../composables/runtime';
+import DcaSelect from '../DcaSelect.vue';
 
 defineProps<{ sidebarCollapsed: boolean }>();
 const emit = defineEmits<{ 'toggle-sidebar': [] }>();
@@ -84,6 +110,15 @@ const { action, deleteCharacterSession, deleteSession, isSessionTabRunning, runt
 const renaming = ref(false);
 const titleDraft = ref('');
 const deletePending = ref(false);
+const pendingAgentId = ref('');
+const agentOptions = computed(() =>
+  state.value.agentConfigurations.map(configuration => ({ label: configuration.name, value: configuration.id })),
+);
+const selectedAgentId = computed(() => {
+  const id = state.value.active?.agentConfiguration.id ?? '';
+  return state.value.agentConfigurations.some(configuration => configuration.id === id) ? id : '';
+});
+const hasStarted = computed(() => state.value.active?.ui.some(item => item.kind === 'user') === true);
 
 watch(
   () => state.value.active?.sessionId,
@@ -91,6 +126,7 @@ watch(
     renaming.value = false;
     titleDraft.value = '';
     deletePending.value = false;
+    pendingAgentId.value = '';
   },
 );
 
@@ -117,6 +153,23 @@ async function confirmDelete() {
       ? await deleteCharacterSession(bindingId, sessionId)
       : await deleteSession(sessionId);
   if (deleted) deletePending.value = false;
+}
+
+function requestAgentChange(id: string) {
+  if (!id || id === selectedAgentId.value) return;
+  if (hasStarted.value) pendingAgentId.value = id;
+  else void applyAgent(id);
+}
+
+async function applyAgent(id: string) {
+  if (await action(() => runtime.applyAgentConfiguration(id))) {
+    pendingAgentId.value = '';
+    toastr.success('当前会话的 Agent 已切换。', '梦境创客');
+  }
+}
+
+async function confirmAgentChange() {
+  if (pendingAgentId.value) await applyAgent(pendingAgentId.value);
 }
 </script>
 
@@ -171,6 +224,29 @@ async function confirmDelete() {
   gap: 0.5rem;
 }
 
+.dca-session-agent-select {
+  display: flex;
+  min-width: 12rem;
+  align-items: center;
+  gap: 0.4rem;
+}
+.dca-session-agent-select > span {
+  color: var(--dca-text-muted);
+  font-size: 0.72rem;
+}
+.dca-session-agent-select > .dca-select {
+  min-width: 9rem;
+  flex: 1;
+}
+.dca-agent-change-dialog {
+  width: min(32rem, calc(100vw - 2rem));
+}
+.dca-agent-change-dialog > header { display: flex; gap: .7rem; }
+.dca-agent-change-dialog > header > i { color: var(--dca-warning); }
+.dca-agent-change-dialog > header > div { display: grid; gap: .2rem; }
+.dca-agent-change-dialog > header span { color: var(--dca-text-muted); font-size: .78rem; }
+.dca-agent-change-dialog > footer { display: flex; justify-content: flex-end; gap: .5rem; }
+
 .dca-app .dca-session-delete {
   color: var(--dca-text-muted);
 }
@@ -195,6 +271,9 @@ async function confirmDelete() {
 }
 
 @media (max-width: 720px) {
+  .dca-session-agent-select { min-width: 0; max-width: 10rem; }
+  .dca-session-agent-select > span { display: none; }
+  .dca-session-agent-select > .dca-select { min-width: 0; }
   .dca-sidebar-toggle span {
     display: none;
   }

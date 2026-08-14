@@ -66,7 +66,7 @@ describe('readTavernState', () => {
     expect(first.state.character.greetings.map(item => item.name)).toEqual(['默认开场白', '开场白 2']);
   });
 
-  it('通过角色元数据回读尚未绑定但由梦境创客创建的世界书', async () => {
+  it('不再通过角色元数据隐式挂载未绑定世界书', async () => {
     const bridge = new FakeTavernBridge();
     bridge.books.set('未绑定新书', []);
     const cardAgent = bridge.raw!.data.extensions!.card_agent as { worldbooks: Array<{ id: string; name: string }> };
@@ -74,21 +74,15 @@ describe('readTavernState', () => {
 
     const result = await readTavernState(bridge);
 
-    expect(result.state.worldbooks.find(book => book.name === '未绑定新书')).toMatchObject({
-      resourceId: 'book-unbound',
-      writable: true,
-    });
+    expect(result.state.worldbooks.find(book => book.name === '未绑定新书')).toBeUndefined();
   });
 
-  it('把无法读取的全局世界书降级为只读并给出警告', async () => {
+  it('角色状态不再自动挂载酒馆全局世界书', async () => {
     const bridge = new FakeTavernBridge();
     bridge.globalWorldbooks = ['损坏书'];
     const result = await readTavernState(bridge);
-    expect(result.warnings).toEqual(['世界书“损坏书”无法无损读取，已降级为只读。']);
-    expect(result.state.worldbooks.find(book => book.name === '损坏书')).toMatchObject({
-      roundTripSafe: false,
-      writable: false,
-    });
+    expect(result.warnings).toEqual([]);
+    expect(result.state.worldbooks.find(book => book.name === '损坏书')).toBeUndefined();
   });
 
   it('拒绝群聊、未打开角色卡和读取失败', async () => {

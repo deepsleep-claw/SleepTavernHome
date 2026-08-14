@@ -44,7 +44,7 @@ describe('AgentWindow', () => {
     expect(root.textContent).not.toContain('保存（不测试连接）');
     expect([...root.querySelectorAll('button')].some(button => button.textContent?.trim() === '保存 Provider')).toBe(true);
     expect(root.querySelector('.dca-api-provider-toolbar')).not.toBeNull();
-    expect((root.querySelector('textarea') as HTMLTextAreaElement).value).toBe('{}');
+    expect((root.querySelector('textarea') as HTMLTextAreaElement).value).toBe('');
     app.unmount();
   });
 });

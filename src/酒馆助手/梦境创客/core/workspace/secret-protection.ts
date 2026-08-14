@@ -51,7 +51,7 @@ const rules = [
 ].map(([id, rule]) => ({ id, rule }));
 
 export function isProtectedScriptDataPath(path: string): boolean {
-  return /^\/tavern-helper-scripts\/(?:character|global|preset-current)\/scripts\/[^/]+\/data\.yaml$/u.test(path);
+  return /^\/scripts\/(?:character|global|preset-current)\/scripts\/[^/]+\/data\.yaml$/u.test(path);
 }
 
 function normalizedFindings(
@@ -159,4 +159,3 @@ export async function restoreSecretsFromModel(
     removed: [...expected.entries()].filter(([token]) => !placeholders.includes(token)).map(([, value]) => value.finding),
   };
 }
-

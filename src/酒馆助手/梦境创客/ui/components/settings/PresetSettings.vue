@@ -157,8 +157,10 @@ const activeAgentConfiguration = computed(
     state.value.agentConfigurations[0],
 );
 const enabledSkills = computed(() => {
-  const enabled = new Set(activeAgentConfiguration.value?.skillIds ?? []);
-  return state.value.skills.filter(skill => enabled.has(skill.id));
+  const enabled = new Set(
+    activeAgentConfiguration.value?.skills?.filter(skill => skill.enabled).map(skill => skill.id) ?? [],
+  );
+  return (state.value.skills ?? []).filter(skill => enabled.has(skill.id));
 });
 const macroValues = computed(() => defaultPresetValues(enabledSkills.value));
 const regularMacroPreviews = computed(() =>

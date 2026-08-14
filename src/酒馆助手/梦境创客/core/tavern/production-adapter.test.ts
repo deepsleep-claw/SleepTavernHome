@@ -6,6 +6,7 @@ import { diffCardStates, type StateOperation } from '../transaction/state-diff';
 import type { TavernWorldbookEntry } from './bridge';
 import { ProductionCardStateAdapter } from './production-adapter';
 import { FakeTavernBridge } from './test-bridge';
+import { readCharacterTavernState } from './global-state-reader';
 
 function operation(path: string, before: unknown, after: unknown, kind: StateOperation['kind'] = 'modify'): StateOperation {
   return { after, before, highRisk: false, kind, label: path, path };
@@ -112,8 +113,10 @@ describe('ProductionCardStateAdapter', () => {
 
   it('实时创建未绑定世界书后同步元数据并采用写后回读', async () => {
     const bridge = new FakeTavernBridge();
-    const adapter = new ProductionCardStateAdapter(bridge);
+    const mounted = new Set<string>();
+    const adapter = new ProductionCardStateAdapter(bridge, value => readCharacterTavernState(value, mounted));
     const base = await adapter.read();
+    mounted.add('未绑定新书');
     const working = klona(base);
     working.worldbooks.push({
       entries: [
@@ -173,8 +176,10 @@ describe('ProductionCardStateAdapter', () => {
       book.push(...created);
       return klona(created);
     };
-    const adapter = new ProductionCardStateAdapter(bridge);
+    const mounted = new Set<string>();
+    const adapter = new ProductionCardStateAdapter(bridge, value => readCharacterTavernState(value, mounted));
     const base = await adapter.read();
+    mounted.add('带酒馆默认值的新书');
     const working = klona(base);
     working.worldbooks.push({
       entries: [

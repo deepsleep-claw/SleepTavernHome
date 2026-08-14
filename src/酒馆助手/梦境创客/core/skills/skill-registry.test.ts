@@ -33,17 +33,17 @@ describe('agent skills', () => {
       builtin: true,
       id: 'card-workspace-io',
       loading: 'full',
-      name: '角色卡工作区读写',
+      name: '内置文件读写规则',
     });
-    expect(BUILTIN_CARD_WORKSPACE_SKILL.body).toContain('# 角色卡工作区读写');
-    expect(BUILTIN_CARD_WORKSPACE_SKILL.body).toContain('不要主动列目录、搜索或读取');
+    expect(BUILTIN_CARD_WORKSPACE_SKILL.body).toContain('# 内置文件读写规则');
+    expect(BUILTIN_CARD_WORKSPACE_SKILL.body).toContain('先探索，再修改');
     expect(() => parseBuiltinSkillSource('没有Frontmatter', 'broken.md')).toThrowError(
       expect.objectContaining({ path: 'broken.md' }),
     );
   });
 
   it('投影摘要索引、内置只读Skill和用户资源', () => {
-    const files = projectSkills([userSkill()]);
+    const files = projectSkills([BUILTIN_CARD_WORKSPACE_SKILL, userSkill()]);
     expect(files.find(file => file.path === '/skills/index.md')).toMatchObject({ readonly: true });
     expect(files.find(file => file.path.endsWith('/builtin/card-workspace-io/SKILL.md'))).toMatchObject({
       readonly: true,
@@ -73,8 +73,9 @@ describe('agent skills', () => {
     });
   });
 
-  it('全量提示只包含当前配置传入的full Skill，并始终包含内置读写Skill', () => {
+  it('全量提示只包含当前Agent启用且设置为full的Skill', () => {
     const prompt = compileFullSkillInstructions([
+      BUILTIN_CARD_WORKSPACE_SKILL,
       userSkill({ loading: 'full' }),
       userSkill({ id: 'on-demand', name: '按需', loading: 'on-demand' }),
     ]);

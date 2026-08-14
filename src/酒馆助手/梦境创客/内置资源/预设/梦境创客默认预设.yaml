@@ -1,6 +1,6 @@
 id: dream-card-agent-default
 name: 梦境创客默认预设
-version: 1
+version: 2
 nodes:
   - id: identity
     title: 身份
@@ -39,6 +39,8 @@ nodes:
       </meta>
 
       以下是当前环境设定。
+
+      {{workspace_environment}}
 
       {{tools_can_use}}
 

@@ -4,13 +4,15 @@ import type { ProviderCompatibilityMode, ProviderInterfaceType, ProviderRuntime 
 import { createProviderRuntime } from '../provider-probe';
 import {
   EMPTY_ADVANCED_REQUEST,
-  mergeExtraParameterLayers,
+  mergeBodyParameterLayers,
   mergeRequestHeaders,
-  normalizeAdvancedRequestDocument,
-  normalizeRequestHeaders,
-  parseAdvancedRequestDocument,
-  type AdvancedRequestDocument,
+  normalizeAdvancedRequestValues,
+  parseBodyParameters,
+  parseExcludedBodyParameters,
+  parseRequestHeaders,
+  validateAdvancedRequestValues,
   type AdvancedRequestValues,
+  type YamlRequestDocument,
 } from './advanced-request';
 import {
   defaultModelSettings,
@@ -18,7 +20,6 @@ import {
   type AppliedModelTemplate,
   type ModelSettings,
 } from './model-catalog';
-import type { ApiProfile } from './profiles';
 
 export type ApiModel = {
   appliedModelTemplate?: AppliedModelTemplate;
@@ -52,24 +53,26 @@ export type ApiModelSecretValues = AdvancedRequestValues;
 export type ApiProviderInput = {
   apiKey?: string;
   baseURL: string;
+  bodyParameters?: YamlRequestDocument;
   enabled: boolean;
-  extraParameters?: AdvancedRequestDocument;
-  headers?: Record<string, string>;
+  excludedBodyParameters?: YamlRequestDocument;
   id?: string;
   interfaceType: ProviderInterfaceType;
   name: string;
+  requestHeaders?: YamlRequestDocument;
 };
 
 export type ApiModelInput = {
   appliedModelTemplate?: AppliedModelTemplate | null;
+  bodyParameters?: YamlRequestDocument;
   compatibilityMode: ProviderCompatibilityMode;
   enabled: boolean;
-  extraParameters?: AdvancedRequestDocument;
-  headers?: Record<string, string>;
+  excludedBodyParameters?: YamlRequestDocument;
   id?: string;
   modelId: string;
   modelSettings?: Partial<ModelSettings>;
   name: string;
+  requestHeaders?: YamlRequestDocument;
 };
 
 export type ApiProviderBundle = {
@@ -114,11 +117,14 @@ export function normalizeApiProvider(provider: ApiProvider): ApiProvider {
   };
 }
 
-function normalizeAdvancedValues(value: Partial<AdvancedRequestValues> | undefined): AdvancedRequestValues {
-  return {
-    extraParameters: normalizeAdvancedRequestDocument(value?.extraParameters),
-    headers: normalizeRequestHeaders(value?.headers),
-  };
+function normalizeAdvancedValues(
+  value: {
+    bodyParameters?: YamlRequestDocument;
+    excludedBodyParameters?: YamlRequestDocument;
+    requestHeaders?: YamlRequestDocument;
+  } | undefined,
+): AdvancedRequestValues {
+  return normalizeAdvancedRequestValues(value);
 }
 
 async function providerSecretValues(provider: ApiProvider): Promise<ApiProviderSecretValues> {
@@ -144,8 +150,7 @@ export async function revealApiModel(model: ApiModel): Promise<ApiModelSecretVal
 
 export async function createApiProvider(input: ApiProviderInput, models: ApiModel[] = []): Promise<ApiProvider> {
   const values = normalizeAdvancedValues(input);
-  // 保存时同步校验附加参数，避免把无法执行的配置留在设置里。
-  parseAdvancedRequestDocument(values.extraParameters);
+  validateAdvancedRequestValues(values);
   return normalizeApiProvider({
     baseURL: input.baseURL,
     enabled: input.enabled,
@@ -164,22 +169,24 @@ export async function updateApiProvider(provider: ApiProvider, input: ApiProvide
       {
         ...input,
         apiKey: input.apiKey || previous.apiKey,
-        extraParameters: input.extraParameters ?? previous.extraParameters,
-        headers: input.headers ?? previous.headers,
+        bodyParameters: input.bodyParameters ?? previous.bodyParameters,
+        excludedBodyParameters: input.excludedBodyParameters ?? previous.excludedBodyParameters,
         id: provider.id,
+        requestHeaders: input.requestHeaders ?? previous.requestHeaders,
       },
       provider.models,
     );
   } finally {
     previous.apiKey = '';
-    Object.keys(previous.headers).forEach(key => delete previous.headers[key]);
-    previous.extraParameters.text = '';
+    previous.bodyParameters.text = '';
+    previous.excludedBodyParameters.text = '';
+    previous.requestHeaders.text = '';
   }
 }
 
 export async function createApiModel(input: ApiModelInput): Promise<ApiModel> {
   const values = normalizeAdvancedValues(input);
-  parseAdvancedRequestDocument(values.extraParameters);
+  validateAdvancedRequestValues(values);
   return normalizeModel({
     appliedModelTemplate: input.appliedModelTemplate ? structuredClone(input.appliedModelTemplate) : undefined,
     compatibilityMode: input.compatibilityMode,
@@ -201,14 +208,16 @@ export async function updateApiModel(model: ApiModel, input: ApiModelInput): Pro
         input.appliedModelTemplate === undefined
           ? structuredClone(model.appliedModelTemplate)
           : input.appliedModelTemplate ?? undefined,
-      extraParameters: input.extraParameters ?? previous.extraParameters,
-      headers: input.headers ?? previous.headers,
+      bodyParameters: input.bodyParameters ?? previous.bodyParameters,
+      excludedBodyParameters: input.excludedBodyParameters ?? previous.excludedBodyParameters,
       id: model.id,
       modelSettings: input.modelSettings ?? model.modelSettings,
+      requestHeaders: input.requestHeaders ?? previous.requestHeaders,
     });
   } finally {
-    Object.keys(previous.headers).forEach(key => delete previous.headers[key]);
-    previous.extraParameters.text = '';
+    previous.bodyParameters.text = '';
+    previous.excludedBodyParameters.text = '';
+    previous.requestHeaders.text = '';
   }
 }
 
@@ -233,18 +242,26 @@ export async function withProviderModelRuntime<T>(
   const providerValues = await providerSecretValues(provider);
   const modelValues = await modelSecretValues(model);
   try {
-    const extraParameters = mergeExtraParameterLayers(
-      parseAdvancedRequestDocument(providerValues.extraParameters),
-      parseAdvancedRequestDocument(modelValues.extraParameters),
+    const bodyParameters = mergeBodyParameterLayers(
+      parseBodyParameters(providerValues.bodyParameters),
+      parseBodyParameters(modelValues.bodyParameters),
     );
+    const excludedBodyParameters = [...new Set([
+      ...parseExcludedBodyParameters(providerValues.excludedBodyParameters),
+      ...parseExcludedBodyParameters(modelValues.excludedBodyParameters),
+    ])];
     return await action(
       createProviderRuntime(
         {
           apiKey: providerValues.apiKey,
           baseURL: provider.baseURL,
           compatibilityMode: model.compatibilityMode,
-          extraParameters,
-          headers: mergeRequestHeaders(providerValues.headers, modelValues.headers),
+          excludedBodyParameters,
+          extraParameters: bodyParameters,
+          headers: mergeRequestHeaders(
+            parseRequestHeaders(providerValues.requestHeaders),
+            parseRequestHeaders(modelValues.requestHeaders),
+          ),
           interfaceType: provider.interfaceType,
           model: model.modelId,
         },
@@ -253,17 +270,19 @@ export async function withProviderModelRuntime<T>(
     );
   } finally {
     providerValues.apiKey = '';
-    Object.keys(providerValues.headers).forEach(key => delete providerValues.headers[key]);
-    Object.keys(modelValues.headers).forEach(key => delete modelValues.headers[key]);
-    providerValues.extraParameters.text = '';
-    modelValues.extraParameters.text = '';
+    providerValues.bodyParameters.text = '';
+    providerValues.excludedBodyParameters.text = '';
+    providerValues.requestHeaders.text = '';
+    modelValues.bodyParameters.text = '';
+    modelValues.excludedBodyParameters.text = '';
+    modelValues.requestHeaders.text = '';
   }
 }
 
 export async function listProviderModels(provider: ApiProvider): Promise<string[]> {
   const values = await providerSecretValues(provider);
   try {
-    const headers = new Headers(values.headers);
+    const headers = new Headers(parseRequestHeaders(values.requestHeaders));
     if (provider.interfaceType === 'anthropic') {
       if (!headers.has('x-api-key')) headers.set('x-api-key', values.apiKey);
       if (!headers.has('anthropic-version')) headers.set('anthropic-version', '2023-06-01');
@@ -297,8 +316,9 @@ export async function listProviderModels(provider: ApiProvider): Promise<string[
     }))].sort((left, right) => left.localeCompare(right));
   } finally {
     values.apiKey = '';
-    Object.keys(values.headers).forEach(key => delete values.headers[key]);
-    values.extraParameters.text = '';
+    values.bodyParameters.text = '';
+    values.excludedBodyParameters.text = '';
+    values.requestHeaders.text = '';
   }
 }
 
@@ -319,10 +339,11 @@ export async function exportApiProviderBundle(provider: ApiProvider, includeSecr
       apiKey: providerRequest?.apiKey ?? '',
       baseURL: provider.baseURL,
       enabled: provider.enabled,
-      extraParameters: providerRequest?.extraParameters,
-      headers: providerRequest?.headers,
+      bodyParameters: providerRequest?.bodyParameters,
+      excludedBodyParameters: providerRequest?.excludedBodyParameters,
       interfaceType: provider.interfaceType,
       name: provider.name,
+      requestHeaders: providerRequest?.requestHeaders,
       request: providerRequest,
     },
     type: 'dream-card-agent-provider',
@@ -343,29 +364,4 @@ export function parseApiProviderBundle(source: string): ApiProviderBundle {
     throw new Error('这不是梦境创客支持的Provider导出文件。');
   }
   return structuredClone(value as ApiProviderBundle);
-}
-
-/** 旧Profile只用于一次性设置迁移；Model沿用旧ID，方便旧引用确定性映射。 */
-export function migrateLegacyProfiles(profiles: ApiProfile[]): ApiProvider[] {
-  return profiles.map(profile => normalizeApiProvider({
-    baseURL: profile.baseURL,
-    enabled: true,
-    id: `provider:${profile.id}`,
-    interfaceType: profile.interfaceType,
-    models: [{
-      appliedModelTemplate: profile.appliedModelTemplate,
-      compatibilityMode: profile.compatibilityMode,
-      enabled: true,
-      id: profile.id,
-      modelId: profile.model,
-      modelSettings: profile.modelSettings,
-      name: profile.model || profile.name,
-    }],
-    name: profile.name,
-    secrets: profile.secrets,
-  }));
-}
-
-export function legacySelectionForProfile(profileId?: string): ModelSelection | undefined {
-  return profileId ? { modelId: profileId, providerId: `provider:${profileId}` } : undefined;
 }

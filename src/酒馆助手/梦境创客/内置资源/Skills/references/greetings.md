@@ -1,8 +1,8 @@
 # 开场白文件格式参考
 
-`/greetings/*.md` 的正文就是开场白内容，不需要 Frontmatter。直接新建文件时会自动追加到末尾。
+`/character/greetings/*.md` 的正文就是开场白内容，不需要 Frontmatter。直接新建文件时会自动追加到末尾。
 
-需要精确控制名称或顺序时，再编辑 `/greetings/index.yaml`：
+需要精确控制名称或顺序时，再编辑 `/character/greetings/index.yaml`：
 
 ```yaml
 greetings:

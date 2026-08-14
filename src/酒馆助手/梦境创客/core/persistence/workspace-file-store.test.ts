@@ -35,9 +35,9 @@ describe('DreamCreatorWorkspaceFileStore', () => {
     expect(client.uploadedNames.every(name => name.startsWith('DreamCreator--File--role--'))).toBe(true);
     expect(renamed.logicalPath).toBe('资料/a (2).bin');
     expect((await store.project('role', 's1')).map(file => file.path).sort()).toEqual([
-      '/files/资料/a (2).bin',
-      '/files/资料/a.bin',
-      '/files/资料/copy.bin',
+      '/character/files/资料/a (2).bin',
+      '/character/files/资料/a.bin',
+      '/character/files/资料/copy.bin',
     ]);
 
     await store.removeImmediately(first.fileId);
@@ -65,8 +65,8 @@ describe('DreamCreatorWorkspaceFileStore', () => {
       sourceFileId: attachment.fileId,
     });
 
-    expect((await store.project('role', 's1')).some(file => file.path.startsWith('/temp/'))).toBe(true);
-    expect((await store.project('role', 's2')).some(file => file.path.startsWith('/temp/'))).toBe(false);
+    expect((await store.project('role', 's1')).some(file => file.path.startsWith('/character/temp/'))).toBe(true);
+    expect((await store.project('role', 's2')).some(file => file.path.startsWith('/character/temp/'))).toBe(false);
     await store.releaseSession('role', 's1');
     expect(store.getReference(temp.fileId)).toBeUndefined();
     expect(store.getReference(attachment.fileId)?.orphanedAt).toBeUndefined();
@@ -91,10 +91,30 @@ describe('DreamCreatorWorkspaceFileStore', () => {
       referencedSessionId: 's1',
     });
     const base = await store.project('role', 's1');
-    const working = base.map(file => (file.path === '/files/note.md' ? { ...file, content: 'new' } : file));
-    const committed = await store.applyWorkspace('role', 's1', base, working, { '/files/note.md': 'agent' });
-    expect(committed.find(file => file.path === '/files/note.md')?.content).toBe('new');
+    const working = base.map(file => (file.path === '/character/files/note.md' ? { ...file, content: 'new' } : file));
+    const committed = await store.applyWorkspace('role', 's1', base, working, { '/character/files/note.md': 'agent' });
+    expect(committed.find(file => file.path === '/character/files/note.md')?.content).toBe('new');
 
+  });
+
+  it('HTML工程作为角色文件保存，并且清理缓存不会删除', async () => {
+    const store = new DreamCreatorWorkspaceFileStore(
+      new MemoryTavernFileClient(),
+      new MemoryAgentSettingsStore(),
+      () => 300,
+    );
+    await store.putPersistent({
+      bindingId: 'role',
+      bytes: new TextEncoder().encode('name: demo'),
+      logicalPath: 'demo/project.yaml',
+      mediaType: 'text/yaml',
+      referencedSessionId: 's1',
+    });
+    expect((await store.project('role', 's1')).map(file => file.path)).toContain('/character/files/demo/project.yaml');
+    expect((await store.project('role', 's2')).map(file => file.path)).toContain('/character/files/demo/project.yaml');
+    expect(store.summaries()[0]).toMatchObject({ persistentBytes: 10 });
+    await store.clearCache('role');
+    expect((await store.project('role', 's3')).map(file => file.path)).toContain('/character/files/demo/project.yaml');
   });
 
   it('多文件提交中途失败时恢复原索引并删除已经上传的新版本', async () => {
@@ -121,8 +141,8 @@ describe('DreamCreatorWorkspaceFileStore', () => {
     client.failAt = 4;
     await expect(
       store.applyWorkspace('role', 's1', base, working, {
-        '/files/a.md': 'agent',
-        '/files/b.md': 'agent',
+        '/character/files/a.md': 'agent',
+        '/character/files/b.md': 'agent',
       }),
     ).rejects.toThrow('simulated upload failure');
     expect((await store.project('role', 's1')).map(file => file.content).sort()).toEqual(['old-a.md', 'old-b.md']);

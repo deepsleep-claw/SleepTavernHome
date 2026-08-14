@@ -5,7 +5,7 @@ import {
   type ProviderInterfaceType,
   type ProviderRuntime,
 } from '../provider-probe';
-import { normalizeProviderFailure } from '../provider/profiles';
+import { normalizeProviderFailure } from '../provider/provider-failure';
 import { withProviderModelRuntime, type ApiModel, type ApiProvider } from '../provider/provider-config';
 import { takeDeepSeekWebSearchResult } from '../provider/deepseek-responses-adapter';
 import type { RunnerTool } from './tools';

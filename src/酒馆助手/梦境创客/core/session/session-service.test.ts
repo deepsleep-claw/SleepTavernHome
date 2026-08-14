@@ -8,6 +8,7 @@ import { transactionState } from '../transaction/test-fixture';
 import { CardAgentSessionService } from './session-service';
 import { GlobalAgentTaskLock } from './task-lock';
 import type { PersistedSessionRuntime } from './types';
+import { defaultBuiltinAgentConfiguration } from '../persistence/builtin-agent';
 
 function step(toolCalls: RunnerToolCall[] = [], text = '完成啦'): ModelStepResult {
   const assistantMessages: ModelMessage[] = [
@@ -39,7 +40,7 @@ class QueueExecutor implements ModelStepExecutor {
 
 function writeDescription(content: string, id = 'write-description'): RunnerToolCall {
   return {
-    input: { content, overwrite: true, path: '/character/description.md' },
+    input: { content, overwrite: true, path: '/character/definition/description.md' },
     toolCallId: id,
     toolName: 'write_file',
   };
@@ -54,6 +55,7 @@ function createService(input: {
 }) {
   return CardAgentSessionService.create({
     adapter: input.adapter ?? new MemoryCardStateAdapter(transactionState()),
+    agentConfiguration: defaultBuiltinAgentConfiguration(),
     executor: input.executor,
     lock: new GlobalAgentTaskLock(),
     mode: input.mode,
@@ -73,7 +75,7 @@ describe('card agent realtime session service', () => {
         request.onTextDelta?.('先说明再写入。');
         request.onToolInputStarted?.({ toolCallId: call.toolCallId, toolName: call.toolName });
         request.onToolInputDelta?.({
-          delta: '{"path":"/character/description.md","content":"第一行\\n第二',
+          delta: '{"path":"/character/definition/description.md","content":"第一行\\n第二',
           toolCallId: call.toolCallId,
         });
         await new Promise(resolve => setTimeout(resolve, 5));
@@ -97,6 +99,7 @@ describe('card agent realtime session service', () => {
     const updates: PersistedSessionRuntime['ui'][] = [];
     const service = await CardAgentSessionService.create({
       adapter: new MemoryCardStateAdapter(transactionState()),
+      agentConfiguration: defaultBuiltinAgentConfiguration(),
       executor,
       lock: new GlobalAgentTaskLock(),
       mode: 'full',
@@ -121,7 +124,7 @@ describe('card agent realtime session service', () => {
     ).toEqual(['先说明再写入。', 'tool', '完成啦']);
   });
 
-  it('普通发送固定Skill头部，压缩时使用当前配置重新编译', async () => {
+  it('普通发送固定Skill头部，压缩时使用当前Skill重新编译', async () => {
     const oldSkill: AgentSkill = {
       body: 'OLD_SKILL_BODY', builtin: false, description: '测试', directories: [], id: 'dynamic-skill',
       loading: 'full', name: '动态Skill', resources: {},
@@ -134,7 +137,13 @@ describe('card agent realtime session service', () => {
     const executor = new QueueExecutor([step([], 'x'.repeat(150_000)), step([compactCall]), step([], '压缩后完成')]);
     const service = await CardAgentSessionService.create({
       adapter: new MemoryCardStateAdapter(transactionState()),
-      agentConfiguration: { id: 'agent:test', name: '测试', presetId: preset.id, skillIds: [oldSkill.id] },
+      agentConfiguration: {
+        id: 'agent:test',
+        name: '测试',
+        presetId: preset.id,
+        skills: [{ enabled: true, id: oldSkill.id, loading: 'full' }],
+        toolIds: defaultBuiltinAgentConfiguration().toolIds,
+      },
       contextWindow: 50_000,
       executor,
       lock: new GlobalAgentTaskLock(),
@@ -145,7 +154,7 @@ describe('card agent realtime session service', () => {
     await service.setSkills([{ ...oldSkill, body: 'NEW_SKILL_BODY' }]);
     await service.send('第二轮');
     expect(executor.requests[1].forceTool).toBe('compact_context');
-    expect(String(executor.requests[1].messages[0].content)).toContain('OLD_SKILL_BODY');
+    expect(String(executor.requests[1].messages[0].content)).toContain('NEW_SKILL_BODY');
     expect(String(executor.requests[2].messages[0].content)).toContain('NEW_SKILL_BODY');
   });
 
@@ -161,7 +170,7 @@ describe('card agent realtime session service', () => {
       role: 'user',
     });
     expect(completed.ui.find(item => item.id === 'attachment-user')?.attachments?.[0]).not.toHaveProperty('data');
-    expect(persisted.mock.calls.at(-1)?.[0].version).toBe(2);
+    expect(persisted.mock.calls.at(-1)?.[0].version).toBe(3);
   });
 
   it('手动模式逐工具批准后立即写入真实角色资源并记录操作', async () => {
@@ -203,7 +212,7 @@ describe('card agent realtime session service', () => {
     const yoloApproval = vi.fn(async () => false);
     const yolo = await createService({
       executor: new QueueExecutor([
-        step([{ input: { path: '/greetings' }, toolCallId: 'delete-greetings', toolName: 'delete_path' }]),
+        step([{ input: { path: '/character/greetings' }, toolCallId: 'delete-greetings', toolName: 'delete_path' }]),
         step([], '已拒绝删除'),
       ]),
       mode: 'yolo', requestToolApproval: yoloApproval,
@@ -242,7 +251,7 @@ describe('card agent realtime session service', () => {
     adapter.replaceExternal(external);
     const waiting = await service.undo();
     expect(waiting.operationReplay?.conflicts).toMatchObject([
-      { path: '/character/description.md', reason: '文件在原操作之后又发生了变化。' },
+      { path: '/character/definition/description.md', reason: '文件在原操作之后又发生了变化。' },
     ]);
     await service.confirmOperationReplay(true);
     expect((await adapter.read()).character.fields.description).toBe('玩家外部编辑');
@@ -270,8 +279,8 @@ describe('card agent realtime session service', () => {
     const adapter = new MemoryCardStateAdapter(transactionState());
     const executor = new QueueExecutor([step([], '已知晓玩家修改')]);
     const service = await createService({ adapter, executor, mode: 'full' });
-    const before = (await service.view().workingFiles.find(file => file.path === '/character/description.md'))?.content;
-    const changed = await service.writeWorkingFile('/character/description.md', '玩家版本', false, before);
+    const before = (await service.view().workingFiles.find(file => file.path === '/character/definition/description.md'))?.content;
+    const changed = await service.writeWorkingFile('/character/definition/description.md', '玩家版本', false, before);
     expect((await adapter.read()).character.fields.description).toBe('玩家版本');
     expect(changed.operationLog.records.at(-1)).toMatchObject({ actor: 'user' });
     expect(changed.ui.at(-1)).toMatchObject({ kind: 'manual', toolName: '玩家修改工作区' });
@@ -283,11 +292,11 @@ describe('card agent realtime session service', () => {
   it('玩家基于过期编辑内容保存时报告三方冲突而不覆盖实时文件', async () => {
     const adapter = new MemoryCardStateAdapter(transactionState());
     const service = await createService({ adapter, executor: new QueueExecutor([]), mode: 'full' });
-    const before = service.view().workingFiles.find(file => file.path === '/character/description.md')!.content;
+    const before = service.view().workingFiles.find(file => file.path === '/character/definition/description.md')!.content;
     const external = await adapter.read();
     external.character.fields.description = '外部版本';
     adapter.replaceExternal(external);
-    await expect(service.writeWorkingFile('/character/description.md', '玩家版本', false, before)).rejects.toThrow(
+    await expect(service.writeWorkingFile('/character/definition/description.md', '玩家版本', false, before)).rejects.toThrow(
       'MANUAL_EDIT_CONFLICT',
     );
     expect((await adapter.read()).character.fields.description).toBe('外部版本');

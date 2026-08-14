@@ -1,8 +1,5 @@
-import { normalizeApiProfile, type ApiProfile } from '../provider/profiles';
 import {
   findSelectedModel,
-  legacySelectionForProfile,
-  migrateLegacyProfiles,
   normalizeApiProvider,
   type ApiProvider,
   type ModelSelection,
@@ -14,6 +11,7 @@ import {
   type AgentConfiguration,
 } from './builtin-agent';
 import type { SessionMode } from '../session/types';
+import { isAgentToolId } from '../runner/tool-catalog';
 
 export type { AgentConfiguration } from './builtin-agent';
 
@@ -55,13 +53,24 @@ export type DreamCreatorWorkspaceFileReference = {
   name: string;
   orphanedAt?: number;
   referencedSessionIds: string[];
-  scope: 'persistent' | 'temp';
+  scope: 'character-persistent' | 'character-temp' | 'global-persistent' | 'global-temp';
   sessionId?: string;
   sha256: string;
   size: number;
   sourceFileId?: string;
   updatedAt: number;
   url: string;
+};
+
+export type BuiltinSkillPackageReference = {
+  downloadedAt: number;
+  id: string;
+  protocolVersion: number;
+  sha256: string;
+  size: number;
+  sourceUrl: string;
+  url: string;
+  version: number;
 };
 
 export type GlobalSkillIndexEntry = {
@@ -117,9 +126,9 @@ export type DreamCardAgentSettings = {
   activeThemeId: string;
   approvalMode: SessionMode;
   activeAgentConfigurationId: string;
-  activeProfileId?: string;
   activePresetId: string;
   agentConfigurations: AgentConfiguration[];
+  builtinSkillPackages: Record<string, BuiltinSkillPackageReference>;
   characterStores: Record<string, CharacterStoreReference>;
   compressImages: boolean;
   developerMode: boolean;
@@ -132,8 +141,6 @@ export type DreamCardAgentSettings = {
   onboardingDone: boolean;
   defaultModelSelection?: ModelSelection;
   providers: ApiProvider[];
-  /** @deprecated 只在读取旧设置时使用；v4保存结果始终为空数组。 */
-  profiles: ApiProfile[];
   presetProfiles: StructuredPreset[];
   sendWithCtrlEnter: boolean;
   syncRevision: number;
@@ -149,6 +156,7 @@ export const DEFAULT_DREAM_CARD_AGENT_SETTINGS: DreamCardAgentSettings = {
   activeAgentConfigurationId: DEFAULT_AGENT_CONFIGURATION_ID,
   activePresetId: DEFAULT_PRESET.id,
   agentConfigurations: [defaultBuiltinAgentConfiguration()],
+  builtinSkillPackages: {},
   characterStores: {},
   compressImages: true,
   developerMode: false,
@@ -160,7 +168,6 @@ export const DEFAULT_DREAM_CARD_AGENT_SETTINGS: DreamCardAgentSettings = {
   globalSkills: {},
   onboardingDone: false,
   providers: [],
-  profiles: [],
   presetProfiles: [cloneStructuredPreset(DEFAULT_PRESET)],
   sendWithCtrlEnter: false,
   syncRevision: 0,
@@ -203,7 +210,7 @@ async function saveTavernSettingsImmediately(): Promise<void> {
     await builtin.saveSettings();
     return;
   }
-  // 测试环境或旧版酒馆缺少立即保存入口时才降级；真实酒馆不能把防抖调度误当成已落盘。
+  // 测试环境缺少立即保存入口时才降级；真实酒馆不能把防抖调度误当成已落盘。
   await Promise.resolve(SillyTavern.saveSettingsDebounced());
 }
 
@@ -219,38 +226,28 @@ export function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamC
   const activePresetId = presetProfiles.some(preset => preset.id === raw?.activePresetId)
     ? raw!.activePresetId!
     : presetProfiles[0].id;
-  const legacyEnabledSkillIds = Object.values(raw?.globalSkills ?? {})
-    .filter(entry => (entry as GlobalSkillIndexEntry & { enabled?: boolean }).enabled !== false)
-    .map(entry => entry.id);
   const storedConfigurations = raw?.agentConfigurations ?? [];
-  const storedBuiltin = storedConfigurations.find(configuration => configuration.id === DEFAULT_AGENT_CONFIGURATION_ID);
-  const storedBuiltinSkillIds = Array.isArray(storedBuiltin?.skillIds) ? storedBuiltin.skillIds : [];
-  const legacyBuiltinWasCustomized =
-    storedBuiltin !== undefined &&
-    (storedBuiltin.presetId !== DEFAULT_PRESET.id || storedBuiltinSkillIds.length > 0);
-  const migratedLegacyConfiguration: AgentConfiguration | undefined =
-    storedConfigurations.length === 0 && (activePresetId !== DEFAULT_PRESET.id || legacyEnabledSkillIds.length > 0)
-      ? {
-          id: 'agent:migrated',
-          name: '迁移的 Agent 配置',
-          presetId: activePresetId,
-          skillIds: legacyEnabledSkillIds,
-        }
-      : legacyBuiltinWasCustomized
-        ? {
-            ...storedBuiltin,
-            id: 'agent:preserved-default',
-            name: `${storedBuiltin.name || '旧默认 Agent'}（已保留）`,
-            skillIds: storedBuiltinSkillIds,
-          }
-        : undefined;
   const sourceConfigurations = [
     defaultBuiltinAgentConfiguration(),
     ...storedConfigurations.filter(configuration => configuration.id !== DEFAULT_AGENT_CONFIGURATION_ID),
-    ...(migratedLegacyConfiguration ? [migratedLegacyConfiguration] : []),
   ];
   const seenConfigurationIds = new Set<string>();
-  const agentConfigurations = sourceConfigurations.map((configuration, index) => ({
+  const agentConfigurations = sourceConfigurations.flatMap((configuration, index): AgentConfiguration[] => {
+    if (
+      !Array.isArray(configuration.skills) ||
+      !Array.isArray(configuration.toolIds) ||
+      configuration.skills.some(
+        skill =>
+          typeof skill !== 'object' ||
+          skill === null ||
+          typeof skill.id !== 'string' ||
+          typeof skill.enabled !== 'boolean' ||
+          !['full', 'on-demand'].includes(skill.loading),
+      )
+    ) {
+      return [];
+    }
+    return [{
     id:
       typeof configuration.id === 'string' && configuration.id.trim()
         ? configuration.id
@@ -262,24 +259,20 @@ export function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamC
     presetId: presetProfiles.some(preset => preset.id === configuration.presetId)
       ? configuration.presetId
       : presetProfiles[0].id,
-    skillIds: [
-      ...new Set((Array.isArray(configuration.skillIds) ? configuration.skillIds : []).filter(id => typeof id === 'string')),
-    ],
-  })).filter(configuration => {
+      skills: configuration.skills.map(skill => ({ ...skill })),
+      toolIds: [...new Set(configuration.toolIds.filter(isAgentToolId))],
+    }];
+  }).filter(configuration => {
     if (seenConfigurationIds.has(configuration.id)) return false;
     seenConfigurationIds.add(configuration.id);
     return true;
   });
-  const requestedActiveId =
-    raw?.activeAgentConfigurationId === DEFAULT_AGENT_CONFIGURATION_ID && legacyBuiltinWasCustomized
-      ? migratedLegacyConfiguration?.id
-      : raw?.activeAgentConfigurationId ?? migratedLegacyConfiguration?.id;
+  const requestedActiveId = raw?.activeAgentConfigurationId;
   const activeAgentConfigurationId = agentConfigurations.some(configuration => configuration.id === requestedActiveId)
     ? requestedActiveId!
     : DEFAULT_AGENT_CONFIGURATION_ID;
-  const legacyProfiles = (raw?.profiles ?? []).map(normalizeApiProfile);
-  const providers = (raw?.providers?.length ? raw.providers : migrateLegacyProfiles(legacyProfiles)).map(normalizeApiProvider);
-  const requestedModelSelection = raw?.defaultModelSelection ?? legacySelectionForProfile(raw?.activeProfileId);
+  const providers = (raw?.providers ?? []).map(normalizeApiProvider);
+  const requestedModelSelection = raw?.defaultModelSelection;
   const defaultModelSelection = findSelectedModel(providers, requestedModelSelection)
     ? structuredClone(requestedModelSelection as ModelSelection)
     : undefined;
@@ -298,6 +291,7 @@ export function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamC
     activeAgentConfigurationId,
     activePresetId,
     agentConfigurations,
+    builtinSkillPackages: structuredClone(raw?.builtinSkillPackages ?? {}),
     floatingButtonAnchor: anchor,
     floatingButtonOffset: {
       x: Number.isFinite(offset?.x) ? offset!.x : defaultOffset.x,
@@ -306,7 +300,6 @@ export function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamC
     globalSkills: structuredClone(raw?.globalSkills ?? {}),
     defaultModelSelection,
     providers,
-    profiles: [],
     presetProfiles,
     sendWithCtrlEnter: raw?.sendWithCtrlEnter === true,
     syncRevision: Number.isFinite(raw?.syncRevision) ? Math.max(0, raw!.syncRevision!) : 0,
@@ -341,9 +334,13 @@ export function mergeSettingsChanges(
     activeThemeId: choose('activeThemeId'),
     approvalMode: choose('approvalMode'),
     activeAgentConfigurationId: choose('activeAgentConfigurationId'),
-    activeProfileId: choose('activeProfileId'),
     activePresetId: choose('activePresetId'),
     agentConfigurations: choose('agentConfigurations'),
+    builtinSkillPackages: applyRecordChanges(
+      base.builtinSkillPackages,
+      incoming.builtinSkillPackages,
+      latest.builtinSkillPackages,
+    ),
     characterStores: applyRecordChanges(base.characterStores, incoming.characterStores, latest.characterStores),
     compressImages: choose('compressImages'),
     developerMode: choose('developerMode'),
@@ -356,7 +353,6 @@ export function mergeSettingsChanges(
     onboardingDone: choose('onboardingDone'),
     defaultModelSelection: choose('defaultModelSelection'),
     providers: choose('providers'),
-    profiles: choose('profiles'),
     presetProfiles: choose('presetProfiles'),
     sendWithCtrlEnter: choose('sendWithCtrlEnter'),
     syncRevision: Math.max(base.syncRevision, incoming.syncRevision, latest.syncRevision) + 1,

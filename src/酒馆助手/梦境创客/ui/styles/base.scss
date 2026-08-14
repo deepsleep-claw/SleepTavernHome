@@ -57,6 +57,18 @@
     color var(--dca-motion-fast) ease;
 }
 
+// 普通动作按钮默认居中；带“图标 + 标题 + 说明”的导航/内容按钮显式使用 start。
+// 两种基元集中定义，避免各页面反复覆盖 justify-content / text-align。
+.dca-app button.dca-btn-center {
+  justify-content: center;
+  text-align: center;
+}
+
+.dca-app button.dca-btn-start {
+  justify-content: flex-start;
+  text-align: left;
+}
+
 .dca-app button:hover:not(:disabled) {
   border-color: var(--dca-border-strong);
   background: var(--dca-overlay);

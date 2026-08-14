@@ -3,9 +3,9 @@ import { availableAceMode, hasAceTheme, languageForPath, type AceNamespace } fro
 
 describe('Ace editor helpers', () => {
   it('按VFS文件扩展名选择编辑语言', () => {
-    expect(languageForPath('/tavern-helper-scripts/character/scripts/demo/script.js')).toBe('javascript');
-    expect(languageForPath('/tavern-helper-scripts/character/scripts/demo/data.yaml')).toBe('yaml');
-    expect(languageForPath('/character/description.md')).toBe('markdown');
+    expect(languageForPath('/scripts/character/scripts/demo/script.js')).toBe('javascript');
+    expect(languageForPath('/scripts/character/scripts/demo/data.yaml')).toBe('yaml');
+    expect(languageForPath('/character/definition/description.md')).toBe('markdown');
     expect(languageForPath('/context/chat/page-1.json')).toBe('json');
     expect(languageForPath('/unknown/file.txt')).toBe('text');
   });

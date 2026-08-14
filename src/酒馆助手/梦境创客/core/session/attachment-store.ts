@@ -24,6 +24,7 @@ export class ExternalSessionAttachmentStore implements SessionAttachmentStore {
     private readonly files: DreamCreatorWorkspaceFileStore,
     private readonly settingsStore: AgentSettingsStore,
     private readonly encoder?: RasterImageEncoder,
+    private readonly scope: 'character' | 'global' = 'character',
   ) {}
 
   async save(sessionId: string, inputs: SessionAttachmentInput[]): Promise<StoredSessionAttachment[]> {
@@ -35,12 +36,13 @@ export class ExternalSessionAttachmentStore implements SessionAttachmentStore {
         logicalPath: input.filename,
         mediaType: input.mediaType,
         referencedSessionId: sessionId,
+        global: this.scope === 'global',
       });
       result.push({
         fileId: file.fileId,
         filename: input.filename,
         id: crypto.randomUUID(),
-        logicalPath: `/files/${file.logicalPath}`,
+        logicalPath: `${this.scope === 'global' ? '/files' : '/character/files'}/${file.logicalPath}`,
         mediaType: input.mediaType,
         size: input.size,
       });
@@ -87,7 +89,7 @@ export class ExternalSessionAttachmentStore implements SessionAttachmentStore {
         .find(
           file =>
             !file.orphanedAt &&
-            file.scope === 'temp' &&
+            file.scope === (this.scope === 'global' ? 'global-temp' : 'character-temp') &&
             file.sessionId === sessionId &&
             file.sourceFileId === fileId,
         );
@@ -104,6 +106,7 @@ export class ExternalSessionAttachmentStore implements SessionAttachmentStore {
           mediaType: compressed.mediaType,
           sessionId,
           sourceFileId: fileId,
+          global: this.scope === 'global',
         });
         return { data: base64ForBytes(compressed.bytes), mediaType: stored.mediaType };
       }

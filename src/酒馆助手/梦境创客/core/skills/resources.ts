@@ -75,25 +75,9 @@ export function isTextSkillResource(resource: Pick<SkillResource, 'mediaType'>, 
   );
 }
 
-/** 把旧版references/assets折叠进自由资源树；同路径以resources为准。 */
 export function skillResources(skill: AgentSkill): Record<string, SkillResource> {
-  const encoder = new TextEncoder();
-  const legacy = {
-    ...Object.fromEntries(
-      Object.entries(skill.references ?? {}).map(([path, content]) => [
-        `references/${path}`,
-        { content, mediaType: inferSkillMediaType(path), size: encoder.encode(content).byteLength },
-      ]),
-    ),
-    ...Object.fromEntries(
-      Object.entries(skill.assets ?? {}).map(([path, content]) => [
-        `assets/${path}`,
-        { content, mediaType: inferSkillMediaType(path), size: encoder.encode(content).byteLength },
-      ]),
-    ),
-  } satisfies Record<string, SkillResource>;
   return Object.fromEntries(
-    Object.entries({ ...legacy, ...(skill.resources ?? {}) }).map(([path, resource]) => [
+    Object.entries(skill.resources ?? {}).map(([path, resource]) => [
       normalizeSkillResourcePath(path),
       { ...resource },
     ]),

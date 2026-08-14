@@ -4,7 +4,7 @@
 
 ## 创建世界书
 
-使用 `create_worldbook`，不要自行猜测 `resource_id`。创建后目录始终包含可列出的空 `entries/` 和只读身份用途的 `book.yaml`：
+使用 `manage_worldbook` 的 `create` 动作，不要自行猜测 `resource_id`。创建后目录始终包含可列出的空 `entries/` 和只读身份用途的 `book.yaml`：
 
 ```yaml
 name: 测试世界书
@@ -73,7 +73,7 @@ extra: {}
 ## 条目路径与排序
 
 - 已有条目的文件名形如 `<4位顺序号>-<稳定身份>-<名称>.md`。这是工作区的真实路径，不是正文的一部分。
-- 读取、修改、移动或删除已有条目时，必须使用 `list_directory` 或 `search_files` 实际返回的完整路径；不要只凭条目名称猜文件名。
+- 读取、修改、移动或删除已有条目时，必须使用 `list_path` 或 `search_files` 实际返回的完整路径；不要只凭条目名称猜文件名。
 - 新建条目可以直接向 `entries/` 写入一个不重名的 `.md` 文件，不要自行编造 UID。提交后系统会分配正式 UID 并规范化文件名。
 - 文件按路径字典序排列，因此开头的 4 位数字决定条目顺序。用户没有要求排序时，不要只为美观重命名文件。
 - 需要重排时，先把涉及的文件移动到互不冲突的临时名称，再按 `0001`、`0002`……移动到最终名称；每一步都使用上一步工具实际返回或随后列出的路径。不要用删除再新建的方式重排已有条目。
@@ -88,4 +88,4 @@ additional: []
 chat: null
 ```
 
-优先使用 `set_worldbook_binding` 修改绑定。`primary`、`chat` 是世界书名称或 `null`，`additional` 必须是名称数组。
+优先使用 `manage_worldbook` 的 `set_binding` 动作修改绑定。`primary`、`chat` 是世界书名称或 `null`，`additional` 必须是名称数组。

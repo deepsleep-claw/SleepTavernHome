@@ -1,7 +1,6 @@
 import { parseFrontmatter, serializeFrontmatter, slugifyFileName } from '../mapping/serde';
 import { parentWorkspacePath, workspaceBasename } from '../workspace/path';
 import { WorkspaceError, type WorkspaceFile } from '../workspace/types';
-import { BUILTIN_CARD_WORKSPACE_SKILL } from './builtin-card-workspace';
 import { isTextSkillResource, skillDirectories, skillResources } from './resources';
 import type { AgentSkill, SkillLoadingMode, SkillMutationAssessment, SkillResource } from './types';
 
@@ -60,13 +59,12 @@ function buildIndex(skills: AgentSkill[]): string {
 }
 
 export function projectSkills(skills: AgentSkill[]): WorkspaceFile[] {
-  const all = [BUILTIN_CARD_WORKSPACE_SKILL, ...skills.filter(skill => skill.id !== BUILTIN_CARD_WORKSPACE_SKILL.id)];
-  const files = all.flatMap(skill => [
+  const files = skills.flatMap(skill => [
     skillFile(skill),
     ...Object.entries(skillResources(skill)).map(([name, resource]) => resourceFile(skill, name, resource)),
   ]);
   files.push({
-    content: buildIndex(all),
+    content: buildIndex(skills),
     mediaType: 'text/markdown',
     path: '/skills/index.md',
     readonly: true,
@@ -142,7 +140,7 @@ export function materializeUserSkills(files: Iterable<WorkspaceFile>, previousSk
 export type FullSkillInstruction = { content: string; id: string; name: string };
 
 export function fullSkillInstructions(skills: AgentSkill[]): FullSkillInstruction[] {
-  return [BUILTIN_CARD_WORKSPACE_SKILL, ...skills]
+  return skills
     .filter(skill => skill.loading === 'full')
     .map(skill => ({ content: `## Skill：${skill.name}\n\n${skill.body.trim()}`, id: skill.id, name: skill.name }));
 }

@@ -84,19 +84,79 @@ describe('SessionModelMenu', () => {
 
     root.querySelector<HTMLButtonElement>('.dca-session-model-trigger')?.click();
     await nextTick();
+    expect(root.querySelector('.dca-model-menu-backdrop')?.tagName).toBe('DIV');
     const rootButtons = [...root.querySelectorAll<HTMLButtonElement>('.dca-model-menu-root > button')];
     rootButtons.find(button => button.textContent?.includes('模型'))?.click();
-    await nextTick();
+    await vi.waitFor(() => expect(root.querySelector('input[placeholder="搜索模型"]')).not.toBeNull());
 
+    expect(root.querySelector('.dca-model-menu-panel > header')).toBeNull();
+    const search = root.querySelector<HTMLInputElement>('input[placeholder="搜索模型"]')!;
+    expect(search).not.toBeNull();
+    expect(root.querySelector<HTMLButtonElement>('button[aria-label="返回模型与推理"]')).not.toBeNull();
+
+    root.querySelector<HTMLButtonElement>('button[aria-label="返回模型与推理"]')?.click();
+    await vi.waitFor(() => expect(root.querySelector('.dca-model-menu-root')).not.toBeNull());
+    [...root.querySelectorAll<HTMLButtonElement>('.dca-model-menu-root > button')]
+      .find(button => button.textContent?.includes('模型'))
+      ?.click();
+    await vi.waitFor(() => expect(root.querySelector('input[placeholder="搜索模型"]')).not.toBeNull());
     expect(root.querySelector('.dca-model-menu-list')?.textContent).toContain('测试 Provider');
     expect(root.querySelector('.dca-model-menu-list')?.textContent).toContain('测试模型');
     expect(root.querySelector('.dca-model-menu-list')?.textContent).not.toContain('隐藏模型');
+
+    search.value = '不存在的模型';
+    search.dispatchEvent(new Event('input'));
+    await nextTick();
+    expect(root.querySelector('.dca-model-menu-list')?.textContent).toContain('没有匹配的模型');
+    search.value = '';
+    search.dispatchEvent(new Event('input'));
+    await nextTick();
 
     const modelButton = [...root.querySelectorAll<HTMLButtonElement>('.dca-model-menu-list button')].find(button =>
       button.textContent?.includes('测试模型'),
     );
     modelButton?.click();
+    expect(selectSessionModel).toHaveBeenCalledWith({ modelId: 'model-a', providerId: 'provider-a' });
+    await vi.waitFor(() => expect(root.querySelector('.dca-model-menu-root')).not.toBeNull());
+  });
+
+  it('桌面分离模式直接展示模型列表，并在选择后关闭浮层', async () => {
+    const selectSessionModel = vi.fn(async () => true);
+    runtimeMock.context = {
+      action: async (callback: () => unknown) => {
+        await callback();
+        return true;
+      },
+      runtime: { selectSessionModel, setModelControls: vi.fn(async () => true) },
+      state: shallowRef({
+        active: {
+          modelControls: { reasoningEffort: 'auto', webSearch: false },
+          status: 'completed',
+        },
+        busy: false,
+        providers,
+      }),
+    };
+    const root = document.createElement('div');
+    document.body.append(root);
+    const app = createApp(SessionModelMenu, { mode: 'model' });
+    app.mount(root);
+    mounted = { root, unmount: () => app.unmount() };
+
+    root.querySelector<HTMLButtonElement>('.dca-session-model-trigger')?.click();
     await nextTick();
+    expect(root.querySelector('.dca-model-menu-root')).toBeNull();
+    expect(root.querySelector('.dca-model-menu-list')?.textContent).toContain('测试模型');
+    const header = root.querySelector('.dca-model-subpage-header')!;
+    expect(header.children).toHaveLength(3);
+    expect(header.children[0].tagName).toBe('SPAN');
+    expect(header.children[1].textContent).toBe('选择模型');
+
+    const modelButton = [...root.querySelectorAll<HTMLButtonElement>('.dca-model-menu-list button')].find(button =>
+      button.textContent?.includes('测试模型'),
+    )!;
+    modelButton.click();
+    await vi.waitFor(() => expect(root.querySelector('.dca-model-menu-backdrop')).toBeNull());
     expect(selectSessionModel).toHaveBeenCalledWith({ modelId: 'model-a', providerId: 'provider-a' });
   });
 });

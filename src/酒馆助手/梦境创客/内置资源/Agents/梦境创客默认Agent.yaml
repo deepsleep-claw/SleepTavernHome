@@ -1,5 +1,44 @@
 id: agent:default
 name: 梦境创客默认 Agent
-version: 1
+version: 3
 preset: dream-card-agent-default
-skills: []
+skills:
+  - id: card-workspace-io
+    enabled: true
+    loading: full
+  - id: html-project
+    enabled: true
+    loading: on-demand
+  - id: plain-html-regex
+    enabled: true
+    loading: on-demand
+  - id: tavern-helper-regex
+    enabled: true
+    loading: on-demand
+  - id: mvu-zod-card
+    enabled: true
+    loading: on-demand
+  - id: mvu-frontend
+    enabled: true
+    loading: on-demand
+  - id: tavern-helper-api
+    enabled: true
+    loading: on-demand
+tools:
+  - list_path
+  - read_file
+  - write_file
+  - apply_patch
+  - move_path
+  - delete_path
+  - search_files
+  - search_worldbooks
+  - manage_worldbook
+  - manage_tavern_chat
+  - send_tavern_message
+  - generate_tavern_reply
+  - manage_character
+  - manage_html_project
+  - run_javascript
+  - prepare_render
+  - compact_context

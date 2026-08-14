@@ -10,7 +10,7 @@ import {
 } from '../../runtime/dream-card-agent-runtime';
 
 export type WorkspaceView = 'home' | 'session' | 'settings';
-export type SettingsSection = 'agent' | 'api' | 'diagnostics' | 'general' | 'preset' | 'skills' | 'storage' | 'theme' | 'update';
+export type SettingsSection = 'agent' | 'api' | 'diagnostics' | 'general' | 'preset' | 'resources' | 'skills' | 'storage' | 'theme' | 'update';
 export type SidebarTab = 'context' | 'diff' | 'files';
 
 export type SkillEditorRequest = { builtin?: boolean; deleting: boolean; skill?: AgentSkill };
@@ -27,6 +27,8 @@ export type DreamCardAgentContext = {
   closeSessionTab: (id: string) => Promise<void>;
   confirmCharacterSwitch: (confirmed: boolean) => void;
   createSession: () => Promise<void>;
+  createGlobalSession: () => Promise<void>;
+  createSessionForAvatar: (avatarId: string) => Promise<void>;
   createSessionForCharacter: (bindingId: string) => Promise<void>;
   deleteCharacterSession: (bindingId: string, id: string) => Promise<boolean>;
   deleteSession: (id: string) => Promise<boolean>;
@@ -91,6 +93,38 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
     if (succeeded && sessionId) {
       ensureSessionTab(sessionId);
       workspaceView.value = 'session';
+    }
+  }
+
+  async function createGlobalSession() {
+    let sessionId = '';
+    const succeeded = await action(async () => {
+      sessionId = (await runtime.createSession({ scope: 'global' })).sessionId;
+    });
+    if (succeeded && sessionId) {
+      ensureSessionTab(sessionId);
+      workspaceView.value = 'session';
+      if (isMobile.value) mobileSurface.value = 'workspace';
+    }
+  }
+
+  async function createSessionForAvatar(avatarId: string) {
+    const character = state.value.availableCharacters.find(item => item.avatarId === avatarId);
+    if (!character) {
+      toastr.error('角色卡已经不可用。', '梦境创客');
+      return;
+    }
+    if (state.value.currentCharacter?.avatarId !== avatarId && !(await requestCharacterSwitch(character.name, 'create'))) {
+      return;
+    }
+    let sessionId = '';
+    const succeeded = await action(async () => {
+      sessionId = (await runtime.selectCharacterAndCreateSession(avatarId)).sessionId;
+    });
+    if (succeeded && sessionId) {
+      ensureSessionTab(sessionId);
+      workspaceView.value = 'session';
+      if (isMobile.value) mobileSurface.value = 'workspace';
     }
   }
 
@@ -238,7 +272,9 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
     action,
     closeSessionTab,
     confirmCharacterSwitch,
+    createGlobalSession,
     createSession,
+    createSessionForAvatar,
     createSessionForCharacter,
     deleteCharacterSession,
     deleteSession,

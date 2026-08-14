@@ -9,6 +9,7 @@ import type {
 
 export const MAX_DREAMCREATOR_FILE_BYTES = 20 * 1024 * 1024;
 export const DREAMCREATOR_ORPHAN_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+export const GLOBAL_WORKSPACE_BINDING_ID = 'global';
 
 export type ManagedFileSummary = DreamCreatorWorkspaceFileReference & {
   characterName: string;
@@ -22,6 +23,7 @@ export type CharacterFileStorageSummary = {
   files: ManagedFileSummary[];
   orphanBytes: number;
   persistentBytes: number;
+  projectBytes: number;
   totalBytes: number;
 };
 
@@ -59,8 +61,12 @@ function isTextMediaType(mediaType: string): boolean {
   return mediaType.startsWith('text/') || /(?:json|javascript|typescript|yaml|xml)$/iu.test(mediaType);
 }
 
-function rootFor(scope: DreamCreatorWorkspaceFileReference['scope']): '/files' | '/temp' {
-  return scope === 'persistent' ? '/files' : '/temp';
+function rootFor(
+  scope: DreamCreatorWorkspaceFileReference['scope'],
+): '/character/files' | '/character/temp' | '/files' | '/temp' {
+  if (scope === 'character-persistent') return '/character/files';
+  if (scope === 'character-temp') return '/character/temp';
+  return scope === 'global-persistent' ? '/files' : '/temp';
 }
 
 function workspacePath(file: DreamCreatorWorkspaceFileReference): string {
@@ -73,10 +79,22 @@ function logicalPathFromWorkspace(path: string): {
 } {
   const normalized = normalizeWorkspacePath(path);
   if (normalized.startsWith('/files/')) {
-    return { logicalPath: normalizedRelativePath(normalized.slice('/files/'.length)), scope: 'persistent' };
+    return { logicalPath: normalizedRelativePath(normalized.slice('/files/'.length)), scope: 'global-persistent' };
   }
   if (normalized.startsWith('/temp/')) {
-    return { logicalPath: normalizedRelativePath(normalized.slice('/temp/'.length)), scope: 'temp' };
+    return { logicalPath: normalizedRelativePath(normalized.slice('/temp/'.length)), scope: 'global-temp' };
+  }
+  if (normalized.startsWith('/character/files/')) {
+    return {
+      logicalPath: normalizedRelativePath(normalized.slice('/character/files/'.length)),
+      scope: 'character-persistent',
+    };
+  }
+  if (normalized.startsWith('/character/temp/')) {
+    return {
+      logicalPath: normalizedRelativePath(normalized.slice('/character/temp/'.length)),
+      scope: 'character-temp',
+    };
   }
   throw new Error(`不是梦境创客存储路径：${path}`);
 }
@@ -119,24 +137,42 @@ export class DreamCreatorWorkspaceFileStore {
 
   async project(bindingId: string, sessionId: string): Promise<WorkspaceFile[]> {
     await this.collectExpiredOrphans(bindingId);
-    let references = this.listReferences(bindingId).filter(
+    if (bindingId !== GLOBAL_WORKSPACE_BINDING_ID) await this.collectExpiredOrphans(GLOBAL_WORKSPACE_BINDING_ID);
+    const loadReferences = () =>
+      this.listReferences().filter(file => file.bindingId === bindingId || file.bindingId === GLOBAL_WORKSPACE_BINDING_ID);
+    let references = loadReferences().filter(
       file =>
         !file.orphanedAt &&
-        (file.scope === 'persistent' || (file.scope === 'temp' && file.sessionId === sessionId)),
+        (file.scope === 'global-persistent' ||
+          file.scope === 'character-persistent' ||
+          ((file.scope === 'global-temp' || file.scope === 'character-temp') && file.sessionId === sessionId)),
     );
-    if (references.some(file => file.scope === 'persistent' && !file.referencedSessionIds.includes(sessionId))) {
+    if (
+      references.some(
+        file =>
+          (file.scope === 'global-persistent' || file.scope === 'character-persistent') &&
+          !file.referencedSessionIds.includes(sessionId),
+      )
+    ) {
       const settings = this.settingsStore.load();
       for (const file of references) {
         const stored = settings.workspaceFiles[file.fileId];
-        if (!stored || stored.scope !== 'persistent' || stored.referencedSessionIds.includes(sessionId)) continue;
+        if (
+          !stored ||
+          (stored.scope !== 'global-persistent' && stored.scope !== 'character-persistent') ||
+          stored.referencedSessionIds.includes(sessionId)
+        )
+          continue;
         stored.referencedSessionIds.push(sessionId);
         stored.updatedAt = this.now();
       }
       await this.settingsStore.save(settings);
-      references = this.listReferences(bindingId).filter(
+      references = loadReferences().filter(
         file =>
           !file.orphanedAt &&
-          (file.scope === 'persistent' || (file.scope === 'temp' && file.sessionId === sessionId)),
+          (file.scope === 'global-persistent' ||
+            file.scope === 'character-persistent' ||
+            ((file.scope === 'global-temp' || file.scope === 'character-temp') && file.sessionId === sessionId)),
       );
     }
     return Promise.all(
@@ -165,8 +201,9 @@ export class DreamCreatorWorkspaceFileStore {
     mediaType: string;
     referencedSessionId?: string;
     overwrite?: boolean;
+    global?: boolean;
   }): Promise<DreamCreatorWorkspaceFileReference> {
-    return this.put({ ...input, scope: 'persistent' });
+    return this.put({ ...input, scope: input.global ? 'global-persistent' : 'character-persistent' });
   }
 
   async putTemp(input: {
@@ -176,8 +213,14 @@ export class DreamCreatorWorkspaceFileStore {
     mediaType: string;
     sessionId: string;
     sourceFileId?: string;
+    global?: boolean;
   }): Promise<DreamCreatorWorkspaceFileReference> {
-    return this.put({ ...input, overwrite: true, referencedSessionId: input.sessionId, scope: 'temp' });
+    return this.put({
+      ...input,
+      overwrite: true,
+      referencedSessionId: input.sessionId,
+      scope: input.global ? 'global-temp' : 'character-temp',
+    });
   }
 
   async addSessionReference(fileId: string, sessionId: string): Promise<void> {
@@ -199,9 +242,10 @@ export class DreamCreatorWorkspaceFileStore {
   ): Promise<WorkspaceFile[]> {
     const settingsBefore = this.settingsStore.load();
     const urlsBefore = new Set(Object.values(settingsBefore.workspaceFiles).map(file => file.url));
-    const base = new Map(baseFiles.filter(file => /^\/(?:files|temp)(?:\/|$)/u.test(file.path)).map(file => [file.path, file]));
+    const storagePath = (path: string) => /^\/(?:files|temp)(?:\/|$)|^\/character\/(?:files|temp)(?:\/|$)/u.test(path);
+    const base = new Map(baseFiles.filter(file => storagePath(file.path)).map(file => [file.path, file]));
     const working = new Map(
-      workingFiles.filter(file => /^\/(?:files|temp)(?:\/|$)/u.test(file.path)).map(file => [file.path, file]),
+      workingFiles.filter(file => storagePath(file.path)).map(file => [file.path, file]),
     );
     const currentFiles = await this.project(bindingId, sessionId);
     const current = new Map(currentFiles.map(file => [file.path, file]));
@@ -212,7 +256,7 @@ export class DreamCreatorWorkspaceFileStore {
         const after = working.get(path);
         if (canonicalEqual(before, after)) continue;
         const { logicalPath, scope } = logicalPathFromWorkspace(path);
-        const choice = scope === 'temp' ? 'agent' : decisions[path];
+        const choice = scope.endsWith('-temp') ? 'agent' : decisions[path];
         if (choice !== 'agent') continue;
         const nowValue = current.get(path);
         if (!canonicalEqual(nowValue, before) && !canonicalEqual(nowValue, after)) {
@@ -228,14 +272,14 @@ export class DreamCreatorWorkspaceFileStore {
         }
         const bytes = new TextEncoder().encode(after.content);
         await this.put({
-          bindingId,
+          bindingId: scope.startsWith('global-') ? GLOBAL_WORKSPACE_BINDING_ID : bindingId,
           bytes,
           logicalPath,
           mediaType: after.mediaType || 'text/plain',
           overwrite: true,
           referencedSessionId: sessionId,
           scope,
-          sessionId: scope === 'temp' ? sessionId : undefined,
+          sessionId: scope.endsWith('-temp') ? sessionId : undefined,
         });
       }
     } catch (error) {
@@ -267,8 +311,8 @@ export class DreamCreatorWorkspaceFileStore {
     const tempIds: string[] = [];
     for (const file of Object.values(settings.workspaceFiles)) {
       if (file.bindingId !== bindingId) continue;
-      if (file.scope === 'temp' && file.sessionId === sessionId) tempIds.push(file.fileId);
-      if (file.scope === 'persistent' && file.referencedSessionIds.includes(sessionId)) {
+      if (file.scope.endsWith('-temp') && file.sessionId === sessionId) tempIds.push(file.fileId);
+      if (file.scope.endsWith('-persistent') && file.referencedSessionIds.includes(sessionId)) {
         file.referencedSessionIds = file.referencedSessionIds.filter(id => id !== sessionId);
         if (file.referencedSessionIds.length === 0) file.orphanedAt ??= this.now();
       }
@@ -279,14 +323,14 @@ export class DreamCreatorWorkspaceFileStore {
 
   async clearCache(bindingId?: string): Promise<number> {
     const targets = this.listReferences(bindingId).filter(
-      file => file.scope === 'temp' || (file.orphanedAt !== undefined && this.now() - file.orphanedAt >= 0),
+      file => file.scope.endsWith('-temp') || (file.orphanedAt !== undefined && this.now() - file.orphanedAt >= 0),
     );
     for (const file of targets) await this.removeImmediately(file.fileId);
     return targets.length;
   }
 
   async clearAttachments(bindingId?: string): Promise<number> {
-    const targets = this.listReferences(bindingId).filter(file => file.scope === 'persistent');
+    const targets = this.listReferences(bindingId).filter(file => file.scope.endsWith('-persistent'));
     for (const file of targets) await this.removeImmediately(file.fileId);
     await this.clearCache(bindingId);
     return targets.length;
@@ -325,10 +369,13 @@ export class DreamCreatorWorkspaceFileStore {
         const files = groups.get(bindingId) ?? [];
         const characterName = names.get(bindingId) ?? '未知角色';
         const managed = files.map(file => ({ ...file, characterName }));
-        const cacheBytes = files.filter(file => file.scope === 'temp').reduce((total, file) => total + file.size, 0);
+        const cacheBytes = files.filter(file => file.scope.endsWith('-temp')).reduce((total, file) => total + file.size, 0);
         const orphanBytes = files.filter(file => file.orphanedAt !== undefined).reduce((total, file) => total + file.size, 0);
         const persistentBytes = files
-          .filter(file => file.scope === 'persistent' && file.orphanedAt === undefined)
+          .filter(file => file.scope.endsWith('-persistent') && file.orphanedAt === undefined)
+          .reduce((total, file) => total + file.size, 0);
+        const projectBytes = files
+          .filter(file => file.logicalPath.endsWith('/project.yaml') && file.orphanedAt === undefined)
           .reduce((total, file) => total + file.size, 0);
         return {
           attachmentBytes: persistentBytes,
@@ -338,6 +385,7 @@ export class DreamCreatorWorkspaceFileStore {
           files: managed.sort((left, right) => right.updatedAt - left.updatedAt),
           orphanBytes,
           persistentBytes,
+          projectBytes,
           totalBytes: files.reduce((total, file) => total + file.size, 0),
         };
       })
@@ -390,8 +438,8 @@ export class DreamCreatorWorkspaceFileStore {
     const fileId = crypto.randomUUID();
     const at = this.now();
     const name = targetPath.split('/').at(-1) ?? 'file';
-    const physicalName = `DreamCreator--${input.scope === 'persistent' ? 'File' : 'Temp'}--${safe(
-      input.scope === 'persistent' ? input.bindingId : input.sessionId ?? 'session',
+    const physicalName = `DreamCreator--${input.scope.endsWith('-persistent') ? 'File' : 'Temp'}--${safe(
+      input.scope.endsWith('-temp') ? input.sessionId ?? 'session' : input.bindingId,
     )}--${safe(fileId)}${extension(targetPath)}`;
     let uploadedUrl: string | undefined;
     const url = identical?.url ?? (uploadedUrl = await this.client.upload(physicalName, bytes));
@@ -466,7 +514,7 @@ export class DreamCreatorWorkspaceFileStore {
     }
     file.logicalPath = logicalPath;
     file.scope = scope;
-    file.sessionId = scope === 'temp' ? sessionId : undefined;
+    file.sessionId = scope.endsWith('-temp') ? sessionId : undefined;
     file.orphanedAt = undefined;
     file.referencedSessionIds = [...new Set([...file.referencedSessionIds, sessionId])];
     file.updatedAt = this.now();

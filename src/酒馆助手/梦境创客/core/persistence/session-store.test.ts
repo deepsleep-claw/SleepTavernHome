@@ -6,24 +6,32 @@ import { MemoryTavernFileClient } from './file-client';
 import { SessionRevisionStore } from './session-store';
 import { MemorySessionDraftCache } from './session-draft-cache';
 import { MemoryAgentSettingsStore } from './settings';
+import { defaultBuiltinAgentConfiguration } from './builtin-agent';
 
 async function runtime(sessionId = 'session'): Promise<PersistedSessionRuntime> {
-  const compiledPreset = await compilePreset(DEFAULT_PRESET, defaultPresetValues([]));
+  const agentConfiguration = defaultBuiltinAgentConfiguration();
+  const compiledPreset = await compilePreset(
+    DEFAULT_PRESET,
+    defaultPresetValues([], agentConfiguration.toolIds, 'character'),
+  );
   return {
+    agentConfiguration,
     compiledPreset,
     createdAt: 1,
     events: [{ at: 2, status: 'completed', type: 'status' }],
     headerMessageCount: compiledPreset.messages.length,
     mode: 'normal',
     modelMessages: compiledPreset.messages,
+    mountedWorldbooks: [],
     preset: DEFAULT_PRESET,
     sessionId,
     skills: [],
+    scope: 'character',
     status: 'completed',
     title: '第一次创作',
     ui: [],
     updatedAt: 2,
-    version: 2,
+    version: 3,
   };
 }
 

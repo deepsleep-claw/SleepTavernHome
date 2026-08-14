@@ -65,7 +65,7 @@ describe('VfsTextEditor', () => {
     const app = createApp(VfsTextEditor, {
       markers: [{ endColumn: 8, endLine: 0, label: '可能的密钥', startColumn: 3, startLine: 0 }],
       modelValue: 'key: secret',
-      path: '/tavern-helper-scripts/character/scripts/demo/data.yaml',
+      path: '/scripts/character/scripts/demo/data.yaml',
     });
     app.mount(root);
     await Promise.resolve();

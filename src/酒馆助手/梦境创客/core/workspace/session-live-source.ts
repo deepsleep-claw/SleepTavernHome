@@ -11,8 +11,14 @@ type WorkspaceDomain = 'card' | 'chat' | 'skill' | 'storage';
 
 function domain(path: string): WorkspaceDomain {
   if (path.startsWith('/skills/user/')) return 'skill';
-  if (path.startsWith('/files/') || path.startsWith('/temp/')) return 'storage';
-  if (path.startsWith('/context/chats/')) return 'chat';
+  if (
+    path.startsWith('/files/') ||
+    path.startsWith('/temp/') ||
+    path.startsWith('/character/files/') ||
+    path.startsWith('/character/temp/')
+  )
+    return 'storage';
+  if (path.startsWith('/character/chats/')) return 'chat';
   return 'card';
 }
 
@@ -36,6 +42,7 @@ export type SessionWorkspaceLiveSourceOptions = {
   cardSource: LiveWorkspaceSource;
   decorate?: (files: WorkspaceFile[]) => WorkspaceFile[];
   getSkills: () => AgentSkill[];
+  getStorageBindingId?: () => string;
   getStorageFiles: () => WorkspaceFile[];
   onSkillsCommit?: (skills: AgentSkill[], previousSkillIds: string[]) => Promise<AgentSkill[]>;
   sessionId: string;
@@ -128,7 +135,7 @@ export class SessionWorkspaceLiveSource implements LiveWorkspaceSource {
     }
     const decisions = Object.fromEntries(repository.changes().map(change => [change.path, 'agent' as const]));
     const committed = await this.options.workspaceStore.applyWorkspace(
-      this.options.bindingId,
+      this.options.getStorageBindingId?.() ?? this.options.bindingId,
       this.options.sessionId,
       previous,
       repository.snapshot(),

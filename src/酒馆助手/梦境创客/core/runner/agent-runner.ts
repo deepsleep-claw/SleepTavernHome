@@ -55,6 +55,7 @@ export type AgentRunnerState = {
 };
 
 export type AgentRunnerOptions = {
+  compactionEnabled?: boolean;
   contextWindow?: number;
   executor: ModelStepExecutor;
   headerMessageCount?: number;
@@ -110,24 +111,6 @@ function toolFailureOutput(error: unknown, skipped = false): Record<string, unkn
   };
 }
 
-/**
- * 旧版Runner可能把AI SDK生成的参数校验错误与本地误执行结果同时保存。
- * 请求前只保留每个call_id的第一份结果，使已有失败会话也能安全恢复。
- */
-function deduplicateToolResults(messages: ModelMessage[]): ModelMessage[] {
-  const seen = new Set<string>();
-  return messages.flatMap(message => {
-    if (message.role !== 'tool' || !Array.isArray(message.content)) return [message];
-    const content = message.content.filter(part => {
-      if (part.type !== 'tool-result') return true;
-      if (seen.has(part.toolCallId)) return false;
-      seen.add(part.toolCallId);
-      return true;
-    });
-    return content.length > 0 ? [{ ...message, content }] : [];
-  });
-}
-
 function guidanceMessage(messages: string[]): string {
   return `<mid_turn_guidance>\n这是对当前未完成目标的中途补充，不是替换旧目标的新任务。\n${messages.join('\n')}\n</mid_turn_guidance>`;
 }
@@ -138,6 +121,7 @@ export class AgentRunner {
   private controller?: AbortController;
   private toolController?: AbortController;
   private compactionFresh = false;
+  private readonly compactionEnabled: boolean;
   private readonly executor: ModelStepExecutor;
   private headerMessageCount: number;
   private readonly journal: RunnerJournal;
@@ -160,6 +144,7 @@ export class AgentRunner {
 
   constructor(options: AgentRunnerOptions) {
     this.contextWindow = options.contextWindow ?? 128_000;
+    this.compactionEnabled = options.compactionEnabled ?? true;
     this.executor = options.executor;
     this.headerMessageCount = options.headerMessageCount ?? 0;
     this.journal = options.journal;
@@ -173,7 +158,7 @@ export class AgentRunner {
     this.prepareMessages = options.prepareMessages;
     this.refreshCompactionHeader = options.refreshCompactionHeader;
     this.requestApproval = options.requestApproval;
-    this.tools = [...options.tools, COMPACT_CONTEXT_TOOL];
+    this.tools = this.compactionEnabled ? [...options.tools, COMPACT_CONTEXT_TOOL] : [...options.tools];
     this.toolMap = new Map(this.tools.map(item => [item.name, item]));
     const messages = structuredClone(options.initialMessages ?? []);
     this.state = {
@@ -254,16 +239,19 @@ export class AgentRunner {
         await this.setStatus('context-exhausted');
         return this.state;
       }
+      if (decision === 'compact' && !this.compactionEnabled) {
+        this.state.failure = '上下文已达到压缩阈值，但当前Agent关闭了上下文压缩工具。请新建会话或换用更大上下文模型。';
+        await this.setStatus('context-exhausted');
+        return this.state;
+      }
       const compacting = decision === 'compact' && !this.compactionFresh;
       this.controller = new AbortController();
       let result;
       const liveProviderStarted = new Set<string>();
       const liveProviderCompleted = new Set<string>();
       try {
-        const persistedMessages = deduplicateToolResults(structuredClone(this.state.messages));
-        const requestMessages = this.prepareMessages
-          ? await this.prepareMessages(persistedMessages)
-          : persistedMessages;
+        const persistedMessages = structuredClone(this.state.messages);
+        const requestMessages = this.prepareMessages ? await this.prepareMessages(persistedMessages) : persistedMessages;
         result = await this.executor.execute({
           abortSignal: this.controller.signal,
           forceTool: compacting ? 'compact_context' : undefined,

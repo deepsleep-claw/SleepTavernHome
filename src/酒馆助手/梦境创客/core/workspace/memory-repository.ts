@@ -355,8 +355,7 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
     for (const file of this.current.values()) {
       if (!file.path.endsWith('/book.yaml')) continue;
       const root = parentWorkspacePath(file.path);
-      if (!/^\/(?:worldbooks|worldbooks-global-readonly)\/[^/]+$/u.test(root) &&
-          !/^\/library\/worldbooks\/[^/]+$/u.test(root)) {
+      if (!/^\/worldbooks\/[^/]+$/u.test(root)) {
         continue;
       }
       const path = `${root}/entries`;

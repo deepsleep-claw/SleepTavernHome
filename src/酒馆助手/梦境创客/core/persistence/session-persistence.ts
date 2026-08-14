@@ -11,7 +11,7 @@ function manifestStatus(status: SessionLifecycleStatus): SessionIndexEntry['stat
 }
 
 export type SessionPersistenceOptions = {
-  avatarId: string;
+  avatarId?: string;
   bindingId: string;
   characterName: string;
   store: SessionRevisionStore;

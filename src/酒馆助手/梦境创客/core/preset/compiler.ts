@@ -5,6 +5,7 @@ import { sha256 } from '../transaction/canonical';
 
 export const PRESET_MACROS = [
   'agent_identity',
+  'workspace_environment',
   'tools_can_use',
   'tool_rules',
   'skill_instructions',

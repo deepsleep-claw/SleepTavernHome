@@ -10,19 +10,18 @@ describe('酒馆聊天Runner工具', () => {
     const workspace = new TavernChatWorkspace(new FakeTavernChatBridge());
     await workspace.initialize(repository);
     const tools = createTavernChatRunnerTools(repository, workspace, { approvalMode: () => 'manual' });
-    const create = tools.find(item => item.name === 'create_tavern_chat')!;
-    const truncate = tools.find(item => item.name === 'truncate_tavern_chat')!;
+    const manage = tools.find(item => item.name === 'manage_tavern_chat')!;
 
-    expect(create.confirmation?.({ name: '测试' }, 'call-1')).toMatchObject({ toolName: 'create_tavern_chat' });
-    await create.execute({ name: '测试' }, 'call-1');
-    expect(truncate.confirmation?.({ chatId: 'c02', fromMessageId: 0 }, 'call-2')).toMatchObject({
+    expect(await manage.confirmation?.({ action: 'create', name: '测试' }, 'call-1')).toMatchObject({ toolName: 'manage_tavern_chat' });
+    await manage.execute({ action: 'create', name: '测试' }, 'call-1');
+    expect(await manage.confirmation?.({ action: 'truncate', chatId: 'c02', fromMessageId: 0 }, 'call-2')).toMatchObject({
       risk: 'high',
-      toolName: 'truncate_tavern_chat',
+      toolName: 'manage_tavern_chat',
     });
     const yolo = createTavernChatRunnerTools(repository, workspace, { approvalMode: () => 'yolo' });
-    expect(yolo.find(item => item.name === 'create_tavern_chat')!.confirmation?.({ name: '新聊天' }, 'call-3'))
+    expect(await yolo.find(item => item.name === 'manage_tavern_chat')!.confirmation?.({ action: 'create', name: '新聊天' }, 'call-3'))
       .toBeUndefined();
-    expect(yolo.find(item => item.name === 'truncate_tavern_chat')!.confirmation?.({ chatId: 'c02', fromMessageId: 0 }, 'call-4'))
+    expect(await yolo.find(item => item.name === 'manage_tavern_chat')!.confirmation?.({ action: 'truncate', chatId: 'c02', fromMessageId: 0 }, 'call-4'))
       .toBeDefined();
   });
 
@@ -35,7 +34,7 @@ describe('酒馆聊天Runner工具', () => {
     const generate = tools.find(item => item.name === 'generate_tavern_reply')!;
 
     await workspace.writeFile(
-      '/context/chats/c01/messages/0000-0099/000001.md',
+      '/character/chats/c01/messages/0000-0099/000001.md',
       ['---', 'role: user', '---', '测试'].join('\n'),
       repository,
     );
@@ -49,11 +48,11 @@ describe('酒馆聊天Runner工具', () => {
     const workspace = new TavernChatWorkspace(bridge);
     await workspace.initialize(repository);
     const create = createTavernChatRunnerTools(repository, workspace, { isYolo: () => true }).find(
-      item => item.name === 'create_tavern_chat',
+      item => item.name === 'manage_tavern_chat',
     )!;
 
-    await create.execute({ name: '幂等测试' }, 'same-call');
-    expect(await create.execute({ name: '幂等测试' }, 'same-call')).toEqual({ idempotent: true });
+    await create.execute({ action: 'create', name: '幂等测试' }, 'same-call');
+    expect(await create.execute({ action: 'create', name: '幂等测试' }, 'same-call')).toEqual({ idempotent: true });
     expect(bridge.calls.filter(call => call === 'create-chat:幂等测试')).toHaveLength(1);
   });
 });

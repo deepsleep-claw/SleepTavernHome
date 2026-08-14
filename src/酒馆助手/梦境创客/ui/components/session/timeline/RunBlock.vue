@@ -24,13 +24,10 @@
           <header v-if="inner.item.kind !== 'assistant'">
             <span>{{ itemKindLabel(inner.item.kind) }}</span>
           </header>
-          <!-- eslint-disable vue/no-v-html -- 内容已由 ui/markdown.ts 的默认安全 Schema 清洗。 -->
-          <div
+          <RenderRichText
             v-if="isMarkdownMessage(inner.item)"
-            class="dca-markdown"
-            v-html="renderMessageMarkdown(inner.item.content)"
-          ></div>
-          <!-- eslint-enable vue/no-v-html -->
+            :content="cleanGuidance(inner.item.content)"
+          />
           <p v-else>{{ cleanGuidance(inner.item.content) }}</p>
         </div>
       </template>
@@ -51,9 +48,9 @@ import {
   runStatusLabel,
   type RunTimelineBlock,
 } from '../../../composables/timeline';
-import { renderMarkdown } from '../../../markdown';
 import ReasoningBlock from './ReasoningBlock.vue';
 import ManualChangeCard from './ManualChangeCard.vue';
+import RenderRichText from './RenderRichText.vue';
 import ToolGroup from './ToolGroup.vue';
 
 const props = defineProps<{ block: RunTimelineBlock; collapsed: boolean; confirmation?: ToolConfirmation }>();
@@ -61,9 +58,6 @@ const emit = defineEmits<{ 'resolve-confirmation': [approved: boolean]; toggle: 
 
 const contentBlocks = computed(() => runContentBlocks(props.block.items));
 
-function renderMessageMarkdown(value: string): string {
-  return renderMarkdown(cleanGuidance(value));
-}
 </script>
 
 <style lang="scss">

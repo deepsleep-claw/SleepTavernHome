@@ -11,53 +11,56 @@
         <i class="fa-solid fa-bars" aria-hidden="true"></i>
       </button>
       <div v-if="isMobile" class="dca-mobile-brand">
-        <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i><strong>梦境创客</strong>
+        <i class="fa-solid fa-address-card" aria-hidden="true"></i>
+        <strong :title="mobileCharacterTitle">{{ mobileCharacterTitle }}</strong>
       </div>
-      <button
-        class="dca-tab dca-tab-home"
-        type="button"
-        :class="{ active: workspaceView === 'home' }"
-        title="会话列表"
-        @click="workspaceView = 'home'"
-      >
-        <i class="fa-solid fa-house" aria-hidden="true"></i>
-      </button>
-      <div
-        v-for="session in openedSessions"
-        :key="session.sessionId"
-        class="dca-session-tab"
-        :class="{
-          active: workspaceView === 'session' && state.active?.sessionId === session.sessionId,
-          running: isSessionTabRunning(session.sessionId),
-          readonly: session.readonly,
-        }"
-      >
-        <button class="dca-session-tab-open" type="button" @click="openSessionTab(session.sessionId)">
-          <i v-if="session.readonly" class="fa-solid fa-lock" aria-hidden="true"></i>
-          <span>{{ session.title }}</span>
-          <small v-if="state.developerMode">r{{ session.revision }}</small>
-        </button>
+      <template v-if="!isMobile">
         <button
-          class="dca-session-tab-close"
+          class="dca-tab dca-tab-home"
           type="button"
-          :title="isSessionTabRunning(session.sessionId) ? '停止任务并关闭页签' : '关闭页签（不会删除会话）'"
-          @click.stop="requestClose(session.sessionId)"
+          :class="{ active: workspaceView === 'home' }"
+          title="会话列表"
+          @click="workspaceView = 'home'"
         >
-          <i
-            :class="isSessionTabRunning(session.sessionId) ? 'fa-solid fa-stop' : 'fa-solid fa-xmark'"
-            aria-hidden="true"
-          ></i>
+          <i class="fa-solid fa-house" aria-hidden="true"></i>
         </button>
-      </div>
-      <button
-        class="dca-tab dca-new-tab"
-        type="button"
-        :disabled="!canCreateSession || state.busy"
-        :title="state.currentCharacter ? '新建会话' : '请先在酒馆中打开一张角色卡'"
-        @click="createSession"
-      >
-        <i class="fa-solid fa-plus" aria-hidden="true"></i>
-      </button>
+        <div
+          v-for="session in openedSessions"
+          :key="session.sessionId"
+          class="dca-session-tab"
+          :class="{
+            active: workspaceView === 'session' && state.active?.sessionId === session.sessionId,
+            running: isSessionTabRunning(session.sessionId),
+            readonly: session.readonly,
+          }"
+        >
+          <button class="dca-session-tab-open" type="button" @click="openSessionTab(session.sessionId)">
+            <i v-if="session.readonly" class="fa-solid fa-lock" aria-hidden="true"></i>
+            <span>{{ session.title }}</span>
+            <small v-if="state.developerMode">r{{ session.revision }}</small>
+          </button>
+          <button
+            class="dca-session-tab-close"
+            type="button"
+            :title="isSessionTabRunning(session.sessionId) ? '停止任务并关闭页签' : '关闭页签（不会删除会话）'"
+            @click.stop="requestClose(session.sessionId)"
+          >
+            <i
+              :class="isSessionTabRunning(session.sessionId) ? 'fa-solid fa-stop' : 'fa-solid fa-xmark'"
+              aria-hidden="true"
+            ></i>
+          </button>
+        </div>
+        <button
+          class="dca-tab dca-new-tab"
+          type="button"
+          :disabled="state.busy"
+          title="新建会话"
+          @click="newSessionChoiceOpen = true"
+        >
+          <i class="fa-solid fa-plus" aria-hidden="true"></i>
+        </button>
+      </template>
     </div>
     <div class="dca-tab-actions">
       <button
@@ -100,6 +103,20 @@
         </footer>
       </section>
     </div>
+    <div v-if="newSessionChoiceOpen" class="dca-modal-backdrop" role="presentation">
+      <section class="dca-modal dca-tab-new-session-dialog" role="dialog" aria-modal="true">
+        <header><strong>新建会话</strong><button class="dca-icon-btn" type="button" @click="newSessionChoiceOpen = false"><i class="fa-solid fa-xmark"></i></button></header>
+        <div class="dca-tab-new-session-kinds">
+          <button class="dca-btn-start" type="button" @click="createGlobalFromTab"><i class="fa-solid fa-globe"></i><span><strong>全局会话</strong><small>不绑定角色卡</small></span></button>
+          <button class="dca-btn-start" type="button" @click="showCharacterChoices = !showCharacterChoices"><i class="fa-regular fa-address-card"></i><span><strong>角色卡会话</strong><small>选择酒馆角色卡</small></span></button>
+        </div>
+        <div v-if="showCharacterChoices" class="dca-tab-character-list">
+          <button v-for="character in state.availableCharacters" :key="character.avatarId" type="button" @click="createCharacterFromTab(character.avatarId)">
+            <span>{{ character.name }}</span><i class="fa-solid fa-chevron-right"></i>
+          </button>
+        </div>
+      </section>
+    </div>
   </nav>
 </template>
 
@@ -110,7 +127,9 @@ import { useDreamCardAgentUpdater } from '../updater';
 
 const {
   closeSessionTab,
+  createGlobalSession,
   createSession,
+  createSessionForAvatar,
   isMobile,
   isSessionTabRunning,
   mobileSurface,
@@ -124,9 +143,12 @@ const {
 const { snapshot: updaterSnapshot } = useDreamCardAgentUpdater();
 
 const allSessions = computed(() =>
-  (state.value.characterGroups ?? []).flatMap(group =>
-    group.sessions.map(session => ({ ...session, readonly: !group.available, groupCurrent: group.current })),
-  ),
+  [
+    ...(state.value.globalSessions ?? []).map(session => ({ ...session, readonly: false, groupCurrent: true })),
+    ...(state.value.characterGroups ?? []).flatMap(group =>
+      group.sessions.map(session => ({ ...session, readonly: !group.available, groupCurrent: group.current })),
+    ),
+  ],
 );
 const openedSessions = computed(() =>
   openedSessionIds.value
@@ -137,8 +159,10 @@ const openedSessions = computed(() =>
       item.sessionId === state.value.active?.sessionId ? { ...item, title: state.value.active.title } : item,
     ),
 );
-const canCreateSession = computed(() => Boolean(state.value.currentCharacter));
+const mobileCharacterTitle = computed(() => state.value.currentCharacter?.name || '未打开角色卡');
 const closingSessionId = ref('');
+const newSessionChoiceOpen = ref(false);
+const showCharacterChoices = ref(false);
 const versionTitle = computed(() => {
   if (updaterSnapshot.value.status === 'checking')
     return `正在检查更新 · 当前 v${updaterSnapshot.value.runningVersion}`;
@@ -160,6 +184,17 @@ function confirmStopAndClose() {
   openedSessionIds.value = openedSessionIds.value.filter(id => id !== sessionId);
   if (state.value.active?.sessionId === sessionId) workspaceView.value = 'home';
   closingSessionId.value = '';
+}
+
+async function createGlobalFromTab() {
+  newSessionChoiceOpen.value = false;
+  await createGlobalSession();
+}
+
+async function createCharacterFromTab(avatarId: string) {
+  newSessionChoiceOpen.value = false;
+  showCharacterChoices.value = false;
+  await createSessionForAvatar(avatarId);
 }
 </script>
 
@@ -350,6 +385,15 @@ function confirmStopAndClose() {
   justify-content: flex-end;
   gap: 0.5rem;
 }
+.dca-tab-new-session-dialog { display: grid; width: min(32rem, calc(100vw - 2rem)); gap: .7rem; }
+.dca-tab-new-session-dialog > header { display: flex; align-items: center; justify-content: space-between; }
+.dca-tab-new-session-kinds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
+.dca-tab-new-session-kinds > button { display: flex; align-items: center; justify-content: flex-start; gap: .65rem; border-color: var(--dca-border); padding: .7rem; background: var(--dca-surface); text-align: left; }
+.dca-tab-new-session-kinds > button > i { color: var(--dca-accent-strong); }
+.dca-tab-new-session-kinds > button > span { display: grid; gap: .1rem; }
+.dca-tab-new-session-kinds small { color: var(--dca-text-muted); }
+.dca-tab-character-list { display: grid; max-height: min(26rem, 50vh); gap: .2rem; overflow: auto; scrollbar-gutter: stable; }
+.dca-tab-character-list > button { display: flex; align-items: center; justify-content: space-between; border-color: transparent; background: var(--dca-raised); text-align: left; }
 
 .dca-version-tab {
   flex: 0 0 auto;
@@ -378,7 +422,12 @@ function confirmStopAndClose() {
 
 @media (max-width: 720px) {
   .dca-tabs {
+    min-width: 0;
     padding-right: 2.65rem;
+  }
+
+  .dca-tab-strip {
+    overflow: hidden;
   }
 
   .dca-settings-tab span,
@@ -400,10 +449,26 @@ function confirmStopAndClose() {
 
   .dca-mobile-brand {
     display: flex;
+    min-width: 0;
+    flex: 1 1 auto;
+    justify-content: center;
+    padding: 0 0.35rem;
+  }
+
+  .dca-mobile-brand > strong {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .dca-mobile-brand > i {
+    flex: 0 0 auto;
   }
 
   .dca-tab-home,
-  .dca-new-tab {
+  .dca-new-tab,
+  .dca-session-tab {
     display: none !important;
   }
 }

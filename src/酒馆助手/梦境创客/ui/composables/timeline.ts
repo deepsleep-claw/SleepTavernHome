@@ -51,8 +51,8 @@ function runDuration(
   const startedAt = user?.at ?? items[0]?.at ?? now;
   if (activeStillRunning) return Math.max(0, now - startedAt);
 
-  // 旧版本没有持久化整轮 durationMs。已完成轮次绝不能以“现在”作为结束点，
-  // 否则每次打开历史都会继续变长；用该轮最后一个可见事件（含片段自身耗时）兼容估算。
+  // 缺少整轮 durationMs 时，已完成轮次绝不能以“现在”作为结束点，
+  // 否则每次打开历史都会继续变长；使用该轮最后一个可见事件（含片段自身耗时）估算。
   const endedAt = Math.max(
     startedAt,
     ...items.map(item => item.at + Math.max(0, item.durationMs ?? 0)),

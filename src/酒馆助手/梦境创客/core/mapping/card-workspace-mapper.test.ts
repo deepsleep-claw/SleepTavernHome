@@ -109,11 +109,10 @@ describe('card workspace mapper', () => {
   it('投影固定角色文件、具名开场白和世界书，聊天由独立实时工作区负责', () => {
     const files = projectCardWorkspace(state(), 2);
     const paths = files.map(item => item.path);
-    expect(paths).toContain('/character/description.md');
-    expect(paths).toContain('/greetings/001-初见.md');
+    expect(paths).toContain('/character/definition/description.md');
+    expect(paths).toContain('/character/greetings/001-初见.md');
     expect(paths.some(path => path.startsWith('/context/'))).toBe(false);
     expect(paths).toContain(`/worldbooks/${encodeWorkspaceSegment('学院')}/book.yaml`);
-    expect(files.find(item => item.path.includes('worldbooks-global-readonly'))?.readonly).toBe(true);
     expect(files.find(item => item.path === '/character/identity.yaml')?.readonly).toBe(true);
 
     const entryFile = files.find(item => item.resourceId === 'entry-library');
@@ -154,7 +153,7 @@ describe('card workspace mapper', () => {
   it('从Working Copy读取角色和世界书的明确修改', async () => {
     const base = state();
     const workspace = new MemoryWorkspaceRepository({ files: projectCardWorkspace(base) });
-    await workspace.write('/character/description.md', '爱丽丝是首席学生。', 'character-edit', { overwrite: true });
+    await workspace.write('/character/definition/description.md', '爱丽丝是首席学生。', 'character-edit', { overwrite: true });
     const entryPath = workspace.snapshot().find(item => item.resourceId === 'entry-library')?.path;
     expect(entryPath).toBeTruthy();
     const original = await workspace.read(entryPath!);
@@ -190,8 +189,8 @@ describe('card workspace mapper', () => {
   it('支持直接新增开场白文件，并对缺失索引项给出警告', async () => {
     const base = state();
     const workspace = new MemoryWorkspaceRepository({ files: projectCardWorkspace(base) });
-    await workspace.remove('/greetings/001-初见.md', 'remove-greeting');
-    await workspace.write('/greetings/003-夜谈.md', '今晚聊聊吧。', 'new-greeting');
+    await workspace.remove('/character/greetings/001-初见.md', 'remove-greeting');
+    await workspace.write('/character/greetings/003-夜谈.md', '今晚聊聊吧。', 'new-greeting');
     const result = materializeCardWorkspace(base, workspace.snapshot());
     expect(result.warnings).toEqual(['开场白索引引用了不存在的文件：001-初见.md']);
     expect(result.state.character.greetings).toEqual([
@@ -203,7 +202,7 @@ describe('card workspace mapper', () => {
   it('拒绝删除固定字段和损坏的结构化关键字', async () => {
     const base = state();
     const workspace = new MemoryWorkspaceRepository({ files: projectCardWorkspace(base) });
-    await workspace.remove('/character/scenario.md', 'remove-required');
+    await workspace.remove('/character/definition/scenario.md', 'remove-required');
     expect(() => materializeCardWorkspace(base, workspace.snapshot())).toThrowError(
       expect.objectContaining({ code: 'NOT_FOUND' }),
     );
@@ -248,7 +247,7 @@ describe('card workspace mapper', () => {
   it('拒绝损坏的标签、绑定和开场白索引', () => {
     const base = state();
     const tagsBroken = projectCardWorkspace(base);
-    tagsBroken.find(item => item.path === '/character/tags.yaml')!.content = 'tags: not-an-array\n';
+    tagsBroken.find(item => item.path === '/character/definition/tags.yaml')!.content = 'tags: not-an-array\n';
     expect(() => materializeCardWorkspace(base, tagsBroken)).toThrowError(
       expect.objectContaining({ code: 'INVALID_PATCH' }),
     );
@@ -261,7 +260,7 @@ describe('card workspace mapper', () => {
     );
 
     const indexBroken = projectCardWorkspace(base);
-    indexBroken.find(item => item.path === '/greetings/index.yaml')!.content = 'greetings: invalid\n';
+    indexBroken.find(item => item.path === '/character/greetings/index.yaml')!.content = 'greetings: invalid\n';
     expect(() => materializeCardWorkspace(base, indexBroken)).toThrowError(
       expect.objectContaining({ code: 'INVALID_PATCH' }),
     );
@@ -270,7 +269,7 @@ describe('card workspace mapper', () => {
   it('拒绝开场白索引重复引用同一资源', () => {
     const base = state();
     const files = projectCardWorkspace(base);
-    files.find(item => item.path === '/greetings/index.yaml')!.content = serializeYaml({
+    files.find(item => item.path === '/character/greetings/index.yaml')!.content = serializeYaml({
       greetings: [
         { file: '001-初见.md', id: 'greeting-1', name: '初见' },
         { file: '001-初见.md', id: 'greeting-1', name: '重复' },
@@ -397,9 +396,9 @@ describe('card workspace mapper', () => {
     base.character.extensions = { foreign: true };
     base.bindings = { additional: [], chat: null, primary: null };
     const workspace = new MemoryWorkspaceRepository({ files: projectCardWorkspace(base) });
-    await workspace.remove('/greetings/index.yaml', 'remove-index');
-    await workspace.remove('/character/creator.md', 'remove-creator');
-    await workspace.remove('/character/version.md', 'remove-version');
+    await workspace.remove('/character/greetings/index.yaml', 'remove-index');
+    await workspace.remove('/character/definition/creator.md', 'remove-creator');
+    await workspace.remove('/character/definition/version.md', 'remove-version');
     const result = materializeCardWorkspace(base, workspace.snapshot()).state;
     expect(result.character.creator).toBe('作者');
     expect(result.character.version).toBe('1.2.0');

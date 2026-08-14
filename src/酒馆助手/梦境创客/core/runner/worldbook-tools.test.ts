@@ -11,7 +11,7 @@ function fixture() {
   bridge.books.set('资料库', structuredClone(bridge.books.get('主世界书')!));
   const repository = new MemoryWorkspaceRepository({
     files: projectCardWorkspace(base),
-    readonlyRoots: ['/context', '/library', '/worldbooks-global-readonly'],
+    readonlyRoots: ['/context'],
   });
   const tools = new Map(
     createWorldbookRunnerTools(repository, bridge, { getBaseState: () => base }).map(item => [item.name, item]),
@@ -27,34 +27,34 @@ describe('世界书Runner工具', () => {
     expect(bridge.calls).not.toContain('get-worldbook:资料库');
   });
 
-  it('把参考世界书挂载到library且不产生Diff', async () => {
+  it('把参考世界书挂载到worldbooks且不产生Diff', async () => {
     const { repository, tools } = fixture();
-    await tools.get('mount_worldbook_reference')!.execute({ name: '资料库' }, 'mount');
-    expect((await repository.list('/library/worldbooks/资料库')).map(item => item.name)).toEqual([
+    await tools.get('manage_worldbook')!.execute({ action: 'mount', name: '资料库' }, 'mount');
+    expect((await repository.list('/worldbooks/资料库')).map(item => item.name)).toEqual([
       'entries',
       'book.yaml',
     ]);
-    expect((await repository.read('/library/worldbooks/资料库/book.yaml')).readonly).toBe(true);
+    expect((await repository.read('/worldbooks/资料库/book.yaml')).readonly).toBe(false);
     expect(repository.changes()).toEqual([]);
   });
 
   it('新建空世界书并拒绝重名', async () => {
     const { base, repository, tools } = fixture();
-    await tools.get('create_worldbook')!.execute({ name: '新版本' }, 'create');
+    await tools.get('manage_worldbook')!.execute({ action: 'create', name: '新版本' }, 'create');
     expect(await repository.list('/worldbooks/新版本/entries')).toEqual([]);
     expect(await repository.list('/worldbooks/新版本')).toEqual(
       expect.arrayContaining([expect.objectContaining({ kind: 'directory', name: 'entries' })]),
     );
     const result = materializeCardWorkspace(base, repository.snapshot()).state;
     expect(result.worldbooks.find(book => book.name === '新版本')).toMatchObject({ entries: [], writable: true });
-    await expect(tools.get('create_worldbook')!.execute({ name: '资料库' }, 'duplicate')).rejects.toThrow(
+    await expect(tools.get('manage_worldbook')!.execute({ action: 'create', name: '资料库' }, 'duplicate')).rejects.toThrow(
       '世界书名称已存在',
     );
   });
 
   it('复制完整世界书并分配独立资源身份', async () => {
     const { base, repository, tools } = fixture();
-    await tools.get('clone_worldbook')!.execute({ name: '主世界书 v2', source: '主世界书' }, 'clone');
+    await tools.get('manage_worldbook')!.execute({ action: 'clone', name: '主世界书 v2', source: '主世界书' }, 'clone');
     const books = materializeCardWorkspace(base, repository.snapshot()).state.worldbooks;
     const source = books.find(book => book.name === '主世界书')!;
     const cloned = books.find(book => book.name === '主世界书 v2')!;
@@ -65,11 +65,14 @@ describe('世界书Runner工具', () => {
 
   it('绑定尚未挂载的现有世界书并支持增删附加绑定', async () => {
     const { base, repository, tools } = fixture();
-    await tools.get('set_worldbook_binding')!.execute(
+    await tools.get('manage_worldbook')!.execute(
       {
-        addCharacterAdditional: ['资料库'],
-        characterPrimary: '资料库',
-        removeCharacterAdditional: ['旧资料'],
+        action: 'set_binding',
+        binding: {
+          addCharacterAdditional: ['资料库'],
+          characterPrimary: '资料库',
+          removeCharacterAdditional: ['旧资料'],
+        },
       },
       'bind',
     );
@@ -86,8 +89,8 @@ describe('世界书Runner工具', () => {
   it('没有聊天控制器时拒绝聊天绑定且不留下部分修改', async () => {
     const { repository, tools } = fixture();
     await expect(
-      tools.get('set_worldbook_binding')!.execute(
-        { characterPrimary: null, chat: { chatId: 'c01', worldbook: null } },
+      tools.get('manage_worldbook')!.execute(
+        { action: 'set_binding', binding: { characterPrimary: null, chat: { chatId: 'c01', worldbook: null } } },
         'chat-bind',
       ),
     ).rejects.toThrow('CHAT_WORKSPACE_UNAVAILABLE');

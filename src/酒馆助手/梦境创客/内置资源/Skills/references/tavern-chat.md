@@ -1,6 +1,6 @@
 # 酒馆测试聊天楼层格式参考
 
-聊天楼层位于 `/context/chats/<chatId>/messages/<分段目录>/<六位楼层>.md`，楼层编号从 0 开始。
+聊天楼层位于 `/character/chats/<chatId>/messages/<分段目录>/<六位楼层>.md`，楼层编号从 0 开始。
 
 ## 直接追加下一楼
 
@@ -28,4 +28,4 @@ selected_swipe: 0
 swipe_count: 1
 ```
 
-不要用 `delete_path` 删除楼层；使用 `truncate_tavern_chat` 从指定楼层起截断。只有最新 assistant 楼层可以切换或生成 Swipe。
+不要用 `delete_path` 删除楼层；使用 `manage_tavern_chat` 的 `truncate` 动作从指定楼层起截断。只有最新 assistant 楼层可以用 `generate_tavern_reply` 的 `swipe` 模式切换或生成 Swipe。

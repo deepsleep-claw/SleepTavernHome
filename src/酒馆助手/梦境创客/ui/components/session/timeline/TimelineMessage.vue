@@ -22,13 +22,10 @@
         <small>{{ attachment.missing ? '已清理' : formatBytes(attachment.size) }}</small>
       </span>
     </div>
-    <!-- eslint-disable vue/no-v-html -- 内容已由 ui/markdown.ts 的默认安全 Schema 清洗。 -->
-    <div
+    <RenderRichText
       v-if="!editing && item.content && isMarkdownMessage(item)"
-      class="dca-markdown"
-      v-html="renderMessageMarkdown(item.content)"
-    ></div>
-    <!-- eslint-enable vue/no-v-html -->
+      :content="cleanGuidance(item.content)"
+    />
     <p v-else-if="!editing && item.content">{{ cleanGuidance(item.content) }}</p>
     <footer v-if="item.kind === 'user' && !editing && state.activeSessionAccess === 'live'" class="dca-message-actions">
       <button type="button" :disabled="!canModifyHistory" @click="undoTo">回退本轮修改</button>
@@ -52,8 +49,8 @@ import type { SessionUiItem } from '../../../../core/session/types';
 import { formatBytes, formatTime } from '../../../composables/format';
 import { useDreamCardAgent } from '../../../composables/runtime';
 import { cleanGuidance, isMarkdownMessage, itemKindLabel } from '../../../composables/timeline';
-import { renderMarkdown } from '../../../markdown';
 import ManualChangeCard from './ManualChangeCard.vue';
+import RenderRichText from './RenderRichText.vue';
 
 const props = defineProps<{ item: SessionUiItem }>();
 
@@ -83,10 +80,6 @@ const canSend = computed(() =>
     props.item.id === lastVisibleMessageId.value,
   ),
 );
-
-function renderMessageMarkdown(value: string): string {
-  return renderMarkdown(cleanGuidance(value));
-}
 
 function beginEdit() {
   editDraft.value = props.item.content;

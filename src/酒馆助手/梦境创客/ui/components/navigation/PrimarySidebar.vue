@@ -28,8 +28,8 @@
     <div class="dca-sidebar-primary-actions">
       <button
         type="button"
-        :disabled="!state.currentCharacter || state.busy"
-        :title="newSessionTitle"
+        :disabled="state.busy"
+        title="新建会话"
         @click="createSessionFromTop"
       >
         <i class="fa-solid fa-plus" aria-hidden="true"></i><span v-if="!collapsed">新建会话</span>
@@ -39,7 +39,68 @@
       </button>
     </div>
 
+    <div v-if="newSessionMenuOpen && !collapsed" class="dca-new-session-menu" role="menu">
+      <button class="dca-btn-start" type="button" role="menuitem" @click="createGlobalFromMenu">
+        <i class="fa-solid fa-globe" aria-hidden="true"></i>
+        <span><strong>全局会话</strong><small>不绑定角色卡，管理全局工作区与角色导航</small></span>
+      </button>
+      <button class="dca-btn-start" type="button" role="menuitem" @click="openCharacterPicker">
+        <i class="fa-regular fa-address-card" aria-hidden="true"></i>
+        <span><strong>角色卡会话</strong><small>选择酒馆中的一张角色卡开始创作</small></span>
+      </button>
+    </div>
+
+    <section v-if="isMobile && !collapsed && openedSessions.length" class="dca-mobile-open-sessions">
+      <div class="dca-sidebar-section-title">
+        <span>已打开会话</span><small>{{ openedSessions.length }}</small>
+      </div>
+      <div class="dca-mobile-open-session-list">
+        <div
+          v-for="session in openedSessions"
+          :key="session.sessionId"
+          class="dca-mobile-open-session"
+          :class="{ active: state.active?.sessionId === session.sessionId }"
+        >
+          <button type="button" class="dca-mobile-open-session-main" @click="openMobileSession(session)">
+            <span
+              class="dca-session-state"
+              :class="`state-${state.sessionStatuses[session.sessionId] ?? session.status}`"
+            ></span>
+            <span>{{ session.title }}</span>
+          </button>
+          <button
+            class="dca-icon-btn dca-mobile-open-session-close"
+            type="button"
+            :title="isSessionTabRunning(session.sessionId) ? '停止任务并关闭会话页签' : '关闭会话页签'"
+            @click.stop="requestCloseSession(session.sessionId)"
+          >
+            <i
+              :class="isSessionTabRunning(session.sessionId) ? 'fa-solid fa-stop' : 'fa-solid fa-xmark'"
+              aria-hidden="true"
+            ></i>
+          </button>
+        </div>
+      </div>
+    </section>
+
     <div v-if="!collapsed" class="dca-character-groups">
+      <div class="dca-sidebar-section-title">
+        <span>全局会话</span><small>{{ (state.globalSessions ?? []).length }}</small>
+      </div>
+      <section class="dca-global-session-group">
+        <button
+          v-for="session in (state.globalSessions ?? []).slice(0, 10)"
+          :key="session.sessionId"
+          type="button"
+          :class="{ active: state.active?.sessionId === session.sessionId }"
+          @click="openGlobalSession(session.sessionId)"
+        >
+          <i class="fa-solid fa-globe" aria-hidden="true"></i>
+          <span>{{ session.title }}</span>
+          <time>{{ relativeTime(session.updatedAt) }}</time>
+        </button>
+        <div v-if="(state.globalSessions ?? []).length === 0" class="dca-sidebar-empty">还没有全局会话</div>
+      </section>
       <div class="dca-sidebar-section-title">
         <span>角色与会话</span><small>{{ groups.length }}</small>
       </div>
@@ -49,7 +110,7 @@
         class="dca-character-group"
         :class="{ current: group.current, unavailable: !group.available }"
       >
-        <div class="dca-character-heading">
+        <div class="dca-character-heading" :class="{ 'menu-open': characterMenuBindingId === group.bindingId }">
           <button class="dca-character-toggle" type="button" @click="toggleGroup(group.bindingId)">
             <span class="dca-character-avatar">
               <img
@@ -67,15 +128,68 @@
               }}</small>
             </span>
           </button>
+          <div class="dca-character-actions">
+            <button
+              v-if="group.available"
+              class="dca-character-new"
+              type="button"
+              :title="`为 ${group.characterName} 新建会话`"
+              @click.stop="createSessionForCharacter(group.bindingId)"
+            >
+              <i class="fa-solid fa-plus" aria-hidden="true"></i>
+            </button>
+            <button
+              class="dca-character-more"
+              type="button"
+              :title="`${group.characterName} 的更多操作`"
+              :aria-expanded="characterMenuBindingId === group.bindingId"
+              @click.stop="toggleCharacterMenu(group.bindingId)"
+            >
+              <i class="fa-solid fa-ellipsis" aria-hidden="true"></i>
+            </button>
+          </div>
           <button
-            v-if="group.available"
-            class="dca-character-new"
+            v-if="characterMenuBindingId === group.bindingId"
+            class="dca-character-menu-scrim"
             type="button"
-            :title="`为 ${group.characterName} 新建会话`"
-            @click.stop="createSessionForCharacter(group.bindingId)"
-          >
-            <i class="fa-solid fa-plus" aria-hidden="true"></i>
-          </button>
+            aria-label="关闭角色菜单"
+            @click.stop="characterMenuBindingId = undefined"
+          ></button>
+          <div v-if="characterMenuBindingId === group.bindingId" class="dca-character-menu" role="menu" @click.stop>
+            <button
+              type="button"
+              role="menuitem"
+              :disabled="!group.available || state.busy"
+              @click="createFromCharacterMenu(group.bindingId)"
+            >
+              <i class="fa-solid fa-plus" aria-hidden="true"></i><span>新建会话</span>
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              :disabled="group.current"
+              :title="group.current ? '当前打开的角色卡不能隐藏' : '隐藏到下次打开这张角色卡'"
+              @click="requestHideCharacter(group.bindingId)"
+            >
+              <i class="fa-regular fa-eye-slash" aria-hidden="true"></i><span>隐藏角色卡</span>
+            </button>
+            <button
+              class="danger"
+              type="button"
+              role="menuitem"
+              :disabled="
+                group.sessions.length === 0 || group.sessions.some(session => isSessionTabRunning(session.sessionId))
+              "
+              :title="
+                group.sessions.some(session => isSessionTabRunning(session.sessionId))
+                  ? '请先停止正在运行的会话'
+                  : '删除该角色的全部会话'
+              "
+              @click="requestDeleteAllSessions(group.bindingId)"
+            >
+              <i class="fa-solid fa-trash-can" aria-hidden="true"></i><span>删除全部会话</span>
+            </button>
+          </div>
         </div>
         <div v-if="expandedBindingIds.has(group.bindingId)" class="dca-character-sessions">
           <button
@@ -144,6 +258,86 @@
       :binding-id="allSessionsBindingId"
       @close="allSessionsBindingId = undefined"
     />
+    <div v-if="pendingCharacterAction" class="dca-modal-backdrop" role="presentation">
+      <section class="dca-modal dca-character-action-dialog" role="dialog" aria-modal="true" @click.stop>
+        <header>
+          <i
+            :class="pendingCharacterAction.kind === 'hide' ? 'fa-regular fa-eye-slash' : 'fa-solid fa-trash-can'"
+            aria-hidden="true"
+          ></i>
+          <div>
+            <strong>{{ pendingCharacterAction.kind === 'hide' ? '隐藏这张角色卡？' : '删除全部会话？' }}</strong>
+            <span v-if="pendingCharacterAction.kind === 'hide'">
+              “{{ pendingCharacterGroup?.characterName }}”及其会话将从侧栏隐藏；下次在酒馆打开这张角色卡时会自动恢复。
+            </span>
+            <span v-else>
+              将永久删除“{{ pendingCharacterGroup?.characterName }}”的 {{ pendingCharacterGroup?.sessions.length ?? 0 }}
+              个会话及其操作记录，无法撤销。
+            </span>
+          </div>
+        </header>
+        <footer>
+          <button type="button" @click="pendingCharacterAction = undefined">取消</button>
+          <button
+            :class="pendingCharacterAction.kind === 'delete' ? 'dca-btn-danger' : 'dca-btn-primary'"
+            type="button"
+            @click="confirmCharacterAction"
+          >
+            {{ pendingCharacterAction.kind === 'hide' ? '确认隐藏' : '确认全部删除' }}
+          </button>
+        </footer>
+      </section>
+    </div>
+    <div v-if="closingSessionId" class="dca-modal-backdrop" role="presentation">
+      <section class="dca-modal dca-character-action-dialog" role="dialog" aria-modal="true" @click.stop>
+        <header>
+          <i class="fa-solid fa-stop" aria-hidden="true"></i>
+          <div>
+            <strong>停止任务并关闭会话页签？</strong>
+            <span>当前模型或工具调用会被中断；已经成功写入的实时修改会保留。</span>
+          </div>
+        </header>
+        <footer>
+          <button type="button" @click="closingSessionId = ''">取消</button>
+          <button class="dca-btn-danger" type="button" @click="confirmStopAndClose">停止并关闭</button>
+        </footer>
+      </section>
+    </div>
+    <div v-if="characterPickerOpen" class="dca-modal-backdrop" role="presentation">
+      <section class="dca-modal dca-character-picker" role="dialog" aria-modal="true" @click.stop>
+        <header>
+          <div><strong>选择角色卡</strong><span>从酒馆当前可用角色中创建独立会话。</span></div>
+          <button class="dca-icon-btn" type="button" title="关闭" @click="characterPickerOpen = false">
+            <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+          </button>
+        </header>
+        <label class="dca-character-picker-search">
+          <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+          <input v-model="characterSearch" type="search" placeholder="搜索角色卡" />
+        </label>
+        <div class="dca-character-picker-list">
+          <button
+            v-for="character in filteredCharacters"
+            :key="character.avatarId"
+            type="button"
+            @click="chooseCharacter(character.avatarId)"
+          >
+            <span class="dca-character-avatar">
+              <img
+                v-if="character.avatarId && !failedAvatarIds.has(character.avatarId)"
+                :src="characterAvatarUrl(character.avatarId)"
+                :alt="character.name"
+                @error="failedAvatarIds.add(character.avatarId)"
+              />
+              <i v-else class="fa-regular fa-address-card" aria-hidden="true"></i>
+            </span>
+            <strong>{{ character.name }}</strong>
+            <i class="fa-solid fa-chevron-right" aria-hidden="true"></i>
+          </button>
+          <div v-if="filteredCharacters.length === 0" class="dca-sidebar-empty">没有找到角色卡</div>
+        </div>
+      </section>
+    </div>
   </aside>
 </template>
 
@@ -154,21 +348,57 @@ import { useDreamCardAgent } from '../../composables/runtime';
 import AllSessionsDialog from './AllSessionsDialog.vue';
 
 const {
+  action,
+  closeSessionTab,
+  createGlobalSession,
   createSession,
+  createSessionForAvatar,
   createSessionForCharacter,
   isMobile,
+  isSessionTabRunning,
   mobileSurface,
   openCharacterSession,
   openSettings,
+  openedSessionIds,
+  runtime,
   sidebarCollapsed,
   state,
+  workspaceView,
 } = useDreamCardAgent();
 const expandedBindingIds = reactive(new Set<string>());
 const failedAvatarIds = reactive(new Set<string>());
 const allSessionsBindingId = ref<string>();
-const groups = computed(() => state.value.characterGroups ?? []);
+const characterMenuBindingId = ref<string>();
+const closingSessionId = ref('');
+const newSessionMenuOpen = ref(false);
+const characterPickerOpen = ref(false);
+const characterSearch = ref('');
+const pendingCharacterAction = ref<{ bindingId: string; kind: 'delete' | 'hide' }>();
+const HIDDEN_CHARACTERS_KEY = 'dream-card-agent:hidden-character-groups';
+const hiddenBindingIds = reactive(new Set(readHiddenBindingIds()));
+const groups = computed(() =>
+  (state.value.characterGroups ?? []).filter(group => !hiddenBindingIds.has(group.bindingId)),
+);
+const allGroups = computed(() => state.value.characterGroups ?? []);
+const openedSessions = computed(() =>
+  openedSessionIds.value.flatMap(sessionId => {
+    const globalSession = (state.value.globalSessions ?? []).find(session => session.sessionId === sessionId);
+    if (globalSession) return [{ ...globalSession, bindingId: 'global', scope: 'global' as const }];
+    const group = allGroups.value.find(item => item.sessions.some(session => session.sessionId === sessionId));
+    const session = group?.sessions.find(item => item.sessionId === sessionId);
+    return group && session ? [{ ...session, bindingId: group.bindingId, scope: 'character' as const }] : [];
+  }),
+);
+const filteredCharacters = computed(() => {
+  const query = characterSearch.value.trim().toLocaleLowerCase();
+  return (state.value.availableCharacters ?? []).filter(
+    character => !query || character.name.toLocaleLowerCase().includes(query),
+  );
+});
+const pendingCharacterGroup = computed(() =>
+  allGroups.value.find(group => group.bindingId === pendingCharacterAction.value?.bindingId),
+);
 const collapsed = computed(() => !isMobile.value && sidebarCollapsed.value);
-const newSessionTitle = computed(() => (state.value.currentCharacter ? '新建会话' : '请先在酒馆中打开一张角色卡'));
 const activeAgentName = computed(
   () =>
     state.value.agentConfigurations.find(item => item.id === state.value.activeAgentConfigurationId)?.name ?? '未配置',
@@ -184,7 +414,9 @@ const statusLabel = computed(
 watch(
   () => state.value.currentCharacter?.bindingId,
   bindingId => {
-    if (bindingId) expandedBindingIds.add(bindingId);
+    if (!bindingId) return;
+    expandedBindingIds.add(bindingId);
+    if (hiddenBindingIds.delete(bindingId)) saveHiddenBindingIds();
   },
   { immediate: true },
 );
@@ -194,13 +426,122 @@ function toggleGroup(bindingId: string) {
   else expandedBindingIds.add(bindingId);
 }
 
+function readHiddenBindingIds(): string[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(HIDDEN_CHARACTERS_KEY) ?? '[]');
+    return Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHiddenBindingIds() {
+  localStorage.setItem(HIDDEN_CHARACTERS_KEY, JSON.stringify([...hiddenBindingIds]));
+}
+
+function toggleCharacterMenu(bindingId: string) {
+  characterMenuBindingId.value = characterMenuBindingId.value === bindingId ? undefined : bindingId;
+}
+
+async function createFromCharacterMenu(bindingId: string) {
+  characterMenuBindingId.value = undefined;
+  await createSessionForCharacter(bindingId);
+}
+
+function requestHideCharacter(bindingId: string) {
+  const group = allGroups.value.find(item => item.bindingId === bindingId);
+  if (!group || group.current) return;
+  characterMenuBindingId.value = undefined;
+  pendingCharacterAction.value = { bindingId, kind: 'hide' };
+}
+
+function requestDeleteAllSessions(bindingId: string) {
+  const group = allGroups.value.find(item => item.bindingId === bindingId);
+  if (!group?.sessions.length || group.sessions.some(session => isSessionTabRunning(session.sessionId))) return;
+  characterMenuBindingId.value = undefined;
+  pendingCharacterAction.value = { bindingId, kind: 'delete' };
+}
+
+async function confirmCharacterAction() {
+  const request = pendingCharacterAction.value;
+  const group = pendingCharacterGroup.value;
+  if (!request || !group) return;
+  if (request.kind === 'hide') {
+    hiddenBindingIds.add(request.bindingId);
+    saveHiddenBindingIds();
+    const sessionIds = new Set(group.sessions.map(session => session.sessionId));
+    openedSessionIds.value = openedSessionIds.value.filter(id => !sessionIds.has(id));
+    pendingCharacterAction.value = undefined;
+    toastr.success('角色卡已隐藏；下次打开时会自动恢复。', '梦境创客');
+    return;
+  }
+
+  const sessionIds = group.sessions.map(session => session.sessionId);
+  const activeWasDeleted = Boolean(state.value.active?.sessionId && sessionIds.includes(state.value.active.sessionId));
+  const succeeded = await action(async () => {
+    for (const sessionId of sessionIds) await runtime.deleteCharacterSession(request.bindingId, sessionId);
+  });
+  if (!succeeded) return;
+  const deletedIds = new Set(sessionIds);
+  openedSessionIds.value = openedSessionIds.value.filter(id => !deletedIds.has(id));
+  if (activeWasDeleted) workspaceView.value = 'home';
+  pendingCharacterAction.value = undefined;
+  toastr.success(`已删除 ${sessionIds.length} 个会话及其操作记录。`, '梦境创客');
+}
+
+async function openMobileSession(session: (typeof openedSessions.value)[number]) {
+  if (session.scope === 'global') await openGlobalSession(session.sessionId);
+  else await openCharacterSession(session.bindingId, session.sessionId);
+}
+
+async function openGlobalSession(sessionId: string) {
+  if (await action(() => runtime.openGlobalSession(sessionId))) {
+    if (!openedSessionIds.value.includes(sessionId)) openedSessionIds.value = [...openedSessionIds.value, sessionId];
+    workspaceView.value = 'session';
+    if (isMobile.value) mobileSurface.value = 'workspace';
+  }
+}
+
+function requestCloseSession(sessionId: string) {
+  if (isSessionTabRunning(sessionId)) closingSessionId.value = sessionId;
+  else void closeSessionTab(sessionId);
+}
+
+function confirmStopAndClose() {
+  const sessionId = closingSessionId.value;
+  if (!sessionId) return;
+  runtime.stopSession(sessionId);
+  openedSessionIds.value = openedSessionIds.value.filter(id => id !== sessionId);
+  if (state.value.active?.sessionId === sessionId) workspaceView.value = 'home';
+  closingSessionId.value = '';
+}
+
 function characterAvatarUrl(avatarId: string): string {
   return `/thumbnail?type=avatar&file=${encodeURIComponent(avatarId)}`;
 }
 
 async function createSessionFromTop() {
-  await createSession();
-  if (isMobile.value) mobileSurface.value = 'workspace';
+  if (collapsed.value) {
+    await createGlobalSession();
+    return;
+  }
+  newSessionMenuOpen.value = !newSessionMenuOpen.value;
+}
+
+async function createGlobalFromMenu() {
+  newSessionMenuOpen.value = false;
+  await createGlobalSession();
+}
+
+function openCharacterPicker() {
+  newSessionMenuOpen.value = false;
+  characterSearch.value = '';
+  characterPickerOpen.value = true;
+}
+
+async function chooseCharacter(avatarId: string) {
+  characterPickerOpen.value = false;
+  await createSessionForAvatar(avatarId);
 }
 
 function openSettingsFromSidebar() {
@@ -275,11 +616,40 @@ function relativeTime(timestamp: number): string {
   border-color: color-mix(in srgb, var(--dca-accent) 45%, transparent);
   background: var(--dca-sidebar-active);
 }
+.dca-new-session-menu {
+  position: absolute;
+  z-index: 15;
+  top: 6.15rem;
+  left: 0.7rem;
+  display: grid;
+  width: calc(100% - 1.4rem);
+  gap: 0.2rem;
+  border: 1px solid var(--dca-border-strong);
+  border-radius: var(--dca-radius-md);
+  padding: 0.3rem;
+  background: var(--dca-raised);
+  box-shadow: var(--dca-shadow-3);
+}
+.dca-new-session-menu > button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.65rem;
+  border-color: transparent;
+  padding: 0.6rem;
+  background: transparent;
+  text-align: left;
+}
+.dca-new-session-menu > button:hover { background: var(--dca-sidebar-hover); }
+.dca-new-session-menu > button > i { width: 1.15rem; color: var(--dca-accent-strong); text-align: center; }
+.dca-new-session-menu > button > span { display: grid; min-width: 0; gap: 0.08rem; }
+.dca-new-session-menu small { color: var(--dca-text-muted); font-size: .68rem; }
 .dca-character-groups {
   min-height: 0;
   flex: 1;
   overflow-y: auto;
   padding: 0 0.65rem 1rem;
+  scrollbar-gutter: stable;
 }
 .dca-sidebar-section-title {
   display: flex;
@@ -294,11 +664,35 @@ function relativeTime(timestamp: number): string {
 .dca-character-group {
   margin-bottom: 0.3rem;
 }
+.dca-global-session-group {
+  display: grid;
+  gap: .12rem;
+  margin-bottom: .7rem;
+}
+.dca-global-session-group > button {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: .5rem;
+  border-color: transparent;
+  padding: .45rem .5rem;
+  background: transparent;
+  color: var(--dca-text-muted);
+  text-align: left;
+}
+.dca-global-session-group > button:hover,
+.dca-global-session-group > button.active { background: var(--dca-sidebar-active); color: var(--dca-text); }
+.dca-global-session-group > button > i { flex: 0 0 auto; color: var(--dca-accent-strong); }
+.dca-global-session-group > button > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dca-global-session-group time { flex: 0 0 auto; font-size: .66rem; }
 .dca-character-heading {
   position: relative;
-  overflow: hidden;
+  overflow: visible;
   border: 1px solid transparent;
   border-radius: var(--dca-radius-sm);
+}
+.dca-character-heading.menu-open {
+  z-index: 10;
 }
 .dca-character-group.current .dca-character-heading {
   border-color: color-mix(in srgb, var(--dca-accent) 28%, var(--dca-border));
@@ -311,8 +705,9 @@ function relativeTime(timestamp: number): string {
   align-items: center;
   gap: 0.55rem;
   border: 0;
-  padding: 0.5rem 2.35rem 0.5rem 0.45rem;
+  padding: 0.5rem 4.35rem 0.5rem 0.45rem;
   background: transparent;
+  border-radius: inherit;
   text-align: left;
 }
 .dca-character-toggle:hover {
@@ -355,10 +750,16 @@ function relativeTime(timestamp: number): string {
   color: var(--dca-text-muted);
   font-size: 0.68rem;
 }
-.dca-character-new {
+.dca-character-actions {
   position: absolute;
   top: 0.67rem;
   right: 0.35rem;
+  z-index: 2;
+  display: flex;
+  gap: 0.12rem;
+}
+.dca-character-new,
+.dca-character-more {
   display: grid;
   width: 1.7rem;
   min-width: 0;
@@ -370,8 +771,45 @@ function relativeTime(timestamp: number): string {
   opacity: 0;
 }
 .dca-character-heading:hover .dca-character-new,
-.dca-character-new:focus-visible {
+.dca-character-heading:hover .dca-character-more,
+.dca-character-new:focus-visible,
+.dca-character-more:focus-visible,
+.dca-character-more[aria-expanded='true'] {
   opacity: 1;
+}
+.dca-character-menu-scrim {
+  position: fixed;
+  z-index: 8;
+  min-height: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  padding: 0 !important;
+  background: transparent !important;
+  inset: 0;
+}
+.dca-character-menu {
+  position: absolute;
+  z-index: 9;
+  top: 2.55rem;
+  right: 0.3rem;
+  display: flex;
+  width: 12.5rem;
+  flex-direction: column;
+  gap: 0.15rem;
+  border: 1px solid var(--dca-border-strong);
+  border-radius: var(--dca-radius-md);
+  padding: 0.3rem;
+  background: var(--dca-raised);
+  box-shadow: var(--dca-shadow-3);
+}
+.dca-character-menu > button {
+  justify-content: flex-start;
+  border-color: transparent;
+  background: transparent;
+  text-align: left;
+}
+.dca-character-menu > button.danger {
+  color: var(--dca-danger);
 }
 .dca-character-group.unavailable {
   opacity: 0.66;
@@ -494,6 +932,83 @@ function relativeTime(timestamp: number): string {
   border-radius: 50%;
   background: var(--dca-success);
 }
+.dca-mobile-open-sessions {
+  display: flex;
+  min-height: 0;
+  max-height: min(32vh, 14rem);
+  flex: 0 1 auto;
+  flex-direction: column;
+  border-bottom: 1px solid var(--dca-border);
+  padding: 0 0.65rem 0.65rem;
+}
+.dca-mobile-open-session-list {
+  display: grid;
+  min-height: 0;
+  gap: 0.18rem;
+  overflow-y: auto;
+  padding-right: 0.2rem;
+  scrollbar-gutter: stable;
+}
+.dca-mobile-open-session {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: var(--dca-radius-sm);
+}
+.dca-mobile-open-session.active {
+  border-color: color-mix(in srgb, var(--dca-accent) 32%, var(--dca-border));
+  background: var(--dca-sidebar-active);
+}
+.dca-app .dca-mobile-open-session-main {
+  min-width: 0;
+  justify-content: flex-start;
+  overflow: hidden;
+  border-color: transparent;
+  background: transparent;
+  text-align: left;
+}
+.dca-mobile-open-session-main > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dca-character-action-dialog > header {
+  display: flex;
+  gap: 0.75rem;
+}
+.dca-character-action-dialog > header > i {
+  margin-top: 0.2rem;
+  color: var(--dca-warning);
+}
+.dca-character-action-dialog > header > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.dca-character-action-dialog > header span {
+  color: var(--dca-text-muted);
+  font-size: 0.78rem;
+}
+.dca-character-action-dialog > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.45rem;
+  margin-top: 1rem;
+}
+.dca-character-picker { display: flex; width: min(34rem, calc(100vw - 2rem)); max-height: min(42rem, calc(100vh - 2rem)); flex-direction: column; gap: .75rem; }
+.dca-character-picker > header { display: flex; align-items: flex-start; justify-content: space-between; gap: .7rem; }
+.dca-character-picker > header > div { display: grid; gap: .15rem; }
+.dca-character-picker > header span { color: var(--dca-text-muted); font-size: .76rem; }
+.dca-character-picker-search { display: flex; align-items: center; gap: .5rem; border: 1px solid var(--dca-border); border-radius: var(--dca-radius-sm); padding: 0 .65rem; background: var(--dca-canvas); }
+.dca-character-picker-search > i { color: var(--dca-text-muted); }
+.dca-character-picker-search > input { min-width: 0; flex: 1; border: 0 !important; background: transparent !important; box-shadow: none !important; }
+.dca-character-picker-list { display: grid; min-height: 0; gap: .25rem; overflow: auto; scrollbar-gutter: stable; }
+.dca-character-picker-list > button { display: flex; align-items: center; justify-content: flex-start; gap: .65rem; border-color: var(--dca-border); padding: .5rem; background: var(--dca-surface); text-align: left; }
+.dca-character-picker-list > button > strong { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dca-character-picker-list > button > i { color: var(--dca-text-muted); }
 .dca-primary-sidebar.collapsed .dca-sidebar-brand {
   justify-content: center;
   padding: 0;
@@ -515,6 +1030,9 @@ function relativeTime(timestamp: number): string {
     box-shadow: var(--dca-shadow-3);
   }
   .dca-character-new {
+    opacity: 1;
+  }
+  .dca-character-more {
     opacity: 1;
   }
 }

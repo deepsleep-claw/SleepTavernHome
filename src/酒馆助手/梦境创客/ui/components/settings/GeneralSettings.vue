@@ -33,7 +33,7 @@
           @update:model-value="toggleSendShortcut"
         />
       </div>
-      <div v-if="state.developerMode" class="dca-toggle-row dca-danger-row">
+      <div class="dca-toggle-row dca-danger-row">
         <span>
           <strong>允许修改非角色正则与脚本</strong>
           <small>危险：允许 Agent 和工作区编辑器改写全局及当前预设资源；Agent 操作仍会逐次确认</small>
@@ -49,14 +49,22 @@
         <DcaSwitch label="开发者模式" :model-value="state.developerMode" @update:model-value="toggleDeveloper" />
       </div>
     </section>
+    <div v-if="dangerConfirmation" class="dca-modal-backdrop" role="presentation">
+      <section class="dca-modal dca-provider-confirm" role="dialog" aria-modal="true">
+        <header><div><h3>启用高危写入权限？</h3><p>这会允许修改全局和当前预设的正则与酒馆助手脚本。相关Agent工具仍按审批模式确认。</p></div></header>
+        <footer><button type="button" @click="dangerConfirmation = false">取消</button><button class="dca-btn-danger" type="button" @click="confirmDangerousWrites">确认启用</button></footer>
+      </section>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
+import { ref } from 'vue';
 import { useDreamCardAgent } from '../../composables/runtime';
 import DcaSwitch from '../DcaSwitch.vue';
 
 const { action, runtime, state } = useDreamCardAgent();
+const dangerConfirmation = ref(false);
 
 async function toggleFloating(enabled: boolean) {
   await action(() => runtime.updateSettings({ floatingButton: enabled }));
@@ -75,9 +83,15 @@ async function toggleDeveloper(enabled: boolean) {
 }
 
 async function toggleDangerousResourceWrites(enabled: boolean) {
-  if (enabled && !window.confirm('这会允许修改全局和当前预设的正则与酒馆助手脚本。确定启用吗？')) {
+  if (enabled) {
+    dangerConfirmation.value = true;
     return;
   }
   await action(() => runtime.updateSettings({ dangerousNonCharacterResourceWrites: enabled }));
+}
+
+async function confirmDangerousWrites() {
+  dangerConfirmation.value = false;
+  await action(() => runtime.updateSettings({ dangerousNonCharacterResourceWrites: true }));
 }
 </script>

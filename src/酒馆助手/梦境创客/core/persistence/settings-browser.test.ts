@@ -6,6 +6,7 @@ import {
   TavernAgentSettingsStore,
   type CharacterStoreReference,
 } from './settings';
+import { DEFAULT_BUILTIN_AGENT } from './builtin-agent';
 
 function character(id: string): CharacterStoreReference {
   return {
@@ -52,41 +53,22 @@ describe('tavern settings cross-window cache', () => {
     secondStore.destroy();
   });
 
-  it('旧设置自动迁移为默认Agent配置，并沿用原预设与已启用Skill', () => {
+  it('旧版Agent配置不再迁移，始终使用当前内置配置', () => {
     const legacy = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS) as unknown as Record<string, unknown>;
-    delete legacy.activeAgentConfigurationId;
-    delete legacy.agentConfigurations;
-    legacy.version = 2;
-    legacy.globalSkills = {
-      disabled: {
-        description: '停用',
-        enabled: false,
-        id: 'disabled',
-        loading: 'full',
-        name: '停用',
-        revision: 1,
-        updatedAt: 1,
-        url: '/disabled.md',
-      },
-      writer: {
-        description: '写作',
-        enabled: true,
-        id: 'writer',
-        loading: 'full',
-        name: '写作',
-        revision: 1,
-        updatedAt: 1,
-        url: '/writer.md',
-      },
-    };
+    legacy.activeAgentConfigurationId = 'agent:old';
+    legacy.agentConfigurations = [{ id: 'agent:old', name: '旧配置', presetId: 'preset:default', skillIds: ['writer'] }];
     SillyTavern.extensionSettings['dream-card-agent'] = legacy;
     const store = new TavernAgentSettingsStore();
     const settings = store.load();
     expect(settings.agentConfigurations).toEqual([
-      expect.objectContaining({ id: 'agent:default', name: '梦境创客默认 Agent', skillIds: [] }),
-      expect.objectContaining({ id: 'agent:migrated', name: '迁移的 Agent 配置', skillIds: ['writer'] }),
+      expect.objectContaining({
+        id: DEFAULT_BUILTIN_AGENT.id,
+        name: DEFAULT_BUILTIN_AGENT.name,
+        skills: DEFAULT_BUILTIN_AGENT.skills,
+        toolIds: DEFAULT_BUILTIN_AGENT.toolIds,
+      }),
     ]);
-    expect(settings.activeAgentConfigurationId).toBe('agent:migrated');
+    expect(settings.activeAgentConfigurationId).toBe(DEFAULT_BUILTIN_AGENT.id);
     store.destroy();
   });
 });

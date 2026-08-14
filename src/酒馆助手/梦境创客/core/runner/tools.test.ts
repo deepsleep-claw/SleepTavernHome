@@ -10,17 +10,17 @@ describe('workspace runner tools', () => {
         {
           content: 'hello\nworld',
           mediaType: 'text/markdown',
-          path: '/character/description.md',
+          path: '/character/definition/description.md',
           readonly: false,
           resourceId: 'description',
         },
       ],
     });
     const tools = new Map(createWorkspaceRunnerTools(repository).map(item => [item.name, item]));
-    expect(await tools.get('list_directory')!.execute({ path: '/character' }, 'list')).toMatchObject([
-      { name: 'description.md' },
-    ]);
-    expect(await tools.get('read_file')!.execute({ path: '/character/description.md' }, 'read')).toMatchObject({
+    expect(await tools.get('list_path')!.execute({ path: '/character/definition' }, 'list')).toMatchObject({
+      entries: [expect.objectContaining({ path: '/character/definition/description.md', type: 'file' })],
+    });
+    expect(await tools.get('read_file')!.execute({ path: '/character/definition/description.md' }, 'read')).toMatchObject({
       endLine: 2,
       lineNumbering: { prefixesAreFileContent: false },
       startLine: 1,
@@ -28,10 +28,10 @@ describe('workspace runner tools', () => {
       view: '1 | hello\n2 | world',
     });
     expect(
-      await tools.get('read_file')!.execute({ limit: 1, offset: 2, path: '/character/description.md' }, 'read-page'),
+      await tools.get('read_file')!.execute({ limit: 1, offset: 2, path: '/character/definition/description.md' }, 'read-page'),
     ).toMatchObject({ endLine: 2, startLine: 2, totalLines: 2, truncated: false, view: '2 | world' });
     await tools.get('apply_patch')!.execute(
-      { patch: '@@ -1,2 +1,2 @@\n-hello\n+HELLO\n world', path: '/character/description.md' },
+      { patch: '@@ -1,2 +1,2 @@\n-hello\n+HELLO\n world', path: '/character/definition/description.md' },
       'patch',
     );
     await tools.get('write_file')!.execute({ content: 'new', path: '/character/new.md' }, 'write');
@@ -47,7 +47,7 @@ describe('workspace runner tools', () => {
         {
           content: '旧内容',
           mediaType: 'text/markdown',
-          path: '/character/description.md',
+          path: '/character/definition/description.md',
           readonly: false,
           resourceId: 'description',
         },
@@ -55,12 +55,12 @@ describe('workspace runner tools', () => {
     });
     const tools = new Map(createWorkspaceRunnerTools(repository).map(item => [item.name, item]));
     await expect(
-      tools.get('write_file')!.execute({ content: '误覆盖', path: '/character/description.md' }, 'write-default'),
+      tools.get('write_file')!.execute({ content: '误覆盖', path: '/character/definition/description.md' }, 'write-default'),
     ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
     await tools
       .get('write_file')!
-      .execute({ content: '新内容', overwrite: true, path: '/character/description.md' }, 'write-overwrite');
-    expect((await repository.read('/character/description.md')).content).toBe('新内容');
+      .execute({ content: '新内容', overwrite: true, path: '/character/definition/description.md' }, 'write-overwrite');
+    expect((await repository.read('/character/definition/description.md')).content).toBe('新内容');
   });
 
   it('手动模式逐次确认所有写入，同时保留Skill高危等级和内置保护', async () => {
@@ -81,7 +81,7 @@ describe('workspace runner tools', () => {
     expect(
       await tools.get('move_path')!.confirmation?.({ from: '/skills/user/new', to: '/skills/user/old' }, 'call'),
     ).toBeDefined();
-    expect(await tools.get('delete_path')!.confirmation?.({ path: '/character/description.md' }, 'call')).toMatchObject({
+    expect(await tools.get('delete_path')!.confirmation?.({ path: '/character/definition/description.md' }, 'call')).toMatchObject({
       risk: 'ordinary',
     });
   });
@@ -94,22 +94,22 @@ describe('workspace runner tools', () => {
           external: {
             fileId: 'file-1',
             mediaType: 'image/png',
-            scope: 'persistent',
+            scope: 'character-persistent',
             sha256: 'hash',
             size: 123,
           },
           mediaType: 'image/png',
-          path: '/files/card.png',
+          path: '/character/files/card.png',
           readonly: false,
           resourceId: 'file-1',
         },
       ],
     });
     const read = new Map(createWorkspaceRunnerTools(repository).map(item => [item.name, item])).get('read_file')!;
-    const result = await read.execute({ path: '/files/card.png' }, 'read-binary');
+    const result = await read.execute({ path: '/character/files/card.png' }, 'read-binary');
     expect(isRichToolOutput(result)).toBe(true);
     if (!isRichToolOutput(result)) throw new Error('expected rich output');
-    expect(result.display).toEqual({ binary: true, mediaType: 'image/png', path: '/files/card.png', size: 123 });
+    expect(result.display).toEqual({ binary: true, mediaType: 'image/png', path: '/character/files/card.png', size: 123 });
     expect(result.modelOutput).toMatchObject({
       type: 'content',
       value: [
@@ -121,7 +121,7 @@ describe('workspace runner tools', () => {
 
   it('遮罩 data.yaml 的读取、搜索和Patch视图，底层始终保留真实值', async () => {
     const key = `sk_test_${'A'.repeat(24)}`;
-    const path = '/tavern-helper-scripts/character/scripts/s1/data.yaml';
+    const path = '/scripts/character/scripts/s1/data.yaml';
     const repository = new MemoryWorkspaceRepository({
       files: [{ content: `key: ${key}\nname: old\n`, mediaType: 'text/yaml', path, readonly: false, resourceId: 'data' }],
     });
@@ -163,7 +163,7 @@ describe('workspace runner tools', () => {
   });
 
   it('YOLO只在启用脚本或修改已启用脚本代码时要求角色脚本确认', async () => {
-    const root = '/tavern-helper-scripts/character/scripts/s1';
+    const root = '/scripts/character/scripts/s1';
     const repository = new MemoryWorkspaceRepository({
       files: [
         {

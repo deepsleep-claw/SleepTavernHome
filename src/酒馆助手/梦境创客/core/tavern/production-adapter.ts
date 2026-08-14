@@ -4,7 +4,7 @@ import type { CardStateAdapter } from '../transaction/adapter';
 import { canonicalEqual } from '../transaction/canonical';
 import { applyStateOperation, readStatePath, type StateOperation } from '../transaction/state-diff';
 import type { RawCharacterData, TavernBridge, TavernWorldbookEntry } from './bridge';
-import { readStandaloneWorldbook, readTavernState } from './state-reader';
+import { readStandaloneWorldbook, readTavernState, type TavernStateReadResult } from './state-reader';
 import { readRegexScope, readScriptScope, writeRegexScope, writeScriptScope } from './resource-reader';
 
 function decodePath(path: string): string[] {
@@ -107,10 +107,13 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
   private cached?: CardWorkspaceState;
   private warnings: string[] = [];
 
-  constructor(private readonly bridge: TavernBridge) {}
+  constructor(
+    private readonly bridge: TavernBridge,
+    private readonly stateReader: (bridge: TavernBridge) => Promise<TavernStateReadResult> = readTavernState,
+  ) {}
 
   async read(): Promise<CardWorkspaceState> {
-    const result = await readTavernState(this.bridge);
+    const result = await this.stateReader(this.bridge);
     this.cached = klona(result.state);
     this.warnings = result.warnings;
     return result.state;

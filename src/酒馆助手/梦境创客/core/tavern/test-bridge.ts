@@ -43,6 +43,10 @@ export class FakeTavernBridge implements TavernBridge {
   loadedPresetName = '默认预设';
   nextUid = 100;
 
+  async closeCurrentChat(): Promise<void> {
+    this.raw = null;
+  }
+
   constructor() {
     const state = transactionState();
     this.raw = {

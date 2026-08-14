@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { maskSecretsForModel, restoreSecretsFromModel, scanSecrets } from './secret-protection';
 
 const STRIPE_KEY = `sk_test_${'A'.repeat(24)}`;
-const DATA_PATH = '/tavern-helper-scripts/character/scripts/script-1/data.yaml';
+const DATA_PATH = '/scripts/character/scripts/script-1/data.yaml';
 
 describe('script data secret protection', () => {
   it('只遮罩官方规则命中的精确区间，并可用未改动占位符恢复原值', async () => {
@@ -37,11 +37,10 @@ describe('script data secret protection', () => {
   });
 
   it('不扫描 data.yaml 以外的文件', async () => {
-    expect(await maskSecretsForModel(STRIPE_KEY, '/character/description.md')).toEqual({
+    expect(await maskSecretsForModel(STRIPE_KEY, '/character/definition/description.md')).toEqual({
       findings: [],
       maskedContent: STRIPE_KEY,
     });
     expect(await scanSecrets(`key: ${STRIPE_KEY}`, DATA_PATH)).toHaveLength(1);
   });
 });
-

@@ -12,6 +12,8 @@ import type { RunnerTool, ToolConfirmation } from './tools';
 export type WorldbookRunnerToolOptions = {
   approvalMode?: () => 'full' | 'manual' | 'yolo';
   getBaseState: () => Promise<CardWorkspaceState> | CardWorkspaceState;
+  onMount?: (name: string) => void;
+  onUnmount?: (name: string) => void;
   chatBindingConfirmation?: (input: unknown, toolCallId: string) => ToolConfirmation | undefined;
   setChatBinding?: (chatId: string, worldbook: string | null, toolCallId: string) => Promise<void>;
 };
@@ -100,21 +102,28 @@ function knownNames(repository: MemoryWorkspaceRepository, bridge: TavernBridge,
   return new Set([...bridge.getWorldbookNames(), ...workingBooks(repository, base).map(book => book.name)]);
 }
 
+const bindingShape = {
+  addCharacterAdditional: z.array(z.string().min(1)).optional(),
+  characterPrimary: z.string().min(1).nullable().optional(),
+  chat: z.object({ chatId: z.string().min(1), worldbook: z.string().min(1).nullable() }).optional(),
+  removeCharacterAdditional: z.array(z.string().min(1)).optional(),
+};
+
+const hasBindingAction = (value: {
+  addCharacterAdditional?: string[];
+  characterPrimary?: string | null;
+  chat?: unknown;
+  removeCharacterAdditional?: string[];
+}) =>
+  Object.prototype.hasOwnProperty.call(value, 'characterPrimary') ||
+  Boolean(value.addCharacterAdditional?.length) ||
+  Boolean(value.removeCharacterAdditional?.length) ||
+  Boolean(value.chat);
+
 const bindingSchema = z
-  .object({
-    addCharacterAdditional: z.array(z.string().min(1)).optional(),
-    characterPrimary: z.string().min(1).nullable().optional(),
-    chat: z
-      .object({ chatId: z.string().min(1), worldbook: z.string().min(1).nullable() })
-      .optional(),
-    removeCharacterAdditional: z.array(z.string().min(1)).optional(),
-  })
+  .object(bindingShape)
   .refine(
-    value =>
-      Object.prototype.hasOwnProperty.call(value, 'characterPrimary') ||
-      Boolean(value.addCharacterAdditional?.length) ||
-      Boolean(value.removeCharacterAdditional?.length) ||
-      Boolean(value.chat),
+    hasBindingAction,
     '至少提供一项绑定操作。',
   );
 
@@ -123,7 +132,7 @@ export function createWorldbookRunnerTools(
   bridge: TavernBridge,
   options: WorldbookRunnerToolOptions,
 ): RunnerTool[] {
-  return [
+  const tools: RunnerTool[] = [
     {
       definition: tool({
         description: '按名称搜索酒馆中的全部世界书。只返回名称和是否已进入当前可编辑工作区，不读取正文。',
@@ -151,19 +160,37 @@ export function createWorldbookRunnerTools(
     {
       definition: tool({
         description:
-          '把指定酒馆世界书挂载到/library/worldbooks下作为当前Agent会话的只读参考。挂载不会绑定角色，也不会进入角色卡Diff。',
+          '把指定酒馆世界书挂载到/worldbooks作为当前Agent会话的可编辑资源。挂载不会改变角色绑定。',
         inputSchema: z.object({ name: z.string().min(1) }),
       }),
       execute: async input => {
         const name = normalizedName((input as { name: string }).name);
         if (!bridge.getWorldbookNames().includes(name)) throw new Error(`世界书不存在：${name}`);
-        const book = await readStandaloneWorldbook(bridge, name, { writable: false });
+        const book = await readStandaloneWorldbook(bridge, name, { writable: true });
         if (!book.roundTripSafe) throw new Error(`世界书“${name}”读取失败，无法挂载。`);
-        const root = `/library/worldbooks/${encodeWorkspaceSegment(name)}`;
-        repository.replaceProjection(root, projectWorldbookFiles(book, { readonly: true, root: '/library/worldbooks' }));
-        return { mounted: true, name, path: root, readonly: true };
+        const base = await options.getBaseState();
+        if (!base.worldbooks.some(item => item.name === name)) base.worldbooks.push(klona(book));
+        const root = `/worldbooks/${encodeWorkspaceSegment(name)}`;
+        repository.replaceProjection(root, projectWorldbookFiles(book));
+        options.onMount?.(name);
+        return { mounted: true, name, path: root, readonly: false };
       },
       name: 'mount_worldbook_reference',
+      readonly: true,
+    },
+    {
+      definition: tool({
+        description: '从当前Agent工作区卸载一本世界书。只移除VFS投影，不删除酒馆中的真实世界书。',
+        inputSchema: z.object({ name: z.string().min(1) }),
+      }),
+      execute: async input => {
+        const name = normalizedName((input as { name: string }).name);
+        const root = `/worldbooks/${encodeWorkspaceSegment(name)}`;
+        repository.replaceProjection(root, []);
+        options.onUnmount?.(name);
+        return { name, path: root, unmounted: true };
+      },
+      name: 'unmount_worldbook_reference',
       readonly: true,
     },
     {
@@ -185,7 +212,13 @@ export function createWorldbookRunnerTools(
           unknownFields: {},
           writable: true,
         };
-        await repository.stageFiles(projectWorldbookFiles(book), `${toolCallId}:worldbook`);
+        options.onMount?.(name);
+        try {
+          await repository.stageFiles(projectWorldbookFiles(book), `${toolCallId}:worldbook`);
+        } catch (error) {
+          options.onUnmount?.(name);
+          throw error;
+        }
         return { created: true, name, path: `/worldbooks/${encodeWorkspaceSegment(name)}` };
       },
       name: 'create_worldbook',
@@ -208,7 +241,13 @@ export function createWorldbookRunnerTools(
         const source = await loadBook(repository, bridge, base, sourceName);
         if (!source.roundTripSafe) throw new Error(`世界书“${sourceName}”无法无损读取，不能复制。`);
         const cloned = cloneBook(source, name);
-        await repository.stageFiles(projectWorldbookFiles(cloned), `${toolCallId}:worldbook`);
+        options.onMount?.(name);
+        try {
+          await repository.stageFiles(projectWorldbookFiles(cloned), `${toolCallId}:worldbook`);
+        } catch (error) {
+          options.onUnmount?.(name);
+          throw error;
+        }
         return {
           cloned: true,
           entries: cloned.entries.length,
@@ -281,4 +320,39 @@ export function createWorldbookRunnerTools(
       readonly: false,
     },
   ];
+  const byName = new Map(tools.map(item => [item.name, item]));
+  const actionTargets = {
+    clone: 'clone_worldbook',
+    create: 'create_worldbook',
+    mount: 'mount_worldbook_reference',
+    set_binding: 'set_worldbook_binding',
+    unmount: 'unmount_worldbook_reference',
+  } as const;
+  const manage: RunnerTool = {
+    confirmation: async (input, toolCallId) => {
+      const { action, ...payload } = input as Record<string, unknown> & { action: keyof typeof actionTargets };
+      const target = byName.get(actionTargets[action]);
+      const confirmation = await target?.confirmation?.(action === 'set_binding' ? payload.binding : payload, toolCallId);
+      return confirmation ? { ...confirmation, toolName: 'manage_worldbook' } : undefined;
+    },
+    definition: tool({
+      description: '管理世界书生命周期和绑定。用action明确选择挂载、卸载、创建、复制或修改绑定。',
+      inputSchema: z.discriminatedUnion('action', [
+        z.object({ action: z.literal('mount'), name: z.string().min(1) }),
+        z.object({ action: z.literal('unmount'), name: z.string().min(1) }),
+        z.object({ action: z.literal('create'), name: z.string().min(1) }),
+        z.object({ action: z.literal('clone'), name: z.string().min(1), source: z.string().min(1) }),
+        z.object({ action: z.literal('set_binding'), binding: bindingSchema }),
+      ]),
+    }),
+    execute: async (input, toolCallId, context) => {
+      const { action, ...payload } = input as Record<string, unknown> & { action: keyof typeof actionTargets };
+      const target = byName.get(actionTargets[action]);
+      if (!target) throw new Error(`不支持的世界书动作：${String(action)}`);
+      return target.execute(action === 'set_binding' ? payload.binding : payload, toolCallId, context);
+    },
+    name: 'manage_worldbook',
+    readonly: false,
+  };
+  return [tools[0], manage];
 }

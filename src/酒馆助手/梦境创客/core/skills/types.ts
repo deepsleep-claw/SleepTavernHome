@@ -11,20 +11,17 @@ export type SkillResource = {
 };
 
 export type AgentSkill = {
-  /** @deprecated 旧版固定目录兼容；读取时会折叠进resources。 */
-  assets?: Record<string, string>;
   body: string;
   builtin: boolean;
   description: string;
   /** 可选空目录；普通目录会由资源路径自然推导。 */
   directories?: string[];
   id: string;
+  /** Skill作者填写的默认策略；挂载到会话时可被Agent配置覆盖。 */
   loading: SkillLoadingMode;
   /** 用户在设置中锁定后，Agent只能读取，不能修改、移动或删除。 */
   locked?: boolean;
   name: string;
-  /** @deprecated 旧版固定目录兼容；读取时会折叠进resources。 */
-  references?: Record<string, string>;
   /** 相对Skill根目录的自由资源树；根目录SKILL.md由其它字段表示，不能占用。 */
   resources?: Record<string, SkillResource>;
 };

@@ -97,5 +97,7 @@ describe('SessionComposer', () => {
     await nextTick();
     expect(root.querySelector('.dca-plus-menu')?.textContent).toContain('添加文件');
     expect(root.querySelector('.dca-plus-menu')?.textContent).toContain('添加图片');
+    expect(root.querySelector('.dca-plus-menu')?.textContent).toContain('模型与推理');
+    expect(root.querySelector('.dca-plus-menu')?.textContent).toContain('审批模式');
   });
 });

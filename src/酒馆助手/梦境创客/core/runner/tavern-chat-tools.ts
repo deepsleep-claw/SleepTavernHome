@@ -79,11 +79,11 @@ export function createTavernChatRunnerTools(
   const mutationConfirmation = (toolName: string, highRisk?: (input: unknown) => boolean) =>
     (input: unknown, toolCallId: string) =>
       confirmation(options, input, toolCallId, toolName, highRisk?.(input) ?? false);
-  return [
+  const tools: RunnerTool[] = [
     {
       definition: tool({
         description:
-          '列出当前角色卡的全部酒馆聊天文件。id存在表示已挂载到/context/chats；未挂载的聊天需先用switch_tavern_chat按ref切换。',
+          '列出当前角色卡的全部酒馆聊天文件。id存在表示已挂载到/character/chats；未挂载的聊天需先用switch动作按ref切换。',
         inputSchema: z.object({}),
       }),
       execute: async () => ({ chats: await workspace.listAvailable() }),
@@ -234,4 +234,68 @@ export function createTavernChatRunnerTools(
       readonly: false,
     },
   ];
+  const byName = new Map(tools.map(item => [item.name, item]));
+  const manageTargets = {
+    create: 'create_tavern_chat',
+    list: 'list_tavern_chats',
+    switch: 'switch_tavern_chat',
+    truncate: 'truncate_tavern_chat',
+  } as const;
+  const manage: RunnerTool = {
+    confirmation: async (input, toolCallId) => {
+      const { action, ...payload } = input as Record<string, unknown> & { action: keyof typeof manageTargets };
+      const result = await byName.get(manageTargets[action])?.confirmation?.(payload, toolCallId);
+      return result ? { ...result, toolName: 'manage_tavern_chat' } : undefined;
+    },
+    definition: tool({
+      description:
+        '管理酒馆聊天。list列出；create新建并切换；switch切换；truncate按酒馆语义从指定0基楼层起删除该楼层及之后全部消息。',
+      inputSchema: z.discriminatedUnion('action', [
+        z.object({ action: z.literal('list') }),
+        z.object({ action: z.literal('create'), name: z.string().min(1) }),
+        z.object({ action: z.literal('switch'), chatId: z.string().min(1) }),
+        z.object({ action: z.literal('truncate'), chatId: z.string().min(1), fromMessageId: z.number().int().min(0) }),
+      ]),
+    }),
+    execute: async (input, toolCallId, context) => {
+      const { action, ...payload } = input as Record<string, unknown> & { action: keyof typeof manageTargets };
+      const target = byName.get(manageTargets[action]);
+      if (!target) throw new Error(`不支持的酒馆聊天动作：${String(action)}`);
+      return target.execute(payload, toolCallId, context);
+    },
+    name: 'manage_tavern_chat',
+    readonly: false,
+  };
+  const generateTarget = byName.get('generate_tavern_reply')!;
+  const swipeTarget = byName.get('switch_tavern_swipe')!;
+  const generate: RunnerTool = {
+    confirmation: async (input, toolCallId) => {
+      const value = input as { chatId: string; mode: 'generate' | 'swipe'; target?: number | 'generate' };
+      const target = value.mode === 'swipe' ? swipeTarget : generateTarget;
+      const payload = value.mode === 'swipe' ? { chatId: value.chatId, target: value.target } : { chatId: value.chatId };
+      const result = await target.confirmation?.(payload, toolCallId);
+      return result ? { ...result, toolName: 'generate_tavern_reply' } : undefined;
+    },
+    definition: tool({
+      description:
+        '操作酒馆生成。mode=generate时为最新user楼层生成回复；mode=swipe时选择现有0基Swipe，或用target=generate生成新Swipe。',
+      inputSchema: z.discriminatedUnion('mode', [
+        z.object({ chatId: z.string().min(1), mode: z.literal('generate') }),
+        z.object({
+          chatId: z.string().min(1),
+          mode: z.literal('swipe'),
+          target: z.union([z.number().int().min(0), z.literal('generate')]),
+        }),
+      ]),
+    }),
+    execute: async (input, toolCallId, context) => {
+      const value = input as { chatId: string; mode: 'generate' | 'swipe'; target?: number | 'generate' };
+      return value.mode === 'swipe'
+        ? swipeTarget.execute({ chatId: value.chatId, target: value.target }, toolCallId, context)
+        : generateTarget.execute({ chatId: value.chatId }, toolCallId, context);
+    },
+    name: 'generate_tavern_reply',
+    readonly: false,
+  };
+  return [manage, byName.get('send_tavern_message')!, generate];
 }

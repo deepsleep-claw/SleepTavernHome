@@ -20,7 +20,10 @@ async function applyFileIntent(repository: MemoryWorkspaceRepository, change: Wo
 
 /** 把文件级实时写入映射为酒馆角色卡/世界书/资源的最小状态操作。 */
 export class CardWorkspaceLiveSource implements LiveWorkspaceSource {
-  constructor(private readonly adapter: CardStateAdapter) {}
+  constructor(
+    private readonly adapter: CardStateAdapter,
+    private readonly options: { synchronizeMetadata?: boolean } = {},
+  ) {}
 
   async load(): Promise<WorkspaceFile[]> {
     return projected(await this.adapter.read());
@@ -31,13 +34,13 @@ export class CardWorkspaceLiveSource implements LiveWorkspaceSource {
     const beforeFiles = projected(beforeState);
     const intent = new MemoryWorkspaceRepository({
       files: beforeFiles,
-      readonlyRoots: ['/context', '/library', '/worldbooks-global-readonly', '/skills/builtin'],
+      readonlyRoots: ['/context', '/skills/builtin'],
     });
     for (const [index, change] of input.changes.entries()) {
       await applyFileIntent(intent, change, `${input.toolCallId}:file:${index}`);
     }
-    const desired = materializeCardWorkspace(beforeState, intent.snapshot()).state;
-    synchronizeCardAgentMetadata(desired);
+    const desired = materializeCardWorkspace(beforeState, intent.snapshot(), this.options).state;
+    if (this.options.synchronizeMetadata !== false) synchronizeCardAgentMetadata(desired);
     const operations = diffCardStates(beforeState, desired);
     const result = await applyRealtimeStateOperations(this.adapter, operations);
     let afterFiles: WorkspaceFile[];

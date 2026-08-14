@@ -14,9 +14,9 @@
           <button
             class="primary"
             type="button"
-            :disabled="!canCreateSession || state.busy"
-            :title="createTitle"
-            @click="createSession"
+            :disabled="state.busy"
+            title="新建会话"
+            @click="newSessionOpen = true"
           >
             <i class="fa-solid fa-plus" aria-hidden="true"></i> 新建会话
           </button>
@@ -83,6 +83,19 @@
       </section>
       <footer class="dca-welcome-footer">梦境创客 <span>·</span> 由 AI 驱动的角色创作与协作空间</footer>
     </div>
+    <div v-if="newSessionOpen" class="dca-modal-backdrop" role="presentation">
+      <section class="dca-modal dca-home-new-session" role="dialog" aria-modal="true">
+        <header><div><strong>新建会话</strong><span>选择全局工作区，或从酒馆角色卡开始。</span></div><button class="dca-icon-btn" type="button" @click="newSessionOpen = false"><i class="fa-solid fa-xmark"></i></button></header>
+        <div class="dca-home-session-kinds">
+          <button class="dca-btn-start" type="button" @click="createGlobal"><i class="fa-solid fa-globe"></i><span><strong>全局会话</strong><small>管理跨角色文件、资源与角色导航</small></span></button>
+          <button class="dca-btn-start" type="button" @click="showCharacters = !showCharacters"><i class="fa-regular fa-address-card"></i><span><strong>角色卡会话</strong><small>选择酒馆中的角色卡</small></span></button>
+        </div>
+        <div v-if="showCharacters" class="dca-home-character-list">
+          <button v-for="character in state.availableCharacters" :key="character.avatarId" type="button" @click="createForCharacter(character.avatarId)"><span>{{ character.name }}</span><i class="fa-solid fa-chevron-right"></i></button>
+          <div v-if="state.availableCharacters.length === 0" class="dca-welcome-empty">酒馆中没有可用的单角色卡</div>
+        </div>
+      </section>
+    </div>
   </section>
 </template>
 
@@ -90,9 +103,11 @@
 import { computed, ref, watch } from 'vue';
 import { formatSessionDate } from '../../composables/format';
 import { useDreamCardAgent } from '../../composables/runtime';
-const { createSession, deleteSession, isSessionTabRunning, openCharacterSession, openSettings, state } =
+const { createGlobalSession, createSessionForAvatar, deleteSession, isSessionTabRunning, openCharacterSession, openSettings, state } =
   useDreamCardAgent();
 const deletePendingSessionId = ref('');
+const newSessionOpen = ref(false);
+const showCharacters = ref(false);
 const currentSessions = computed(() =>
   state.value.sessions.filter(item => item.bindingId === state.value.currentCharacter?.bindingId),
 );
@@ -100,12 +115,6 @@ const recentSessions = computed(() => currentSessions.value.slice(0, 5));
 const availableModelCount = computed(() => (state.value.providers ?? [])
   .filter(provider => provider.enabled)
   .reduce((total, provider) => total + provider.models.filter(model => model.enabled).length, 0));
-const canCreateSession = computed(() => Boolean(state.value.currentCharacter));
-const createTitle = computed(() =>
-  !state.value.currentCharacter
-    ? '请先在酒馆中打开一张角色卡'
-    : '新建会话',
-);
 const activeAgentName = computed(
   () =>
     state.value.agentConfigurations.find(item => item.id === state.value.activeAgentConfigurationId)?.name ??
@@ -116,6 +125,15 @@ async function openCurrentSession(sessionId: string) {
 }
 async function confirmDeleteSession(sessionId: string) {
   if (await deleteSession(sessionId)) deletePendingSessionId.value = '';
+}
+async function createGlobal() {
+  newSessionOpen.value = false;
+  await createGlobalSession();
+}
+async function createForCharacter(avatarId: string) {
+  newSessionOpen.value = false;
+  showCharacters.value = false;
+  await createSessionForAvatar(avatarId);
 }
 watch(
   () => state.value.currentCharacter?.bindingId,
@@ -405,6 +423,17 @@ function recentIcon(index: number) {
 .dca-welcome-footer span {
   margin: 0 0.65rem;
 }
+.dca-home-new-session { display: grid; width: min(34rem, calc(100vw - 2rem)); max-height: min(42rem, calc(100vh - 2rem)); gap: .75rem; }
+.dca-home-new-session > header { display: flex; align-items: flex-start; justify-content: space-between; gap: .7rem; }
+.dca-home-new-session > header > div { display: grid; gap: .15rem; }
+.dca-home-new-session > header span { color: var(--dca-text-muted); font-size: .76rem; }
+.dca-home-session-kinds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
+.dca-home-session-kinds > button { display: flex; align-items: center; justify-content: flex-start; gap: .65rem; padding: .75rem; text-align: left; }
+.dca-home-session-kinds > button > i { color: var(--dca-accent-strong); }
+.dca-home-session-kinds > button > span { display: grid; gap: .1rem; }
+.dca-home-session-kinds small { color: var(--dca-text-muted); }
+.dca-home-character-list { display: grid; min-height: 0; max-height: 24rem; gap: .2rem; overflow: auto; scrollbar-gutter: stable; }
+.dca-home-character-list > button { display: flex; align-items: center; justify-content: space-between; border-color: transparent; background: var(--dca-raised); text-align: left; }
 @media (max-width: 720px) {
   .dca-home-inner {
     padding-top: 1.6rem;

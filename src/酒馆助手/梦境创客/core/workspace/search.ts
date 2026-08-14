@@ -5,7 +5,7 @@ function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
-function globToRegex(glob: string): RegExp {
+export function globToRegex(glob: string): RegExp {
   if (glob.includes('..') || glob.includes('\\')) {
     throw new WorkspaceError('INVALID_GLOB', `非法Glob：${glob}`);
   }
@@ -40,7 +40,7 @@ export function searchWorkspaceFiles(files: Iterable<WorkspaceFile>, query: Sear
   const contextAfter = Math.min(5, Math.max(0, query.contextAfter ?? defaultContext));
   const maxResults = Math.min(500, Math.max(1, query.maxResults ?? 100));
   const flags = query.caseSensitive ? 'u' : 'iu';
-  const regexMode = query.mode === 'regex' || (query.mode === undefined && query.fixedStrings === false);
+  const regexMode = query.mode === 'regex';
   let expression: RegExp;
   try {
     const source = regexMode ? query.pattern : escapeRegex(query.pattern);

@@ -3,7 +3,7 @@ import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
 import { FakeTavernChatBridge } from './chat-bridge';
 import { TavernChatWorkspace } from './chat-workspace';
 
-const firstMessagePath = '/context/chats/c01/messages/0000-0099/000000.md';
+const firstMessagePath = '/character/chats/c01/messages/0000-0099/000000.md';
 
 describe('TavernChatWorkspace', () => {
   it('用稳定短ID投影当前聊天，并且实时投影不进入Working Diff', async () => {
@@ -13,7 +13,7 @@ describe('TavernChatWorkspace', () => {
 
     await workspace.initialize(repository);
 
-    expect((await repository.read('/context/chats/index.yaml')).content).toContain('active_chat: c01');
+    expect((await repository.read('/character/chats/index.yaml')).content).toContain('active_chat: c01');
     expect(await repository.read(firstMessagePath)).toMatchObject({ content: expect.stringContaining('你好。'), readonly: false });
     expect(workspace.exportRuntime().initialChat).toBe('c01');
     expect(repository.changes()).toEqual([]);
@@ -41,7 +41,7 @@ describe('TavernChatWorkspace', () => {
     await workspace.initialize(repository);
 
     await workspace.writeFile(
-      '/context/chats/c01/messages/0000-0099/000001.md',
+      '/character/chats/c01/messages/0000-0099/000001.md',
       ['---', 'role: user', 'name: 测试者', 'hidden: false', '---', '直接追加的消息'].join('\n'),
       repository,
     );
@@ -50,7 +50,7 @@ describe('TavernChatWorkspace', () => {
     expect(chat.messages[1]).toMatchObject({ messageId: 1, name: '测试者', role: 'user', swipes: ['直接追加的消息'] });
     await expect(
       workspace.writeFile(
-        '/context/chats/c01/messages/0000-0099/000003.md',
+        '/character/chats/c01/messages/0000-0099/000003.md',
         ['---', 'role: user', '---', '跳号'].join('\n'),
         repository,
       ),
@@ -79,7 +79,7 @@ describe('TavernChatWorkspace', () => {
     await workspace.switchSwipe('c01', 1, repository);
     expect((await bridge.readChat('初始聊天')).messages[0].selectedSwipe).toBe(1);
     await workspace.writeFile(
-      '/context/chats/c01/messages/0000-0099/000001.md',
+      '/character/chats/c01/messages/0000-0099/000001.md',
       ['---', 'role: user', '---', '测试'].join('\n'),
       repository,
     );

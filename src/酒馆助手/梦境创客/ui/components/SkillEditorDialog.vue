@@ -62,7 +62,7 @@
               <strong>资源文件</strong>
               <span>{{ resourceFileCount }} 个文件 · {{ formatBytes(resourceBytes) }}</span>
             </div>
-            <div v-if="!builtinReadonly" class="dca-row-actions">
+            <div v-if="!builtinReadonly" class="dca-row-actions dca-skill-file-actions">
               <label class="dca-skill-folder-target">
                 <span>当前目录</span>
                 <input v-model="currentDirectory" type="text" placeholder="根目录" />
@@ -76,60 +76,105 @@
 
           <div class="dca-skill-file-layout">
             <div class="dca-skill-file-list">
-              <button class="dca-skill-file-row reserved" type="button" @click="selectedPath = 'SKILL.md'">
+              <button
+                class="dca-skill-file-row reserved"
+                :class="{ active: selectedPath === 'SKILL.md' }"
+                type="button"
+                @click="selectMainSkillFile"
+              >
                 <i class="fa-brands fa-markdown" aria-hidden="true"></i>
                 <span>SKILL.md</span><small>主文件</small>
               </button>
-              <div v-for="entry in resourceEntries" :key="`${entry.kind}:${entry.path}`" class="dca-skill-file-row-wrap">
+              <div
+                v-for="entry in visibleResourceEntries"
+                :key="`${entry.kind}:${entry.path}`"
+                class="dca-skill-file-row-wrap"
+                :style="treeRowStyle(entry)"
+                @contextmenu.prevent="openResourceMenu($event, entry)"
+              >
                 <button
                   class="dca-skill-file-row"
-                  :class="{ active: selectedPath === entry.path }"
+                  :class="{ active: entry.kind === 'file' && selectedPath === entry.path, directory: entry.kind === 'directory' }"
                   type="button"
-                  @click="selectResource(entry.path)"
+                  @click="selectResource(entry)"
                 >
-                  <i :class="entry.kind === 'directory' ? 'fa-regular fa-folder' : 'fa-regular fa-file'" aria-hidden="true"></i>
-                  <span>{{ entry.path }}</span>
+                  <i
+                    v-if="entry.kind === 'directory'"
+                    :class="expandedDirectories.has(entry.path) ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right'"
+                    aria-hidden="true"
+                  ></i>
+                  <i v-else class="fa-regular fa-file" aria-hidden="true"></i>
+                  <span>{{ entry.name }}</span>
                   <small>{{ entry.kind === 'directory' ? '文件夹' : formatBytes(entry.size) }}</small>
                 </button>
-                <span v-if="!builtinReadonly" class="dca-row-actions">
-                  <button class="dca-icon-btn" type="button" title="重命名" @click="renameEntry(entry)">
+                <span class="dca-row-actions dca-skill-entry-actions">
+                  <button class="dca-icon-btn" type="button" :title="entry.kind === 'directory' ? '导出文件夹 ZIP' : '导出文件'" @click.stop="downloadEntry(entry)">
+                    <i class="fa-solid fa-download" aria-hidden="true"></i>
+                  </button>
+                  <button v-if="!builtinReadonly" class="dca-icon-btn" type="button" title="重命名" @click.stop="renameEntry(entry)">
                     <i class="fa-solid fa-pen" aria-hidden="true"></i>
                   </button>
-                  <button class="dca-icon-btn" type="button" title="删除" @click="deleteEntry(entry)">
+                  <button v-if="!builtinReadonly" class="dca-icon-btn" type="button" title="删除" @click.stop="deleteEntry(entry)">
                     <i class="fa-solid fa-trash" aria-hidden="true"></i>
                   </button>
                 </span>
               </div>
-              <div v-if="resourceEntries.length === 0" class="dca-empty">暂无额外资源，不会预创建任何目录。</div>
+              <div v-if="allResourceEntries.length === 0" class="dca-empty">暂无额外资源，不会预创建任何目录。</div>
             </div>
 
-            <div class="dca-skill-file-preview">
-              <template v-if="selectedPath === 'SKILL.md'">
-                <strong>SKILL.md</strong>
-                <p>主 Skill 正文在上方编辑；这个文件名固定保留。</p>
-              </template>
-              <template v-else-if="selectedResource">
-                <header>
-                  <div><strong>{{ selectedPath }}</strong><small>{{ selectedResource.mediaType }}</small></div>
-                  <button type="button" @click="downloadResource(selectedPath, selectedResource)">下载</button>
-                </header>
-                <textarea
-                  v-if="selectedResource.content !== undefined"
-                  :disabled="builtinReadonly"
-                  :value="selectedResource.content"
-                  rows="15"
-                  spellcheck="false"
-                  @input="updateSelectedText"
-                ></textarea>
-                <div v-else class="dca-empty">
-                  二进制资源不会作为文本展开。Agent 可以看到、移动或删除它，但 read_file 会返回不可读取提示。
-                </div>
-              </template>
-              <template v-else>
-                <strong>{{ selectedPath || '选择一个资源' }}</strong>
-                <p>文件夹用于组织资源；空文件夹也会保存在 Skill 清单中。</p>
-              </template>
+            <div class="dca-skill-file-preview-layer" :class="{ open: mobileResourceOpen }" @click.self="closeMobileResource">
+              <div class="dca-skill-file-preview">
+                <button class="dca-icon-btn dca-skill-mobile-preview-close" type="button" title="关闭资源文件" @click="closeMobileResource">
+                  <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+                </button>
+                <template v-if="selectedPath === 'SKILL.md'">
+                  <strong>SKILL.md</strong>
+                  <p>主 Skill 正文在上方编辑；这个文件名固定保留。</p>
+                </template>
+                <template v-else-if="selectedResource">
+                  <header>
+                    <div><strong>{{ selectedPath }}</strong><small>{{ selectedResource.mediaType }}</small></div>
+                    <button type="button" @click="downloadResource(selectedPath, selectedResource)">
+                      <i class="fa-solid fa-download" aria-hidden="true"></i>导出
+                    </button>
+                  </header>
+                  <textarea
+                    v-if="selectedResource.content !== undefined"
+                    :disabled="builtinReadonly"
+                    :value="selectedResource.content"
+                    rows="15"
+                    spellcheck="false"
+                    @input="updateSelectedText"
+                  ></textarea>
+                  <div v-else class="dca-empty">
+                    二进制资源不会作为文本展开。Agent 可以看到、移动或删除它，但 read_file 会返回不可读取提示。
+                  </div>
+                </template>
+                <template v-else>
+                  <strong>选择一个资源</strong>
+                  <p>从左侧文件树选择文件进行查看或编辑。</p>
+                </template>
+              </div>
             </div>
+          </div>
+
+          <div
+            v-if="resourceMenu"
+            class="dca-file-context-menu dca-skill-resource-menu"
+            :style="{ left: `${resourceMenu.x}px`, top: `${resourceMenu.y}px` }"
+            @click.stop
+            @pointerdown.stop
+          >
+            <button type="button" @click="downloadEntry(resourceMenu.entry)">
+              <i class="fa-solid fa-download" aria-hidden="true"></i>
+              导出{{ resourceMenu.entry.kind === 'directory' ? '文件夹 ZIP' : '文件' }}
+            </button>
+            <button v-if="!builtinReadonly" type="button" @click="renameEntry(resourceMenu.entry)">
+              <i class="fa-solid fa-pen" aria-hidden="true"></i>重命名
+            </button>
+            <button v-if="!builtinReadonly" class="danger" type="button" @click="deleteEntry(resourceMenu.entry)">
+              <i class="fa-regular fa-trash-can" aria-hidden="true"></i>删除
+            </button>
           </div>
         </section>
 
@@ -148,7 +193,6 @@
         >
           删除
         </button>
-        <button v-if="builtinReadonly" type="button" @click="copyBuiltinSkill">另存为用户 Skill</button>
         <button type="button" @click="closeSkillEditor">取消</button>
         <button v-if="skillDeletePending" class="dca-btn-danger" type="button" @click="deleteSkill">确认删除</button>
         <button
@@ -166,7 +210,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, shallowRef, toRaw, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, toRaw, watch } from 'vue';
+import { zipSync } from 'fflate';
 import {
   inferSkillMediaType,
   MAX_SKILL_RESOURCE_BYTES,
@@ -181,7 +226,7 @@ import { downloadBytes, downloadText, formatBytes } from '../composables/format'
 import { useDreamCardAgent } from '../composables/runtime';
 import DcaSelect from './DcaSelect.vue';
 
-type ResourceEntry = { kind: 'directory' | 'file'; path: string; size: number };
+type ResourceEntry = { depth: number; kind: 'directory' | 'file'; name: string; path: string; size: number };
 
 const { action, runtime, skillEditorRequest } = useDreamCardAgent();
 const skillDeletePending = ref(false);
@@ -195,6 +240,9 @@ const directoryDraft = shallowRef<string[]>([]);
 const resourceUploadInput = ref<HTMLInputElement>();
 const currentDirectory = ref('');
 const selectedPath = ref('SKILL.md');
+const expandedDirectories = ref(new Set<string>());
+const mobileResourceOpen = ref(false);
+const resourceMenu = ref<{ entry: ResourceEntry; x: number; y: number }>();
 let loadToken = 0;
 
 const skillDraft = reactive({
@@ -216,19 +264,42 @@ const canSaveSkill = computed(
 const resourceFileCount = computed(() => Object.keys(resourceDraft.value).length);
 const resourceBytes = computed(() => Object.values(resourceDraft.value).reduce((sum, resource) => sum + resource.size, 0));
 const selectedResource = computed(() => resourceDraft.value[selectedPath.value]);
-const resourceEntries = computed<ResourceEntry[]>(() => {
+const allResourceEntries = computed<ResourceEntry[]>(() => {
   const directories = new Set(directoryDraft.value);
   for (const path of Object.keys(resourceDraft.value)) {
     const parts = path.split('/');
     for (let index = 1; index < parts.length; index += 1) directories.add(parts.slice(0, index).join('/'));
   }
-  return [
-    ...[...directories].sort((a, b) => a.localeCompare(b)).map(path => ({ kind: 'directory' as const, path, size: 0 })),
-    ...Object.entries(resourceDraft.value)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([path, resource]) => ({ kind: 'file' as const, path, size: resource.size })),
+  const entries: ResourceEntry[] = [
+    ...[...directories].map(path => ({
+      depth: path.split('/').length - 1,
+      kind: 'directory' as const,
+      name: path.split('/').at(-1) ?? path,
+      path,
+      size: 0,
+    })),
+    ...Object.entries(resourceDraft.value).map(([path, resource]) => ({
+      depth: path.split('/').length - 1,
+      kind: 'file' as const,
+      name: path.split('/').at(-1) ?? path,
+      path,
+      size: resource.size,
+    })),
   ];
+  return entries.sort((left, right) => {
+    const leftParent = left.path.split('/').slice(0, -1).join('/');
+    const rightParent = right.path.split('/').slice(0, -1).join('/');
+    if (leftParent === rightParent && left.kind !== right.kind) return left.kind === 'directory' ? -1 : 1;
+    return left.path.localeCompare(right.path);
+  });
 });
+const visibleResourceEntries = computed(() => allResourceEntries.value.filter(entry => {
+  const parts = entry.path.split('/');
+  for (let index = 1; index < parts.length; index += 1) {
+    if (!expandedDirectories.value.has(parts.slice(0, index).join('/'))) return false;
+  }
+  return true;
+}));
 
 watch(skillEditorRequest, request => {
   if (!request) return;
@@ -237,6 +308,7 @@ watch(skillEditorRequest, request => {
   skillModifyPending.value = false;
   builtinReadonly.value = request.builtin === true || request.skill?.builtin === true;
   selectedPath.value = 'SKILL.md';
+  mobileResourceOpen.value = false;
   currentDirectory.value = '';
   if (request.deleting && request.skill) {
     assignSkill(request.skill);
@@ -270,6 +342,10 @@ function assignSkill(input: AgentSkill) {
   Object.assign(skillDraft, skill);
   resourceDraft.value = structuredClone(skillResources(skill));
   directoryDraft.value = skillDirectories(skill);
+  expandedDirectories.value = new Set(
+    [...directoryDraft.value, ...Object.keys(resourceDraft.value).map(path => path.split('/')[0])]
+      .filter(path => path && !path.includes('/')),
+  );
   dirty.value = false;
   loading.value = false;
 }
@@ -288,6 +364,9 @@ function closeSkillEditor() {
   editingSkill.value = undefined;
   resourceDraft.value = {};
   directoryDraft.value = [];
+  expandedDirectories.value = new Set();
+  mobileResourceOpen.value = false;
+  resourceMenu.value = undefined;
   dirty.value = false;
 }
 
@@ -338,14 +417,6 @@ async function deleteSkill() {
     closeSkillEditor();
     toastr.success(`已删除全局Skill“${name}”。`, '梦境创客');
   }
-}
-
-function copyBuiltinSkill() {
-  builtinReadonly.value = false;
-  editingSkill.value = undefined;
-  skillDraft.id = '';
-  skillDraft.name = `${skillDraft.name} 副本`;
-  dirty.value = true;
 }
 
 function targetPath(name: string): string {
@@ -406,12 +477,52 @@ function createTextFile() {
   }
 }
 
-function selectResource(path: string) {
-  selectedPath.value = path;
-  if (!resourceDraft.value[path]) currentDirectory.value = path;
+function selectMainSkillFile() {
+  selectedPath.value = 'SKILL.md';
+  mobileResourceOpen.value = true;
+}
+
+function selectResource(entry: ResourceEntry) {
+  closeResourceMenu();
+  if (entry.kind === 'directory') {
+    toggleDirectory(entry.path);
+    currentDirectory.value = entry.path;
+    return;
+  }
+  selectedPath.value = entry.path;
+  currentDirectory.value = entry.path.split('/').slice(0, -1).join('/');
+  mobileResourceOpen.value = true;
+}
+
+function toggleDirectory(path: string) {
+  const next = new Set(expandedDirectories.value);
+  if (next.has(path)) next.delete(path);
+  else next.add(path);
+  expandedDirectories.value = next;
+}
+
+function treeRowStyle(entry: ResourceEntry) {
+  return { paddingLeft: `${entry.depth * 0.9}rem` };
+}
+
+function closeMobileResource() {
+  mobileResourceOpen.value = false;
+}
+
+function closeResourceMenu() {
+  resourceMenu.value = undefined;
+}
+
+function openResourceMenu(event: MouseEvent, entry: ResourceEntry) {
+  resourceMenu.value = {
+    entry,
+    x: Math.min(event.clientX, window.innerWidth - 220),
+    y: Math.min(event.clientY, window.innerHeight - 150),
+  };
 }
 
 function renameEntry(entry: ResourceEntry) {
+  closeResourceMenu();
   const input = window.prompt('输入新的相对路径：', entry.path);
   if (!input || input === entry.path) return;
   try {
@@ -443,6 +554,7 @@ function renameEntry(entry: ResourceEntry) {
 }
 
 function deleteEntry(entry: ResourceEntry) {
+  closeResourceMenu();
   if (!window.confirm(`确定删除${entry.kind === 'directory' ? '文件夹及其内容' : '文件'}“${entry.path}”吗？`)) return;
   if (entry.kind === 'file') {
     const next = { ...resourceDraft.value };
@@ -479,13 +591,33 @@ function downloadResource(path: string, resource: SkillResource) {
   if (resource.data) downloadBytes(name, resource.data, resource.mediaType);
   else downloadText(name, resource.content ?? '', resource.mediaType);
 }
+
+function resourceDataBytes(resource: SkillResource): Uint8Array {
+  return resource.data ?? new TextEncoder().encode(resource.content ?? '');
+}
+
+function downloadEntry(entry: ResourceEntry) {
+  closeResourceMenu();
+  if (entry.kind === 'file') {
+    const resource = resourceDraft.value[entry.path];
+    if (resource) downloadResource(entry.path, resource);
+    return;
+  }
+  const prefix = `${entry.path}/`;
+  const files = Object.entries(resourceDraft.value).filter(([path]) => path.startsWith(prefix));
+  const archive = Object.fromEntries(files.map(([path, resource]) => [path.slice(prefix.length), resourceDataBytes(resource)]));
+  downloadBytes(`${entry.name}.zip`, zipSync(archive, { level: 6 }), 'application/zip');
+}
+
+onMounted(() => window.addEventListener('pointerdown', closeResourceMenu));
+onBeforeUnmount(() => window.removeEventListener('pointerdown', closeResourceMenu));
 </script>
 
 <style lang="scss">
-.dca-skill-editor {
+.dca-modal.dca-skill-editor {
   display: flex;
-  width: min(62rem, 100%);
-  max-height: min(58rem, calc(100vh - 2rem));
+  width: min(76rem, calc(100vw - 2rem));
+  max-height: min(62rem, calc(100vh - 2rem));
   flex-direction: column;
   gap: 0.75rem;
   overflow: auto;
@@ -545,6 +677,11 @@ function downloadResource(path: string, resource: SkillResource) {
   width: 9rem;
 }
 
+.dca-skill-file-actions {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
 .dca-skill-file-layout {
   display: grid;
   min-height: 18rem;
@@ -564,6 +701,17 @@ function downloadResource(path: string, resource: SkillResource) {
 .dca-skill-file-list {
   max-height: 24rem;
   overflow: auto;
+  scrollbar-gutter: stable;
+}
+
+.dca-skill-file-preview-layer {
+  min-width: 0;
+}
+
+.dca-skill-file-preview {
+  height: 100%;
+  overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 .dca-skill-file-row-wrap {
@@ -572,35 +720,50 @@ function downloadResource(path: string, resource: SkillResource) {
   gap: 0.25rem;
 }
 
-.dca-skill-file-row {
+.dca-app .dca-skill-file-row {
   display: grid;
   width: 100%;
   grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
   gap: 0.45rem;
+  justify-content: stretch;
   padding: 0.38rem 0.45rem;
   border: 0;
   background: transparent;
   text-align: left;
 }
 
-.dca-skill-file-row span {
+.dca-app .dca-skill-file-row.directory {
+  color: var(--dca-text-secondary);
+  font-weight: 600;
+}
+
+.dca-app .dca-skill-file-row span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.dca-skill-file-row small {
+.dca-app .dca-skill-file-row small {
   color: var(--dca-text-muted);
 }
 
-.dca-skill-file-row.active,
-.dca-skill-file-row:hover {
+.dca-app .dca-skill-file-row.active,
+.dca-app .dca-skill-file-row:hover {
   background: var(--dca-accent-soft);
 }
 
-.dca-skill-file-row.reserved {
+.dca-app .dca-skill-file-row.reserved {
   color: var(--dca-accent);
+}
+
+.dca-skill-entry-actions {
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.dca-skill-entry-actions button {
+  text-align: left;
 }
 
 .dca-skill-file-preview textarea {
@@ -621,9 +784,72 @@ function downloadResource(path: string, resource: SkillResource) {
   margin-right: auto;
 }
 
+.dca-skill-mobile-preview-close {
+  display: none;
+}
+
+.dca-app .dca-skill-resource-menu button {
+  justify-content: flex-start;
+  text-align: left;
+}
+
 @media (max-width: 720px) {
+  .dca-modal.dca-skill-editor {
+    width: calc(100vw - 1rem);
+    max-height: calc(100dvh - 1rem);
+  }
+
   .dca-skill-file-layout {
     grid-template-columns: 1fr;
+  }
+
+  .dca-skill-file-list {
+    max-height: min(40dvh, 25rem);
+  }
+
+  .dca-skill-file-preview-layer {
+    position: fixed;
+    z-index: 120;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 0.5rem;
+    background: var(--dca-scrim);
+  }
+
+  .dca-skill-file-preview-layer.open {
+    display: flex;
+  }
+
+  .dca-skill-file-preview {
+    position: relative;
+    width: min(100%, 42rem);
+    height: auto;
+    max-height: calc(100dvh - 1rem);
+    padding-top: 2.8rem;
+    overflow: auto;
+    background: var(--dca-raised);
+    box-shadow: var(--dca-shadow-3);
+  }
+
+  .dca-skill-file-preview textarea {
+    min-height: min(60dvh, 32rem);
+  }
+
+  .dca-skill-mobile-preview-close {
+    position: absolute;
+    top: 0.55rem;
+    right: 0.55rem;
+    display: inline-grid;
+  }
+
+  .dca-skill-file-row-wrap {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .dca-skill-entry-actions {
+    display: none;
   }
 }
 </style>

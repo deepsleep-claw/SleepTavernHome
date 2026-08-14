@@ -27,8 +27,8 @@ export type TavernChatWorkspaceRuntime = {
 
 type ParsedMessagePath = { alias: string; messageId: number };
 
-const CHAT_ROOT = '/context/chats';
-const MESSAGE_PATH = /^\/context\/chats\/(c\d+)\/messages\/\d{4}-\d{4}\/(\d{6})\.md$/u;
+const CHAT_ROOT = '/character/chats';
+const MESSAGE_PATH = /^\/character\/chats\/(c\d+)\/messages\/\d{4}-\d{4}\/(\d{6})\.md$/u;
 
 function textFile(
   path: string,
@@ -147,6 +147,15 @@ export class TavernChatWorkspace {
   async initialize(repository: MemoryWorkspaceRepository): Promise<void> {
     this.syncCurrentChat();
     await this.refresh(repository);
+  }
+
+  async resetForCurrentCharacter(repository: MemoryWorkspaceRepository): Promise<void> {
+    this.mounts.clear();
+    this.activeChat = undefined;
+    this.initialChat = undefined;
+    this.nextAlias = 1;
+    this.cachedFiles = [];
+    await this.initialize(repository);
   }
 
   exportRuntime(): TavernChatWorkspaceRuntime {

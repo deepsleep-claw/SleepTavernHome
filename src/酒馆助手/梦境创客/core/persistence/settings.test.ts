@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_PRESET } from '../preset/compiler';
-import { createApiProfile } from '../provider/profiles';
 import { DEFAULT_BUILTIN_AGENT } from './builtin-agent';
 import {
   DEFAULT_DREAM_CARD_AGENT_SETTINGS,
@@ -22,6 +21,13 @@ function character(bindingId: string, revision: number): CharacterStoreReference
 }
 
 describe('settings cross-window merge', () => {
+  const userAgent = (id: string, name: string) => ({
+    id,
+    name,
+    presetId: DEFAULT_PRESET.id,
+    skills: [],
+    toolIds: [],
+  });
   it('合并两个页面分别创建的角色元信息引用', () => {
     const base = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS);
     const fromFirstWindow = structuredClone(base);
@@ -90,50 +96,43 @@ describe('settings cross-window merge', () => {
   it('始终用当前脚本内置Agent替换设置中的旧默认副本', () => {
     const raw = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS);
     raw.agentConfigurations = [
-      { id: DEFAULT_BUILTIN_AGENT.id, name: '旧默认名称', presetId: DEFAULT_PRESET.id, skillIds: [] },
-      { id: 'agent:user', name: '用户 Agent', presetId: DEFAULT_PRESET.id, skillIds: [] },
+      { ...userAgent(DEFAULT_BUILTIN_AGENT.id, '旧默认名称') },
+      userAgent('agent:user', '用户 Agent'),
     ];
     const normalized = normalizeSettings(raw);
-    expect(normalized.agentConfigurations[0]).toEqual({
+    expect(normalized.agentConfigurations[0]).toMatchObject({
       id: DEFAULT_BUILTIN_AGENT.id,
       name: DEFAULT_BUILTIN_AGENT.name,
       presetId: DEFAULT_BUILTIN_AGENT.presetId,
-      skillIds: DEFAULT_BUILTIN_AGENT.skillIds,
+      skills: DEFAULT_BUILTIN_AGENT.skills,
+      toolIds: DEFAULT_BUILTIN_AGENT.toolIds,
     });
     expect(normalized.agentConfigurations[1].id).toBe('agent:user');
   });
 
-  it('把用户改过的旧默认Agent另存保留，同时恢复只读内置Agent', () => {
+  it('只按内置ID覆盖定义，不保留基于旧名称的兼容魔法', () => {
     const raw = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS);
     raw.agentConfigurations = [
-      { id: DEFAULT_BUILTIN_AGENT.id, name: '我的默认Agent', presetId: DEFAULT_PRESET.id, skillIds: ['writer'] },
+      { ...userAgent(DEFAULT_BUILTIN_AGENT.id, '我的默认Agent'), presetId: '旧预设' },
+      userAgent('agent:preserved-default', '梦境创客默认 Agent（已保留）'),
+      userAgent('agent:user', '我的 Agent'),
     ];
-    raw.activeAgentConfigurationId = DEFAULT_BUILTIN_AGENT.id;
+    raw.activeAgentConfigurationId = 'agent:preserved-default';
     const normalized = normalizeSettings(raw);
-    expect(normalized.agentConfigurations.map(configuration => configuration.id)).toEqual([
-      DEFAULT_BUILTIN_AGENT.id,
-      'agent:preserved-default',
-    ]);
+    expect(normalized.agentConfigurations).toHaveLength(3);
     expect(normalized.activeAgentConfigurationId).toBe('agent:preserved-default');
-    expect(normalized.agentConfigurations[1]).toMatchObject({ name: '我的默认Agent（已保留）', skillIds: ['writer'] });
+    expect(normalized.agentConfigurations[0]).toMatchObject({
+      id: DEFAULT_BUILTIN_AGENT.id,
+      name: DEFAULT_BUILTIN_AGENT.name,
+      presetId: DEFAULT_BUILTIN_AGENT.presetId,
+      skills: DEFAULT_BUILTIN_AGENT.skills,
+      toolIds: DEFAULT_BUILTIN_AGENT.toolIds,
+    });
+    expect(normalized.agentConfigurations[1]).toMatchObject({
+      id: 'agent:preserved-default',
+      name: '梦境创客默认 Agent（已保留）',
+    });
+    expect(normalized.agentConfigurations[2]).toMatchObject({ id: 'agent:user', name: '我的 Agent' });
   });
 
-  it('把旧API Profile一次性迁移成一个Provider和一个模型并保留默认选择', async () => {
-    const profile = await createApiProfile({
-      apiKey: 'key', baseURL: 'https://example.invalid/v1', compatibilityMode: 'deepseek',
-      interfaceType: 'openai-responses', model: 'deepseek-v4', name: '旧配置',
-    });
-    const raw = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS);
-    raw.version = 3 as 4;
-    raw.profiles = [profile];
-    raw.activeProfileId = profile.id;
-    raw.providers = [];
-    const normalized = normalizeSettings(raw);
-    expect(normalized.profiles).toEqual([]);
-    expect(normalized.providers).toHaveLength(1);
-    expect(normalized.providers[0]).toMatchObject({
-      baseURL: profile.baseURL, id: `provider:${profile.id}`, models: [{ id: profile.id, modelId: profile.model }],
-    });
-    expect(normalized.defaultModelSelection).toEqual({ providerId: `provider:${profile.id}`, modelId: profile.id });
-  });
 });

@@ -2,7 +2,10 @@ import { checkMinimumVersion } from '@util/common';
 import { teleportStyle } from '@util/script';
 import type { PluginActivationContext, PluginRuntime } from '../../公共模块/脚本更新器/contracts';
 import { createProbeModel, createProbeStream } from './core/provider-probe';
-import { getDreamCardAgentRuntime } from './runtime/dream-card-agent-runtime';
+import {
+  configureDreamCardAgentResourceBase,
+  getDreamCardAgentRuntime,
+} from './runtime/dream-card-agent-runtime';
 import {
   DEFAULT_FLOATING_BUTTON_ANCHOR,
   floatingButtonOffsetForPosition,
@@ -22,6 +25,9 @@ export { DREAM_CARD_AGENT_ID, DREAM_CARD_AGENT_NAME, DREAM_CARD_AGENT_VERSION } 
 export const PLUGIN_ID = DREAM_CARD_AGENT_ID;
 export const PLUGIN_VERSION = DREAM_CARD_AGENT_VERSION;
 export const dreamCardAgentProbe = createProbeStream;
+
+// 资源始终以实际载入的index.js为基准：本地5500与精确版本jsDelivr无需不同配置。
+configureDreamCardAgentResourceBase(new URL('./resources/', import.meta.url).href);
 
 const WAND_CONTAINER_ID = 'dream-card-agent-wand-container';
 const FLOATING_BUTTON_ID = 'dream-card-agent-floating-button';
