@@ -65,6 +65,25 @@ function createService(input: {
 }
 
 describe('card agent realtime session service', () => {
+  it('分叉运行时继承目标输出前的可见上下文，但建立独立操作历史', async () => {
+    const executor = new QueueExecutor([
+      step([writeDescription('第一轮写入')]),
+      step([], '第一轮完成'),
+      step([], '第二轮完成'),
+    ]);
+    const service = await createService({ executor, mode: 'full' });
+    const first = await service.send('第一轮要求');
+    const firstOutput = first.ui.find(item => item.kind === 'assistant' && item.content === '第一轮完成')!;
+    await service.send('第二轮要求');
+
+    const fork = service.forkRuntime(firstOutput.id, 'session:fork');
+    expect(fork.sessionId).toBe('session:fork');
+    expect(fork.ui.filter(item => item.kind === 'assistant').map(item => item.content)).toEqual(['第一轮完成']);
+    expect(fork.operationLog).toEqual({ records: [], turns: [], version: 1 });
+    expect(JSON.stringify(fork.modelMessages)).toContain('第一轮完成');
+    expect(JSON.stringify(fork.modelMessages)).not.toContain('第二轮完成');
+  });
+
   it('按toolCallId流式建立工具卡并在正式执行时原地更新', async () => {
     const call = writeDescription('第一行\n第二行', 'stream-write');
     let stepIndex = 0;

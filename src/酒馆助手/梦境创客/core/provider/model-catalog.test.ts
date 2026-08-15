@@ -38,6 +38,42 @@ describe('model catalog', () => {
     })[0]?.template).toMatchObject({ compatibilityMode: 'deepseek', id: 'deepseek:chat:v4-flash' });
   });
 
+  it('按协议匹配Kimi Code模型，并应用官方上下文与推理档位', () => {
+    const templates = builtinModelTemplates();
+    const chatK3 = matchModelTemplates('k3', templates, 1, {
+      compatibilityMode: 'standard',
+      interfaceType: 'openai-chat',
+    })[0]?.template;
+    const anthropicK3 = matchModelTemplates('k3', templates, 1, {
+      compatibilityMode: 'standard',
+      interfaceType: 'anthropic',
+    })[0]?.template;
+    const compactK3 = matchModelTemplates('k3-256k', templates, 1, {
+      compatibilityMode: 'standard',
+      interfaceType: 'openai-chat',
+    })[0]?.template;
+    const highspeed = matchModelTemplates('kimi-for-coding-highspeed', templates, 1, {
+      compatibilityMode: 'standard',
+      interfaceType: 'openai-chat',
+    })[0]?.template;
+
+    expect(chatK3).toMatchObject({
+      id: 'kimi-code:chat:k3',
+      settings: {
+        capabilities: { reasoning: 'enabled', toolCalling: 'enabled', vision: 'enabled', webSearch: 'disabled' },
+        contextWindow: 1_048_576,
+        maxOutputTokens: 0,
+        reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }, { id: 'max', name: '最高' }],
+      },
+    });
+    expect(anthropicK3?.id).toBe('kimi-code:anthropic:k3');
+    expect(compactK3?.settings.contextWindow).toBe(262_144);
+    expect(highspeed).toMatchObject({
+      id: 'kimi-code:chat:kimi-for-coding-highspeed',
+      settings: { contextWindow: 262_144, maxOutputTokens: 0 },
+    });
+  });
+
   it('解析models.dev目录并排除非文本生成模型', () => {
     const templates = parseModelsDevCatalog({
       openai: {

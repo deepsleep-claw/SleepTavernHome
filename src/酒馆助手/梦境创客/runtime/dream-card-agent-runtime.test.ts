@@ -416,7 +416,7 @@ describe('DreamCardAgentRuntime', () => {
     observer.destroy();
   });
 
-  it('首条用户输入前10个字成为默认会话名，并允许随后重命名', async () => {
+  it('首条用户输入第一行前20个字成为默认会话名，并允许随后重命名', async () => {
     const runtime = new DreamCardAgentRuntime({
       adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
       executorFactory: () => new QueueExecutor([modelStep(false)]),
@@ -426,10 +426,43 @@ describe('DreamCardAgentRuntime', () => {
     await addProfile(runtime);
     await useAgentWithoutRemoteSkills(runtime);
     await runtime.createSession();
-    expect((await runtime.send('请补全角色的背景故事与动机')).title).toBe('请补全角色的背景故事');
+    const firstMessage = '请补全角色的背景故事与核心动机，并补充完整的成长经历\n第二行不要进入标题';
+    expect((await runtime.send(firstMessage)).title).toBe(Array.from(firstMessage.split('\n')[0]).slice(0, 20).join(''));
     expect((await runtime.renameSession('  我的角色创作  ')).title).toBe('我的角色创作');
     expect(runtime.snapshot().sessions[0]?.title).toBe('我的角色创作');
     expect(runtime.snapshot().characterGroups[0]?.sessions[0]?.title).toBe('我的角色创作');
+    runtime.destroy();
+  });
+
+  it('从指定最终输出分叉为独立会话，并只继承该节点之前的对话上下文', async () => {
+    const executor = new QueueExecutor([
+      { ...modelStep(false), assistantMessages: [{ content: '第一轮完成', role: 'assistant' }], text: '第一轮完成' },
+      { ...modelStep(false), assistantMessages: [{ content: '第二轮完成', role: 'assistant' }], text: '第二轮完成' },
+      { ...modelStep(false), assistantMessages: [{ content: '分叉继续完成', role: 'assistant' }], text: '分叉继续完成' },
+    ]);
+    const runtime = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+      executorFactory: () => executor,
+      fileClient: new MemoryTavernFileClient(),
+      settingsStore: new MemoryAgentSettingsStore(),
+    });
+    await addProfile(runtime);
+    await useAgentWithoutRemoteSkills(runtime);
+    const original = await runtime.createSession();
+    const first = await runtime.send('这是用于测试分叉会话标题与继承范围的第一行文字\n第二行');
+    const firstOutput = first.ui.find(item => item.kind === 'assistant' && item.content === '第一轮完成')!;
+    await runtime.send('原会话第二轮');
+
+    const forked = await runtime.forkSession(firstOutput.id);
+    expect(forked.sessionId).not.toBe(original.sessionId);
+    expect(forked.ui.filter(item => item.kind === 'assistant').map(item => item.content)).toEqual(['第一轮完成']);
+    expect(forked.operationLog).toEqual({ records: [], turns: [], version: 1 });
+    expect(runtime.snapshot().sessions).toHaveLength(2);
+
+    await runtime.send('只在分叉中继续');
+    const forkRequest = executor.requests.at(-1)!;
+    expect(JSON.stringify(forkRequest.messages)).toContain('第一轮完成');
+    expect(JSON.stringify(forkRequest.messages)).not.toContain('第二轮完成');
     runtime.destroy();
   });
 

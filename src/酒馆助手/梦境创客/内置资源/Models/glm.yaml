@@ -5,14 +5,20 @@ models:
   - id: zhipu:glm-5
     name: GLM-5 系列
     provider: zhipu
-    aliases: [glm-5, glm-5-air, glm-5.1, glm-5.2]
+    aliases: [glm-5, glm-5-air, glm-5.1, glm-5.2, glm-5.3]
     patterns: ["glm-5*", "*/glm-5*"]
     sourceUrl: https://docs.bigmodel.cn/cn/guide/models/text/glm-5
     confidence: medium
     settings:
       contextWindow: 200000
       maxOutputTokens: 128000
-      capabilities: { vision: auto, reasoning: enabled, toolCalling: enabled, webSearch: auto }
+      capabilities:
+        {
+          vision: auto,
+          reasoning: enabled,
+          toolCalling: enabled,
+          webSearch: auto,
+        }
       reasoningEfforts:
         - { name: 关闭, id: none }
         - { name: 最低, id: minimal }
@@ -31,4 +37,10 @@ models:
     settings:
       contextWindow: 200000
       maxOutputTokens: 128000
-      capabilities: { vision: auto, reasoning: enabled, toolCalling: enabled, webSearch: auto }
+      capabilities:
+        {
+          vision: auto,
+          reasoning: enabled,
+          toolCalling: enabled,
+          webSearch: auto,
+        }

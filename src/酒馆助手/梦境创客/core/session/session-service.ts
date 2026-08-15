@@ -135,8 +135,8 @@ function isStoragePath(path: string): boolean {
 }
 
 function sessionTitleFromMessage(message: string): string {
-  const normalized = message.trim().replace(/\s+/gu, ' ');
-  return Array.from(normalized).slice(0, 10).join('') || DEFAULT_SESSION_TITLE;
+  const firstLine = message.trim().split(/\r\n|\n|\r/u, 1)[0]?.replace(/[\t\f\v ]+/gu, ' ').trim() ?? '';
+  return Array.from(firstLine).slice(0, 20).join('') || DEFAULT_SESSION_TITLE;
 }
 
 function assistantText(messages: ModelMessage[]): string {
@@ -909,6 +909,84 @@ export class CardAgentSessionService {
     if (!item) throw new Error(`用户消息不存在：${messageId}`);
     item.content = content;
     this.notify();
+  }
+
+  /**
+   * 从一轮最终回复建立独立会话数据。分支继承可见对话和会话配置，但不继承操作日志：
+   * 文件工作区始终是实时状态，复制旧操作记录会让新会话误撤销原会话的修改。
+   */
+  forkRuntime(messageId: string, sessionId: string): PersistedSessionRuntime {
+    if (this.activeCheckpointId || ['running', 'waiting-approval'].includes(this.status)) {
+      throw new Error('当前轮次结束前不能分叉会话。');
+    }
+    const visibleUi = this.ui.filter(item => !item.hidden);
+    const targetIndex = visibleUi.findIndex(item => item.id === messageId);
+    const target = visibleUi[targetIndex];
+    if (!target || target.kind !== 'assistant') throw new Error('只能从一轮最终输出处分叉会话。');
+
+    const inheritedUi = klona(visibleUi.slice(0, targetIndex + 1));
+    const finalAssistantByCheckpoint = new Map<string, string>();
+    for (const item of inheritedUi) {
+      if (item.kind === 'assistant' && item.checkpointId) finalAssistantByCheckpoint.set(item.checkpointId, item.id);
+    }
+    const inheritedMessages: ModelMessage[] = klona(this.modelMessages.slice(0, this.headerMessageCount));
+    for (const item of inheritedUi) {
+      if (item.kind === 'user') {
+        const attachments = (item.attachments ?? [])
+          .map(summary => this.attachments[summary.id])
+          .filter((attachment): attachment is StoredSessionAttachment => Boolean(attachment));
+        inheritedMessages.push({ content: userContentWithAttachments(item.content, attachments), role: 'user' });
+      } else if (item.kind === 'guidance') {
+        inheritedMessages.push({ content: item.content, role: 'user' });
+      } else if (
+        item.kind === 'assistant' &&
+        (!item.checkpointId || finalAssistantByCheckpoint.get(item.checkpointId) === item.id)
+      ) {
+        inheritedMessages.push({ content: item.content, role: 'assistant' });
+      }
+    }
+
+    const referencedAttachmentIds = new Set(
+      inheritedUi.flatMap(item => item.attachments?.map(attachment => attachment.id) ?? []),
+    );
+    const firstUser = inheritedUi.find(item => item.kind === 'user');
+    const titleSource = firstUser?.content || firstUser?.attachments?.[0]?.filename || this.title;
+    const timestamp = this.now();
+    return {
+      activeCheckpointId: undefined,
+      agentConfiguration: klona(this.agentConfiguration),
+      attachments: Object.fromEntries(
+        Object.entries(this.attachments)
+          .filter(([id]) => referencedAttachmentIds.has(id))
+          .map(([id, attachment]) => [id, klona(attachment)]),
+      ),
+      compiledPreset: klona(this.compiledPreset),
+      createdAt: timestamp,
+      events: [],
+      headerMessageCount: this.headerMessageCount,
+      lastError: undefined,
+      manualEditGroup: undefined,
+      mode: this.mode,
+      modelControls: klona(this.modelControls),
+      modelSelection: this.modelSelection ? klona(this.modelSelection) : undefined,
+      mountedWorldbooks: [...this.mountedWorldbooks],
+      mountedPresets: [...this.mountedPresets],
+      runModelSelection: undefined,
+      modelMessages: inheritedMessages,
+      operationLog: { records: [], turns: [], version: 1 },
+      preset: klona(this.preset),
+      renderPreviews: klona(this.renderPreviews),
+      scope: this.scope,
+      sessionId,
+      skills: klona(this.skills),
+      status: 'completed',
+      tavernChats: this.tavernChatWorkspace?.exportRuntime(),
+      title: sessionTitleFromMessage(titleSource),
+      ui: inheritedUi,
+      updatedAt: timestamp,
+      version: 3,
+      warnings: [...this.warnings],
+    };
   }
 
   async resend(messageId: string): Promise<SessionView> {

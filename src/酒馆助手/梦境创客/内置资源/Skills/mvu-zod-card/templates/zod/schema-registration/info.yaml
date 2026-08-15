@@ -1,0 +1,10 @@
+# 创建角色脚本前，把占位ID替换为当前角色中唯一的稳定ID。
+id: REPLACE_WITH_UNIQUE_MVU_SCHEMA_ID
+name: MVU变量结构
+enabled: true
+button:
+  enabled: false
+  buttons: []
+export_with:
+  button: false
+  data: false

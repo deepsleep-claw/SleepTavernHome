@@ -12,11 +12,16 @@ models:
     settings: &flash-chat
       contextWindow: 1048576
       maxOutputTokens: 393216
-      capabilities: { vision: disabled, reasoning: enabled, toolCalling: enabled, webSearch: disabled }
+      capabilities:
+        {
+          vision: disabled,
+          reasoning: enabled,
+          toolCalling: enabled,
+          webSearch: disabled,
+        }
       reasoningEfforts:
         - { name: 低, id: low }
         - { name: 高, id: high }
-        - { name: 极高, id: xhigh }
         - { name: 最高, id: max }
 
   - id: deepseek:chat:v4-pro
@@ -39,9 +44,27 @@ models:
     patterns: ["deepseek-v4-flash*", "*/deepseek-v4-flash*"]
     sourceUrl: https://api-docs.deepseek.com/guides/responses_api/
     confidence: medium
-    settings:
+    settings: &flash-responses
       <<: *flash-chat
-      capabilities: { vision: disabled, reasoning: enabled, toolCalling: enabled, webSearch: enabled }
+      capabilities:
+        {
+          vision: disabled,
+          reasoning: enabled,
+          toolCalling: enabled,
+          webSearch: enabled,
+        }
+
+  - id: deepseek:responses:v4-pro
+    name: DeepSeek V4 Pro（Responses）
+    provider: deepseek
+    interfaceType: openai-responses
+    compatibilityMode: deepseek
+    aliases: [deepseek-v4-pro]
+    patterns: ["deepseek-v4-pro*", "*/deepseek-v4-pro*"]
+    sourceUrl: https://api-docs.deepseek.com/guides/responses_api/
+    confidence: medium
+    settings:
+      <<: *flash-responses
 
   - id: deepseek:anthropic:v4-flash
     name: DeepSeek V4 Flash（Anthropic）
@@ -54,7 +77,13 @@ models:
     confidence: medium
     settings: &flash-anthropic
       <<: *flash-chat
-      capabilities: { vision: disabled, reasoning: enabled, toolCalling: enabled, webSearch: enabled }
+      capabilities:
+        {
+          vision: disabled,
+          reasoning: enabled,
+          toolCalling: enabled,
+          webSearch: enabled,
+        }
 
   - id: deepseek:anthropic:v4-pro
     name: DeepSeek V4 Pro（Anthropic）

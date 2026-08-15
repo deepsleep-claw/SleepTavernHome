@@ -17,7 +17,7 @@
       /></label>
       <div class="dca-all-list">
         <article v-for="session in sessions" :key="session.sessionId">
-          <button class="dca-all-open" type="button" @click="open(session.sessionId)">
+          <button class="dca-all-open dca-btn-start" type="button" @click="open(session.sessionId)">
             <span
               class="dca-session-state"
               :class="`state-${state.sessionStatuses[session.sessionId] ?? session.status}`"

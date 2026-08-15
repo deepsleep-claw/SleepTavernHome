@@ -1,7 +1,89 @@
-revision: "2026-08-10"
+revision: "2026-08-14"
 interfaceType: openai-chat
 compatibilityMode: standard
 models:
+  - id: kimi-code:chat:k3
+    name: Kimi Code K3（OpenAI 兼容）
+    provider: kimi-code
+    aliases: [k3, kimi-code/k3]
+    patterns: ["*/k3"]
+    sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
+    confidence: high
+    settings: &kimi-code-k3
+      contextWindow: 1048576
+      maxOutputTokens: 0
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: disabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 高, id: high }
+        - { name: 最高, id: max }
+  - id: kimi-code:chat:k3-256k
+    name: Kimi Code K3 256K（OpenAI 兼容）
+    provider: kimi-code
+    aliases: [k3-256k, kimi-code/k3-256k]
+    patterns: ["*/k3-256k"]
+    sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
+    confidence: high
+    settings: &kimi-code-k3-256k
+      <<: *kimi-code-k3
+      contextWindow: 262144
+  - id: kimi-code:chat:kimi-for-coding
+    name: Kimi Code K2.7 Code（OpenAI 兼容）
+    provider: kimi-code
+    aliases: [kimi-for-coding, kimi-code/kimi-for-coding]
+    patterns: ["*/kimi-for-coding"]
+    sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
+    confidence: high
+    settings: &kimi-code-k27
+      contextWindow: 262144
+      maxOutputTokens: 0
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: disabled }
+  - id: kimi-code:chat:kimi-for-coding-highspeed
+    name: Kimi Code K2.7 Code HighSpeed（OpenAI 兼容）
+    provider: kimi-code
+    aliases: [kimi-for-coding-highspeed, kimi-code/kimi-for-coding-highspeed]
+    patterns: ["*/kimi-for-coding-highspeed"]
+    sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
+    confidence: high
+    settings: *kimi-code-k27
+
+  - id: kimi-code:anthropic:k3
+    name: Kimi Code K3（Anthropic）
+    provider: kimi-code
+    interfaceType: anthropic
+    aliases: [k3, kimi-code/k3]
+    patterns: ["*/k3"]
+    sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
+    confidence: high
+    settings: *kimi-code-k3
+  - id: kimi-code:anthropic:k3-256k
+    name: Kimi Code K3 256K（Anthropic）
+    provider: kimi-code
+    interfaceType: anthropic
+    aliases: [k3-256k, kimi-code/k3-256k]
+    patterns: ["*/k3-256k"]
+    sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
+    confidence: high
+    settings: *kimi-code-k3-256k
+  - id: kimi-code:anthropic:kimi-for-coding
+    name: Kimi Code K2.7 Code（Anthropic）
+    provider: kimi-code
+    interfaceType: anthropic
+    aliases: [kimi-for-coding, kimi-code/kimi-for-coding]
+    patterns: ["*/kimi-for-coding"]
+    sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
+    confidence: high
+    settings: *kimi-code-k27
+  - id: kimi-code:anthropic:kimi-for-coding-highspeed
+    name: Kimi Code K2.7 Code HighSpeed（Anthropic）
+    provider: kimi-code
+    interfaceType: anthropic
+    aliases: [kimi-for-coding-highspeed, kimi-code/kimi-for-coding-highspeed]
+    patterns: ["*/kimi-for-coding-highspeed"]
+    sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
+    confidence: high
+    settings: *kimi-code-k27
+
   - id: moonshot:kimi-k3
     name: Kimi K3
     provider: moonshot

@@ -347,6 +347,11 @@ describe('WorkspaceWindow', () => {
     secondGroup.querySelector<HTMLButtonElement>('.dca-character-more')?.click();
     await nextTick();
     expect(secondGroup.querySelector('.dca-character-menu')?.textContent).toContain('删除全部会话');
+    expect(
+      [...secondGroup.querySelectorAll<HTMLButtonElement>('.dca-character-menu button')].every(button =>
+        button.classList.contains('dca-btn-start'),
+      ),
+    ).toBe(true);
     const hideButton = [...secondGroup.querySelectorAll<HTMLButtonElement>('.dca-character-menu button')].find(button =>
       button.textContent?.includes('隐藏角色卡'),
     )!;
@@ -417,7 +422,7 @@ describe('WorkspaceWindow', () => {
     expect(root.querySelector('.dca-header')).toBeNull();
     expect(root.querySelector('.dca-sidebar-brand strong')?.textContent).toBe('梦境创客');
     expect(root.querySelector('.dca-character-group.current .dca-character-copy strong')?.textContent).toBe('测试角色');
-    expect(root.querySelector('.dca-version-tab')?.textContent).toContain('v0.1.0');
+    expect(root.querySelector('.dca-version-tab')?.textContent).toContain('v0.1.1');
     expect(root.querySelector<HTMLImageElement>('.dca-character-avatar img')?.getAttribute('src')).toBe(
       '/thumbnail?type=avatar&file=avatar',
     );
@@ -452,9 +457,18 @@ describe('WorkspaceWindow', () => {
     await nextTick();
 
     const characterToggles = root.querySelectorAll<HTMLButtonElement>('.dca-character-toggle');
+    const secondaryGroup = characterToggles[1].closest<HTMLElement>('.dca-character-group')!;
     characterToggles[1].click();
     await nextTick();
     expect(root.querySelectorAll('.dca-character-sessions')).toHaveLength(2);
+    const secondAllSessionsButton = secondaryGroup.querySelector<HTMLButtonElement>('.dca-all-sessions-button');
+    expect(secondAllSessionsButton?.textContent).toContain('查看全部 1 个会话');
+    secondAllSessionsButton?.click();
+    await nextTick();
+    expect(root.querySelectorAll('.dca-all-list article')).toHaveLength(1);
+    expect(root.querySelector('.dca-all-open')?.classList).toContain('dca-btn-start');
+    (root.querySelector('.dca-all-dialog button[title="关闭"]') as HTMLButtonElement).click();
+    await nextTick();
     characterToggles[0].click();
     await nextTick();
     expect(root.querySelectorAll('.dca-character-sessions')).toHaveLength(1);
@@ -482,7 +496,7 @@ describe('WorkspaceWindow', () => {
     )!;
     updateSection.click();
     await nextTick();
-    expect(root.querySelector('.dca-update-settings')?.textContent).toContain('当前版本 v0.1.0');
+    expect(root.querySelector('.dca-update-settings')?.textContent).toContain('当前版本 v0.1.1');
     expect(root.querySelector('.dca-update-settings')?.textContent).toContain('首次加载后静默检查更新');
     const skillSection = [...root.querySelectorAll<HTMLButtonElement>('.dca-settings-nav button')].find(button =>
       button.textContent?.includes('Skill'),

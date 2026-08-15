@@ -157,6 +157,7 @@
           ></button>
           <div v-if="characterMenuBindingId === group.bindingId" class="dca-character-menu" role="menu" @click.stop>
             <button
+              class="dca-btn-start"
               type="button"
               role="menuitem"
               :disabled="!group.available || state.busy"
@@ -165,6 +166,7 @@
               <i class="fa-solid fa-plus" aria-hidden="true"></i><span>新建会话</span>
             </button>
             <button
+              class="dca-btn-start"
               type="button"
               role="menuitem"
               :disabled="group.current"
@@ -174,7 +176,7 @@
               <i class="fa-regular fa-eye-slash" aria-hidden="true"></i><span>隐藏角色卡</span>
             </button>
             <button
-              class="danger"
+              class="danger dca-btn-start"
               type="button"
               role="menuitem"
               :disabled="
@@ -208,7 +210,7 @@
           </button>
           <div v-if="group.sessions.length === 0" class="dca-sidebar-empty">{{ group.error || '还没有会话' }}</div>
           <button
-            v-if="group.sessions.length > 10"
+            v-if="group.sessions.length > 0"
             class="dca-all-sessions-button"
             type="button"
             @click="allSessionsBindingId = group.bindingId"

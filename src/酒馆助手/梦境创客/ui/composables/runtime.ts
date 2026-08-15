@@ -32,6 +32,7 @@ export type DreamCardAgentContext = {
   createSessionForCharacter: (bindingId: string) => Promise<void>;
   deleteCharacterSession: (bindingId: string, id: string) => Promise<boolean>;
   deleteSession: (id: string) => Promise<boolean>;
+  forkSessionFromMessage: (messageId: string) => Promise<void>;
   isSessionTabRunning: (id: string) => boolean;
   openSessionTab: (id: string) => Promise<void>;
   openCharacterSession: (bindingId: string, id: string) => Promise<void>;
@@ -199,6 +200,18 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
     }
   }
 
+  async function forkSessionFromMessage(messageId: string) {
+    let sessionId = '';
+    const succeeded = await action(async () => {
+      sessionId = (await runtime.forkSession(messageId)).sessionId;
+    });
+    if (!succeeded || !sessionId) return;
+    ensureSessionTab(sessionId);
+    workspaceView.value = 'session';
+    if (isMobile.value) mobileSurface.value = 'workspace';
+    toastr.success('已从该轮输出创建分叉会话。', '梦境创客');
+  }
+
   function isSessionTabRunning(id: string): boolean {
     return ['running', 'waiting-approval'].includes(
       state.value.sessionStatuses[id] ?? '',
@@ -278,6 +291,7 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
     createSessionForCharacter,
     deleteCharacterSession,
     deleteSession,
+    forkSessionFromMessage,
     isSessionTabRunning,
     openSessionTab,
     openCharacterSession,

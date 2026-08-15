@@ -26,6 +26,20 @@ afterEach(() => {
 });
 
 describe('timeline cards', () => {
+  it('短思考使用可贴底的预览内容容器', () => {
+    const root = mount(ReasoningBlock, {
+      item: {
+        at: 1,
+        content: '只有一行的短思考',
+        id: 'reasoning:short',
+        kind: 'reasoning',
+        status: 'running',
+      } satisfies SessionUiItem,
+    });
+
+    expect(root.querySelector('.dca-reasoning-preview-content')?.textContent).toBe('只有一行的短思考');
+  });
+
   it('思考中收起时保留完整文本作为固定视口内容，展开时显示全文', async () => {
     const content = '第一段旧内容\n第二段旧内容\n第三段旧内容\n第四段最新内容';
     const item = reactive<SessionUiItem>({

@@ -1,12 +1,16 @@
 <template>
   <ManualChangeCard v-if="item.kind === 'manual'" :item="item" />
-  <article v-else class="dca-message" :class="`dca-message-${item.kind}`">
+  <article
+    v-else
+    class="dca-message"
+    :class="[`dca-message-${item.kind}`, { 'dca-message-editing': editing }]"
+  >
     <header>
       <span>{{ itemKindLabel(item.kind) }}</span>
       <small>{{ formatTime(item.at) }}</small>
     </header>
     <template v-if="editing">
-      <textarea v-model="editDraft" rows="3"></textarea>
+      <textarea ref="editArea" v-model="editDraft" rows="4" @input="resizeEditArea"></textarea>
       <div class="dca-row-actions dca-message-edit-actions">
         <button type="button" @click="saveEdit">保存</button>
         <button class="dca-btn-ghost" type="button" @click="cancelEdit">取消</button>
@@ -40,11 +44,26 @@
       </button>
       <button type="button" :disabled="!canSend" @click="resend">重新发送</button>
     </footer>
+    <footer v-else-if="item.kind === 'assistant'" class="dca-message-output-actions">
+      <button class="dca-icon-btn" type="button" title="复制输出" aria-label="复制输出" @click="copyOutput">
+        <i class="fa-regular fa-copy" aria-hidden="true"></i>
+      </button>
+      <button
+        class="dca-icon-btn"
+        type="button"
+        title="从此处分叉新会话"
+        aria-label="从此处分叉新会话"
+        :disabled="!canFork"
+        @click="forkSessionFromMessage(item.id)"
+      >
+        <i class="fa-solid fa-code-branch" aria-hidden="true"></i>
+      </button>
+    </footer>
   </article>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import type { SessionUiItem } from '../../../../core/session/types';
 import { formatBytes, formatTime } from '../../../composables/format';
 import { useDreamCardAgent } from '../../../composables/runtime';
@@ -54,10 +73,11 @@ import RenderRichText from './RenderRichText.vue';
 
 const props = defineProps<{ item: SessionUiItem }>();
 
-const { action, runtime, state } = useDreamCardAgent();
+const { action, forkSessionFromMessage, runtime, state } = useDreamCardAgent();
 
 const editing = ref(false);
 const editDraft = ref('');
+const editArea = ref<HTMLTextAreaElement>();
 
 const lastUserMessageId = computed(() => [...(state.value.active?.ui ?? [])].reverse().find(item => item.kind === 'user')?.id);
 const lastVisibleMessageId = computed(() => state.value.active?.ui.at(-1)?.id);
@@ -81,9 +101,27 @@ const canSend = computed(() =>
   ),
 );
 
-function beginEdit() {
+const canFork = computed(() =>
+  Boolean(
+    state.value.activeSessionAccess === 'live' &&
+    state.value.active &&
+    !state.value.busy &&
+    !['running', 'waiting-approval'].includes(state.value.active.status),
+  ),
+);
+
+function resizeEditArea() {
+  if (!editArea.value) return;
+  editArea.value.style.height = 'auto';
+  editArea.value.style.height = `${editArea.value.scrollHeight}px`;
+}
+
+async function beginEdit() {
   editDraft.value = props.item.content;
   editing.value = true;
+  await nextTick();
+  resizeEditArea();
+  editArea.value?.focus();
 }
 
 function cancelEdit() {
@@ -103,6 +141,15 @@ async function undoTo() {
 async function resend() {
   await action(() => runtime.resend(props.item.id));
 }
+
+async function copyOutput() {
+  try {
+    await navigator.clipboard.writeText(props.item.content);
+    toastr.success('已复制本轮输出。', '梦境创客');
+  } catch (error) {
+    toastr.error(`复制失败：${error instanceof Error ? error.message : String(error)}`, '梦境创客');
+  }
+}
 </script>
 
 <style lang="scss">
@@ -119,6 +166,10 @@ async function resend() {
   align-self: flex-end;
   border-color: color-mix(in srgb, var(--dca-accent) 35%, transparent);
   background: var(--dca-user-message-gradient);
+}
+
+.dca-message-editing {
+  width: 88%;
 }
 
 .dca-message-assistant {
@@ -200,6 +251,19 @@ async function resend() {
   padding-top: 0.4rem;
 }
 
+.dca-message-output-actions {
+  display: flex;
+  gap: 0.15rem;
+  margin-top: 0.4rem;
+}
+
+.dca-app .dca-message-output-actions .dca-icon-btn {
+  width: 1.75rem;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  min-height: 1.75rem;
+}
+
 .dca-app .dca-message-actions button {
   min-height: 0;
   padding: 0.24rem 0.45rem;
@@ -211,13 +275,22 @@ async function resend() {
   margin-top: 0.4rem;
 }
 
-.dca-message textarea {
+.dca-message-editing textarea {
+  min-height: calc(6em + 0.86rem + 2px);
+  max-height: 75vh;
+  max-height: 75dvh;
   margin-top: 0.4rem;
+  overflow-y: auto;
+  resize: none;
 }
 
 @media (max-width: 720px) {
   .dca-message {
     max-width: 97%;
+  }
+
+  .dca-message-editing {
+    width: 97%;
   }
 }
 </style>

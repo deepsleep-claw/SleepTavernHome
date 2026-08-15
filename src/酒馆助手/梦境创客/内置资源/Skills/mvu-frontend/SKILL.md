@@ -6,7 +6,9 @@ loading: on-demand
 ---
 # MVU前端界面
 
-先读取 `/skills/builtin/html-project/SKILL.md` 建立工程，再按需读取酒馆助手API参考。
+先读取 `/skills/builtin/mvu-zod-card/SKILL.md` 识别当前MVU版本。制作Zod前端时，再读取 `/skills/builtin/html-project/SKILL.md` 建立工程，并按需读取酒馆助手API参考。
+
+真实环境开始编码前必须确认角色已有启用的MVU运行时脚本和 `registerMvuSchema` 变量结构脚本。缺失时先按MVU角色卡Skill补全核心链；不要把Schema放进普通角色文件，也不要误以为HTML工程编译会安装酒馆助手脚本。
 
 - 用单一挂载根节点渲染，重复执行时先卸载旧实例。
 - 预览环境从 `__DREAM_CREATOR_RENDER_ENV__.data` 读取测试状态；真实环境等待MVU全局初始化。

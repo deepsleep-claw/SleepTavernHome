@@ -15,7 +15,7 @@
         class="dca-reasoning-preview"
         aria-label="最新思考内容"
       >
-        <span>{{ item.content }}</span>
+        <span class="dca-reasoning-preview-content">{{ item.content }}</span>
       </span>
     </summary>
     <pre>{{ item.content }}</pre>
@@ -123,6 +123,13 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
 
 .dca-reasoning-card.running > summary > .dca-reasoning-preview {
   scroll-behavior: smooth;
+}
+
+.dca-reasoning-preview-content {
+  display: flex;
+  min-height: 100%;
+  flex-direction: column;
+  justify-content: flex-end;
 }
 
 .dca-reasoning-card > summary > .dca-reasoning-preview::-webkit-scrollbar {

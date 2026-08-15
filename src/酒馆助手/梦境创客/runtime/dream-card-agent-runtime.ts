@@ -477,6 +477,107 @@ export class DreamCardAgentRuntime {
     return this.requireService().view();
   }
 
+  async forkSession(messageId: string): Promise<SessionView> {
+    let result!: SessionView;
+    await this.run(async () => {
+      if (this.state.activeSessionAccess !== 'live') throw new Error('只读历史会话不能直接分叉，请先打开对应角色卡。');
+      const source = this.requireService();
+      await this.flushDeferredSessionSave(source);
+      await source.finalizeManualEdits();
+      const sourceView = source.view();
+      const sessionId = crypto.randomUUID();
+      const forkRuntime = source.forkRuntime(messageId, sessionId);
+      const scope = sourceView.scope;
+      const mountedWorldbooks = new Set(forkRuntime.mountedWorldbooks);
+      const adapter =
+        scope === 'global'
+          ? new ProductionCardStateAdapter(this.bridge, bridge => readGlobalTavernState(bridge, mountedWorldbooks))
+          : this.customAdapterFactory
+            ? this.adapterFactory()
+            : new ProductionCardStateAdapter(this.bridge, bridge =>
+                readCharacterTavernState(bridge, mountedWorldbooks),
+              );
+      const current = await adapter.read();
+      if (scope === 'character' && current.character.bindingId !== sourceView.bindingId) {
+        throw new Error('当前打开的角色卡与分叉来源不一致。');
+      }
+      const bindingId = scope === 'global' ? GLOBAL_SESSION_BINDING_ID : current.character.bindingId;
+      const characterName = scope === 'global' ? '全局会话' : current.character.name;
+      const persistence = new SessionPersistenceCoordinator({
+        avatarId: scope === 'global' ? undefined : current.character.avatarId,
+        bindingId,
+        characterName,
+        store: new SessionRevisionStore(this.fileClient, this.settingsStore, this.now),
+      });
+      const storedSelection = forkRuntime.modelSelection;
+      const resolvedModel = findSelectedModel(this.settingsStore.load().providers, storedSelection);
+      const storageBindingId = scope === 'global' ? this.currentCharacterWorkspaceBindingId() : bindingId;
+      const service = await CardAgentSessionService.restore(
+        {
+          adapter,
+          attachmentStore: new ExternalSessionAttachmentStore(
+            bindingId,
+            this.workspaceFileStore,
+            this.settingsStore,
+            undefined,
+            scope,
+          ),
+          executor: resolvedModel
+            ? this.executorFactory(resolvedModel.provider, resolvedModel.model)
+            : new UnavailableModelStepExecutor(),
+          contextWindow: resolvedModel ? this.modelContextWindow(resolvedModel.model) : DEFAULT_CONTEXT_WINDOW,
+          lock: this.lock,
+          mountedWorldbooks,
+          onCharacterChanged:
+            scope === 'global'
+              ? async () => {
+                  if (this.bridge.getCurrentCharacterId()) {
+                    await this.ensureStableBinding(new ProductionCardStateAdapter(this.bridge));
+                  }
+                }
+              : undefined,
+          storageBindingId: scope === 'global' ? () => this.currentCharacterWorkspaceBindingId() : undefined,
+          now: this.now,
+          canWriteNonCharacterResources: () => this.canWriteNonCharacterResources(),
+          onPersist: runtime => persistence.persist(runtime),
+          onSkillsCommit: (skills, mountedIds) => this.commitMountedSkills(skills, mountedIds),
+          onUpdate: view => this.updateService(view),
+          operationRecoveryStore: this.operationRecoveryStore,
+          requestToolApproval: request => this.requestToolConfirmation(request),
+          resourceBaseUrl: this.resourceBaseUrl,
+          scope,
+          tavernBridge: this.bridge,
+          tavernChatBridge: this.chatBridge,
+          workspaceFiles: await this.workspaceFileStore.project(storageBindingId, sessionId),
+          workspaceStore: this.workspaceFileStore,
+        },
+        forkRuntime,
+      );
+      service.setMode(this.state.approvalMode);
+      await service.save();
+      this.services.set(sessionId, service);
+      if (storedSelection && resolvedModel) {
+        this.serviceModelSelections.set(sessionId, this.modelSelectionKey(storedSelection));
+      }
+      this.historyViews.delete(sessionId);
+      this.activeService = service;
+      this.state.activeSessionAccess = 'live';
+      if (scope === 'character') {
+        this.state.currentCharacter = {
+          avatarId: current.character.avatarId,
+          bindingId,
+          name: current.character.name,
+        };
+      }
+      result = service.view();
+      this.updateService(result);
+      this.reloadSettingsState();
+      if (scope === 'global') await this.reloadGlobalSessions();
+      else await this.reloadCharacterSessions();
+    });
+    return result;
+  }
+
   async openSession(sessionId: string): Promise<SessionView> {
     if (this.state.globalSessions.some(session => session.sessionId === sessionId)) {
       return this.openGlobalSession(sessionId);

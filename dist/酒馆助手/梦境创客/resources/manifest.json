@@ -49,13 +49,13 @@
       "version": 1
     },
     {
-      "description": "使用Zod定义并维护MVU角色卡的数据结构与更新规则。",
+      "description": "识别并维护MVU Zod或旧版角色卡；新建角色卡默认采用Zod方案。",
       "file": "mvu-zod-card.zip.ds",
       "id": "mvu-zod-card",
       "loading": "on-demand",
-      "name": "MVU Zod角色卡",
-      "sha256": "dac2b10dc83cffa88611a90f7787f700b36ffbb033b523dfa0c5640e1159970a",
-      "size": 1172,
+      "name": "MVU角色卡",
+      "sha256": "d4ff368bc5a2e72c3e3f5055a503670132d109e810c1a5ca8bbbd57326e0225b",
+      "size": 11463,
       "version": 1
     },
     {
@@ -64,8 +64,8 @@
       "id": "mvu-frontend",
       "loading": "on-demand",
       "name": "MVU前端界面",
-      "sha256": "c0b2d522ea4c11ea21e25d63be714932cc0da67ae675a934a7caa038c8c3f3c3",
-      "size": 1268,
+      "sha256": "4555bce578f891a2bd82deb6c55b7610c2ff63988479135da05d6d1e2fe18846",
+      "size": 1474,
       "version": 1
     },
     {

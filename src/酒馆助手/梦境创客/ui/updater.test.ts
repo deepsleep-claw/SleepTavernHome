@@ -43,10 +43,10 @@ describe('梦境创客更新状态桥', () => {
   it('为旧的直接导入方式提供本地调试上下文', async () => {
     const standalone = createStandaloneActivationContext();
 
-    expect(standalone.release.version).toBe('0.1.0');
+    expect(standalone.release.version).toBe('0.1.1');
     expect(standalone.updater.getSnapshot()).toMatchObject({
       status: 'up-to-date',
-      currentVersion: '0.1.0',
+      currentVersion: '0.1.1',
       updateAvailable: false,
     });
     await expect(standalone.updater.check()).resolves.toMatchObject({ status: 'up-to-date' });

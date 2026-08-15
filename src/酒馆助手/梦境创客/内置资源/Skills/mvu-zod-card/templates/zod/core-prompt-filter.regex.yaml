@@ -1,0 +1,21 @@
+# 创建角色正则前，把占位ID替换为当前角色中唯一的稳定ID，并按现有正则顺序调整order。
+id: REPLACE_WITH_UNIQUE_MVU_FILTER_ID
+name: '[不发送]去除变量更新'
+enabled: true
+order: 100
+find_regex: '/<update(?:variable)?>(?:(?!.*<\/update(?:variable)?>).*$|.*<\/update(?:variable)?>)/gsi'
+replace_string: ''
+source:
+  user_input: true
+  ai_output: true
+  slash_command: false
+  world_info: false
+  reasoning: false
+destination:
+  display: false
+  prompt: true
+run_on_edit: false
+min_depth: null
+max_depth: 3
+macro_substitution: none
+trim_strings: []
