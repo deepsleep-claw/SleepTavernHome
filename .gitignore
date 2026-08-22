@@ -1,5 +1,8 @@
 node_modules
+<<<<<<< HEAD
 coverage
+=======
+>>>>>>> c27dc311feeca88f575184c70cd539091ffeaf47
 
 .DS_Store
 Thumbs.db
@@ -12,5 +15,8 @@ pnpm-debug.log*
 
 auto-imports.d.ts
 components.d.ts
+<<<<<<< HEAD
 
 Creator.md
+=======
+>>>>>>> c27dc311feeca88f575184c70cd539091ffeaf47

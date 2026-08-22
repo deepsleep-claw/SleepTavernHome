@@ -19,7 +19,10 @@ import webpack from 'webpack';
 import WebpackObfuscator from 'webpack-obfuscator';
 const require = createRequire(import.meta.url);
 const HTMLInlineCSSWebpackPlugin = require('html-inline-css-webpack-plugin').default;
+<<<<<<< HEAD
 const pinia_version = (require('pinia/package.json') as { version: string }).version;
+=======
+>>>>>>> c27dc311feeca88f575184c70cd539091ffeaf47
 
 interface Config {
   port: number;
@@ -189,7 +192,10 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
     .includes('@obfuscate');
   const script_filepath = path.parse(entry.script);
 
+<<<<<<< HEAD
   const is_dream_card_agent = entry.script.replaceAll('\\', '/').endsWith('/酒馆助手/梦境创客/index.ts');
+=======
+>>>>>>> c27dc311feeca88f575184c70cd539091ffeaf47
   return (_env, argv) => ({
     experiments: {
       outputModule: true,
@@ -469,6 +475,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
           __VUE_PROD_DEVTOOLS__: process.env.CI !== 'true',
           __VUE_PROD_HYDRATION_MISMATCH_DETAILS__: false,
         }),
+<<<<<<< HEAD
         ...(is_dream_card_agent
           ? [
               {
@@ -496,6 +503,8 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
               },
             ]
           : []),
+=======
+>>>>>>> c27dc311feeca88f575184c70cd539091ffeaf47
       )
       .concat(
         should_obfuscate
@@ -588,12 +597,28 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
         return callback(null, 'var ' + global[request as keyof typeof global]);
       }
       const cdn = {
+<<<<<<< HEAD
         pinia: `https://testingcf.jsdelivr.net/npm/pinia@${pinia_version}/+esm`,
         sass: 'https://jspm.dev/sass',
       };
       return callback(
         null,
         'module-import ' + (cdn[request as keyof typeof cdn] ?? `https://testingcf.jsdelivr.net/npm/${request}/+esm`),
+=======
+        sass: 'https://jspm.dev/sass',
+      };
+      const package_json = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, 'package.json'), 'utf-8')) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      const package_versions = { ...package_json.devDependencies, ...package_json.dependencies };
+      const version = package_versions[request]?.replace(/^[~^]/, '');
+      const versioned_request = /^[.\d]+$/.test(version) ? `${request}@${version}` : request;
+      return callback(
+        null,
+        'module-import ' +
+          (cdn[request as keyof typeof cdn] ?? `https://testingcf.jsdelivr.net/npm/${versioned_request}/+esm`),
+>>>>>>> c27dc311feeca88f575184c70cd539091ffeaf47
       );
     },
   });
