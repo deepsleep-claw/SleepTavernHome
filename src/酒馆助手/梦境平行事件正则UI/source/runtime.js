@@ -88,16 +88,20 @@
     const article = document.createElement('article');
     article.className = 'dream-paraller-event-ui__event';
 
-    const heading = document.createElement('div');
-    heading.className = 'dream-paraller-event-ui__event-heading';
-
     const indexNode = document.createElement('span');
     indexNode.className = 'dream-paraller-event-ui__event-index';
     indexNode.textContent = String(index + 1).padStart(2, '0');
 
+    const eventMain = document.createElement('div');
+    eventMain.className = 'dream-paraller-event-ui__event-main';
+
     const location = document.createElement('span');
     location.className = 'dream-paraller-event-ui__location';
-    location.textContent = event.location;
+
+    const locationText = document.createElement('span');
+    locationText.className = 'dream-paraller-event-ui__location-text';
+    locationText.textContent = event.location;
+    location.appendChild(locationText);
 
     const description = document.createElement('p');
     description.className = 'dream-paraller-event-ui__description';
@@ -108,9 +112,29 @@
       description.appendChild(partNode);
     });
 
-    heading.append(indexNode, location);
-    article.append(heading, description);
+    eventMain.append(location, description);
+    article.append(indexNode, eventMain);
     return article;
+  };
+
+  const makeStars = function (container) {
+    const fragment = document.createDocumentFragment();
+    for (let index = 0; index < 56; index += 1) {
+      const star = document.createElement('span');
+      star.className = 'dream-paraller-event-ui__star';
+      star.style.left = ((index * 47 + 7 + (index % 4) * 9) % 98) + '%';
+      star.style.top = ((index * 67 + 5 + (index % 7) * 5) % 96) + '%';
+      star.style.setProperty('--dream-paraller-star-size', 1.5 + (index % 4) * 0.65 + 'px');
+      star.style.setProperty('--dream-paraller-star-dim', 0.1 + (index % 3) * 0.06);
+      star.style.setProperty('--dream-paraller-star-mid', 0.38 + (index % 4) * 0.07);
+      star.style.setProperty('--dream-paraller-star-bright', 0.68 + (index % 4) * 0.07);
+      star.style.setProperty('--dream-paraller-star-speed', 4.6 + (index % 8) * 0.82 + 's');
+      star.style.setProperty('--dream-paraller-star-delay', -(index % 11) * 0.71 + 's');
+      star.style.setProperty('--dream-paraller-drift-speed', 15 + (index % 7) * 2.3 + 's');
+      star.style.setProperty('--dream-paraller-drift-delay', -(index % 9) * 1.4 + 's');
+      fragment.appendChild(star);
+    }
+    container.appendChild(fragment);
   };
 
   syncThemeVariables();
@@ -119,6 +143,7 @@
   const eventList = root.querySelector('.dream-paraller-event-ui__events');
   const summaryMeta = root.querySelector('.dream-paraller-event-ui__meta');
   const empty = root.querySelector('.dream-paraller-event-ui__empty');
+  const stars = root.querySelector('.dream-paraller-event-ui__stars');
   if (!source || !eventList) {
     return;
   }
@@ -133,5 +158,8 @@
   }
   if (empty) {
     empty.hidden = events.length > 0;
+  }
+  if (stars) {
+    makeStars(stars);
   }
 })();

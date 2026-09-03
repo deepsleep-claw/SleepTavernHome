@@ -1,10 +1,14 @@
 .dream-paraller-event-ui {
-  --dream-paraller-accent: var(--SmartThemeQuoteColor, #ba7c4c);
-  --dream-paraller-text: var(--SmartThemeBodyColor, #ded9d2);
-  --dream-paraller-border: var(--SmartThemeBorderColor, rgba(128, 128, 128, 0.36));
-  --dream-paraller-bg: var(--SmartThemeBlurTintColor, rgba(20, 18, 24, 0.72));
-  --dream-paraller-shadow: var(--SmartThemeShadowColor, rgba(0, 0, 0, 0.22));
-
+  --dream-paraller-theme-accent: var(--SmartThemeQuoteColor, #ba7c4c);
+  --dream-paraller-night: #070a1a;
+  --dream-paraller-surface-strong: rgba(18, 25, 54, 0.96);
+  --dream-paraller-text: #f5f1ec;
+  --dream-paraller-muted: #aeb7d7;
+  --dream-paraller-cyan: #72d9f4;
+  --dream-paraller-violet: #aa83ff;
+  --dream-paraller-gold: color-mix(in srgb, var(--dream-paraller-theme-accent) 42%, #f3c678);
+  --dream-paraller-line: rgba(147, 171, 226, 0.24);
+  --dream-paraller-line-strong: rgba(164, 196, 255, 0.48);
   display: block !important;
   max-width: 100%;
   margin: 0.5rem 0 !important;
@@ -18,29 +22,50 @@
 }
 
 .dream-paraller-event-ui__panel {
+  position: relative;
+  isolation: isolate;
   margin: 0 !important;
   padding: 0 !important;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--dream-paraller-border) 78%, transparent);
-  border-radius: 0.7rem;
+  border: 1px solid var(--dream-paraller-line-strong);
+  border-radius: 1rem;
   background:
-    linear-gradient(135deg, color-mix(in srgb, var(--dream-paraller-accent) 10%, transparent), transparent 48%),
-    color-mix(in srgb, var(--dream-paraller-bg) 78%, transparent);
+    linear-gradient(145deg, rgba(19, 25, 57, 0.86), rgba(5, 9, 25, 0.96) 54%, rgba(7, 18, 39, 0.94)),
+    var(--dream-paraller-night);
   box-shadow:
-    0 0.45rem 1.2rem color-mix(in srgb, var(--dream-paraller-shadow) 70%, transparent),
-    inset 0 1px 0 color-mix(in srgb, var(--dream-paraller-accent) 14%, transparent);
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 1rem 2.4rem rgba(1, 4, 16, 0.24);
+}
+
+.dream-paraller-event-ui__panel::after {
+  position: absolute;
+  z-index: -1;
+  inset: -70% -35%;
+  background: linear-gradient(112deg, transparent 42%, rgba(128, 202, 255, 0.07) 49%, rgba(238, 198, 120, 0.1) 50%, transparent 57%);
+  content: '';
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-28%);
+  animation: dream-paraller-sheen 14s ease-in-out infinite;
 }
 
 .dream-paraller-event-ui__summary {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
-  gap: 0.55rem;
+  gap: 0.58rem;
   min-width: 0;
-  padding: 0.68rem 0.82rem !important;
+  padding: 0.52rem 0.72rem !important;
+  background: linear-gradient(90deg, rgba(8, 12, 31, 0.76), rgba(16, 23, 51, 0.5), rgba(7, 12, 29, 0.72));
   color: var(--dream-paraller-text);
   list-style: none;
   cursor: pointer;
   user-select: none;
+}
+
+.dream-paraller-event-ui__panel[open] > .dream-paraller-event-ui__summary {
+  border-bottom: 1px solid var(--dream-paraller-line);
 }
 
 .dream-paraller-event-ui__summary::-webkit-details-marker {
@@ -48,71 +73,137 @@
 }
 
 .dream-paraller-event-ui__summary:hover {
-  background: color-mix(in srgb, var(--dream-paraller-accent) 8%, transparent);
+  background: linear-gradient(90deg, rgba(14, 20, 47, 0.9), rgba(22, 30, 63, 0.64), rgba(10, 17, 39, 0.82));
 }
 
 .dream-paraller-event-ui__summary:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--dream-paraller-accent) 78%, transparent);
+  outline: 2px solid var(--dream-paraller-cyan);
   outline-offset: -2px;
 }
 
-.dream-paraller-event-ui__mark {
+.dream-paraller-event-ui__system {
   position: relative;
-  width: 1.1rem;
-  height: 1.1rem;
+  width: 2.1rem;
+  aspect-ratio: 1;
   flex: 0 0 auto;
-  border: 1px solid color-mix(in srgb, var(--dream-paraller-accent) 78%, transparent);
   border-radius: 50%;
-  background: color-mix(in srgb, var(--dream-paraller-accent) 13%, transparent);
+  background: radial-gradient(circle, rgba(114, 217, 244, 0.08), transparent 68%);
+  box-shadow: inset 0 0 0.9rem rgba(114, 217, 244, 0.08);
 }
 
-.dream-paraller-event-ui__mark::before,
-.dream-paraller-event-ui__mark::after {
-  content: '';
+.dream-paraller-event-ui__system-core,
+.dream-paraller-event-ui__planet-orbit,
+.dream-paraller-event-ui__planet-orbit i {
   position: absolute;
   top: 50%;
-  width: 0.38rem;
-  border-top: 1px solid var(--dream-paraller-accent);
+  left: 50%;
+  border-radius: 50%;
 }
 
-.dream-paraller-event-ui__mark::before {
-  left: -0.28rem;
-  transform: rotate(-34deg);
+.dream-paraller-event-ui__system-core {
+  width: 0.4rem;
+  height: 0.4rem;
+  background: var(--dream-paraller-text);
+  box-shadow: 0 0 0.35rem rgba(255, 255, 255, 0.92), 0 0 0.78rem rgba(114, 217, 244, 0.72);
+  transform: translate(-50%, -50%);
+  animation: dream-paraller-core-breathe 3.8s ease-in-out infinite;
 }
 
-.dream-paraller-event-ui__mark::after {
-  right: -0.28rem;
-  transform: rotate(34deg);
+.dream-paraller-event-ui__planet-orbit {
+  width: var(--dream-paraller-orbit-size);
+  height: var(--dream-paraller-orbit-size);
+  border: 1px solid var(--dream-paraller-line);
+  transform: translate(-50%, -50%) rotate(var(--dream-paraller-orbit-start));
+  animation: dream-paraller-planet-orbit var(--dream-paraller-orbit-speed) linear infinite;
+  will-change: transform;
+}
+
+.dream-paraller-event-ui__planet-orbit i {
+  top: -1px;
+  width: var(--dream-paraller-planet-size);
+  height: var(--dream-paraller-planet-size);
+  background: var(--dream-paraller-planet-color);
+  box-shadow: 0 0 0.46rem var(--dream-paraller-planet-glow);
+  transform: translate(-50%, -50%);
+}
+
+.dream-paraller-event-ui__planet-orbit--one {
+  --dream-paraller-orbit-size: 0.92rem;
+  --dream-paraller-orbit-speed: 4.8s;
+  --dream-paraller-orbit-start: 38deg;
+  --dream-paraller-planet-size: 0.2rem;
+  --dream-paraller-planet-color: var(--dream-paraller-gold);
+  --dream-paraller-planet-glow: rgba(243, 198, 120, 0.76);
+}
+
+.dream-paraller-event-ui__planet-orbit--two {
+  --dream-paraller-orbit-size: 1.38rem;
+  --dream-paraller-orbit-speed: 8.4s;
+  --dream-paraller-orbit-start: 164deg;
+  --dream-paraller-planet-size: 0.24rem;
+  --dream-paraller-planet-color: var(--dream-paraller-cyan);
+  --dream-paraller-planet-glow: rgba(114, 217, 244, 0.78);
+  animation-direction: reverse;
+}
+
+.dream-paraller-event-ui__planet-orbit--three {
+  --dream-paraller-orbit-size: 1.9rem;
+  --dream-paraller-orbit-speed: 13.6s;
+  --dream-paraller-orbit-start: 286deg;
+  --dream-paraller-planet-size: 0.18rem;
+  --dream-paraller-planet-color: #c7b1ff;
+  --dream-paraller-planet-glow: rgba(170, 131, 255, 0.78);
+}
+
+.dream-paraller-event-ui__heading {
+  display: block;
+  min-width: 0;
+}
+
+.dream-paraller-event-ui__title,
+.dream-paraller-event-ui__subtitle {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dream-paraller-event-ui__title {
-  min-width: 0;
-  overflow: hidden;
+  color: var(--dream-paraller-text);
+  font-size: 0.98em;
   font-weight: 750;
-  letter-spacing: 0.08em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  letter-spacing: 0.04em;
+  line-height: 1.18 !important;
+}
+
+.dream-paraller-event-ui__subtitle {
+  margin-top: 0.12rem;
+  color: var(--dream-paraller-muted);
+  font-size: 0.7em;
+  font-weight: 400;
+  line-height: 1.2 !important;
 }
 
 .dream-paraller-event-ui__meta {
   flex: 0 0 auto;
   margin-left: auto;
-  padding: 0.08rem 0.45rem !important;
-  border: 1px solid color-mix(in srgb, var(--dream-paraller-accent) 42%, transparent);
+  padding: 0.1rem 0.42rem !important;
+  border: 1px solid var(--dream-paraller-line);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--dream-paraller-accent) 11%, transparent);
-  color: color-mix(in srgb, var(--dream-paraller-text) 86%, var(--dream-paraller-accent));
-  font-size: 0.78em;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--dream-paraller-muted);
+  font-size: 0.76em;
+  font-variant-numeric: tabular-nums;
   font-weight: 650;
-  line-height: 1.45 !important;
+  line-height: 1.4 !important;
 }
 
 .dream-paraller-event-ui__chevron {
-  width: 0.5rem;
-  height: 0.5rem;
+  width: 0.46rem;
+  height: 0.46rem;
   flex: 0 0 auto;
-  border-right: 2px solid var(--dream-paraller-accent);
-  border-bottom: 2px solid var(--dream-paraller-accent);
+  border-right: 2px solid var(--dream-paraller-cyan);
+  border-bottom: 2px solid var(--dream-paraller-cyan);
   transform: rotate(45deg) translate(-0.08rem, -0.08rem);
   transition: transform 0.18s ease;
 }
@@ -121,59 +212,223 @@
   transform: rotate(225deg) translate(-0.08rem, -0.08rem);
 }
 
+.dream-paraller-event-ui__ambient {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.dream-paraller-event-ui__nebula {
+  position: absolute;
+  width: 44%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  opacity: 0.2;
+  filter: blur(3.4rem);
+  will-change: transform;
+}
+
+.dream-paraller-event-ui__nebula--violet {
+  top: -18%;
+  left: -14%;
+  background: radial-gradient(circle, var(--dream-paraller-violet), transparent 68%);
+  animation: dream-paraller-nebula-violet 18s ease-in-out infinite alternate;
+}
+
+.dream-paraller-event-ui__nebula--cyan {
+  right: -16%;
+  bottom: -24%;
+  background: radial-gradient(circle, var(--dream-paraller-cyan), transparent 70%);
+  animation: dream-paraller-nebula-cyan 22s ease-in-out infinite alternate;
+}
+
+.dream-paraller-event-ui__stars {
+  position: absolute;
+  inset: 0;
+}
+
+.dream-paraller-event-ui__star {
+  --dream-paraller-star-color: var(--dream-paraller-text);
+  --dream-paraller-star-glow: rgba(180, 223, 255, 0.72);
+  position: absolute;
+  width: var(--dream-paraller-star-size);
+  height: var(--dream-paraller-star-size);
+  border-radius: 50%;
+  background: var(--dream-paraller-star-color);
+  box-shadow: 0 0 calc(var(--dream-paraller-star-size) * 3.5) var(--dream-paraller-star-glow);
+  opacity: var(--dream-paraller-star-dim);
+  transform: translate3d(0, 0, 0) scale(0.72);
+  animation:
+    dream-paraller-twinkle var(--dream-paraller-star-speed) ease-in-out var(--dream-paraller-star-delay) infinite,
+    dream-paraller-star-drift var(--dream-paraller-drift-speed) ease-in-out var(--dream-paraller-drift-delay) infinite alternate;
+  will-change: opacity, transform;
+}
+
+.dream-paraller-event-ui__star:nth-child(5n + 1) {
+  --dream-paraller-star-color: var(--dream-paraller-cyan);
+  --dream-paraller-star-glow: rgba(114, 217, 244, 0.82);
+}
+
+.dream-paraller-event-ui__star:nth-child(7n + 2) {
+  --dream-paraller-star-color: var(--dream-paraller-gold);
+  --dream-paraller-star-glow: rgba(243, 198, 120, 0.76);
+}
+
+.dream-paraller-event-ui__star:nth-child(11n + 3) {
+  --dream-paraller-star-color: #c7b1ff;
+  --dream-paraller-star-glow: rgba(170, 131, 255, 0.82);
+}
+
+.dream-paraller-event-ui__star:nth-child(13n + 4)::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: calc(var(--dream-paraller-star-size) * 6);
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--dream-paraller-star-color), transparent);
+  content: '';
+  opacity: 0.48;
+  transform: translate(-50%, -50%);
+}
+
+.dream-paraller-event-ui__meteor {
+  position: absolute;
+  top: var(--dream-paraller-meteor-top);
+  left: -18%;
+  width: 6rem;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(218, 238, 255, 0.78));
+  filter: drop-shadow(0 0 0.3rem rgba(114, 217, 244, 0.65));
+  opacity: 0;
+  transform: rotate(-18deg) translate3d(0, 0, 0);
+  animation: dream-paraller-meteor-flight 13s cubic-bezier(0.34, 0.02, 0.28, 0.98) var(--dream-paraller-meteor-delay) infinite;
+  will-change: opacity, transform;
+}
+
+.dream-paraller-event-ui__meteor--one {
+  --dream-paraller-meteor-top: 19%;
+  --dream-paraller-meteor-delay: -2.8s;
+}
+
+.dream-paraller-event-ui__meteor--two {
+  --dream-paraller-meteor-top: 62%;
+  --dream-paraller-meteor-delay: -9.4s;
+  width: 4.25rem;
+  animation-duration: 17s;
+}
+
 .dream-paraller-event-ui__content {
-  padding: 0 0.82rem 0.78rem !important;
+  position: relative;
+  z-index: 1;
+  padding: 0.34rem 0.78rem 0.58rem !important;
 }
 
 .dream-paraller-event-ui__events {
-  border-top: 1px solid color-mix(in srgb, var(--dream-paraller-border) 54%, transparent);
+  position: relative;
+  display: grid;
+  min-width: 0;
+}
+
+.dream-paraller-event-ui__events::before {
+  position: absolute;
+  top: 1.1rem;
+  bottom: 1.25rem;
+  left: 1.66rem;
+  width: 2px;
+  background-image:
+    repeating-linear-gradient(180deg, transparent 0 10%, var(--dream-paraller-cyan) 18%, var(--dream-paraller-violet) 48%, var(--dream-paraller-gold) 76%, transparent 90% 100%),
+    linear-gradient(180deg, transparent, var(--dream-paraller-line-strong) 5% 95%, transparent);
+  background-position: 0 0, 0 0;
+  background-size: 100% 6.25rem, 100% 100%;
+  content: '';
+  opacity: 0.68;
+  animation: dream-paraller-rail-flow 9s linear infinite;
 }
 
 .dream-paraller-event-ui__event {
+  position: relative;
+  display: grid;
+  grid-template-columns: 3.35rem minmax(0, 1fr);
+  gap: 0.82rem;
   min-width: 0;
-  padding: 0.78rem 0.12rem !important;
+  padding: 0.72rem 0 !important;
 }
 
 .dream-paraller-event-ui__event + .dream-paraller-event-ui__event {
-  border-top: 1px dashed color-mix(in srgb, var(--dream-paraller-accent) 38%, var(--dream-paraller-border));
-}
-
-.dream-paraller-event-ui__event-heading {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-width: 0;
-  margin-bottom: 0.42rem !important;
+  border-top: 1px solid var(--dream-paraller-line);
 }
 
 .dream-paraller-event-ui__event-index {
-  flex: 0 0 auto;
-  color: color-mix(in srgb, var(--dream-paraller-accent) 86%, var(--dream-paraller-text));
-  font-size: 0.72em;
+  position: relative;
+  z-index: 1;
+  display: grid;
+  align-self: start;
+  width: 3.35rem;
+  aspect-ratio: 1;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--dream-paraller-gold) 62%, transparent);
+  border-radius: 50%;
+  background: radial-gradient(circle at 50% 45%, rgba(243, 198, 120, 0.18), transparent 62%), var(--dream-paraller-surface-strong);
+  box-shadow: 0 0 0 0.32rem rgba(114, 217, 244, 0.04), 0 0 1.2rem rgba(170, 131, 255, 0.12);
+  color: var(--dream-paraller-gold);
+  font-size: 0.8em;
   font-variant-numeric: tabular-nums;
-  font-weight: 800;
-  letter-spacing: 0.05em;
+  font-weight: 750;
+}
+
+.dream-paraller-event-ui__event-index::after {
+  position: absolute;
+  right: -0.42rem;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+  background: var(--dream-paraller-cyan);
+  box-shadow: 0 0 0.5rem rgba(114, 217, 244, 0.72);
+  content: '';
+}
+
+.dream-paraller-event-ui__event-main {
+  min-width: 0;
 }
 
 .dream-paraller-event-ui__location {
   display: inline-flex;
   align-items: center;
-  min-width: 0;
-  padding: 0.15rem 0.52rem !important;
-  border-left: 2px solid var(--dream-paraller-accent);
-  background: color-mix(in srgb, var(--dream-paraller-accent) 10%, transparent);
-  color: color-mix(in srgb, var(--dream-paraller-text) 90%, var(--dream-paraller-accent));
+  max-width: 100%;
+  gap: 0.48rem;
+  padding: 0.26rem 0.68rem !important;
+  border: 1px solid var(--dream-paraller-line);
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(114, 217, 244, 0.08), rgba(170, 131, 255, 0.07));
+  color: #d9e7ff;
   font-size: 0.86em;
   font-weight: 700;
   line-height: 1.4 !important;
-  overflow-wrap: anywhere;
+}
+
+.dream-paraller-event-ui__location::before {
+  width: 0.38rem;
+  height: 0.38rem;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--dream-paraller-gold);
+  box-shadow: 0 0 0.46rem rgba(243, 198, 120, 0.68);
+  content: '';
+}
+
+.dream-paraller-event-ui__location-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .dream-paraller-event-ui__description {
-  margin: 0 !important;
-  color: color-mix(in srgb, var(--dream-paraller-text) 91%, transparent);
-  font-size: 0.94em;
-  line-height: 1.64 !important;
+  margin: 0.54rem 0 0 !important;
+  color: var(--dream-paraller-text);
+  font-size: 0.92em;
+  line-height: 1.62 !important;
 }
 
 .dream-paraller-event-ui__description-part {
@@ -182,34 +437,150 @@
 }
 
 .dream-paraller-event-ui__description-part + .dream-paraller-event-ui__description-part {
-  margin-top: 0.32rem;
+  margin-top: 0.28rem;
 }
 
 .dream-paraller-event-ui__empty {
   margin: 0 !important;
-  padding: 0.78rem 0.12rem 0 !important;
-  border-top: 1px solid color-mix(in srgb, var(--dream-paraller-border) 54%, transparent);
-  color: color-mix(in srgb, var(--dream-paraller-text) 62%, transparent);
+  padding: 0.78rem 0.12rem !important;
+  color: var(--dream-paraller-muted);
   font-size: 0.88em;
   text-align: center;
 }
 
+@keyframes dream-paraller-twinkle {
+  0%, 100% { opacity: var(--dream-paraller-star-dim); }
+  38% { opacity: var(--dream-paraller-star-mid); }
+  67% { opacity: var(--dream-paraller-star-bright); }
+  82% { opacity: var(--dream-paraller-star-mid); }
+}
+
+@keyframes dream-paraller-star-drift {
+  from { transform: translate3d(-2px, 1px, 0) scale(0.72); }
+  to { transform: translate3d(3px, -3px, 0) scale(1.12); }
+}
+
+@keyframes dream-paraller-core-breathe {
+  0%, 100% { opacity: 0.72; transform: translate(-50%, -50%) scale(0.86); }
+  50% { opacity: 1; transform: translate(-50%, -50%) scale(1.16); }
+}
+
+@keyframes dream-paraller-planet-orbit {
+  from { transform: translate(-50%, -50%) rotate(var(--dream-paraller-orbit-start)); }
+  to { transform: translate(-50%, -50%) rotate(calc(var(--dream-paraller-orbit-start) + 360deg)); }
+}
+
+@keyframes dream-paraller-nebula-violet {
+  to { transform: translate(12%, 8%) scale(1.08); }
+}
+
+@keyframes dream-paraller-nebula-cyan {
+  to { transform: translate(-10%, -6%) scale(1.1); }
+}
+
+@keyframes dream-paraller-rail-flow {
+  to { background-position: 0 6.25rem, 0 0; }
+}
+
+@keyframes dream-paraller-meteor-flight {
+  0%, 71% { opacity: 0; transform: rotate(-18deg) translate3d(0, 0, 0); }
+  74% { opacity: 0.78; }
+  86% { opacity: 0.66; }
+  90%, 100% { opacity: 0; transform: rotate(-18deg) translate3d(150vw, 0, 0); }
+}
+
+@keyframes dream-paraller-sheen {
+  0%, 35% { opacity: 0; transform: translateX(-28%); }
+  50% { opacity: 1; }
+  70%, 100% { opacity: 0; transform: translateX(28%); }
+}
+
 @media (max-width: 700px) {
-  .dream-paraller-event-ui__summary {
-    padding: 0.62rem 0.68rem !important;
+  .dream-paraller-event-ui__panel { border-radius: 0.82rem; }
+
+  .dream-paraller-event-ui__panel::after,
+  .dream-paraller-event-ui__meteor,
+  .dream-paraller-event-ui__nebula { animation: none; }
+
+  .dream-paraller-event-ui__panel::after,
+  .dream-paraller-event-ui__meteor { display: none; }
+
+  .dream-paraller-event-ui__nebula {
+    opacity: 0.11;
+    filter: blur(2.4rem);
+    will-change: auto;
   }
 
-  .dream-paraller-event-ui__content {
-    padding: 0 0.68rem 0.66rem !important;
+  .dream-paraller-event-ui__star:nth-child(n + 17) { display: none; }
+
+  .dream-paraller-event-ui__star {
+    animation-name: dream-paraller-twinkle;
+    animation-duration: calc(var(--dream-paraller-star-speed) * 1.8);
+    will-change: opacity;
+  }
+
+  .dream-paraller-event-ui__summary {
+    gap: 0.46rem;
+    padding: 0.44rem 0.58rem !important;
+  }
+
+  .dream-paraller-event-ui__system { width: 1.8rem; }
+
+  .dream-paraller-event-ui__planet-orbit--one {
+    --dream-paraller-orbit-size: 0.78rem;
+    --dream-paraller-orbit-speed: 8.8s;
+  }
+
+  .dream-paraller-event-ui__planet-orbit--two {
+    --dream-paraller-orbit-size: 1.17rem;
+    --dream-paraller-orbit-speed: 14s;
+  }
+
+  .dream-paraller-event-ui__planet-orbit--three {
+    --dream-paraller-orbit-size: 1.58rem;
+    --dream-paraller-orbit-speed: 21s;
+  }
+
+  .dream-paraller-event-ui__subtitle { font-size: 0.66em; }
+  .dream-paraller-event-ui__meta { padding: 0.08rem 0.36rem !important; }
+  .dream-paraller-event-ui__content { padding: 0.22rem 0.58rem 0.46rem !important; }
+
+  .dream-paraller-event-ui__events::before {
+    top: 0.92rem;
+    bottom: 1rem;
+    left: 1.25rem;
+    animation-duration: 15s;
   }
 
   .dream-paraller-event-ui__event {
-    padding: 0.68rem 0.06rem !important;
+    grid-template-columns: 2.5rem minmax(0, 1fr);
+    gap: 0.64rem;
+    padding: 0.62rem 0 !important;
   }
+
+  .dream-paraller-event-ui__event-index {
+    width: 2.5rem;
+    box-shadow: 0 0 0 0.22rem rgba(114, 217, 244, 0.04);
+  }
+
+  .dream-paraller-event-ui__event-index::after {
+    right: -0.3rem;
+    width: 0.32rem;
+    height: 0.32rem;
+    box-shadow: none;
+  }
+
+  .dream-paraller-event-ui__location { padding: 0.22rem 0.5rem !important; }
+  .dream-paraller-event-ui__description { margin-top: 0.42rem !important; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dream-paraller-event-ui__chevron {
-    transition: none;
+  .dream-paraller-event-ui *,
+  .dream-paraller-event-ui *::before,
+  .dream-paraller-event-ui *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

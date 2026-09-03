@@ -8,6 +8,7 @@
     "build:regex:dream-discuss": "pnpm build:regex:dream-big-discuss",
     "build:regex:dream-paraller-event": "node util/build_tavern_regexes.mjs src/酒馆助手/梦境平行事件正则UI",
     "build:regex:dream-option": "node util/build_tavern_regexes.mjs src/酒馆助手/梦境选项框正则UI",
+    "build:regex:dream-self-repair": "node util/build_tavern_regexes.mjs src/酒馆助手/梦境自修复正则UI src/酒馆助手/梦境自修复隐藏正则",
     "watch": "webpack --mode development --watch --progress",
     "typecheck:modern": "tsc --project tsconfig.modern-layout.json --noEmit --pretty false",
     "lint:modern": "eslint \"src/酒馆助手/现代化界面/**/*.{ts,vue}\" --max-warnings 0",

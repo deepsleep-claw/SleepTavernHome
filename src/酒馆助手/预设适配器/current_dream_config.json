@@ -42,6 +42,19 @@
           ]
         },
         {
+          "id": "Deepseek官方Need思维链",
+          "label": "Deepseek官方Need思维链",
+          "enable": [
+            "Deepseek官方",
+            "DeepSeek禁词",
+            "V4Pro神秘小指令",
+            "DeepseekV4pro思维链"
+          ],
+          "disable": [
+            "默认思维链"
+          ]
+        },
+        {
           "id": "Deepseek非官方",
           "label": "Deepseek非官方",
           "enable": [
@@ -65,6 +78,19 @@
             "☆Gemini预填充",
             "Glm/Gemini禁词"
           ]
+        },
+        {
+          "id": "Gemini无预填充",
+          "label": "Gemini无预填充",
+          "enable": [
+            "硅基流动或其他",
+            "schema初始化-thinking",
+            "Glm/Gemini禁词"
+          ],
+          "disable": [
+            "schema初始化"
+          ],
+          "description": "适用于Gemini3.7flash。"
         },
         {
           "id": "混元3",
@@ -108,10 +134,13 @@
         "硅基流动或其他",
         "schema初始化-thinking",
         "DeepSeek禁词",
-        "Glm/Gemini禁词"
+        "Glm/Gemini禁词",
+        "V4Pro神秘小指令",
+        "DeepseekV4pro思维链"
       ],
       "enable_group": [
-        "schema初始化"
+        "schema初始化",
+        "默认思维链"
       ]
     },
     {
@@ -305,7 +334,7 @@
           "type": "between",
           "match": {
             "below": "/(.*)===角色分析(.*)===/",
-            "above": "/(.*)===固定设定(.*)===/"
+            "above": "/(.*)===思维链(.*)===/"
           },
           "enable": [
             "{match}"

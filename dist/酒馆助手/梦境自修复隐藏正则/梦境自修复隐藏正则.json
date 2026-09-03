@@ -1,0 +1,17 @@
+{
+  "id": "2c35dd5f-0b1b-4acd-be41-33b8f41124e6",
+  "scriptName": "[🦋隐藏]梦境自修复",
+  "findRegex": "/<dream_self_check\\b[^>]*>\\s*([\\s\\S]*?)\\s*<\\/dream_self_check>/gi",
+  "replaceString": "",
+  "trimStrings": [],
+  "placement": [
+    2
+  ],
+  "disabled": false,
+  "markdownOnly": false,
+  "promptOnly": true,
+  "runOnEdit": true,
+  "substituteRegex": 0,
+  "minDepth": null,
+  "maxDepth": null
+}

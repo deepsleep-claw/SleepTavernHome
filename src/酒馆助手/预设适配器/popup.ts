@@ -3,6 +3,12 @@ import { createPinia } from 'pinia';
 import { createApp } from 'vue';
 import Popup from './Popup.vue';
 import { SCRIPT_NAME, usePresetAdapterStore } from './store';
+import {
+  DEFAULT_PRESET_ADAPTER_THEME,
+  isPresetAdapterThemeId,
+  PRESET_ADAPTER_THEMES,
+  type PresetAdapterThemeId,
+} from './theme';
 
 type Frame = {
   height: number;
@@ -93,10 +99,10 @@ function getDefaultFrame(): Frame {
     viewport.height - viewport.insets.top - viewport.insets.bottom - VIEWPORT_MARGIN * 2,
   );
   const is_mobile = viewport.width <= 720;
-  const width = is_mobile ? available_width : Math.min(760, Math.max(430, Math.round(available_width * 0.42)));
+  const width = is_mobile ? available_width : Math.min(1180, Math.max(980, Math.round(available_width * 0.82)));
   const height = is_mobile
     ? Math.min(620, available_height)
-    : Math.min(available_height, Math.max(420, Math.round(available_height * 0.72)));
+    : Math.min(available_height, Math.max(620, Math.round(available_height * 0.84)));
 
   return clampFrame({
     height,
@@ -137,6 +143,7 @@ export function openPresetAdapterPopup(): Promise<void> {
   const host_document = host_window.document;
   const $window = $('<section>')
     .attr({
+      'data-preset-adapter-theme': DEFAULT_PRESET_ADAPTER_THEME,
       'data-tt-mobile-surface': 'free-window',
       role: 'dialog',
       script_id: getScriptId(),
@@ -149,6 +156,18 @@ export function openPresetAdapterPopup(): Promise<void> {
     .append($('<i>').addClass('fa-solid fa-sliders').attr('aria-hidden', 'true'))
     .append($('<span>').text(SCRIPT_NAME))
     .appendTo($titlebar);
+  const $title_actions = $('<div>').addClass('preset-adapter-floating-title-actions').appendTo($titlebar);
+  const $theme_button = $('<button>')
+    .attr({
+      'aria-controls': 'preset-adapter-theme-picker',
+      'aria-expanded': 'false',
+      'aria-label': '切换主题',
+      title: '切换主题',
+      type: 'button',
+    })
+    .addClass('menu_button preset-adapter-floating-theme')
+    .append($('<i>').addClass('fa-solid fa-palette').attr('aria-hidden', 'true'))
+    .appendTo($title_actions);
   const $close = $('<button>')
     .attr({
       'aria-label': '关闭',
@@ -157,7 +176,49 @@ export function openPresetAdapterPopup(): Promise<void> {
     })
     .addClass('menu_button preset-adapter-floating-close')
     .append($('<i>').addClass('fa-solid fa-xmark').attr('aria-hidden', 'true'))
-    .appendTo($titlebar);
+    .appendTo($title_actions);
+  const $theme_picker = $('<section>')
+    .attr({
+      'aria-label': '切换主题',
+      hidden: '',
+      id: 'preset-adapter-theme-picker',
+      role: 'dialog',
+    })
+    .addClass('preset-adapter-theme-picker')
+    .appendTo($window);
+  const $theme_picker_header = $('<header>').appendTo($theme_picker);
+  $('<div>')
+    .append($('<strong>').text('选择主题'))
+    .append($('<small>').text('三套深色 · 三套浅色'))
+    .appendTo($theme_picker_header);
+  const $theme_picker_close = $('<button>')
+    .attr({ 'aria-label': '关闭主题选择', title: '关闭', type: 'button' })
+    .append($('<i>').addClass('fa-solid fa-xmark').attr('aria-hidden', 'true'))
+    .appendTo($theme_picker_header);
+  const $theme_grid = $('<div>').addClass('preset-adapter-theme-grid').appendTo($theme_picker);
+  PRESET_ADAPTER_THEMES.forEach(theme => {
+    const $option = $('<button>')
+      .attr({
+        'aria-label': `${theme.label}：${theme.description}`,
+        'aria-pressed': 'false',
+        'data-preset-adapter-theme-option': theme.id,
+        type: 'button',
+      })
+      .addClass('preset-adapter-theme-option')
+      .appendTo($theme_grid);
+    $('<span>')
+      .addClass('preset-adapter-theme-option-icon')
+      .append($('<i>').addClass(`fa-solid ${theme.icon}`).attr('aria-hidden', 'true'))
+      .appendTo($option);
+    $('<span>')
+      .addClass('preset-adapter-theme-option-copy')
+      .append($('<strong>').text(theme.label))
+      .append($('<small>').text(theme.description))
+      .appendTo($option);
+    const $swatches = $('<span>').addClass('preset-adapter-theme-option-swatches').attr('aria-hidden', 'true');
+    theme.swatches.forEach(color => $('<i>').css('background-color', color).appendTo($swatches));
+    $swatches.appendTo($option);
+  });
   const $body = $('<div>').addClass('preset-adapter-floating-body').appendTo($window);
   const $resize = $('<div>').attr({ title: '调整大小' }).addClass('preset-adapter-floating-resize').appendTo($window);
 
@@ -167,7 +228,52 @@ export function openPresetAdapterPopup(): Promise<void> {
 
   const style = teleportStyle();
   const store = usePresetAdapterStore(pinia);
-  store.refresh();
+  const getActiveTheme = (): PresetAdapterThemeId => {
+    const theme = store.ui_preferences.theme;
+    return isPresetAdapterThemeId(theme) ? theme : DEFAULT_PRESET_ADAPTER_THEME;
+  };
+  const applyTheme = (theme: PresetAdapterThemeId) => {
+    const definition = PRESET_ADAPTER_THEMES.find(candidate => candidate.id === theme);
+    $window.attr('data-preset-adapter-theme', theme);
+    $theme_button.attr('title', `切换主题（当前：${definition?.label ?? '夜金'}）`);
+    $theme_grid.find<HTMLElement>('[data-preset-adapter-theme-option]').each((_, option) => {
+      const selected = option.dataset.presetAdapterThemeOption === theme;
+      option.setAttribute('aria-pressed', String(selected));
+    });
+  };
+  const closeThemePicker = () => {
+    $theme_picker.prop('hidden', true);
+    $theme_button.attr('aria-expanded', 'false');
+  };
+  const openThemePicker = () => {
+    $theme_picker.prop('hidden', false);
+    $theme_button.attr('aria-expanded', 'true');
+    $theme_grid
+      .find<HTMLElement>(`[data-preset-adapter-theme-option="${getActiveTheme()}"]`)
+      .trigger('focus');
+  };
+  const refresh = () => {
+    store.refresh();
+    applyTheme(getActiveTheme());
+  };
+  const onDocumentPointerDown = (event: PointerEvent) => {
+    const target = event.target;
+    if (
+      !$theme_picker.prop('hidden') &&
+      target &&
+      !$theme_picker[0].contains(target as Node) &&
+      !$theme_button[0].contains(target as Node)
+    ) {
+      closeThemePicker();
+    }
+  };
+  const onDocumentKeyDown = (event: KeyboardEvent) => {
+    if (event.key === 'Escape' && !$theme_picker.prop('hidden')) {
+      closeThemePicker();
+      $theme_button.trigger('focus');
+    }
+  };
+  refresh();
   applyFrame($window, getDefaultFrame());
 
   let removePointerListeners = () => {};
@@ -179,6 +285,8 @@ export function openPresetAdapterPopup(): Promise<void> {
     }
     destroyed = true;
     removePointerListeners();
+    host_document.removeEventListener('pointerdown', onDocumentPointerDown);
+    host_document.removeEventListener('keydown', onDocumentKeyDown);
     app.unmount();
     $window.remove();
     style.destroy();
@@ -190,16 +298,22 @@ export function openPresetAdapterPopup(): Promise<void> {
   const resetPosition = () => applyFrame($window, getDefaultFrame());
 
   const startPointerTracking = (event: PointerEvent, resize: boolean) => {
-    if (event.button !== 0) {
+    if (!event.isPrimary || event.button !== 0) {
       return;
     }
 
     event.preventDefault();
+    const pointer_id = event.pointerId;
+    const pointer_target = resize ? $resize[0] : $titlebar[0];
     const start_frame = getFrame($window);
     const start_x = event.clientX;
     const start_y = event.clientY;
 
     const onPointerMove = (move_event: PointerEvent) => {
+      if (move_event.pointerId !== pointer_id) {
+        return;
+      }
+      move_event.preventDefault();
       const delta_x = move_event.clientX - start_x;
       const delta_y = move_event.clientY - start_y;
       if (resize) {
@@ -218,22 +332,55 @@ export function openPresetAdapterPopup(): Promise<void> {
       });
     };
 
-    const stopPointerTracking = () => {
+    const cleanupPointerTracking = () => {
       host_document.removeEventListener('pointermove', onPointerMove);
       host_document.removeEventListener('pointerup', stopPointerTracking);
       host_document.removeEventListener('pointercancel', stopPointerTracking);
+      if (pointer_target.hasPointerCapture(pointer_id)) {
+        pointer_target.releasePointerCapture(pointer_id);
+      }
       removePointerListeners = () => {};
     };
 
+    const stopPointerTracking = (end_event: PointerEvent) => {
+      if (end_event.pointerId === pointer_id) {
+        cleanupPointerTracking();
+      }
+    };
+
     removePointerListeners();
-    removePointerListeners = stopPointerTracking;
+    removePointerListeners = cleanupPointerTracking;
     host_document.addEventListener('pointermove', onPointerMove);
     host_document.addEventListener('pointerup', stopPointerTracking);
     host_document.addEventListener('pointercancel', stopPointerTracking);
+    pointer_target.setPointerCapture(pointer_id);
   };
 
   $titlebar.on('pointerdown', event => startPointerTracking(event.originalEvent as PointerEvent, false));
   $resize.on('pointerdown', event => startPointerTracking(event.originalEvent as PointerEvent, true));
+  $title_actions.on('pointerdown', event => event.stopPropagation());
+  $theme_picker.on('pointerdown', event => event.stopPropagation());
+  $theme_button.on('click', event => {
+    event.preventDefault();
+    if ($theme_picker.prop('hidden')) {
+      openThemePicker();
+    } else {
+      closeThemePicker();
+    }
+  });
+  $theme_picker_close.on('click', event => {
+    event.preventDefault();
+    closeThemePicker();
+    $theme_button.trigger('focus');
+  });
+  $theme_grid.on('click', '[data-preset-adapter-theme-option]', event => {
+    const theme = $(event.currentTarget).attr('data-preset-adapter-theme-option');
+    if (!isPresetAdapterThemeId(theme)) {
+      return;
+    }
+    store.setTheme(theme);
+    applyTheme(theme);
+  });
   $close
     .on('pointerdown', event => event.stopPropagation())
     .on('click', event => {
@@ -241,8 +388,10 @@ export function openPresetAdapterPopup(): Promise<void> {
       destroy();
     });
   host_window.addEventListener('resize', keepInViewport);
+  host_document.addEventListener('pointerdown', onDocumentPointerDown);
+  host_document.addEventListener('keydown', onDocumentKeyDown);
 
-  active_popup = { destroy, resetPosition, refresh: store.refresh };
+  active_popup = { destroy, resetPosition, refresh };
   return Promise.resolve();
 }
 

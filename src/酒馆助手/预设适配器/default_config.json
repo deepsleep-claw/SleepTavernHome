@@ -10,13 +10,16 @@
     },
     "settings": {
       "content_handling": "direct",
-      "filter_html_code_blocks": true,
+      "filter_html_code_blocks": false,
       "manual_prompt_enabled": false,
       "hide_rules": {
+        "only_before_latest_summary": true,
         "hide_first": false,
         "hide_user": true,
         "hide_assistant_system": true,
         "hide_summary": false,
+        "keep_latest_enabled": true,
+        "keep_latest_count": 5,
         "auto_hide_after_manual": true
       }
     }
