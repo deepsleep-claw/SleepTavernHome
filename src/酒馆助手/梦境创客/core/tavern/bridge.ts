@@ -1,4 +1,5 @@
 import { klona } from 'klona';
+import type { PartialDeep } from 'type-fest';
 import type { TavernResourceScope } from '../mapping/types';
 
 export type RawCharacterData = {
@@ -180,7 +181,7 @@ export function createGlobalTavernBridge(): TavernBridge {
       if (!(await createWorldbook(name))) throw new Error(`世界书已存在：${name}`);
     },
     createWorldbookEntries: async (name, entries) =>
-      (await createWorldbookEntries(name, entries as TypeFest.PartialDeep<WorldbookEntry>[]))
+      (await createWorldbookEntries(name, entries as PartialDeep<WorldbookEntry>[]))
         .new_entries as TavernWorldbookEntry[],
     deleteWorldbook: async name => {
       if (!(await deleteWorldbook(name))) throw new Error(`世界书删除失败：${name}`);
