@@ -25,6 +25,7 @@ export type SessionAgentConfiguration = AgentConfiguration;
 export type SessionLifecycleStatus = RunnerStatus | 'abnormal';
 
 export type SessionUiItem = {
+  guidanceStatus?: 'queued' | 'delivered' | 'cancelled';
   attachments?: SessionAttachmentSummary[];
   at: number;
   checkpointId?: string;
@@ -59,6 +60,7 @@ export type ManualEditGroup = {
 };
 
 export type PersistedSessionRuntime = {
+  pendingGuidance?: Array<{ id: string; message: string }>;
   activeCheckpointId?: string;
   agentConfiguration?: SessionAgentConfiguration;
   attachments?: Record<string, StoredSessionAttachment>;

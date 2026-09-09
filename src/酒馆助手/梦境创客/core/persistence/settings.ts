@@ -5,11 +5,7 @@ import {
   type ModelSelection,
 } from '../provider/provider-config';
 import { cloneStructuredPreset, DEFAULT_PRESET, type StructuredPreset } from '../preset/compiler';
-import {
-  DEFAULT_BUILTIN_AGENT,
-  defaultBuiltinAgentConfiguration,
-  type AgentConfiguration,
-} from './builtin-agent';
+import { DEFAULT_BUILTIN_AGENT, defaultBuiltinAgentConfiguration, type AgentConfiguration } from './builtin-agent';
 import type { SessionMode } from '../session/types';
 import { isAgentToolId } from '../runner/tool-catalog';
 
@@ -97,6 +93,7 @@ export type GlobalSkillFileIndexEntry = {
 };
 
 export type SessionIndexEntry = {
+  previousBackupUrl?: string;
   avatarId?: string;
   bindingId: string;
   characterName: string;
@@ -123,6 +120,7 @@ export type CharacterStoreReference = {
 };
 
 export type DreamCardAgentSettings = {
+  interfaceModes: { overlay: boolean; navigation: boolean; detached: boolean };
   activeThemeId: string;
   approvalMode: SessionMode;
   activeAgentConfigurationId: string;
@@ -151,6 +149,7 @@ export type DreamCardAgentSettings = {
 export const DEFAULT_AGENT_CONFIGURATION_ID = DEFAULT_BUILTIN_AGENT.id;
 
 export const DEFAULT_DREAM_CARD_AGENT_SETTINGS: DreamCardAgentSettings = {
+  interfaceModes: { overlay: true, navigation: true, detached: false },
   activeThemeId: 'builtin:clean',
   approvalMode: 'normal',
   activeAgentConfigurationId: DEFAULT_AGENT_CONFIGURATION_ID,
@@ -232,41 +231,45 @@ export function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamC
     ...storedConfigurations.filter(configuration => configuration.id !== DEFAULT_AGENT_CONFIGURATION_ID),
   ];
   const seenConfigurationIds = new Set<string>();
-  const agentConfigurations = sourceConfigurations.flatMap((configuration, index): AgentConfiguration[] => {
-    if (
-      !Array.isArray(configuration.skills) ||
-      !Array.isArray(configuration.toolIds) ||
-      configuration.skills.some(
-        skill =>
-          typeof skill !== 'object' ||
-          skill === null ||
-          typeof skill.id !== 'string' ||
-          typeof skill.enabled !== 'boolean' ||
-          !['full', 'on-demand'].includes(skill.loading),
-      )
-    ) {
-      return [];
-    }
-    return [{
-    id:
-      typeof configuration.id === 'string' && configuration.id.trim()
-        ? configuration.id
-        : `agent:recovered-${index + 1}`,
-    name:
-      typeof configuration.name === 'string' && configuration.name.trim()
-        ? configuration.name.trim()
-        : `Agent配置 ${index + 1}`,
-    presetId: presetProfiles.some(preset => preset.id === configuration.presetId)
-      ? configuration.presetId
-      : presetProfiles[0].id,
-      skills: configuration.skills.map(skill => ({ ...skill })),
-      toolIds: [...new Set(configuration.toolIds.filter(isAgentToolId))],
-    }];
-  }).filter(configuration => {
-    if (seenConfigurationIds.has(configuration.id)) return false;
-    seenConfigurationIds.add(configuration.id);
-    return true;
-  });
+  const agentConfigurations = sourceConfigurations
+    .flatMap((configuration, index): AgentConfiguration[] => {
+      if (
+        !Array.isArray(configuration.skills) ||
+        !Array.isArray(configuration.toolIds) ||
+        configuration.skills.some(
+          skill =>
+            typeof skill !== 'object' ||
+            skill === null ||
+            typeof skill.id !== 'string' ||
+            typeof skill.enabled !== 'boolean' ||
+            !['full', 'on-demand'].includes(skill.loading),
+        )
+      ) {
+        return [];
+      }
+      return [
+        {
+          id:
+            typeof configuration.id === 'string' && configuration.id.trim()
+              ? configuration.id
+              : `agent:recovered-${index + 1}`,
+          name:
+            typeof configuration.name === 'string' && configuration.name.trim()
+              ? configuration.name.trim()
+              : `Agent配置 ${index + 1}`,
+          presetId: presetProfiles.some(preset => preset.id === configuration.presetId)
+            ? configuration.presetId
+            : presetProfiles[0].id,
+          skills: configuration.skills.map(skill => ({ ...skill })),
+          toolIds: [...new Set(configuration.toolIds.filter(isAgentToolId))],
+        },
+      ];
+    })
+    .filter(configuration => {
+      if (seenConfigurationIds.has(configuration.id)) return false;
+      seenConfigurationIds.add(configuration.id);
+      return true;
+    });
   const requestedActiveId = raw?.activeAgentConfigurationId;
   const activeAgentConfigurationId = agentConfigurations.some(configuration => configuration.id === requestedActiveId)
     ? requestedActiveId!
@@ -280,6 +283,11 @@ export function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamC
     ...structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS),
     ...structuredClone(raw ?? {}),
     approvalMode: ['full', 'normal', 'yolo'].includes(raw?.approvalMode ?? '') ? raw!.approvalMode! : 'normal',
+    interfaceModes: {
+      overlay: raw?.interfaceModes?.overlay !== false,
+      navigation: raw?.interfaceModes?.navigation !== false,
+      detached: raw?.interfaceModes?.detached === true,
+    },
     characterStores: structuredClone(raw?.characterStores ?? {}),
     activeThemeId:
       typeof raw?.activeThemeId === 'string' && raw.activeThemeId.trim()
@@ -333,6 +341,7 @@ export function mergeSettingsChanges(
   return {
     activeThemeId: choose('activeThemeId'),
     approvalMode: choose('approvalMode'),
+    interfaceModes: choose('interfaceModes'),
     activeAgentConfigurationId: choose('activeAgentConfigurationId'),
     activePresetId: choose('activePresetId'),
     agentConfigurations: choose('agentConfigurations'),

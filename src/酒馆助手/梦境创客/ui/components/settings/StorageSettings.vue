@@ -10,6 +10,30 @@
       </button>
     </header>
 
+    <section class="dca-settings-group">
+      <strong>本机会话与后端备份</strong>
+      <p>会话与草稿保存在当前浏览器。后端备份用于跨浏览器恢复；恢复会话记录不会回退酒馆角色卡和世界书。</p>
+      <div class="dca-row-actions">
+        <button type="button" :disabled="busy" @click="exportSessions">导出本机会话与恢复点</button>
+        <button type="button" :disabled="busy" @click="action(() => runtime.refreshSessionBackups())">
+          刷新后端备份列表
+        </button>
+        <button type="button" :disabled="busy || !state.active || state.busy" @click="restorePending = true">
+          恢复当前会话的后端备份
+        </button>
+      </div>
+    </section>
+    <div v-if="restorePending" class="dca-modal-backdrop">
+      <section class="dca-modal" role="dialog" aria-modal="true">
+        <header><strong>恢复当前会话记录？</strong></header>
+        <p>本机当前记录会保留为恢复点，可以随本机会话一起导出。角色卡和世界书保持当前内容。</p>
+        <footer>
+          <button type="button" @click="restorePending = false">取消</button
+          ><button type="button" @click="restoreBackup">恢复备份</button>
+        </footer>
+      </section>
+    </div>
+
     <div class="dca-metric-grid">
       <div>
         <strong>{{ formatBytes(totalBytes) }}</strong>
@@ -34,7 +58,12 @@
     </div>
 
     <div v-if="groups.length" class="dca-character-storage-list">
-      <details v-for="group in groups" :key="group.bindingId" class="dca-character-storage" :open="isCurrent(group.bindingId)">
+      <details
+        v-for="group in groups"
+        :key="group.bindingId"
+        class="dca-character-storage"
+        :open="isCurrent(group.bindingId)"
+      >
         <summary>
           <span class="dca-storage-character-name">
             <i class="fa-regular fa-folder-open" aria-hidden="true"></i>
@@ -86,7 +115,12 @@
             <button type="button" :disabled="busy || !hasCache(group)" @click="clearCharacterCache(group)">
               <i class="fa-solid fa-broom" aria-hidden="true"></i>清理缓存
             </button>
-            <button class="dca-btn-danger" type="button" :disabled="busy || group.files.length === 0" @click="clearCharacterAll(group)">
+            <button
+              class="dca-btn-danger"
+              type="button"
+              :disabled="busy || group.files.length === 0"
+              @click="clearCharacterAll(group)"
+            >
               <i class="fa-regular fa-trash-can" aria-hidden="true"></i>全部清理
             </button>
             <button class="dca-btn-danger" type="button" :disabled="busy" @click="resetCharacter(group)">
@@ -132,21 +166,39 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import type {
-  CharacterFileStorageSummary,
-  ManagedFileSummary,
-} from '../../../core/persistence/workspace-file-store';
+import type { CharacterFileStorageSummary, ManagedFileSummary } from '../../../core/persistence/workspace-file-store';
 import { formatBytes, formatSessionDate } from '../../composables/format';
 import { useDreamCardAgent } from '../../composables/runtime';
 
 const { action, openedSessionIds, runtime, state, workspaceView } = useDreamCardAgent();
 const busy = ref(false);
+const restorePending = ref(false);
+async function exportSessions() {
+  await action(async () => {
+    const text = await runtime.exportBrowserSessions();
+    const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `梦境创客会话-${Date.now()}.json`;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+}
+async function restoreBackup() {
+  busy.value = true;
+  try {
+    if (await action(() => runtime.restoreCurrentSessionBackup())) {
+      restorePending.value = false;
+      workspaceView.value = 'session';
+    }
+  } finally {
+    busy.value = false;
+  }
+}
 
 const groups = computed(() => state.value.storage.characters);
 const totalBytes = computed(() => groups.value.reduce((total, group) => total + group.totalBytes, 0));
-const totalAttachmentBytes = computed(() =>
-  groups.value.reduce((total, group) => total + group.attachmentBytes, 0),
-);
+const totalAttachmentBytes = computed(() => groups.value.reduce((total, group) => total + group.attachmentBytes, 0));
 const totalProjectBytes = computed(() => groups.value.reduce((total, group) => total + group.projectBytes, 0));
 const totalCacheBytes = computed(() =>
   groups.value.reduce((total, group) => total + group.cacheBytes + group.orphanBytes, 0),

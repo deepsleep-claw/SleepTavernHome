@@ -60,7 +60,7 @@ describe('TimelineMessage', () => {
 
     const root = mountMessage(item);
 
-    root.querySelector<HTMLButtonElement>('[title="编辑并可重新发送"]')?.click();
+    root.querySelector<HTMLButtonElement>('[title="回退本轮并编辑"]')?.click();
     await nextTick();
     await nextTick();
 

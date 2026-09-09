@@ -1,18 +1,17 @@
 <template>
   <ManualChangeCard v-if="item.kind === 'manual'" :item="item" />
-  <article
-    v-else
-    class="dca-message"
-    :class="[`dca-message-${item.kind}`, { 'dca-message-editing': editing }]"
-  >
+  <article v-else class="dca-message" :class="[`dca-message-${item.kind}`, { 'dca-message-editing': editing }]">
     <header>
       <span>{{ itemKindLabel(item.kind) }}</span>
       <small>{{ formatTime(item.at) }}</small>
+      <small v-if="item.guidanceStatus">{{
+        item.guidanceStatus === 'queued' ? '等待处理' : item.guidanceStatus === 'delivered' ? '已交给 Agent' : '已取消'
+      }}</small>
     </header>
     <template v-if="editing">
       <textarea ref="editArea" v-model="editDraft" rows="4" @input="resizeEditArea"></textarea>
       <div class="dca-row-actions dca-message-edit-actions">
-        <button type="button" @click="saveEdit">保存</button>
+        <button type="button" @click="saveEdit">保存待重发内容</button>
         <button class="dca-btn-ghost" type="button" @click="cancelEdit">取消</button>
       </div>
     </template>
@@ -26,17 +25,14 @@
         <small>{{ attachment.missing ? '已清理' : formatBytes(attachment.size) }}</small>
       </span>
     </div>
-    <RenderRichText
-      v-if="!editing && item.content && isMarkdownMessage(item)"
-      :content="cleanGuidance(item.content)"
-    />
+    <RenderRichText v-if="!editing && item.content && isMarkdownMessage(item)" :content="cleanGuidance(item.content)" />
     <p v-else-if="!editing && item.content">{{ cleanGuidance(item.content) }}</p>
     <footer v-if="item.kind === 'user' && !editing && state.activeSessionAccess === 'live'" class="dca-message-actions">
       <button type="button" :disabled="!canModifyHistory" @click="undoTo">回退本轮修改</button>
       <button
         class="dca-icon-btn"
         type="button"
-        title="编辑并可重新发送"
+        title="回退本轮并编辑"
         :disabled="!canModifyHistory"
         @click="beginEdit"
       >
@@ -79,7 +75,9 @@ const editing = ref(false);
 const editDraft = ref('');
 const editArea = ref<HTMLTextAreaElement>();
 
-const lastUserMessageId = computed(() => [...(state.value.active?.ui ?? [])].reverse().find(item => item.kind === 'user')?.id);
+const lastUserMessageId = computed(
+  () => [...(state.value.active?.ui ?? [])].reverse().find(item => item.kind === 'user')?.id,
+);
 const lastVisibleMessageId = computed(() => state.value.active?.ui.at(-1)?.id);
 
 const canModifyHistory = computed(() =>
@@ -117,6 +115,10 @@ function resizeEditArea() {
 }
 
 async function beginEdit() {
+  if (props.item.id !== lastVisibleMessageId.value || state.value.active?.status !== 'completed') {
+    if (!(await action(() => runtime.undoToUserMessage(props.item.id)))) return;
+    if (state.value.active?.operationReplay) return;
+  }
   editDraft.value = props.item.content;
   editing.value = true;
   await nextTick();
@@ -129,9 +131,8 @@ function cancelEdit() {
   editDraft.value = '';
 }
 
-function saveEdit() {
-  runtime.editUserMessage(props.item.id, editDraft.value);
-  cancelEdit();
+async function saveEdit() {
+  if (await action(() => runtime.editUserMessage(props.item.id, editDraft.value))) cancelEdit();
 }
 
 async function undoTo() {
@@ -180,9 +181,7 @@ async function copyOutput() {
   align-self: flex-end;
   border-style: dashed;
   border-color: color-mix(in srgb, var(--dca-warning) 55%, transparent);
-  background:
-    linear-gradient(var(--dca-warning-soft), var(--dca-warning-soft)),
-    var(--dca-user-message-gradient);
+  background: linear-gradient(var(--dca-warning-soft), var(--dca-warning-soft)), var(--dca-user-message-gradient);
 }
 
 .dca-message > header {

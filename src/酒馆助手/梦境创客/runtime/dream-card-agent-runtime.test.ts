@@ -1,10 +1,8 @@
 import type { ModelMessage } from 'ai';
 import { describe, expect, it } from 'vitest';
 import { MemoryTavernFileClient } from '../core/persistence/file-client';
-import {
-  MemoryAgentSettingsStore,
-  type DreamCardAgentSettings,
-} from '../core/persistence/settings';
+import { MemoryBrowserRecordStore } from '../core/persistence/browser-record-store';
+import { MemoryAgentSettingsStore, type DreamCardAgentSettings } from '../core/persistence/settings';
 import type { ModelStepExecutor, ModelStepRequest, ModelStepResult } from '../core/runner/step-executor';
 import { MemoryCardStateAdapter } from '../core/transaction/adapter';
 import { transactionState } from '../core/transaction/test-fixture';
@@ -83,7 +81,10 @@ function modelStep(tool = false): ModelStepResult {
   };
 }
 
-async function addProfile(runtime: DreamCardAgentRuntime, modelSettings?: Parameters<DreamCardAgentRuntime['saveModel']>[1]['modelSettings']) {
+async function addProfile(
+  runtime: DreamCardAgentRuntime,
+  modelSettings?: Parameters<DreamCardAgentRuntime['saveModel']>[1]['modelSettings'],
+) {
   const provider = await runtime.saveProvider({
     apiKey: 'secret',
     baseURL: 'https://example.invalid/v1',
@@ -92,7 +93,11 @@ async function addProfile(runtime: DreamCardAgentRuntime, modelSettings?: Parame
     name: '本地接口',
   });
   const model = await runtime.saveModel(provider.id, {
-    compatibilityMode: 'standard', enabled: true, modelId: 'model', modelSettings, name: 'model',
+    compatibilityMode: 'standard',
+    enabled: true,
+    modelId: 'model',
+    modelSettings,
+    name: 'model',
   });
   await runtime.selectDefaultModel({ providerId: provider.id, modelId: model.id });
   return { model, provider };
@@ -120,6 +125,87 @@ function agentConfiguration(id: string, name: string, presetId: string, skillIds
 }
 
 describe('DreamCardAgentRuntime', () => {
+  it('浏览器会话在备份前也能重新加载并显示到角色列表', async () => {
+    const records = new MemoryBrowserRecordStore();
+    const files = new MemoryTavernFileClient();
+    const settings = new MemoryAgentSettingsStore();
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const options = {
+      browserRecords: records,
+      fileClient: files,
+      settingsStore: settings,
+      bridge: new FakeTavernBridge(),
+      adapterFactory: () => adapter,
+    };
+    const first = new DreamCardAgentRuntime(options);
+    await addProfile(first);
+    await useAgentWithoutRemoteSkills(first);
+    const session = await first.createSession({ title: '浏览器记录' });
+    expect(files.uploadedNames.filter(name => name.includes('--Session--'))).toEqual([]);
+    first.destroy();
+    const second = new DreamCardAgentRuntime(options);
+    try {
+      await second.refreshCharacter();
+      expect(second.snapshot().sessions.some(item => item.sessionId === session.sessionId)).toBe(true);
+      await second.openSession(session.sessionId);
+      expect(second.snapshot().active?.title).toBe('浏览器记录');
+    } finally {
+      second.destroy();
+    }
+  });
+
+  it('失败后选择新模型会用于恢复本轮', async () => {
+    const oldExecutor = new QueueExecutor([]);
+    const newExecutor = new QueueExecutor([modelStep()]);
+    const runtime = new DreamCardAgentRuntime({
+      fileClient: new MemoryTavernFileClient(),
+      settingsStore: new MemoryAgentSettingsStore(),
+      bridge: new FakeTavernBridge(),
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+      executorFactory: (_provider, model) => (model.modelId === 'fallback' ? newExecutor : oldExecutor),
+    });
+    try {
+      const { provider } = await addProfile(runtime);
+      await useAgentWithoutRemoteSkills(runtime);
+      const fallback = await runtime.saveModel(provider.id, {
+        name: '备用',
+        modelId: 'fallback',
+        enabled: true,
+        compatibilityMode: 'standard',
+      });
+      await runtime.createSession();
+      expect((await runtime.send('测试恢复')).status).toBe('failed');
+      await runtime.selectSessionModel({ providerId: provider.id, modelId: fallback.id });
+      expect((await runtime.resume()).status).toBe('completed');
+      expect(newExecutor.requests).toHaveLength(1);
+      expect(oldExecutor.requests).toHaveLength(1);
+    } finally {
+      runtime.destroy();
+    }
+  });
+
+  it('会话权限独立保存，新会话使用全局默认值', async () => {
+    const runtime = new DreamCardAgentRuntime({
+      fileClient: new MemoryTavernFileClient(),
+      settingsStore: new MemoryAgentSettingsStore(),
+      bridge: new FakeTavernBridge(),
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+    });
+    try {
+      await addProfile(runtime);
+      await useAgentWithoutRemoteSkills(runtime);
+      const first = await runtime.createSession();
+      await runtime.setSessionMode('full');
+      const second = await runtime.createSession();
+      expect(second.mode).toBe('normal');
+      await runtime.openSession(first.sessionId);
+      expect(runtime.snapshot().active?.mode).toBe('full');
+      await runtime.setMode('yolo');
+      expect(runtime.snapshot().active?.mode).toBe('full');
+    } finally {
+      runtime.destroy();
+    }
+  });
   it('无需角色即可创建全局会话，角色导航工具只向全局会话暴露', async () => {
     const globalBridge = new FakeTavernBridge();
     globalBridge.raw = null;
@@ -427,7 +513,9 @@ describe('DreamCardAgentRuntime', () => {
     await useAgentWithoutRemoteSkills(runtime);
     await runtime.createSession();
     const firstMessage = '请补全角色的背景故事与核心动机，并补充完整的成长经历\n第二行不要进入标题';
-    expect((await runtime.send(firstMessage)).title).toBe(Array.from(firstMessage.split('\n')[0]).slice(0, 20).join(''));
+    expect((await runtime.send(firstMessage)).title).toBe(
+      Array.from(firstMessage.split('\n')[0]).slice(0, 20).join(''),
+    );
     expect((await runtime.renameSession('  我的角色创作  ')).title).toBe('我的角色创作');
     expect(runtime.snapshot().sessions[0]?.title).toBe('我的角色创作');
     expect(runtime.snapshot().characterGroups[0]?.sessions[0]?.title).toBe('我的角色创作');
@@ -438,7 +526,11 @@ describe('DreamCardAgentRuntime', () => {
     const executor = new QueueExecutor([
       { ...modelStep(false), assistantMessages: [{ content: '第一轮完成', role: 'assistant' }], text: '第一轮完成' },
       { ...modelStep(false), assistantMessages: [{ content: '第二轮完成', role: 'assistant' }], text: '第二轮完成' },
-      { ...modelStep(false), assistantMessages: [{ content: '分叉继续完成', role: 'assistant' }], text: '分叉继续完成' },
+      {
+        ...modelStep(false),
+        assistantMessages: [{ content: '分叉继续完成', role: 'assistant' }],
+        text: '分叉继续完成',
+      },
     ]);
     const runtime = new DreamCardAgentRuntime({
       adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
@@ -493,7 +585,10 @@ describe('DreamCardAgentRuntime', () => {
 
     await runtime.closeSession(session.sessionId);
     expect(files.uploadedNames.filter(name => name.includes('--Session--'))).toHaveLength(sessionUploadsBefore + 1);
-    expect((await runtime.openSession(session.sessionId)).modelControls).toEqual({ reasoningEffort: 'high', webSearch: true });
+    expect((await runtime.openSession(session.sessionId)).modelControls).toEqual({
+      reasoningEffort: 'high',
+      webSearch: true,
+    });
     runtime.destroy();
   });
 
@@ -541,11 +636,19 @@ describe('DreamCardAgentRuntime', () => {
     });
     const { model, provider } = await addProfile(runtime);
     const updatedProvider = await runtime.saveProvider({
-      apiKey: '', baseURL: provider.baseURL, enabled: true, id: provider.id,
-      interfaceType: provider.interfaceType, name: '本地接口新版',
+      apiKey: '',
+      baseURL: provider.baseURL,
+      enabled: true,
+      id: provider.id,
+      interfaceType: provider.interfaceType,
+      name: '本地接口新版',
     });
     const updatedModel = await runtime.saveModel(provider.id, {
-      compatibilityMode: 'deepseek', enabled: true, id: model.id, modelId: 'model-v2', name: '模型新版',
+      compatibilityMode: 'deepseek',
+      enabled: true,
+      id: model.id,
+      modelId: 'model-v2',
+      name: '模型新版',
     });
     expect(updatedProvider.id).toBe(provider.id);
     expect(updatedModel.id).toBe(model.id);
@@ -574,7 +677,7 @@ describe('DreamCardAgentRuntime', () => {
       settingsStore,
     });
     await addProfile(runtime, {
-        capabilities: { reasoning: 'auto', toolCalling: 'auto', vision: 'disabled', webSearch: 'auto' },
+      capabilities: { reasoning: 'auto', toolCalling: 'auto', vision: 'disabled', webSearch: 'auto' },
     });
     await runtime.createSession();
     const view = await runtime.send('', [{ data: 'AQID', filename: 'image.png', mediaType: 'image/png', size: 3 }]);

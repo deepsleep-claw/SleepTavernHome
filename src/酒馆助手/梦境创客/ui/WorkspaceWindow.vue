@@ -7,6 +7,24 @@
         <span>{{ state.error }}</span>
       </div>
       <WorkspaceTabs />
+      <div v-if="state.sessionBackup" class="dca-backup-state" :class="{ error: state.sessionBackup.error }">
+        <span>{{
+          state.sessionBackup.error ||
+          (state.sessionBackup.syncing
+            ? '本机已保存 · 正在备份'
+            : state.sessionBackup.pending
+              ? `本机已保存 · ${state.sessionBackup.pending} 项等待备份`
+              : '本机已保存 · 后端备份已同步')
+        }}</span>
+        <button
+          v-if="state.sessionBackup.pending"
+          type="button"
+          :disabled="state.sessionBackup.syncing"
+          @click="runtime.backupSessions()"
+        >
+          重试备份
+        </button>
+      </div>
       <main class="dca-main">
         <HomeView v-if="workspaceView === 'home'" />
         <SessionWorkbench v-else-if="workspaceView === 'session' && state.active" />
@@ -45,6 +63,7 @@ import { provideDreamCardAgent } from './composables/runtime';
 import { mountThemeRuntime, type MountedThemeRuntime } from './theme/runtime';
 import { getThemeStore } from './theme/store';
 import { DEFAULT_THEME_ID } from './theme/types';
+import { clientEnvironment } from './runtime-client';
 
 const { isMobile, mobileSurface, runtime, sidebarCollapsed, state, workspaceView } = provideDreamCardAgent();
 const appRoot = ref<HTMLElement>();
@@ -53,6 +72,7 @@ let themeRuntime: MountedThemeRuntime | undefined;
 let unsubscribeThemes = () => {};
 
 function publishWindowLayout() {
+  if (clientEnvironment()) return;
   const HostCustomEvent = window.parent.CustomEvent;
   window.parent.dispatchEvent(
     new HostCustomEvent('dream-card-agent:window-layout', {
@@ -108,6 +128,22 @@ onBeforeUnmount(() => {
   flex: 1 1 auto;
   min-height: 0;
   overflow: hidden;
+}
+.dca-client-root .dca-tabs {
+  padding-right: 0.5rem;
+}
+.dca-backup-state {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.2rem 0.7rem;
+  color: var(--dca-text-muted);
+  font-size: 0.7rem;
+}
+.dca-backup-state.error {
+  color: var(--dca-warning);
 }
 
 .dca-workspace-surface {

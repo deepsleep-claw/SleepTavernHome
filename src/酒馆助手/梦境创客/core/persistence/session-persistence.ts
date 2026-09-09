@@ -14,7 +14,7 @@ export type SessionPersistenceOptions = {
   avatarId?: string;
   bindingId: string;
   characterName: string;
-  store: SessionRevisionStore;
+  store: Pick<SessionRevisionStore, 'commit' | 'load'>;
 };
 
 export class SessionPersistenceCoordinator {

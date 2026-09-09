@@ -9,7 +9,7 @@
     >
       <div v-if="attachments.length" class="dca-attachment-tray">
         <article v-for="attachment in attachments" :key="attachment.id" class="dca-attachment-chip">
-          <img v-if="attachment.previewUrl" :src="attachment.previewUrl" :alt="attachment.file.name" />
+          <img v-if="previewUrl(attachment)" :src="previewUrl(attachment)" :alt="attachment.file.name" />
           <i v-else class="fa-regular fa-file-lines" aria-hidden="true"></i>
           <div>
             <strong>{{ attachment.file.name }}</strong
@@ -31,7 +31,7 @@
         <DcaSelect
           class="dca-composer-select dca-mode-select"
           aria-label="审批模式"
-          :model-value="state.approvalMode ?? state.active?.mode ?? 'normal'"
+          :model-value="state.active?.mode ?? state.approvalMode ?? 'normal'"
           :options="approvalModeOptions"
           title="审批模式"
           @update:model-value="changeMode"
@@ -99,8 +99,14 @@
         <textarea
           v-model="message"
           rows="3"
-          :disabled="!canCompose"
-          :placeholder="isRunning ? '中途引导：补充当前目标' : '告诉梦境创客你想怎样修改角色卡……'"
+          :disabled="!canCompose || !draftReady"
+          :placeholder="
+            isRunning
+              ? '补充、纠正或调整当前任务……'
+              : canResume
+                ? '发送新要求保留已有修改，或点击继续恢复原任务……'
+                : '告诉梦境创客你想做什么……'
+          "
           @keydown="handleKeydown"
           @paste="handlePaste"
         ></textarea>
@@ -142,7 +148,7 @@
           <DcaSelect
             class="dca-composer-select dca-mode-select"
             aria-label="审批模式"
-            :model-value="state.approvalMode ?? state.active?.mode ?? 'normal'"
+            :model-value="state.active?.mode ?? state.approvalMode ?? 'normal'"
             :options="approvalModeOptions"
             title="审批模式"
             @update:model-value="changeMode"
@@ -175,6 +181,15 @@
         </div>
       </div>
       <input ref="fileInput" hidden multiple type="file" @change="selectFiles" />
+      <button
+        v-if="isRunning && message.trim()"
+        class="dca-independent-stop"
+        type="button"
+        aria-label="停止当前任务"
+        @click="runtime.stop()"
+      >
+        停止当前任务
+      </button>
       <input ref="imageInput" accept="image/*" hidden multiple type="file" @change="selectImages" />
     </div>
     <small class="dca-shortcut-hint">{{ shortcutHint }} · 可拖入文件或粘贴图片</small>
@@ -198,19 +213,35 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { providerAdapterCapabilities } from '../../../core/provider-probe';
 import { findSelectedModel } from '../../../core/provider/provider-config';
 import { fileToSessionAttachment, isImageAttachment, validateAttachmentFiles } from '../../../core/session/attachments';
 import { formatBytes } from '../../composables/format';
 import { useDreamCardAgent } from '../../composables/runtime';
+import { useStoredDraft } from '../../composables/stored-draft';
 import DcaSelect from '../DcaSelect.vue';
 import SessionModelMenu from './SessionModelMenu.vue';
 
-type AttachmentDraft = { file: File; id: string; previewUrl?: string };
+type AttachmentDraft = { file: File; id: string };
+const previews = new Map<string, string>();
 const { action, runtime, state } = useDreamCardAgent();
-const message = ref('');
-const attachments = ref<AttachmentDraft[]>([]);
+const { draft, ready: draftReady } = useStoredDraft<{ message: string; attachments: AttachmentDraft[] }>(
+  () => (state.value.active?.sessionId ? `composer:${state.value.active.sessionId}` : ''),
+  () => ({ message: '', attachments: [] }),
+);
+const message = computed({
+  get: () => draft.value.message,
+  set: value => {
+    draft.value = { ...draft.value, message: value };
+  },
+});
+const attachments = computed({
+  get: () => draft.value.attachments,
+  set: value => {
+    draft.value = { ...draft.value, attachments: value };
+  },
+});
 const attachmentBusy = ref(false);
 const showFullAccessWarning = ref(false);
 const plusOpen = ref(false);
@@ -252,9 +283,7 @@ const isRunning = computed(() => ['running', 'waiting-approval'].includes(state.
 const canResume = computed(() =>
   ['abnormal', 'failed', 'stopped', 'context-exhausted'].includes(state.value.active?.status ?? ''),
 );
-const canSend = computed(() =>
-  Boolean(state.value.active && ['completed', 'idle'].includes(state.value.active.status)),
-);
+const canSend = computed(() => Boolean(state.value.active && !isRunning.value));
 const canCompose = computed(() => isRunning.value || canSend.value);
 const canAddAttachments = computed(() => canSend.value && !state.value.busy && !attachmentBusy.value);
 const canAddImages = computed(() => canAddAttachments.value && supportsVision.value);
@@ -292,17 +321,19 @@ const shortcutHint = computed(() =>
 const currentApprovalLabel = computed(
   () =>
     approvalModeOptions.find(
-      option => option.value === (state.value.approvalMode ?? state.value.active?.mode ?? 'normal'),
+      option => option.value === (state.value.active?.mode ?? state.value.approvalMode ?? 'normal'),
     )?.label ?? '审批模式',
 );
 
 async function submit() {
+  if (!canSubmit.value || !draftReady.value) return;
   const text = message.value;
+  const sessionId = state.value.active?.sessionId;
   if (isRunning.value) {
     if (!text.trim()) return;
     try {
-      runtime.enqueueGuidance(text);
-      message.value = '';
+      await runtime.enqueueGuidance(text);
+      if (state.value.active?.sessionId === sessionId && message.value === text) message.value = '';
     } catch (error) {
       toastr.error(error instanceof Error ? error.message : String(error), '梦境创客');
     }
@@ -319,14 +350,27 @@ async function submit() {
     return;
   }
   attachmentBusy.value = false;
+  if (state.value.active?.sessionId !== sessionId) return;
   const previous = attachments.value;
-  message.value = '';
-  attachments.value = [];
-  const succeeded = await action(() => runtime.send(text, converted));
-  if (succeeded) previous.forEach(revokePreview);
-  else {
-    message.value = text;
-    attachments.value = previous;
+  const existingIds = new Set(state.value.active?.ui?.map(item => item.id) ?? []);
+  const stopWatching = watch(
+    () => state.value.active,
+    active => {
+      if (
+        active?.sessionId !== sessionId ||
+        !active.ui?.some(item => item.kind === 'user' && !existingIds.has(item.id))
+      )
+        return;
+      if (message.value === text && attachments.value === previous) draft.value = { message: '', attachments: [] };
+      previous.forEach(revokePreview);
+      stopWatching();
+    },
+    { flush: 'sync' },
+  );
+  try {
+    await action(() => runtime.send(text, converted));
+  } finally {
+    stopWatching();
   }
 }
 function handlePrimaryAction() {
@@ -397,10 +441,6 @@ function addFiles(files: File[]) {
     ...files.map(file => ({
       file,
       id: crypto.randomUUID(),
-      previewUrl:
-        isImageAttachment({ mediaType: file.type }) && typeof URL.createObjectURL === 'function'
-          ? URL.createObjectURL(file)
-          : undefined,
     })),
   ];
 }
@@ -410,7 +450,18 @@ function removeAttachment(id: string) {
   attachments.value = attachments.value.filter(value => value.id !== id);
 }
 function revokePreview(item: AttachmentDraft) {
-  if (item.previewUrl && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(item.previewUrl);
+  const url = previews.get(item.id);
+  if (url && typeof URL.revokeObjectURL === 'function') URL.revokeObjectURL(url);
+  previews.delete(item.id);
+}
+function previewUrl(item: AttachmentDraft): string | undefined {
+  if (!isImageAttachment({ mediaType: item.file.type }) || typeof URL.createObjectURL !== 'function') return undefined;
+  let url = previews.get(item.id);
+  if (!url) {
+    url = URL.createObjectURL(item.file);
+    previews.set(item.id, url);
+  }
+  return url;
 }
 async function resume() {
   await action(() => runtime.resume());
@@ -427,7 +478,7 @@ async function changeMode(mode: string) {
     showFullAccessWarning.value = true;
     return;
   }
-  await action(() => runtime.setMode(mode === 'yolo' ? 'yolo' : 'normal'));
+  await action(() => runtime.setSessionMode(mode === 'yolo' ? 'yolo' : 'normal'));
 }
 async function changeModeFromMenu(mode: string) {
   plusOpen.value = false;
@@ -435,8 +486,17 @@ async function changeModeFromMenu(mode: string) {
   await changeMode(mode);
 }
 async function enableFullAccess() {
-  if (await action(() => runtime.setMode('full'))) showFullAccessWarning.value = false;
+  if (await action(() => runtime.setSessionMode('full'))) showFullAccessWarning.value = false;
 }
+
+watch(
+  () => state.value.active?.sessionId,
+  () => {
+    plusOpen.value = false;
+    showFullAccessWarning.value = false;
+    compactModelOpen.value = false;
+  },
+);
 
 onMounted(() => {
   if (!composerShell.value) return;
@@ -447,7 +507,8 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   resizeObserver?.disconnect();
-  attachments.value.forEach(revokePreview);
+  for (const url of previews.values()) URL.revokeObjectURL?.(url);
+  previews.clear();
 });
 </script>
 

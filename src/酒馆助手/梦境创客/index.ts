@@ -16,7 +16,10 @@ import {
   type FloatingButtonOffset,
   type FloatingViewport,
 } from './ui/floating-anchor';
-import { destroyDreamCardAgentWindow, openDreamCardAgentWindow } from './ui/popup';
+import { destroyDreamCardAgentWindow } from './ui/popup';
+import { configureWindowHost, openDefaultInterface as openDreamCardAgentWindow } from './ui/window-host';
+import { clientEnvironment } from './ui/runtime-client';
+import { mountClientWindow } from './ui/client-window';
 import { applyThemeToHost } from './ui/theme/runtime';
 import { configureDreamCardAgentUpdater, createStandaloneActivationContext } from './ui/updater';
 import { DREAM_CARD_AGENT_ID, DREAM_CARD_AGENT_NAME, DREAM_CARD_AGENT_VERSION } from './version';
@@ -259,6 +262,7 @@ function initializeDreamCardAgent(context: PluginActivationContext): PluginRunti
   });
   const runtime = getDreamCardAgentRuntime();
   const destroyUpdater = configureDreamCardAgentUpdater(context);
+  const destroyWindowHost = configureWindowHost(runtime, context, import.meta.url);
   const style = teleportStyle();
   const floating = mountFloatingButton(owner);
   const wand = mountWandEntry(owner);
@@ -277,6 +281,7 @@ function initializeDreamCardAgent(context: PluginActivationContext): PluginRunti
     if (destroyed) return;
     destroyed = true;
     events.forEach(event => event.stop());
+    destroyWindowHost();
     destroyDreamCardAgentWindow();
     floating.destroy();
     wand.destroy();
@@ -301,7 +306,8 @@ export async function activate(context: PluginActivationContext): Promise<Plugin
 
 // 兼容开发阶段一直沿用的 `import dist/.../index.js`。正式更新器在动态导入后会
 // 立即调用 activate，因此会先把 activationRequested 置为 true，不会重复启动。
-setTimeout(() => {
+if (clientEnvironment()) mountClientWindow();
+else setTimeout(() => {
   if (activationRequested) return;
   void activate(createStandaloneActivationContext()).catch(error => {
     console.error(`[${DREAM_CARD_AGENT_NAME}] 本地直接导入启动失败。`, error);

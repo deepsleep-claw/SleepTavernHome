@@ -19,7 +19,9 @@
     <section v-if="tab === 'files'" class="dca-side-files">
       <div class="dca-file-list">
         <header>
-          <div><strong>Card Workspace</strong><small>{{ files.length }} 个文件</small></div>
+          <div>
+            <strong>Card Workspace</strong><small>{{ files.length }} 个文件</small>
+          </div>
           <label class="dca-file-upload-button" title="上传到当前文件区">
             <i class="fa-solid fa-arrow-up-from-bracket" aria-hidden="true"></i><span>上传</span>
             <input class="dca-hidden-input" type="file" multiple @change="uploadFiles" />
@@ -90,9 +92,15 @@
                   <option value="preset-current">当前预设正则</option>
                   <option value="global">全局正则</option>
                 </select>
-                <label class="dca-project-overwrite"><input v-model="projectOverwrite" type="checkbox" />覆盖末个同名</label>
-                <button type="button" :disabled="projectBusy" @click="checkProject">{{ projectBusy ? '检查中' : '检查工程' }}</button>
-                <button class="dca-btn-primary" type="button" :disabled="projectBusy" @click="compileProject">编译为正则</button>
+                <label class="dca-project-overwrite"
+                  ><input v-model="projectOverwrite" type="checkbox" />覆盖末个同名</label
+                >
+                <button type="button" :disabled="projectBusy" @click="checkProject">
+                  {{ projectBusy ? '检查中' : '检查工程' }}
+                </button>
+                <button class="dca-btn-primary" type="button" :disabled="projectBusy" @click="compileProject">
+                  编译为正则
+                </button>
               </template>
               <div v-if="isMarkdownFile" class="dca-editor-view-switch" aria-label="Markdown查看方式">
                 <button type="button" :class="{ active: editorView === 'edit' }" @click="editorView = 'edit'">
@@ -114,11 +122,20 @@
           <section v-if="isProjectManifest && projectCheck" class="dca-project-check-result">
             <header>
               <strong>{{ projectCheck.projectName }}</strong>
-              <span>{{ projectErrorCount }} 错误 · {{ projectWarningCount }} 警告 · {{ formatBytes(projectCheck.outputBytes) }}</span>
+              <span
+                >{{ projectErrorCount }} 错误 · {{ projectWarningCount }} 警告 ·
+                {{ formatBytes(projectCheck.outputBytes) }}</span
+              >
             </header>
             <ul v-if="projectCheck.diagnostics.length">
-              <li v-for="(item, index) in projectCheck.diagnostics" :key="`${item.file}:${item.line}:${index}`" :class="item.severity">
-                <code>{{ item.file }}{{ item.line ? `:${item.line}${item.column ? `:${item.column}` : ''}` : '' }}</code>
+              <li
+                v-for="(item, index) in projectCheck.diagnostics"
+                :key="`${item.file}:${item.line}:${index}`"
+                :class="item.severity"
+              >
+                <code
+                  >{{ item.file }}{{ item.line ? `:${item.line}${item.column ? `:${item.column}` : ''}` : '' }}</code
+                >
                 {{ item.message }}
               </li>
             </ul>
@@ -215,7 +232,10 @@
             >
               <i :class="diffFileIcon(file.path)" aria-hidden="true"></i>
               <span>{{ file.path }}</span>
-              <small><b>+{{ file.addedLines }}</b><em>-{{ file.removedLines }}</em></small>
+              <small
+                ><b>+{{ file.addedLines }}</b
+                ><em>-{{ file.removedLines }}</em></small
+              >
             </button>
           </div>
         </aside>
@@ -278,7 +298,9 @@
       @pointerdown.stop
     >
       <button type="button" @click="exportTreeRow(fileMenu.row)">
-        <i class="fa-solid fa-download" aria-hidden="true"></i>导出{{ fileMenu.row.kind === 'directory' ? '文件夹 ZIP' : '文件' }}
+        <i class="fa-solid fa-download" aria-hidden="true"></i>导出{{
+          fileMenu.row.kind === 'directory' ? '文件夹 ZIP' : '文件'
+        }}
       </button>
       <button
         v-if="canPlayerDelete(fileMenu.row.path)"
@@ -294,6 +316,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useStoredDraft } from '../../../composables/stored-draft';
 import { strToU8, zipSync } from 'fflate';
 import { maskSecretsForModel } from '../../../../core/workspace/secret-protection';
 import { decodeWorkspaceSegment } from '../../../../core/mapping/serde';
@@ -329,7 +352,6 @@ const emit = defineEmits<{ close: []; 'update:tab': [value: SidebarTab] }>();
 const { action, runtime, state } = useDreamCardAgent();
 
 const selectedFilePath = ref('');
-const fileDraft = ref('');
 const editorView = ref<'edit' | 'preview'>('edit');
 const largePreviewApproved = ref(false);
 const diffScope = ref('latest');
@@ -409,26 +431,52 @@ const visibleFileTreeRows = computed<FileTreeRow[]>(() => {
   return rows;
 });
 const selectedFile = computed(() => files.value.find(file => file.path === selectedFilePath.value));
+const { draft: fileBuffer, ready: fileReady } = useStoredDraft(
+  () =>
+    selectedFile.value && state.value.active ? `file:${state.value.active.sessionId}:${selectedFile.value.path}` : '',
+  () => ({ base: selectedFile.value?.content ?? '', text: selectedFile.value?.content ?? '' }),
+);
+const fileDraft = computed({
+  get: () => fileBuffer.value.text,
+  set: text => {
+    fileBuffer.value = { ...fileBuffer.value, text };
+  },
+});
 const isBinaryFile = computed(() => Boolean(selectedFile.value && isBinaryWorkspaceFile(selectedFile.value)));
-const canUseAsAvatar = computed(() => Boolean(
-  selectedFile.value &&
-  selectedFile.value.mediaType.startsWith('image/') &&
-  /^\/(?:files|character\/files)\//u.test(selectedFile.value.path),
-));
-const personaNames = computed(() => files.value
-  .filter(file => /^\/users\/[^/]+\.md$/u.test(file.path))
-  .map(file => decodeWorkspaceSegment(file.path.slice('/users/'.length, -'.md'.length)))
-  .sort((left, right) => left.localeCompare(right, 'zh-CN')));
+const canUseAsAvatar = computed(() =>
+  Boolean(
+    selectedFile.value &&
+    selectedFile.value.mediaType.startsWith('image/') &&
+    /^\/(?:files|character\/files)\//u.test(selectedFile.value.path),
+  ),
+);
+const personaNames = computed(() =>
+  files.value
+    .filter(file => /^\/users\/[^/]+\.md$/u.test(file.path))
+    .map(file => decodeWorkspaceSegment(file.path.slice('/users/'.length, -'.md'.length)))
+    .sort((left, right) => left.localeCompare(right, 'zh-CN')),
+);
 const isRunning = computed(() => ['running', 'waiting-approval'].includes(state.value.active?.status ?? ''));
 const canEditFile = computed(() =>
   Boolean(
-    selectedFile.value && !isBinaryFile.value && !selectedFile.value.readonly && state.value.active && !isRunning.value,
+    fileReady.value &&
+    selectedFile.value &&
+    !isBinaryFile.value &&
+    !selectedFile.value.readonly &&
+    state.value.active &&
+    !isRunning.value,
   ),
 );
 const isMarkdownFile = computed(() => /\.md$/iu.test(selectedFile.value?.path ?? ''));
-const isProjectManifest = computed(() => /^\/regexes\/projects\/[^/]+\/project\.yaml$/u.test(selectedFile.value?.path ?? ''));
-const projectErrorCount = computed(() => projectCheck.value?.diagnostics.filter(item => item.severity === 'error').length ?? 0);
-const projectWarningCount = computed(() => projectCheck.value?.diagnostics.filter(item => item.severity === 'warning').length ?? 0);
+const isProjectManifest = computed(() =>
+  /^\/regexes\/projects\/[^/]+\/project\.yaml$/u.test(selectedFile.value?.path ?? ''),
+);
+const projectErrorCount = computed(
+  () => projectCheck.value?.diagnostics.filter(item => item.severity === 'error').length ?? 0,
+);
+const projectWarningCount = computed(
+  () => projectCheck.value?.diagnostics.filter(item => item.severity === 'warning').length ?? 0,
+);
 const largeMarkdownFile = computed(() => new Blob([fileDraft.value]).size > 1024 * 1024);
 const secretMarkers = computed<VfsEditorMarker[]>(() =>
   secretFindings.value.map(finding => ({
@@ -461,22 +509,37 @@ const latestTurnRecords = computed(() => {
   const ids = new Set(latestTurn.value?.operationIds ?? []);
   return state.value.active?.operationLog?.records.filter(record => ids.has(record.operationId)) ?? [];
 });
-const canUndoLatest = computed(() => latestTurnRecords.value.some(record => record.state === 'applied' && record.undoable));
+const canUndoLatest = computed(() =>
+  latestTurnRecords.value.some(record => record.state === 'applied' && record.undoable),
+);
 const canRedoLatest = computed(() => {
   const redoIds = new Set(latestTurn.value?.redoOperationIds ?? []);
-  return latestTurnRecords.value.some(record => redoIds.has(record.operationId) && record.state === 'undone' && record.undoable);
+  return latestTurnRecords.value.some(
+    record => redoIds.has(record.operationId) && record.state === 'undone' && record.undoable,
+  );
 });
 
-watch(selectedFile, file => {
-  fileDraft.value = file?.content ?? '';
-  editorView.value = 'edit';
-  largePreviewApproved.value = false;
-  projectCheck.value = undefined;
+watch(
+  () => selectedFile.value?.path,
+  () => {
+    editorView.value = 'edit';
+    largePreviewApproved.value = false;
+    projectCheck.value = undefined;
+  },
+);
+watch([() => selectedFile.value?.content, fileReady], ([content, ready]) => {
+  if (ready && content !== undefined && fileBuffer.value.text === fileBuffer.value.base) {
+    fileBuffer.value = { base: content, text: content };
+  }
 });
 
-watch(personaNames, names => {
-  if (!names.includes(avatarUserName.value)) avatarUserName.value = names[0] ?? '';
-}, { immediate: true });
+watch(
+  personaNames,
+  names => {
+    if (!names.includes(avatarUserName.value)) avatarUserName.value = names[0] ?? '';
+  },
+  { immediate: true },
+);
 
 watch(
   [() => selectedFile.value?.path, fileDraft],
@@ -540,7 +603,11 @@ function closeFileMenu() {
 }
 
 function openFileMenu(event: MouseEvent, row: FileTreeRow) {
-  fileMenu.value = { row, x: Math.min(event.clientX, window.innerWidth - 220), y: Math.min(event.clientY, window.innerHeight - 120) };
+  fileMenu.value = {
+    row,
+    x: Math.min(event.clientX, window.innerWidth - 220),
+    y: Math.min(event.clientY, window.innerHeight - 120),
+  };
 }
 
 function canPlayerDelete(path: string): boolean {
@@ -557,7 +624,9 @@ async function bytesForFile(file: (typeof files.value)[number]): Promise<Uint8Ar
     return new Uint8Array(await response.arrayBuffer());
   }
   if (!file.external) return strToU8(file.content);
-  const managed = state.value.storage.characters.flatMap(group => group.files).find(item => item.fileId === file.external?.fileId);
+  const managed = state.value.storage.characters
+    .flatMap(group => group.files)
+    .find(item => item.fileId === file.external?.fileId);
   if (!managed) throw new Error(`找不到托管文件：${file.path}`);
   return new Uint8Array(await (await fetch(managed.url)).arrayBuffer());
 }
@@ -607,8 +676,11 @@ async function exportFile(file: (typeof files.value)[number]) {
 
 async function exportSelectedFile() {
   if (!selectedFile.value) return;
-  try { await exportFile(selectedFile.value); }
-  catch (error) { toastr.error(error instanceof Error ? error.message : String(error), '导出失败'); }
+  try {
+    await exportFile(selectedFile.value);
+  } catch (error) {
+    toastr.error(error instanceof Error ? error.message : String(error), '导出失败');
+  }
 }
 
 async function exportTreeRow(row: FileTreeRow) {
@@ -696,8 +768,13 @@ function toggleDirectory(path: string) {
 async function saveFile() {
   const file = selectedFile.value;
   if (!file) return;
+  const buffer = fileBuffer.value;
+  const key = `file:${state.value.active?.sessionId}:${file.path}`;
   try {
-    await runtime.writeWorkingFile(file.path, fileDraft.value, false, file.content);
+    await runtime.writeWorkingFile(file.path, buffer.text, false, buffer.base);
+    const saved = { base: buffer.text, text: buffer.text };
+    await runtime.saveBrowserDraft?.(key, saved);
+    if (fileBuffer.value === buffer) fileBuffer.value = saved;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!message.startsWith('MANUAL_EDIT_CONFLICT')) {
@@ -705,8 +782,14 @@ async function saveFile() {
       return;
     }
     const usePlayer = window.confirm('这个文件在你编辑期间又被修改了。\n\n确定：保存你的版本\n取消：保留酒馆当前版本');
-    if (usePlayer) await action(() => runtime.writeWorkingFile(file.path, fileDraft.value, true, file.content));
-    else await action(() => runtime.useCurrentWorkingFile(file.path));
+    if (usePlayer) {
+      if (await action(() => runtime.writeWorkingFile(file.path, buffer.text, true, buffer.base))) {
+        fileBuffer.value = { base: buffer.text, text: buffer.text };
+      }
+    } else if (await action(() => runtime.useCurrentWorkingFile(file.path))) {
+      const content = selectedFile.value?.content ?? '';
+      fileBuffer.value = { base: content, text: content };
+    }
   }
 }
 
@@ -726,9 +809,15 @@ async function compileProject() {
   if (!selectedFile.value) return;
   projectBusy.value = true;
   try {
-    await runtime.compileHtmlProject(selectedFile.value.path, { overwrite: projectOverwrite.value, scope: projectScope.value });
+    await runtime.compileHtmlProject(selectedFile.value.path, {
+      overwrite: projectOverwrite.value,
+      scope: projectScope.value,
+    });
     projectCheck.value = await runtime.checkHtmlProject(selectedFile.value.path);
-    toastr.success(`工程已编译到${projectScope.value === 'character' ? '角色' : projectScope.value === 'global' ? '全局' : '当前预设'}正则。`, '梦境创客');
+    toastr.success(
+      `工程已编译到${projectScope.value === 'character' ? '角色' : projectScope.value === 'global' ? '全局' : '当前预设'}正则。`,
+      '梦境创客',
+    );
   } catch (error) {
     toastr.error(error instanceof Error ? error.message : String(error), '工程编译失败');
   } finally {
@@ -778,8 +867,12 @@ async function redo() {
   background: transparent;
   text-align: left;
 }
-.dca-app .dca-file-context-menu > button:hover { background: var(--dca-sidebar-hover); }
-.dca-app .dca-file-context-menu > button.danger { color: var(--dca-danger); }
+.dca-app .dca-file-context-menu > button:hover {
+  background: var(--dca-sidebar-hover);
+}
+.dca-app .dca-file-context-menu > button.danger {
+  color: var(--dca-danger);
+}
 
 .dca-session-sidebar > nav {
   display: flex;
@@ -806,13 +899,34 @@ async function redo() {
   padding: 0.55rem;
   background: var(--dca-raised);
 }
-.dca-project-check-result > header { display: flex; justify-content: space-between; gap: 0.5rem; }
-.dca-project-check-result > header span { color: var(--dca-text-muted); font-size: 0.75rem; }
-.dca-project-check-result ul { max-height: 12rem; margin: 0.45rem 0 0; overflow: auto; padding-left: 1.2rem; }
-.dca-project-check-result li { margin: 0.2rem 0; font-size: 0.78rem; }
-.dca-project-check-result li.error { color: var(--dca-danger); }
-.dca-project-check-result li.warning { color: var(--dca-warning); }
-.dca-project-check-result li code { color: inherit; }
+.dca-project-check-result > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.dca-project-check-result > header span {
+  color: var(--dca-text-muted);
+  font-size: 0.75rem;
+}
+.dca-project-check-result ul {
+  max-height: 12rem;
+  margin: 0.45rem 0 0;
+  overflow: auto;
+  padding-left: 1.2rem;
+}
+.dca-project-check-result li {
+  margin: 0.2rem 0;
+  font-size: 0.78rem;
+}
+.dca-project-check-result li.error {
+  color: var(--dca-danger);
+}
+.dca-project-check-result li.warning {
+  color: var(--dca-warning);
+}
+.dca-project-check-result li code {
+  color: inherit;
+}
 
 .dca-session-sidebar > nav button:not(.dca-close-sidebar) {
   display: flex;
@@ -1167,9 +1281,14 @@ async function redo() {
 }
 
 .dca-diff-toolbar b,
-.dca-diff-index b { color: var(--dca-success); }
+.dca-diff-index b {
+  color: var(--dca-success);
+}
 .dca-diff-toolbar em,
-.dca-diff-index em { color: var(--dca-danger); font-style: normal; }
+.dca-diff-index em {
+  color: var(--dca-danger);
+  font-style: normal;
+}
 
 .dca-diff-toolbar > select {
   max-width: 10.5rem;
@@ -1255,7 +1374,9 @@ async function redo() {
   box-shadow: inset 2px 0 0 var(--dca-accent);
 }
 
-.dca-diff-index button > i { color: var(--dca-info); }
+.dca-diff-index button > i {
+  color: var(--dca-info);
+}
 .dca-diff-index button > span {
   overflow: hidden;
   font: 0.68rem/1.3 var(--dca-font-mono);
@@ -1286,11 +1407,21 @@ async function redo() {
 }
 
 @container dca-session-sidebar (max-width: 620px) {
-  .dca-diff-workspace { grid-template-columns: minmax(0, 1fr); }
-  .dca-diff-index { display: none; }
-  .dca-diff-mobile-file { display: flex; }
-  .dca-diff-toolbar { flex-wrap: wrap; }
-  .dca-diff-toolbar > div:first-child { flex: 1 1 auto; }
+  .dca-diff-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .dca-diff-index {
+    display: none;
+  }
+  .dca-diff-mobile-file {
+    display: flex;
+  }
+  .dca-diff-toolbar {
+    flex-wrap: wrap;
+  }
+  .dca-diff-toolbar > div:first-child {
+    flex: 1 1 auto;
+  }
 }
 
 .dca-context-meter {

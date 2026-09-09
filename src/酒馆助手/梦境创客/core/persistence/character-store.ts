@@ -131,6 +131,7 @@ export class CharacterMetadataStore {
     delete metadata.sessions[sessionId];
     await this.save(metadata);
     await this.client.delete(entry.url).catch(() => undefined);
+    if (entry.previousBackupUrl) await this.client.delete(entry.previousBackupUrl).catch(() => undefined);
     return entry;
   }
 
@@ -142,6 +143,11 @@ export class CharacterMetadataStore {
     delete settings.characterStores[bindingId];
     await this.settingsStore.save(settings);
     await Promise.all(entries.map(entry => this.client.delete(entry.url).catch(() => undefined)));
+    await Promise.all(
+      entries
+        .filter(entry => entry.previousBackupUrl)
+        .map(entry => this.client.delete(entry.previousBackupUrl!).catch(() => undefined)),
+    );
     if (reference) await this.client.delete(reference.url).catch(() => undefined);
     return entries;
   }

@@ -7,6 +7,7 @@
     <button
       v-if="!hideTrigger"
       class="dca-session-model-trigger"
+      :title="isRunning ? '运行中修改会在下次发送或恢复任务时生效' : '选择本次发送或恢复使用的模型与推理配置'"
       type="button"
       :disabled="(state.busy && !isRunning) || (mode === 'reasoning' && !supportsReasoning)"
       @click="toggle"

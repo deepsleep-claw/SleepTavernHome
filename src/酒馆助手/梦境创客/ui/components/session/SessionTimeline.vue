@@ -1,24 +1,29 @@
 <template>
-  <div ref="timelineScroller" class="dca-timeline" @scroll.passive="handleTimelineScroll">
-    <div ref="timelineColumn" class="dca-timeline-column">
-      <button v-if="hiddenTimelineCount > 0" class="dca-load-more" type="button" @click="timelineLimit += 200">
-        再显示较早的 {{ Math.min(200, hiddenTimelineCount) }} 条
-      </button>
-      <template v-for="block in timelineBlocks" :key="block.id">
-        <RunBlock
-          v-if="block.type === 'run'"
-          :block="block"
-          :confirmation="activeToolConfirmation"
-          :collapsed="isRunCollapsed(block)"
-          @resolve-confirmation="resolveConfirmation"
-          @toggle="toggleRunBlock(block)"
-        />
-        <TimelineMessage v-else :item="block.item" />
-      </template>
-      <div v-if="visibleTimelineCount === 0" class="dca-empty">告诉 Agent 你想怎样完善这张角色卡吧。</div>
-      <FailureCard />
-      <OperationDiffCard @open-diff="emit('open-diff', $event)" />
+  <div class="dca-timeline-shell">
+    <div ref="timelineScroller" class="dca-timeline" @scroll.passive="handleTimelineScroll">
+      <div ref="timelineColumn" class="dca-timeline-column">
+        <button v-if="hiddenTimelineCount > 0" class="dca-load-more" type="button" @click="loadEarlier">
+          再显示较早的 {{ Math.min(200, hiddenTimelineCount) }} 条
+        </button>
+        <template v-for="block in timelineBlocks" :key="block.id">
+          <RunBlock
+            v-if="block.type === 'run'"
+            :block="block"
+            :confirmation="activeToolConfirmation"
+            :collapsed="isRunCollapsed(block)"
+            @resolve-confirmation="resolveConfirmation"
+            @toggle="toggleRunBlock(block)"
+          />
+          <TimelineMessage v-else :item="block.item" />
+        </template>
+        <div v-if="visibleTimelineCount === 0" class="dca-empty">告诉 Agent 你想怎样完善这张角色卡吧。</div>
+        <FailureCard />
+        <OperationDiffCard @open-diff="emit('open-diff', $event)" />
+      </div>
     </div>
+    <button v-if="!followTimelineTail" class="dca-jump-latest" type="button" @click="jumpToLatest">
+      回到最新 <i class="fa-solid fa-arrow-down"></i>
+    </button>
   </div>
 </template>
 
@@ -46,7 +51,7 @@ let timelineClock: ReturnType<typeof setInterval> | undefined;
 let timelineResizeObserver: ResizeObserver | undefined;
 let timelineFrame: number | undefined;
 let previousTimelineHeight = 0;
-let followTimelineTail = true;
+const followTimelineTail = ref(true);
 
 const TIMELINE_TAIL_THRESHOLD = 32;
 
@@ -78,7 +83,8 @@ watch(
 watch(
   () => state.value.active?.sessionId,
   async () => {
-    followTimelineTail = true;
+    followTimelineTail.value = true;
+    timelineLimit.value = 200;
     previousTimelineHeight = 0;
     await nextTick();
     scheduleTimelineTail();
@@ -92,9 +98,9 @@ onMounted(() => {
       const nextHeight = entries.at(-1)?.contentRect.height ?? column.getBoundingClientRect().height;
       // 回退会先移除旧分支。若浏览器已把滚动位置夹回新的底部，需要重新恢复贴底状态，
       // 这样随后重发产生的新内容才能继续更新真实可滚动边界。
-      if (nextHeight < previousTimelineHeight && isTimelineNearTail()) followTimelineTail = true;
+      if (nextHeight < previousTimelineHeight && isTimelineNearTail()) followTimelineTail.value = true;
       previousTimelineHeight = nextHeight;
-      if (followTimelineTail) scheduleTimelineTail();
+      if (followTimelineTail.value) scheduleTimelineTail();
     });
     timelineResizeObserver.observe(column);
   }
@@ -113,21 +119,36 @@ function isTimelineNearTail(): boolean {
   return scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= TIMELINE_TAIL_THRESHOLD;
 }
 
+async function loadEarlier() {
+  const scroller = timelineScroller.value;
+  if (!scroller) return;
+  const top = scroller.scrollTop;
+  const height = scroller.scrollHeight;
+  followTimelineTail.value = false;
+  timelineLimit.value += 200;
+  await nextTick();
+  scroller.scrollTop = top + scroller.scrollHeight - height;
+}
+function jumpToLatest() {
+  followTimelineTail.value = true;
+  scheduleTimelineTail();
+}
+
 function handleTimelineScroll() {
-  followTimelineTail = isTimelineNearTail();
+  followTimelineTail.value = isTimelineNearTail();
 }
 
 function scheduleTimelineTail() {
-  if (!followTimelineTail || !timelineScroller.value) return;
+  if (!followTimelineTail.value || !timelineScroller.value) return;
   if (timelineFrame !== undefined) cancelAnimationFrame(timelineFrame);
   timelineFrame = requestAnimationFrame(() => {
     timelineFrame = undefined;
-    if (!followTimelineTail || !timelineScroller.value) return;
+    if (!followTimelineTail.value || !timelineScroller.value) return;
     timelineScroller.value.scrollTop = timelineScroller.value.scrollHeight;
     // <details> 展开与流式 Vue patch 可能跨越相邻两次布局；第二帧用于读取最终边界。
     timelineFrame = requestAnimationFrame(() => {
       timelineFrame = undefined;
-      if (followTimelineTail && timelineScroller.value) {
+      if (followTimelineTail.value && timelineScroller.value) {
         timelineScroller.value.scrollTop = timelineScroller.value.scrollHeight;
       }
     });
@@ -150,6 +171,19 @@ function toggleRunBlock(block: RunTimelineBlock) {
 </script>
 
 <style lang="scss">
+.dca-timeline-shell {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+.dca-jump-latest {
+  position: absolute;
+  bottom: 0.6rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+}
 .dca-timeline {
   flex: 1 1 auto;
   min-height: 10rem;

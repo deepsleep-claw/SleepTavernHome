@@ -25,7 +25,7 @@ export type RunnerEvent =
   | { at: number; call: RunnerToolCall; type: 'tool-executing' }
   | { at: number; call: RunnerToolCall; output: unknown; type: 'tool-completed' }
   | { at: number; call: RunnerToolCall; error: string; type: 'tool-failed' }
-  | { at: number; message: string; type: 'guidance-injected' }
+  | { at: number; message: string; ids?: string[]; type: 'guidance-injected' }
   | { at: number; summary: string; type: 'context-compacted' }
   | { at: number; failure?: string; status: RunnerStatus; type: 'status' };
 
@@ -47,6 +47,7 @@ export type PendingRunnerStep = {
 };
 
 export type AgentRunnerState = {
+  guidance: Array<{ id: string; message: string }>;
   contextUsage: ContextUsage;
   failure?: string;
   messages: ModelMessage[];
@@ -55,6 +56,7 @@ export type AgentRunnerState = {
 };
 
 export type AgentRunnerOptions = {
+  initialGuidance?: Array<{ id: string; message: string }>;
   compactionEnabled?: boolean;
   contextWindow?: number;
   executor: ModelStepExecutor;
@@ -112,7 +114,7 @@ function toolFailureOutput(error: unknown, skipped = false): Record<string, unkn
 }
 
 function guidanceMessage(messages: string[]): string {
-  return `<mid_turn_guidance>\n这是对当前未完成目标的中途补充，不是替换旧目标的新任务。\n${messages.join('\n')}\n</mid_turn_guidance>`;
+  return `<mid_turn_guidance>\n用户在运行期间发来的新指示；根据其意图补充、纠正或替换当前目标。\n${messages.join('\n')}\n</mid_turn_guidance>`;
 }
 
 export class AgentRunner {
@@ -139,7 +141,6 @@ export class AgentRunner {
   private stopRequested = false;
   private readonly toolMap: Map<string, RunnerTool>;
   private readonly tools: RunnerTool[];
-  private readonly guidance: string[] = [];
   readonly state: AgentRunnerState;
 
   constructor(options: AgentRunnerOptions) {
@@ -162,6 +163,7 @@ export class AgentRunner {
     this.toolMap = new Map(this.tools.map(item => [item.name, item]));
     const messages = structuredClone(options.initialMessages ?? []);
     this.state = {
+      guidance: structuredClone(options.initialGuidance ?? []),
       contextUsage: measureContext(messages, this.contextWindow),
       messages,
       pending: options.initialPending ? structuredClone(options.initialPending) : undefined,
@@ -169,9 +171,10 @@ export class AgentRunner {
     };
   }
 
-  enqueueGuidance(message: string): void {
+  enqueueGuidance(message: string, id = crypto.randomUUID()): string {
     const trimmed = message.trim();
-    if (trimmed) this.guidance.push(trimmed);
+    if (trimmed) this.state.guidance.push({ id, message: trimmed });
+    return id;
   }
 
   stop(): void {
@@ -232,6 +235,7 @@ export class AgentRunner {
         await this.injectGuidance();
         continue;
       }
+      await this.injectGuidance();
       const decision = decideContext(this.measureContext());
       this.state.contextUsage = this.measureContext();
       if (decision === 'users-exhausted') {
@@ -251,7 +255,9 @@ export class AgentRunner {
       const liveProviderCompleted = new Set<string>();
       try {
         const persistedMessages = structuredClone(this.state.messages);
-        const requestMessages = this.prepareMessages ? await this.prepareMessages(persistedMessages) : persistedMessages;
+        const requestMessages = this.prepareMessages
+          ? await this.prepareMessages(persistedMessages)
+          : persistedMessages;
         result = await this.executor.execute({
           abortSignal: this.controller.signal,
           forceTool: compacting ? 'compact_context' : undefined,
@@ -263,7 +269,12 @@ export class AgentRunner {
           },
           onProviderToolCompleted: async call => {
             liveProviderCompleted.add(call.toolCallId);
-            await this.journal.append({ at: this.now(), call, output: call.output ?? { ok: true }, type: 'tool-completed' });
+            await this.journal.append({
+              at: this.now(),
+              call,
+              output: call.output ?? { ok: true },
+              type: 'tool-completed',
+            });
           },
           onProviderToolStarted: async call => {
             liveProviderStarted.add(call.toolCallId);
@@ -305,7 +316,12 @@ export class AgentRunner {
           await this.journal.append({ at: this.now(), call, type: 'tool-started' });
         }
         if (!liveProviderCompleted.has(call.toolCallId)) {
-          await this.journal.append({ at: this.now(), call, output: call.output ?? { ok: true }, type: 'tool-completed' });
+          await this.journal.append({
+            at: this.now(),
+            call,
+            output: call.output ?? { ok: true },
+            type: 'tool-completed',
+          });
         }
       }
       const attemptedCalls = [...result.toolCalls, ...(result.invalidToolCalls ?? [])];
@@ -323,7 +339,7 @@ export class AgentRunner {
         await this.injectGuidance();
         continue;
       }
-      if (this.guidance.length > 0) {
+      if (this.state.guidance.length > 0) {
         await this.injectGuidance();
         continue;
       }
@@ -445,10 +461,11 @@ export class AgentRunner {
   }
 
   private async injectGuidance(): Promise<void> {
-    if (this.guidance.length === 0) return;
-    const message = guidanceMessage(this.guidance.splice(0));
+    if (this.state.guidance.length === 0) return;
+    const queued = this.state.guidance.splice(0);
+    const message = guidanceMessage(queued.map(item => item.message));
     this.state.messages.push({ content: message, role: 'user' });
-    await this.journal.append({ at: this.now(), message, type: 'guidance-injected' });
+    await this.journal.append({ at: this.now(), ids: queued.map(item => item.id), message, type: 'guidance-injected' });
   }
 
   private async finishStopped(): Promise<AgentRunnerState> {

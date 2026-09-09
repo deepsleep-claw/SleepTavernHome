@@ -379,8 +379,8 @@ describe('WorkspaceWindow', () => {
 
     (root.querySelector('.dca-settings-tab') as HTMLButtonElement).click();
     await nextTick();
-    const mobileSkillSection = [...root.querySelectorAll<HTMLButtonElement>('.dca-settings-nav button')].find(button =>
-      button.textContent?.trim() === 'Skill',
+    const mobileSkillSection = [...root.querySelectorAll<HTMLButtonElement>('.dca-settings-nav button')].find(
+      button => button.textContent?.trim() === 'Skill',
     )!;
     mobileSkillSection.click();
     await nextTick();
@@ -389,8 +389,9 @@ describe('WorkspaceWindow', () => {
       .find(button => button.textContent?.trim() === '编辑')!
       .click();
     await vi.waitFor(() => expect(root.querySelector('.dca-skill-file-list')?.textContent).toContain('notes.md'));
-    const notesButton = [...root.querySelectorAll<HTMLButtonElement>('.dca-skill-file-row')]
-      .find(button => button.textContent?.includes('notes.md'))!;
+    const notesButton = [...root.querySelectorAll<HTMLButtonElement>('.dca-skill-file-row')].find(button =>
+      button.textContent?.includes('notes.md'),
+    )!;
     notesButton.click();
     await nextTick();
     expect(root.querySelector('.dca-skill-file-preview-layer')?.classList).toContain('open');
@@ -432,13 +433,15 @@ describe('WorkspaceWindow', () => {
     expect(root.querySelector('.dca-workbench')?.classList).not.toContain('sidebar-collapsed');
     expect(root.querySelector('.dca-side-files')).not.toBeNull();
     expect(root.textContent).toContain('character');
-    const definitionRow = [...root.querySelectorAll<HTMLButtonElement>('.dca-file-tree-row.directory')]
-      .find(button => button.textContent?.includes('definition'))!;
+    const definitionRow = [...root.querySelectorAll<HTMLButtonElement>('.dca-file-tree-row.directory')].find(button =>
+      button.textContent?.includes('definition'),
+    )!;
     definitionRow.click();
     await nextTick();
     expect(root.textContent).toContain('description.md');
-    const characterRow = [...root.querySelectorAll<HTMLButtonElement>('.dca-file-tree-row.directory')]
-      .find(button => button.textContent?.includes('character'))!;
+    const characterRow = [...root.querySelectorAll<HTMLButtonElement>('.dca-file-tree-row.directory')].find(button =>
+      button.textContent?.includes('character'),
+    )!;
     characterRow.click();
     await nextTick();
     expect(root.textContent).not.toContain('description.md');
@@ -505,9 +508,13 @@ describe('WorkspaceWindow', () => {
     await nextTick();
     const remoteSkillCards = root.querySelectorAll('.dca-skill-card.remote');
     expect(remoteSkillCards).toHaveLength(2);
-    const downloadedRemoteButtons = [...remoteSkillCards[0].querySelectorAll('button')].map(button => button.textContent?.trim());
+    const downloadedRemoteButtons = [...remoteSkillCards[0].querySelectorAll('button')].map(button =>
+      button.textContent?.trim(),
+    );
     expect(downloadedRemoteButtons).toEqual(['查看', '另存为', '导出']);
-    expect([...remoteSkillCards[1].querySelectorAll('button')].map(button => button.textContent?.trim())).toEqual(['下载']);
+    expect([...remoteSkillCards[1].querySelectorAll('button')].map(button => button.textContent?.trim())).toEqual([
+      '下载',
+    ]);
     (remoteSkillCards[0].querySelector('button[aria-expanded="false"]') as HTMLButtonElement).click();
     await nextTick();
     expect(root.querySelector('.dca-skill-export-options')?.textContent).toContain('仅导出 MD');
@@ -577,8 +584,9 @@ describe('WorkspaceWindow', () => {
     await nextTick();
     expect(root.querySelector<HTMLInputElement>('input[maxlength="80"]')?.value).toBe('梦境创客默认 Agent');
     expect(root.querySelector<HTMLInputElement>('input[maxlength="80"]')?.disabled).toBe(true);
-    const agentSkillTab = [...root.querySelectorAll<HTMLButtonElement>('.dca-agent-tabs button')]
-      .find(button => button.textContent?.includes('Skill'))!;
+    const agentSkillTab = [...root.querySelectorAll<HTMLButtonElement>('.dca-agent-tabs button')].find(button =>
+      button.textContent?.includes('Skill'),
+    )!;
     agentSkillTab.click();
     await nextTick();
     expect(root.querySelector('.dca-agent-skill-row')).not.toBeNull();
@@ -628,7 +636,7 @@ describe('WorkspaceWindow', () => {
     await nextTick();
     const guideButton = root.querySelector<HTMLButtonElement>('.dca-composer button[aria-label="发送中途引导"]')!;
     expect(guideButton.classList).toContain('dca-guidance-button');
-    expect(root.querySelector('.dca-composer button[aria-label="停止当前任务"]')).toBeNull();
+    expect(root.querySelector('.dca-composer button[aria-label="停止当前任务"]')).not.toBeNull();
     guideButton.click();
     expect(mock.runtime.enqueueGuidance).toHaveBeenCalledWith('请优先检查世界书');
     await nextTick();

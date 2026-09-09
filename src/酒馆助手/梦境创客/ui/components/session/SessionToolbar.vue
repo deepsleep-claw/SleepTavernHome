@@ -29,12 +29,15 @@
         </button>
       </div>
       <small
-        >{{ state.active?.scope === 'global' ? '全局会话' : state.active?.characterName }} · {{
+        >{{ state.active?.scope === 'global' ? '全局会话' : state.active?.characterName }} ·
+        {{
           state.activeSessionAccess === 'readonly-history'
             ? '只读历史记录'
             : state.active?.mode === 'yolo'
               ? 'YOLO：低风险自动写入'
-              : '普通：批准后写入'
+              : state.active?.mode === 'full'
+                ? '完全权限：自动批准工具调用'
+                : '普通：批准后写入'
         }}</small
       >
     </div>
@@ -241,11 +244,26 @@ async function confirmAgentChange() {
 .dca-agent-change-dialog {
   width: min(32rem, calc(100vw - 2rem));
 }
-.dca-agent-change-dialog > header { display: flex; gap: .7rem; }
-.dca-agent-change-dialog > header > i { color: var(--dca-warning); }
-.dca-agent-change-dialog > header > div { display: grid; gap: .2rem; }
-.dca-agent-change-dialog > header span { color: var(--dca-text-muted); font-size: .78rem; }
-.dca-agent-change-dialog > footer { display: flex; justify-content: flex-end; gap: .5rem; }
+.dca-agent-change-dialog > header {
+  display: flex;
+  gap: 0.7rem;
+}
+.dca-agent-change-dialog > header > i {
+  color: var(--dca-warning);
+}
+.dca-agent-change-dialog > header > div {
+  display: grid;
+  gap: 0.2rem;
+}
+.dca-agent-change-dialog > header span {
+  color: var(--dca-text-muted);
+  font-size: 0.78rem;
+}
+.dca-agent-change-dialog > footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
 
 .dca-app .dca-session-delete {
   color: var(--dca-text-muted);
@@ -271,9 +289,16 @@ async function confirmAgentChange() {
 }
 
 @media (max-width: 720px) {
-  .dca-session-agent-select { min-width: 0; max-width: 10rem; }
-  .dca-session-agent-select > span { display: none; }
-  .dca-session-agent-select > .dca-select { min-width: 0; }
+  .dca-session-agent-select {
+    min-width: 0;
+    max-width: 10rem;
+  }
+  .dca-session-agent-select > span {
+    display: none;
+  }
+  .dca-session-agent-select > .dca-select {
+    min-width: 0;
+  }
   .dca-sidebar-toggle span {
     display: none;
   }

@@ -65,6 +65,37 @@ function createService(input: {
 }
 
 describe('card agent realtime session service', () => {
+  it('结束中断轮次保留真实修改并允许发送新要求', async () => {
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const service = await createService({
+      adapter,
+      executor: new QueueExecutor([step([writeDescription('保留成果')])]),
+      mode: 'full',
+    });
+    expect((await service.send('先修改')).status).toBe('failed');
+    await service.finishInterruptedTurn();
+    expect((await adapter.read()).character.fields.description).toBe('保留成果');
+    expect(service.view().status).toBe('completed');
+    await service.setExecutor(new QueueExecutor([step([], '新的回答')]));
+    expect((await service.send('换个方向')).status).toBe('completed');
+  });
+
+  it('只能保存已经回退的用户消息，且草稿会持久化', async () => {
+    let saved: PersistedSessionRuntime | undefined;
+    const service = await createService({
+      executor: new QueueExecutor([step()]),
+      onPersist: async value => {
+        saved = value;
+      },
+    });
+    const view = await service.send('原要求', 'edit-id');
+    await expect(service.editUserMessage('edit-id', '新要求')).rejects.toThrow('先回退');
+    expect(view.ui.find(item => item.id === 'edit-id')?.content).toBe('原要求');
+    await service.undoToUserMessage('edit-id');
+    await service.editUserMessage('edit-id', '新要求');
+    expect(saved?.ui.find(item => item.id === 'edit-id')?.content).toBe('新要求');
+    expect(JSON.stringify(saved?.modelMessages)).not.toContain('原要求');
+  });
   it('分叉运行时继承目标输出前的可见上下文，但建立独立操作历史', async () => {
     const executor = new QueueExecutor([
       step([writeDescription('第一轮写入')]),
@@ -130,8 +161,9 @@ describe('card agent realtime session service', () => {
     });
 
     const completed = await service.send('写两行');
-    expect(updates.some(ui => ui.some(item => item.toolCallId === call.toolCallId && item.toolPhase === 'generating')))
-      .toBe(true);
+    expect(
+      updates.some(ui => ui.some(item => item.toolCallId === call.toolCallId && item.toolPhase === 'generating')),
+    ).toBe(true);
     const cards = completed.ui.filter(item => item.toolCallId === call.toolCallId);
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({ status: 'completed', toolPhase: undefined, toolName: 'write_file' });
@@ -139,18 +171,28 @@ describe('card agent realtime session service', () => {
     expect(
       completed.ui
         .filter(item => item.kind === 'assistant' || item.kind === 'tool')
-        .map(item => item.kind === 'tool' ? 'tool' : item.content),
+        .map(item => (item.kind === 'tool' ? 'tool' : item.content)),
     ).toEqual(['先说明再写入。', 'tool', '完成啦']);
   });
 
   it('普通发送固定Skill头部，压缩时使用当前Skill重新编译', async () => {
     const oldSkill: AgentSkill = {
-      body: 'OLD_SKILL_BODY', builtin: false, description: '测试', directories: [], id: 'dynamic-skill',
-      loading: 'full', name: '动态Skill', resources: {},
+      body: 'OLD_SKILL_BODY',
+      builtin: false,
+      description: '测试',
+      directories: [],
+      id: 'dynamic-skill',
+      loading: 'full',
+      name: '动态Skill',
+      resources: {},
     };
     const preset: StructuredPreset = {
-      id: 'preset:dynamic-skill', name: '动态Skill预设', version: 1,
-      nodes: [{ content: '{{skill_instructions}}', enabled: true, id: 'skills', order: 10, role: 'system', title: 'Skill' }],
+      id: 'preset:dynamic-skill',
+      name: '动态Skill预设',
+      version: 1,
+      nodes: [
+        { content: '{{skill_instructions}}', enabled: true, id: 'skills', order: 10, role: 'system', title: 'Skill' },
+      ],
     };
     const compactCall = { input: { summary: '保留目标' }, toolCallId: 'compact', toolName: 'compact_context' };
     const executor = new QueueExecutor([step([], 'x'.repeat(150_000)), step([compactCall]), step([], '压缩后完成')]);
@@ -223,7 +265,8 @@ describe('card agent realtime session service', () => {
     const fullApproval = vi.fn(async () => true);
     const full = await createService({
       executor: new QueueExecutor([step([writeDescription('完全权限')]), step()]),
-      mode: 'full', requestToolApproval: fullApproval,
+      mode: 'full',
+      requestToolApproval: fullApproval,
     });
     await full.send('修改');
     expect(fullApproval).not.toHaveBeenCalled();
@@ -234,7 +277,8 @@ describe('card agent realtime session service', () => {
         step([{ input: { path: '/character/greetings' }, toolCallId: 'delete-greetings', toolName: 'delete_path' }]),
         step([], '已拒绝删除'),
       ]),
-      mode: 'yolo', requestToolApproval: yoloApproval,
+      mode: 'yolo',
+      requestToolApproval: yoloApproval,
     });
     await yolo.send('删除全部开场白');
     expect(yoloApproval).toHaveBeenCalledOnce();
@@ -279,8 +323,10 @@ describe('card agent realtime session service', () => {
   it('回退最新用户消息时同时撤销文件操作、保留可编辑用户消息并允许重发', async () => {
     const adapter = new MemoryCardStateAdapter(transactionState());
     const executor = new QueueExecutor([
-      step([writeDescription('第一版')]), step([], '第一轮完成'),
-      step([writeDescription('第二版', 'write-again')]), step([], '第二轮完成'),
+      step([writeDescription('第一版')]),
+      step([], '第一轮完成'),
+      step([writeDescription('第二版', 'write-again')]),
+      step([], '第二轮完成'),
     ]);
     const service = await createService({ adapter, executor, mode: 'full' });
     const original = transactionState().character.fields.description;
@@ -298,26 +344,32 @@ describe('card agent realtime session service', () => {
     const adapter = new MemoryCardStateAdapter(transactionState());
     const executor = new QueueExecutor([step([], '已知晓玩家修改')]);
     const service = await createService({ adapter, executor, mode: 'full' });
-    const before = (await service.view().workingFiles.find(file => file.path === '/character/definition/description.md'))?.content;
+    const before = (
+      await service.view().workingFiles.find(file => file.path === '/character/definition/description.md')
+    )?.content;
     const changed = await service.writeWorkingFile('/character/definition/description.md', '玩家版本', false, before);
     expect((await adapter.read()).character.fields.description).toBe('玩家版本');
     expect(changed.operationLog.records.at(-1)).toMatchObject({ actor: 'user' });
     expect(changed.ui.at(-1)).toMatchObject({ kind: 'manual', toolName: '玩家修改工作区' });
     await service.finalizeManualEdits();
     await service.send('继续');
-    expect(executor.requests[0].messages.some(message => String(message.content).includes('manual_workspace_changes'))).toBe(true);
+    expect(
+      executor.requests[0].messages.some(message => String(message.content).includes('manual_workspace_changes')),
+    ).toBe(true);
   });
 
   it('玩家基于过期编辑内容保存时报告三方冲突而不覆盖实时文件', async () => {
     const adapter = new MemoryCardStateAdapter(transactionState());
     const service = await createService({ adapter, executor: new QueueExecutor([]), mode: 'full' });
-    const before = service.view().workingFiles.find(file => file.path === '/character/definition/description.md')!.content;
+    const before = service
+      .view()
+      .workingFiles.find(file => file.path === '/character/definition/description.md')!.content;
     const external = await adapter.read();
     external.character.fields.description = '外部版本';
     adapter.replaceExternal(external);
-    await expect(service.writeWorkingFile('/character/definition/description.md', '玩家版本', false, before)).rejects.toThrow(
-      'MANUAL_EDIT_CONFLICT',
-    );
+    await expect(
+      service.writeWorkingFile('/character/definition/description.md', '玩家版本', false, before),
+    ).rejects.toThrow('MANUAL_EDIT_CONFLICT');
     expect((await adapter.read()).character.fields.description).toBe('外部版本');
   });
 

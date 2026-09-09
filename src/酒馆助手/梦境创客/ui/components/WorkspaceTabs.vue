@@ -51,18 +51,21 @@
             ></i>
           </button>
         </div>
-        <button
-          class="dca-tab dca-new-tab"
-          type="button"
-          :disabled="state.busy"
-          title="新建会话"
-          @click="startSession"
-        >
+        <button class="dca-tab dca-new-tab" type="button" :disabled="state.busy" title="新建会话" @click="startSession">
           <i class="fa-solid fa-plus" aria-hidden="true"></i>
         </button>
       </template>
     </div>
     <div class="dca-tab-actions">
+      <button
+        class="dca-tab"
+        type="button"
+        :disabled="!state.interfaceModes?.detached"
+        :title="state.interfaceModes?.detached ? '在新窗口打开' : '在设置中启用独立浏览器窗口'"
+        @click="openDetachedInterface"
+      >
+        <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
+      </button>
       <button
         class="dca-tab dca-version-tab"
         type="button"
@@ -105,14 +108,30 @@
     </div>
     <div v-if="newSessionChoiceOpen" class="dca-modal-backdrop" role="presentation">
       <section class="dca-modal dca-tab-new-session-dialog" role="dialog" aria-modal="true">
-        <header><strong>新建会话</strong><button class="dca-icon-btn" type="button" @click="newSessionChoiceOpen = false"><i class="fa-solid fa-xmark"></i></button></header>
+        <header>
+          <strong>新建会话</strong
+          ><button class="dca-icon-btn" type="button" @click="newSessionChoiceOpen = false">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </header>
         <div class="dca-tab-new-session-kinds">
-          <button class="dca-btn-start" type="button" @click="createGlobalFromTab"><i class="fa-solid fa-globe"></i><span><strong>全局会话</strong><small>不绑定角色卡</small></span></button>
-          <button class="dca-btn-start" type="button" @click="showCharacterChoices = !showCharacterChoices"><i class="fa-regular fa-address-card"></i><span><strong>角色卡会话</strong><small>选择酒馆角色卡</small></span></button>
+          <button class="dca-btn-start" type="button" @click="createGlobalFromTab">
+            <i class="fa-solid fa-globe"></i><span><strong>全局会话</strong><small>不绑定角色卡</small></span>
+          </button>
+          <button class="dca-btn-start" type="button" @click="showCharacterChoices = !showCharacterChoices">
+            <i class="fa-regular fa-address-card"></i
+            ><span><strong>角色卡会话</strong><small>选择酒馆角色卡</small></span>
+          </button>
         </div>
         <div v-if="showCharacterChoices" class="dca-tab-character-list">
-          <button v-for="character in state.availableCharacters" :key="character.avatarId" type="button" @click="createCharacterFromTab(character.avatarId)">
-            <span>{{ character.name }}</span><i class="fa-solid fa-chevron-right"></i>
+          <button
+            v-for="character in state.availableCharacters"
+            :key="character.avatarId"
+            type="button"
+            @click="createCharacterFromTab(character.avatarId)"
+          >
+            <span>{{ character.name }}</span
+            ><i class="fa-solid fa-chevron-right"></i>
           </button>
         </div>
       </section>
@@ -121,6 +140,7 @@
 </template>
 
 <script setup lang="ts">
+import { openDetachedInterface } from '../runtime-client';
 import { computed, ref } from 'vue';
 import { useDreamCardAgent } from '../composables/runtime';
 import { useDreamCardAgentUpdater } from '../updater';
@@ -142,14 +162,12 @@ const {
 } = useDreamCardAgent();
 const { snapshot: updaterSnapshot } = useDreamCardAgentUpdater();
 
-const allSessions = computed(() =>
-  [
-    ...(state.value.globalSessions ?? []).map(session => ({ ...session, readonly: false, groupCurrent: true })),
-    ...(state.value.characterGroups ?? []).flatMap(group =>
-      group.sessions.map(session => ({ ...session, readonly: !group.available, groupCurrent: group.current })),
-    ),
-  ],
-);
+const allSessions = computed(() => [
+  ...(state.value.globalSessions ?? []).map(session => ({ ...session, readonly: false, groupCurrent: true })),
+  ...(state.value.characterGroups ?? []).flatMap(group =>
+    group.sessions.map(session => ({ ...session, readonly: !group.available, groupCurrent: group.current })),
+  ),
+]);
 const openedSessions = computed(() =>
   openedSessionIds.value
     .map(id => allSessions.value.find(item => item.sessionId === id))
@@ -389,15 +407,56 @@ async function createCharacterFromTab(avatarId: string) {
   justify-content: flex-end;
   gap: 0.5rem;
 }
-.dca-tab-new-session-dialog { display: grid; width: min(32rem, calc(100vw - 2rem)); gap: .7rem; }
-.dca-tab-new-session-dialog > header { display: flex; align-items: center; justify-content: space-between; }
-.dca-tab-new-session-kinds { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
-.dca-tab-new-session-kinds > button { display: flex; align-items: center; justify-content: flex-start; gap: .65rem; border-color: var(--dca-border); padding: .7rem; background: var(--dca-surface); text-align: left; }
-.dca-tab-new-session-kinds > button > i { color: var(--dca-accent-strong); }
-.dca-tab-new-session-kinds > button > span { display: grid; gap: .1rem; }
-.dca-tab-new-session-kinds small { color: var(--dca-text-muted); }
-.dca-tab-character-list { display: grid; max-height: min(26rem, 50vh); gap: .2rem; overflow: auto; scrollbar-gutter: stable; }
-.dca-tab-character-list > button { display: flex; align-items: center; justify-content: space-between; border-color: transparent; background: var(--dca-raised); text-align: left; }
+.dca-tab-new-session-dialog {
+  display: grid;
+  width: min(32rem, calc(100vw - 2rem));
+  gap: 0.7rem;
+}
+.dca-tab-new-session-dialog > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.dca-tab-new-session-kinds {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+.dca-tab-new-session-kinds > button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.65rem;
+  border-color: var(--dca-border);
+  padding: 0.7rem;
+  background: var(--dca-surface);
+  text-align: left;
+}
+.dca-tab-new-session-kinds > button > i {
+  color: var(--dca-accent-strong);
+}
+.dca-tab-new-session-kinds > button > span {
+  display: grid;
+  gap: 0.1rem;
+}
+.dca-tab-new-session-kinds small {
+  color: var(--dca-text-muted);
+}
+.dca-tab-character-list {
+  display: grid;
+  max-height: min(26rem, 50vh);
+  gap: 0.2rem;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.dca-tab-character-list > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-color: transparent;
+  background: var(--dca-raised);
+  text-align: left;
+}
 
 .dca-version-tab {
   flex: 0 0 auto;

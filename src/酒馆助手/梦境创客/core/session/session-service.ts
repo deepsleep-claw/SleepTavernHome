@@ -135,7 +135,12 @@ function isStoragePath(path: string): boolean {
 }
 
 function sessionTitleFromMessage(message: string): string {
-  const firstLine = message.trim().split(/\r\n|\n|\r/u, 1)[0]?.replace(/[\t\f\v ]+/gu, ' ').trim() ?? '';
+  const firstLine =
+    message
+      .trim()
+      .split(/\r\n|\n|\r/u, 1)[0]
+      ?.replace(/[\t\f\v ]+/gu, ' ')
+      .trim() ?? '';
   return Array.from(firstLine).slice(0, 20).join('') || DEFAULT_SESSION_TITLE;
 }
 
@@ -212,6 +217,7 @@ export class CardAgentSessionService {
   private readonly mountedWorldbooks: Set<string>;
   private readonly mountedPresets: Set<string>;
   private runModelSelection?: ModelSelection;
+  private pendingGuidance: Array<{ id: string; message: string }> = [];
   private mutationActor: 'agent' | 'user' = 'agent';
   private preset: StructuredPreset;
   private readonly operationLog: WorkspaceOperationLog;
@@ -265,6 +271,7 @@ export class CardAgentSessionService {
     this.mountedWorldbooks = options.mountedWorldbooks ?? new Set(restored?.runtime.mountedWorldbooks ?? []);
     this.mountedPresets = options.mountedPresets ?? new Set(restored?.runtime.mountedPresets ?? []);
     this.runModelSelection = klona(restored?.runtime.runModelSelection);
+    this.pendingGuidance = klona(restored?.runtime.pendingGuidance ?? []);
     this.now = options.now ?? Date.now;
     this.onPersist = options.onPersist;
     this.onSkillsCommit = options.onSkillsCommit;
@@ -378,7 +385,9 @@ export class CardAgentSessionService {
         ...item,
         attachments: item.attachments?.map(attachment => ({
           ...attachment,
-          missing: Boolean(attachment.fileId && this.workspaceStore && !this.workspaceStore.getReference(attachment.fileId)),
+          missing: Boolean(
+            attachment.fileId && this.workspaceStore && !this.workspaceStore.getReference(attachment.fileId),
+          ),
         })),
       })),
       warnings: [...this.warnings],
@@ -461,10 +470,7 @@ export class CardAgentSessionService {
     preset: StructuredPreset,
     availableSkills: AgentSkill[],
   ): Promise<void> {
-    if (
-      this.activeCheckpointId ||
-      ['running', 'waiting-approval'].includes(this.status)
-    ) {
+    if (this.activeCheckpointId || ['running', 'waiting-approval'].includes(this.status)) {
       throw new Error('当前轮次结束前不能替换Agent配置。');
     }
     await this.finalizeManualEdits();
@@ -484,10 +490,7 @@ export class CardAgentSessionService {
     preset: StructuredPreset,
     availableSkills: AgentSkill[],
   ): Promise<void> {
-    if (
-      this.activeCheckpointId ||
-      ['running', 'waiting-approval'].includes(this.status)
-    ) {
+    if (this.activeCheckpointId || ['running', 'waiting-approval'].includes(this.status)) {
       throw new Error('当前轮次结束前不能同步Agent配置。');
     }
     await this.finalizeManualEdits();
@@ -496,12 +499,14 @@ export class CardAgentSessionService {
     const configurationChanged = !canonicalEqual(this.agentConfiguration, configuration);
     const presetChanged = !canonicalEqual(this.preset, preset);
     if (!resourcesChanged && !configurationChanged && !presetChanged) return;
-    const previousSkillIds = new Set(this.agentConfiguration.skills.filter(skill => skill.enabled).map(skill => skill.id));
+    const previousSkillIds = new Set(
+      this.agentConfiguration.skills.filter(skill => skill.enabled).map(skill => skill.id),
+    );
     const nextSkillIds = new Set(configuration.skills.filter(skill => skill.enabled).map(skill => skill.id));
     const skillChanges = new Set(
-      [...previousSkillIds].filter(id => !nextSkillIds.has(id)).concat(
-        [...nextSkillIds].filter(id => !previousSkillIds.has(id)),
-      ),
+      [...previousSkillIds]
+        .filter(id => !nextSkillIds.has(id))
+        .concat([...nextSkillIds].filter(id => !previousSkillIds.has(id))),
     ).size;
     const previousTools = new Set(this.agentConfiguration.toolIds);
     const nextTools = new Set(configuration.toolIds);
@@ -557,10 +562,7 @@ export class CardAgentSessionService {
   }
 
   async setSkills(skills: AgentSkill[]): Promise<void> {
-    if (
-      this.activeCheckpointId ||
-      ['running', 'waiting-approval'].includes(this.status)
-    ) {
+    if (this.activeCheckpointId || ['running', 'waiting-approval'].includes(this.status)) {
       throw new Error('当前轮次结束前不能更新全局Skill挂载。');
     }
     await this.finalizeManualEdits();
@@ -593,20 +595,23 @@ export class CardAgentSessionService {
           sessionId: this.sessionId,
         });
         const path = `${targetDirectory.replace(/\/$/u, '')}/${input.filename}`;
-        await this.repository.stageFile({
-          content: '',
-          external: {
-            fileId: staging.fileId,
-            mediaType: staging.mediaType,
-            scope: staging.scope,
-            sha256: staging.sha256,
-            size: staging.size,
+        await this.repository.stageFile(
+          {
+            content: '',
+            external: {
+              fileId: staging.fileId,
+              mediaType: staging.mediaType,
+              scope: staging.scope,
+              sha256: staging.sha256,
+              size: staging.size,
+            },
+            mediaType: input.mediaType,
+            path,
+            readonly: false,
+            resourceId: crypto.randomUUID(),
           },
-          mediaType: input.mediaType,
-          path,
-          readonly: false,
-          resourceId: crypto.randomUUID(),
-        }, `player-upload:${crypto.randomUUID()}`);
+          `player-upload:${crypto.randomUUID()}`,
+        );
       }
     } finally {
       this.mutationActor = 'agent';
@@ -618,9 +623,8 @@ export class CardAgentSessionService {
 
   async setWorkspaceAvatar(sourcePath: string, target: 'character' | { userName: string }): Promise<SessionView> {
     if (!this.repository) throw new Error('工作区尚未初始化。');
-    const targetPath = target === 'character'
-      ? '/character/avatar.png'
-      : `/users/${encodeWorkspaceSegment(target.userName)}.avatar.png`;
+    const targetPath =
+      target === 'character' ? '/character/avatar.png' : `/users/${encodeWorkspaceSegment(target.userName)}.avatar.png`;
     this.mutationActor = 'user';
     try {
       await this.repository.replaceReadonlyBinary(targetPath, sourcePath, `player-avatar:${crypto.randomUUID()}`);
@@ -749,11 +753,62 @@ export class CardAgentSessionService {
     this.runner?.stop();
   }
 
-  enqueueGuidance(message: string): void {
+  async enqueueGuidance(message: string): Promise<void> {
     if (!this.runner || !['running', 'waiting-approval'].includes(this.runner.state.status)) {
       throw new Error('当前没有正在运行的Agent步骤。');
     }
-    this.runner.enqueueGuidance(message);
+    if (!message.trim()) return;
+    const id = this.runner.enqueueGuidance(message);
+    this.ui.push({
+      id,
+      at: this.now(),
+      checkpointId: this.activeCheckpointId,
+      content: message.trim(),
+      kind: 'guidance',
+      guidanceStatus: 'queued',
+    });
+    this.notify();
+    await this.persist();
+  }
+
+  async finishInterruptedTurn(): Promise<void> {
+    if (!this.activeCheckpointId) return;
+    this.assertHistoryRestoreAllowed();
+    const messages = klona(this.runner?.state.messages ?? this.modelMessages);
+    const results = new Set(
+      messages.flatMap(message =>
+        message.role === 'tool' && Array.isArray(message.content)
+          ? message.content.filter(part => part.type === 'tool-result').map(part => part.toolCallId)
+          : [],
+      ),
+    );
+    for (const message of [...messages]) {
+      if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
+      for (const part of message.content) {
+        if (part.type !== 'tool-call' || results.has(part.toolCallId)) continue;
+        messages.push({
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolCallId: part.toolCallId,
+              toolName: part.toolName,
+              output: {
+                type: 'json',
+                value: { cancelled: true, message: '本轮已结束，此工具没有返回可确认的执行结果。' },
+              },
+            },
+          ],
+        });
+        results.add(part.toolCallId);
+      }
+    }
+    this.modelMessages = messages;
+    for (const item of this.ui) if (item.guidanceStatus === 'queued') item.guidanceStatus = 'cancelled';
+    this.pendingGuidance = [];
+    this.runner = undefined;
+    await this.completeRealtimeTurn();
+    await this.persist();
   }
 
   async undo(): Promise<SessionView> {
@@ -800,7 +855,12 @@ export class CardAgentSessionService {
       this.notify();
       return this.view();
     }
-    await this.replayTurn(pending.turnId, pending.direction, pending.conflicts.map(item => item.operationId), false);
+    await this.replayTurn(
+      pending.turnId,
+      pending.direction,
+      pending.conflicts.map(item => item.operationId),
+      false,
+    );
     if (pending.after?.kind === 'undo-message') return this.finishMessageUndo(pending.after.messageId, pending.turnId);
     await this.persist();
     return this.view();
@@ -878,7 +938,7 @@ export class CardAgentSessionService {
       }
     } catch (error) {
       group.files[input.path] = {
-        after: input.kind === 'write' ? input.content ?? '' : undefined,
+        after: input.kind === 'write' ? (input.content ?? '') : undefined,
         before: currentFile?.content,
         error: error instanceof Error ? error.message : String(error),
         kind: input.kind,
@@ -892,7 +952,7 @@ export class CardAgentSessionService {
     }
     const previous = group.files[input.path];
     group.files[input.path] = {
-      after: input.kind === 'write' ? input.content ?? '' : undefined,
+      after: input.kind === 'write' ? (input.content ?? '') : undefined,
       before: previous?.before ?? currentFile?.content,
       kind: input.kind,
       path: input.path,
@@ -904,11 +964,15 @@ export class CardAgentSessionService {
     return this.view();
   }
 
-  editUserMessage(messageId: string, content: string): void {
+  async editUserMessage(messageId: string, content: string): Promise<void> {
+    this.assertHistoryRestoreAllowed();
+    if (this.activeCheckpointId || this.ui.filter(item => !item.hidden).at(-1)?.id !== messageId) {
+      throw new Error('请先回退本轮，再编辑待重发的消息。');
+    }
     const item = this.ui.find(message => message.id === messageId && message.kind === 'user');
     if (!item) throw new Error(`用户消息不存在：${messageId}`);
     item.content = content;
-    this.notify();
+    await this.persist();
   }
 
   /**
@@ -992,18 +1056,20 @@ export class CardAgentSessionService {
   async resend(messageId: string): Promise<SessionView> {
     const item = this.ui.find(message => message.id === messageId && message.kind === 'user');
     if (!item) throw new Error(`用户消息不存在：${messageId}`);
-    const attachments = await Promise.all((item.attachments ?? []).map(async summary => {
-      const attachment = this.attachments[summary.id];
-      if (!attachment) throw new Error(`附件内容已经丢失：${summary.filename}`);
-      if (this.attachmentStore) return this.attachmentStore.loadInput(attachment);
-      if (!attachment.data) throw new Error(`附件内容已经丢失：${summary.filename}`);
-      return {
-        data: attachment.data,
-        filename: attachment.filename,
-        mediaType: attachment.mediaType,
-        size: attachment.size,
-      };
-    }));
+    const attachments = await Promise.all(
+      (item.attachments ?? []).map(async summary => {
+        const attachment = this.attachments[summary.id];
+        if (!attachment) throw new Error(`附件内容已经丢失：${summary.filename}`);
+        if (this.attachmentStore) return this.attachmentStore.loadInput(attachment);
+        if (!attachment.data) throw new Error(`附件内容已经丢失：${summary.filename}`);
+        return {
+          data: attachment.data,
+          filename: attachment.filename,
+          mediaType: attachment.mediaType,
+          size: attachment.size,
+        };
+      }),
+    );
     return this.send(item.content, messageId, attachments);
   }
 
@@ -1033,7 +1099,7 @@ export class CardAgentSessionService {
       },
       workspaceStore: this.workspaceStore,
       tavernSource: this.tavernBridge
-          ? new TavernWorkspaceLiveSource({
+        ? new TavernWorkspaceLiveSource({
             backupBinary: (file, toolCallId) => this.backupWorkspaceBinary(file, toolCallId),
             bridge: this.tavernBridge,
             mountedPresets: this.mountedPresets,
@@ -1068,7 +1134,7 @@ export class CardAgentSessionService {
       '# 当前工作区环境',
       '',
       `- 会话类型：${this.scope === 'global' ? '全局会话' : '角色会话'}`,
-      `- 当前角色：${hasCharacter ? this.tavernBridge?.getCurrentCharacterName() ?? '未知' : '未打开'}`,
+      `- 当前角色：${hasCharacter ? (this.tavernBridge?.getCurrentCharacterName() ?? '未知') : '未打开'}`,
       `- 当前User：${this.tavernBridge?.getCurrentPersonaName() ?? '未选择'}`,
       `- 当前User文件：${this.tavernBridge?.getCurrentPersonaName() ? `/users/${this.tavernBridge.getCurrentPersonaName()}.md` : '未挂载'}`,
       `- 角色目录：${hasCharacter ? '/character' : '未挂载'}`,
@@ -1170,14 +1236,17 @@ export class CardAgentSessionService {
       .filter(record => (direction === 'undo' ? record.state === 'applied' : record.state === 'undone'));
     this.replayingOperations = true;
     try {
-      const result = await executeOperationReplay({ direction, records, repository: this.repository, skipOperationIds });
+      const result = await executeOperationReplay({
+        direction,
+        records,
+        repository: this.repository,
+        skipOperationIds,
+      });
       if (direction === 'undo') this.operationLog.markUndone(turnId, result.appliedOperationIds);
       else this.operationLog.markRedone(turnId, result.appliedOperationIds);
       this.pendingOperationReplay = undefined;
       if (result.failed.length > 0) {
-        this.warnings = [
-          ...new Set([...this.warnings, ...result.failed.map(item => `${item.path}：${item.reason}`)]),
-        ];
+        this.warnings = [...new Set([...this.warnings, ...result.failed.map(item => `${item.path}：${item.reason}`)])];
       }
       const recoverySaved = await this.operationRecovery.persist(this.sessionId, turnId, this.operationLog.export());
       if (!recoverySaved) this.operationLog.setRecoveryAvailable(turnId, false);
@@ -1209,6 +1278,7 @@ export class CardAgentSessionService {
     // 消息回退会移除该轮Agent上下文，不能只重做文件而留下缺失的Agent消息。
     this.operationLog.discardRedo(turnId);
     this.runner = undefined;
+    this.pendingGuidance = [];
     this.status = 'completed';
     this.lastError = undefined;
     await this.persist();
@@ -1229,6 +1299,7 @@ export class CardAgentSessionService {
       executor: this.executor,
       headerMessageCount: this.headerMessageCount,
       initialMessages: this.modelMessages,
+      initialGuidance: this.runner?.state.guidance ?? this.pendingGuidance,
       initialPending,
       initialStatus,
       journal,
@@ -1242,10 +1313,11 @@ export class CardAgentSessionService {
       requestApproval: request =>
         this.requestToolApproval?.({ ...request, sessionId: this.sessionId }) ?? Promise.resolve(false),
       prepareMessages: this.attachmentStore
-        ? messages => this.attachmentStore!.prepareMessages(this.sessionId, messages, {
-            sendImages: this.modelVisionEnabled,
-          })
-          : undefined,
+        ? messages =>
+            this.attachmentStore!.prepareMessages(this.sessionId, messages, {
+              sendImages: this.modelVisionEnabled,
+            })
+        : undefined,
       refreshCompactionHeader: () => this.compileCompactionHeader(),
       tools: [
         ...createWorkspaceRunnerTools(
@@ -1267,11 +1339,7 @@ export class CardAgentSessionService {
               onUnmount: name => this.mountedWorldbooks.delete(name),
               chatBindingConfirmation: (input, toolCallId) => {
                 const changesChatBinding = Boolean((input as { chat?: unknown } | undefined)?.chat);
-                if (
-                  !changesChatBinding ||
-                  this.mode === 'yolo' ||
-                  !this.tavernChatWorkspace?.needsAuthorization()
-                ) {
+                if (!changesChatBinding || this.mode === 'yolo' || !this.tavernChatWorkspace?.needsAuthorization()) {
                   return undefined;
                 }
                 return {
@@ -1296,10 +1364,8 @@ export class CardAgentSessionService {
                 approvalMode: () => (this.mode === 'full' ? 'full' : this.mode === 'yolo' ? 'yolo' : 'manual'),
                 mountedPresets: this.mountedPresets,
               }),
-              ...createAvatarRunnerTools(
-                this.repository,
-                this.tavernBridge,
-                () => (this.mode === 'full' ? 'full' : this.mode === 'yolo' ? 'yolo' : 'manual'),
+              ...createAvatarRunnerTools(this.repository, this.tavernBridge, () =>
+                this.mode === 'full' ? 'full' : this.mode === 'yolo' ? 'yolo' : 'manual',
               ),
             ]
           : []),
@@ -1394,8 +1460,12 @@ export class CardAgentSessionService {
   private async updateManualModelMessage(group: ManualEditGroup): Promise<void> {
     const entries = await Promise.all(
       Object.values(group.files).map(async change => {
-        const before = change.before === undefined ? undefined : (await maskSecretsForModel(change.before, change.path)).maskedContent;
-        const after = change.after === undefined ? undefined : (await maskSecretsForModel(change.after, change.path)).maskedContent;
+        const before =
+          change.before === undefined
+            ? undefined
+            : (await maskSecretsForModel(change.before, change.path)).maskedContent;
+        const after =
+          change.after === undefined ? undefined : (await maskSecretsForModel(change.after, change.path)).maskedContent;
         return { after, before, kind: change.kind, path: change.path };
       }),
     );
@@ -1412,9 +1482,10 @@ export class CardAgentSessionService {
         ].join('\n');
       })
       .join('\n');
-    const details = unified.length <= 6_000
-      ? unified
-      : `修改规模较大，请按需重新读取这些路径：\n${entries.map(change => `- ${change.kind} ${change.path}`).join('\n')}`;
+    const details =
+      unified.length <= 6_000
+        ? unified
+        : `修改规模较大，请按需重新读取这些路径：\n${entries.map(change => `- ${change.kind} ${change.path}`).join('\n')}`;
     const content = [
       '<manual_workspace_changes>',
       '这是玩家对工作区的直接修改，不是新的创作目标。请把这些变化作为继续旧目标时的最新事实。',
@@ -1683,13 +1754,16 @@ export class CardAgentSessionService {
         item.content = event.type === 'tool-completed' ? canonicalStringify(event.output) : event.error;
       }
     } else if (event.type === 'guidance-injected') {
-      this.ui.push({
-        at: event.at,
-        checkpointId: this.activeCheckpointId,
-        content: event.message,
-        id: crypto.randomUUID(),
-        kind: 'guidance',
-      });
+      if (event.ids?.length) {
+        for (const item of this.ui) if (event.ids.includes(item.id)) item.guidanceStatus = 'delivered';
+      } else
+        this.ui.push({
+          at: event.at,
+          checkpointId: this.activeCheckpointId,
+          content: event.message,
+          id: crypto.randomUUID(),
+          kind: 'guidance',
+        });
     } else if (event.type === 'status') {
       this.status = event.status;
       if (!['running', 'waiting-approval'].includes(event.status)) {
@@ -1705,10 +1779,7 @@ export class CardAgentSessionService {
     }
   }
 
-  private completeRunUi(
-    status: NonNullable<SessionUiItem['runStatus']>,
-    endedAt: number,
-  ): void {
+  private completeRunUi(status: NonNullable<SessionUiItem['runStatus']>, endedAt: number): void {
     const user = [...this.ui]
       .reverse()
       .find(item => item.checkpointId === this.activeCheckpointId && item.kind === 'user');
@@ -1727,6 +1798,7 @@ export class CardAgentSessionService {
       events: klona(this.events),
       headerMessageCount: this.headerMessageCount,
       lastError: this.lastError,
+      pendingGuidance: klona(this.runner?.state.guidance ?? this.pendingGuidance),
       manualEditGroup: this.manualEditGroup ? klona(this.manualEditGroup) : undefined,
       mode: this.mode,
       modelControls: klona(this.modelControls),
@@ -1752,7 +1824,9 @@ export class CardAgentSessionService {
   }
 
   private async persist(): Promise<void> {
-    const referencedAttachments = new Set(this.ui.flatMap(item => item.attachments?.map(attachment => attachment.id) ?? []));
+    const referencedAttachments = new Set(
+      this.ui.flatMap(item => item.attachments?.map(attachment => attachment.id) ?? []),
+    );
     Object.keys(this.attachments).forEach(id => {
       if (!referencedAttachments.has(id)) delete this.attachments[id];
     });

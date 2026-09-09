@@ -3,11 +3,7 @@ import type { PersistedSessionRuntime } from '../session/types';
 import { CharacterMetadataStore } from './character-store';
 import type { AgentSettingsStore, SessionIndexEntry } from './settings';
 import type { TavernFileClient } from './file-client';
-import {
-  IndexedDbSessionDraftCache,
-  type PendingSessionDraft,
-  type SessionDraftCache,
-} from './session-draft-cache';
+import { IndexedDbSessionDraftCache, type PendingSessionDraft, type SessionDraftCache } from './session-draft-cache';
 
 type SessionFilePayload = {
   runtime: PersistedSessionRuntime;
@@ -94,6 +90,7 @@ export class SessionRevisionStore {
     settingsStore: AgentSettingsStore,
     private readonly now: () => number = Date.now,
     private readonly draftCache: SessionDraftCache = new IndexedDbSessionDraftCache(),
+    private readonly versioned = false,
   ) {
     this.characters = new CharacterMetadataStore(client, settingsStore, now);
   }
@@ -131,10 +128,12 @@ export class SessionRevisionStore {
     const revision = (previous?.revision ?? 0) + 1;
     const packed = await envelope({ runtime: input.runtime }, revision);
     const bytes = new TextEncoder().encode(canonicalStringify(packed));
-    const name = `DreamCreator--Session--${safe(input.bindingId)}--${safe(input.runtime.sessionId)}.json`;
+    const suffix = this.versioned ? `--r${revision}--${crypto.randomUUID()}` : '';
+    const name = `DreamCreator--Session--${safe(input.bindingId)}--${safe(input.runtime.sessionId)}${suffix}.json`;
     const url = await this.uploadWithRetry(name, bytes);
     const timestamp = this.now();
     const entry: SessionIndexEntry = {
+      previousBackupUrl: this.versioned ? previous?.url : undefined,
       avatarId: input.avatarId ?? previous?.avatarId,
       bindingId: input.bindingId,
       characterName: input.characterName,
@@ -149,6 +148,8 @@ export class SessionRevisionStore {
       url,
     };
     await this.characters.upsertSession(entry);
+    if (this.versioned && previous?.previousBackupUrl)
+      await this.client.delete(previous.previousBackupUrl).catch(() => undefined);
     return entry;
   }
 

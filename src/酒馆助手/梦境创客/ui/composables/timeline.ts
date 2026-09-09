@@ -53,10 +53,7 @@ function runDuration(
 
   // 缺少整轮 durationMs 时，已完成轮次绝不能以“现在”作为结束点，
   // 否则每次打开历史都会继续变长；使用该轮最后一个可见事件（含片段自身耗时）估算。
-  const endedAt = Math.max(
-    startedAt,
-    ...items.map(item => item.at + Math.max(0, item.durationMs ?? 0)),
-  );
+  const endedAt = Math.max(startedAt, ...items.map(item => item.at + Math.max(0, item.durationMs ?? 0)));
   return Math.max(0, endedAt - startedAt);
 }
 
@@ -108,18 +105,14 @@ export function buildTimelineBlocks(
       );
       const endedAt =
         segment.endedAt ??
-        (isLastSegment && activeStillRunning
-          ? now
-          : Math.max(endFromItems, finalAssistant?.at ?? segment.startedAt));
+        (isLastSegment && activeStillRunning ? now : Math.max(endFromItems, finalAssistant?.at ?? segment.startedAt));
       const block: RunTimelineBlock = {
         durationMs: hasGuidance
           ? Math.max(0, endedAt - segment.startedAt)
           : runDuration(user, items, activeStillRunning, now),
         id: hasGuidance ? `run:${checkpointId}:${segment.index}` : `run:${checkpointId}`,
         items: segment.items,
-        status: isLastSegment
-          ? runDisplayStatus(user, checkpointId === lastCheckpointId, activeStatus)
-          : 'completed',
+        status: isLastSegment ? runDisplayStatus(user, checkpointId === lastCheckpointId, activeStatus) : 'completed',
         type: 'run',
       };
       segment.items.forEach(item => runByItemId.set(item.id, block));
@@ -207,10 +200,7 @@ export function toolGroupSummary(items: SessionUiItem[]): string {
   return [...counts].map(([name, count]) => (count > 1 ? `${name} ×${count}` : name)).join(' · ');
 }
 
-export function toolStatusLabel(
-  status: SessionUiItem['status'],
-  phase?: SessionUiItem['toolPhase'],
-): string {
+export function toolStatusLabel(status: SessionUiItem['status'], phase?: SessionUiItem['toolPhase']): string {
   if (status === 'running' && phase === 'generating') return '生成中';
   if (status === 'running' && phase === 'ready') return '待执行';
   return { completed: '完成', failed: '失败', running: '运行中' }[status ?? 'completed'];
@@ -238,6 +228,7 @@ export function cleanGuidance(value: string): string {
   return value
     .replace(/<\/?mid_turn_guidance>/gu, '')
     .replace('这是对当前未完成目标的中途补充，不是替换旧目标的新任务。', '')
+    .replace('用户在运行期间发来的新指示；根据其意图补充、纠正或替换当前目标。', '')
     .trim();
 }
 

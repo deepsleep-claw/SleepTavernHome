@@ -89,22 +89,28 @@ describe('AgentRunner', () => {
 
   it('把Provider执行的联网活动只记入时间线，不送入本地工具队列', async () => {
     const journal = new MemoryRunnerJournal();
-    const executor = new QueueExecutor([{
-      ...modelStep([], 'answer with sources'),
-      providerToolCalls: [{
-        input: { query: 'latest model' },
-        output: [{ title: 'Source', url: 'https://example.test' }],
-        providerExecuted: true,
-        toolCallId: 'web-1',
-        toolName: 'web_search',
-      }],
-    }]);
+    const executor = new QueueExecutor([
+      {
+        ...modelStep([], 'answer with sources'),
+        providerToolCalls: [
+          {
+            input: { query: 'latest model' },
+            output: [{ title: 'Source', url: 'https://example.test' }],
+            providerExecuted: true,
+            toolCallId: 'web-1',
+            toolName: 'web_search',
+          },
+        ],
+      },
+    ]);
     const runner = new AgentRunner({ executor, journal, tools: [] });
     expect((await runner.start('search')).status).toBe('completed');
-    expect(journal.events).toEqual(expect.arrayContaining([
-      expect.objectContaining({ call: expect.objectContaining({ toolCallId: 'web-1' }), type: 'tool-started' }),
-      expect.objectContaining({ call: expect.objectContaining({ toolCallId: 'web-1' }), type: 'tool-completed' }),
-    ]));
+    expect(journal.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ call: expect.objectContaining({ toolCallId: 'web-1' }), type: 'tool-started' }),
+        expect.objectContaining({ call: expect.objectContaining({ toolCallId: 'web-1' }), type: 'tool-completed' }),
+      ]),
+    );
     expect(executor.requests).toHaveLength(1);
   });
 
@@ -274,7 +280,10 @@ describe('AgentRunner', () => {
     expect(returnedResults).toHaveLength(1);
     expect(journal.events).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ call: expect.objectContaining({ toolCallId: invalidCall.toolCallId }), type: 'tool-failed' }),
+        expect.objectContaining({
+          call: expect.objectContaining({ toolCallId: invalidCall.toolCallId }),
+          type: 'tool-failed',
+        }),
       ]),
     );
     expect(
@@ -288,10 +297,14 @@ describe('AgentRunner', () => {
     const runner = new AgentRunner({
       executor,
       journal: new MemoryRunnerJournal(),
-      tools: [runnerTool('read', true, async () => ({ ok: true }))],
+      tools: [
+        runnerTool('read', true, async () => {
+          runner.enqueueGuidance('补充一');
+          runner.enqueueGuidance('补充二');
+          return { ok: true };
+        }),
+      ],
     });
-    runner.enqueueGuidance('补充一');
-    runner.enqueueGuidance('补充二');
     await runner.start('goal');
     const secondRequest = executor.requests[1].messages;
     expect(secondRequest.at(-2)?.role).toBe('tool');
@@ -303,7 +316,8 @@ describe('AgentRunner', () => {
     const direct = new AgentRunner({ executor: directExecutor, journal: new MemoryRunnerJournal(), tools: [] });
     direct.enqueueGuidance('完成后的引导');
     expect((await direct.start('goal')).status).toBe('completed');
-    expect(directExecutor.requests).toHaveLength(2);
+    expect(directExecutor.requests).toHaveLength(1);
+    expect(JSON.stringify(directExecutor.requests[0].messages)).toContain('完成后的引导');
   });
 
   it('主动停止丢弃失败模型流，并保留此前消息', async () => {

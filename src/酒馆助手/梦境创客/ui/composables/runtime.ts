@@ -3,14 +3,12 @@
 // 叶子组件用 useDreamCardAgent() 读取状态并调用动作，不各自订阅 Runtime。
 import { inject, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch, type InjectionKey, type Ref } from 'vue';
 import type { AgentSkill } from '../../core/skills/types';
-import {
-  getDreamCardAgentRuntime,
-  type DreamCardAgentRuntime,
-  type DreamCardAgentRuntimeState,
-} from '../../runtime/dream-card-agent-runtime';
+import { type DreamCardAgentRuntimeState } from '../../runtime/dream-card-agent-runtime';
+import { getDreamCardAgentClient, type DreamCardAgentClient } from '../runtime-client';
 
 export type WorkspaceView = 'home' | 'session' | 'settings';
-export type SettingsSection = 'agent' | 'api' | 'diagnostics' | 'general' | 'preset' | 'resources' | 'skills' | 'storage' | 'theme' | 'update';
+export type SettingsSection =
+  'agent' | 'api' | 'diagnostics' | 'general' | 'preset' | 'resources' | 'skills' | 'storage' | 'theme' | 'update';
 export type SidebarTab = 'context' | 'diff' | 'files';
 
 export type SkillEditorRequest = { builtin?: boolean; deleting: boolean; skill?: AgentSkill };
@@ -41,7 +39,7 @@ export type DreamCardAgentContext = {
   characterSwitchRequest: Ref<CharacterSwitchRequest | undefined>;
   isMobile: Ref<boolean>;
   mobileSurface: Ref<MobileSurface>;
-  runtime: DreamCardAgentRuntime;
+  runtime: DreamCardAgentClient;
   settingsSection: Ref<SettingsSection>;
   sidebarCollapsed: Ref<boolean>;
   sidebarFocus: Ref<SidebarFocusRequest | undefined>;
@@ -53,7 +51,7 @@ export type DreamCardAgentContext = {
 const key: InjectionKey<DreamCardAgentContext> = Symbol('dca-runtime');
 
 export function provideDreamCardAgent(): DreamCardAgentContext {
-  const runtime = getDreamCardAgentRuntime();
+  const runtime = getDreamCardAgentClient();
   // Runtime每次发布的都是完整新快照；浅响应避免Vue反复代理庞大的文件树、事件和历史正文。
   const state = shallowRef<DreamCardAgentRuntimeState>(runtime.snapshot());
   const workspaceView = ref<WorkspaceView>('home');
@@ -115,7 +113,10 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
       toastr.error('角色卡已经不可用。', '梦境创客');
       return;
     }
-    if (state.value.currentCharacter?.avatarId !== avatarId && !(await requestCharacterSwitch(character.name, 'create'))) {
+    if (
+      state.value.currentCharacter?.avatarId !== avatarId &&
+      !(await requestCharacterSwitch(character.name, 'create'))
+    ) {
       return;
     }
     let sessionId = '';
@@ -213,9 +214,7 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
   }
 
   function isSessionTabRunning(id: string): boolean {
-    return ['running', 'waiting-approval'].includes(
-      state.value.sessionStatuses[id] ?? '',
-    );
+    return ['running', 'waiting-approval'].includes(state.value.sessionStatuses[id] ?? '');
   }
 
   function ensureSessionTab(id: string) {

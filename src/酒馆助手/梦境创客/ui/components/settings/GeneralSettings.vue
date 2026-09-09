@@ -7,6 +7,17 @@
       </div>
     </header>
     <section class="dca-settings-group" aria-label="常规行为">
+      <div v-for="mode in interfaceModes" :key="mode.id" class="dca-toggle-row">
+        <span
+          ><strong>{{ mode.label }}</strong
+          ><small>{{ mode.description }}</small></span
+        >
+        <DcaSwitch
+          :label="mode.label"
+          :model-value="state.interfaceModes?.[mode.id] ?? mode.default"
+          @update:model-value="toggleInterface(mode.id, $event)"
+        />
+      </div>
       <div class="dca-toggle-row">
         <span><strong>显示悬浮按钮</strong><small>魔法棒入口始终保留</small></span>
         <DcaSwitch label="显示悬浮按钮" :model-value="state.floatingButton" @update:model-value="toggleFloating" />
@@ -51,8 +62,16 @@
     </section>
     <div v-if="dangerConfirmation" class="dca-modal-backdrop" role="presentation">
       <section class="dca-modal dca-provider-confirm" role="dialog" aria-modal="true">
-        <header><div><h3>启用高危写入权限？</h3><p>这会允许修改全局和当前预设的正则与酒馆助手脚本。相关Agent工具仍按审批模式确认。</p></div></header>
-        <footer><button type="button" @click="dangerConfirmation = false">取消</button><button class="dca-btn-danger" type="button" @click="confirmDangerousWrites">确认启用</button></footer>
+        <header>
+          <div>
+            <h3>启用高危写入权限？</h3>
+            <p>这会允许修改全局和当前预设的正则与酒馆助手脚本。相关Agent工具仍按审批模式确认。</p>
+          </div>
+        </header>
+        <footer>
+          <button type="button" @click="dangerConfirmation = false">取消</button
+          ><button class="dca-btn-danger" type="button" @click="confirmDangerousWrites">确认启用</button>
+        </footer>
       </section>
     </div>
   </section>
@@ -68,6 +87,35 @@ const dangerConfirmation = ref(false);
 
 async function toggleFloating(enabled: boolean) {
   await action(() => runtime.updateSettings({ floatingButton: enabled }));
+}
+
+const interfaceModes = [
+  { id: 'overlay' as const, label: '覆盖式界面', description: '在酒馆上方显示创客工作台', default: true },
+  {
+    id: 'navigation' as const,
+    label: '酒馆顶部栏入口',
+    description: '使用酒馆原生抽屉；现代化界面会自动排列入口',
+    default: true,
+  },
+  {
+    id: 'detached' as const,
+    label: '独立浏览器窗口',
+    description: '从界面按钮打开；任务仍由酒馆页面运行',
+    default: false,
+  },
+];
+async function toggleInterface(mode: 'overlay' | 'navigation' | 'detached', enabled: boolean) {
+  await action(() =>
+    runtime.updateSettings({
+      interfaceModes: {
+        overlay: true,
+        navigation: true,
+        detached: false,
+        ...state.value.interfaceModes,
+        [mode]: enabled,
+      },
+    }),
+  );
 }
 
 async function toggleSendShortcut(enabled: boolean) {
