@@ -58,6 +58,17 @@
     </div>
     <div class="dca-tab-actions">
       <button
+        v-if="embedded"
+        class="dca-tab dca-native-fullscreen-button"
+        type="button"
+        :title="nativeFullscreen ? '退出全屏' : '全屏显示工作台'"
+        :aria-label="nativeFullscreen ? '退出全屏' : '全屏显示工作台'"
+        :aria-pressed="nativeFullscreen"
+        @click="toggleNativeFullscreen"
+      >
+        <i :class="nativeFullscreen ? 'fa-solid fa-compress' : 'fa-solid fa-expand'" aria-hidden="true"></i>
+      </button>
+      <button
         class="dca-tab"
         type="button"
         :disabled="!state.interfaceModes?.detached"
@@ -140,8 +151,8 @@
 </template>
 
 <script setup lang="ts">
-import { openDetachedInterface } from '../runtime-client';
-import { computed, ref } from 'vue';
+import { clientEnvironment, readClientHost, openDetachedInterface } from '../runtime-client';
+import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
 import { useDreamCardAgent } from '../composables/runtime';
 import { useDreamCardAgentUpdater } from '../updater';
 
@@ -181,6 +192,21 @@ const mobileCharacterTitle = computed(() => state.value.currentCharacter?.name |
 const closingSessionId = ref('');
 const newSessionChoiceOpen = ref(false);
 const showCharacterChoices = ref(false);
+const environment = clientEnvironment();
+const embedded = environment?.mode === 'embedded';
+const nativeFullscreen = ref(false);
+let unsubscribeFullscreen = () => {};
+onMounted(() => {
+  if (embedded && environment)
+    unsubscribeFullscreen =
+      readClientHost(environment.host)?.subscribeNativeFullscreen(value => {
+        nativeFullscreen.value = value;
+      }) ?? (() => {});
+});
+onBeforeUnmount(() => unsubscribeFullscreen());
+function toggleNativeFullscreen() {
+  if (environment) readClientHost(environment.host)?.toggleNativeFullscreen();
+}
 async function startSession() {
   if (state.value.currentCharacter) await createSession();
   else newSessionChoiceOpen.value = true;
@@ -239,8 +265,9 @@ async function createCharacterFromTab(avatarId: string) {
   align-items: stretch;
   gap: 0.2rem;
   overflow-x: auto;
-  scrollbar-width: thin;
+  scrollbar-width: none;
 }
+.dca-tab-strip::-webkit-scrollbar { display: none; width: 0; height: 0; }
 
 .dca-tab-actions {
   display: flex;

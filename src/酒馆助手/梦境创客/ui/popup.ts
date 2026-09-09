@@ -227,8 +227,8 @@ export function openDreamCardAgentWindow(): void {
   const updateModeButton = () => {
     const mobile = viewport().mobile;
     $mode.toggle(!mobile);
-    $mode.attr('title', fullscreen ? '切换到窗口模式' : '填满酒馆可用区域');
-    $mode.find('i').attr('class', fullscreen ? 'fa-regular fa-window-restore' : 'fa-solid fa-expand');
+    $mode.attr('title', fullscreen ? '退出全屏' : '填满酒馆可用区域');
+    $mode.find('i').attr('class', fullscreen ? 'fa-solid fa-compress' : 'fa-solid fa-expand');
     $resizeHandles.toggle(!fullscreen && !mobile);
   };
   const placeFrame = (value: Frame, nextFullscreen = fullscreen) => {

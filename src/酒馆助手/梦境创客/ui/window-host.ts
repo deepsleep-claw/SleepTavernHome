@@ -14,7 +14,9 @@ function scriptString(value: string): string {
 }
 
 export function clientDocument(entryUrl: string, mode: 'embedded' | 'detached'): string {
-  const icon = encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#172536"/><text x="32" y="47" font-size="42" text-anchor="middle">🐋</text></svg>');
+  const icon = encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#172536"/><text x="32" y="47" font-size="42" text-anchor="middle">🐋</text></svg>',
+  );
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>梦境创客</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,${icon}">
 <link rel="stylesheet" href="https://testingcf.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css">
@@ -32,7 +34,7 @@ try {
     const node = document.createElement('div'); node.className = 'dca-client-toast'; node.setAttribute('role','alert'); node.textContent = String(text); document.body.append(node); setTimeout(() => node.remove(), 6000);
   }]));
   await import(${scriptString(entryUrl)});
-} catch (error) { document.getElementById('dca-client-loading').textContent = '连接失败：' + String(error); }
+} catch (error) { const message = document.getElementById('dca-client-loading') || document.body.appendChild(document.createElement('p')); message.textContent = '连接失败：' + String(error); }
 </script></body></html>`;
 }
 
@@ -48,6 +50,15 @@ export function configureWindowHost(
   let drawer: HTMLElement | undefined;
   let frame: HTMLIFrameElement | undefined;
   let disposed = false;
+  let startupTimer: number | undefined;
+  let handoffTimer: number | undefined;
+  let closeDrawer = () => {};
+  let fallbackFullscreenStyle: string | undefined;
+  const fullscreenListeners = new Set<(fullscreen: boolean) => void>();
+  const nativeFullscreen = () =>
+    Boolean(drawer?.querySelector('.th-modern-drawer-fullscreen-content, .dca-native-fullscreen'));
+  const publishFullscreen = () => fullscreenListeners.forEach(listener => listener(nativeFullscreen()));
+  const fullscreenObserver = new (host as Window & typeof globalThis).MutationObserver(publishFullscreen);
   const embeddedViews = new Set<() => void>();
   const clearEmbedded = () => {
     for (const dispose of [...embeddedViews]) dispose();
@@ -75,11 +86,21 @@ export function configureWindowHost(
       toastr.warning('浏览器阻止了新窗口，请允许本站弹窗后重试。', '梦境创客');
       return;
     }
-    destroyDreamCardAgentWindow();
-    clearEmbedded();
-    external.document.open();
-    external.document.write(clientDocument(entryUrl, 'detached'));
-    external.document.close();
+    const opened = external;
+    try {
+      opened.opener = host;
+      opened.document.open();
+      opened.document.write(clientDocument(entryUrl, 'detached'));
+      opened.document.close();
+      startupTimer = host.setTimeout(() => {
+        if (external !== opened || disposed) return;
+        external = null;
+        toastr.warning('新窗口尚未完成连接，原工作台已保留。可以关闭新窗口后重试。', '梦境创客');
+      }, 30_000);
+    } catch (error) {
+      external = null;
+      toastr.error(`新窗口初始化失败：${String(error)}`, '梦境创客');
+    }
   };
   const registry: ClientHost = {
     owner,
@@ -87,9 +108,48 @@ export function configureWindowHost(
     client: createRuntimeClient(runtime),
     context,
     openDetached,
-    registerView: (mode, dispose) => {
+    registerView: (mode, dispose, view) => {
       if (mode === 'embedded') embeddedViews.add(dispose);
+      if (mode === 'detached' && view === external) {
+        if (startupTimer !== undefined) host.clearTimeout(startupTimer);
+        handoffTimer = host.setTimeout(() => {
+          if (disposed || view !== external || view.closed) return;
+          closeDrawer();
+          destroyDreamCardAgentWindow();
+          clearEmbedded();
+        }, 0);
+      }
       return () => embeddedViews.delete(dispose);
+    },
+    toggleNativeFullscreen: () => {
+      const content = drawer?.querySelector<HTMLElement>('.drawer-content');
+      if (!content) return;
+      const modern = content.querySelector<HTMLElement>('.th-modern-drawer-fullscreen-toggle');
+      if (modern) modern.click();
+      else if (content.classList.contains('dca-native-fullscreen')) {
+        content.classList.remove('dca-native-fullscreen');
+        content.setAttribute('style', fallbackFullscreenStyle ?? '');
+        fallbackFullscreenStyle = undefined;
+      } else {
+        fallbackFullscreenStyle = content.getAttribute('style') ?? '';
+        content.classList.add('dca-native-fullscreen');
+        for (const [name, value] of Object.entries({
+          position: 'fixed',
+          inset: '0',
+          width: '100vw',
+          height: '100dvh',
+          'max-width': '100vw',
+          'max-height': '100dvh',
+          'z-index': '6000',
+        }))
+          content.style.setProperty(name, value, 'important');
+      }
+      publishFullscreen();
+    },
+    subscribeNativeFullscreen: listener => {
+      fullscreenListeners.add(listener);
+      listener(nativeFullscreen());
+      return () => fullscreenListeners.delete(listener);
     },
   };
   (host as unknown as Record<string, unknown>)[CLIENT_HOST_KEY] = registry;
@@ -115,6 +175,7 @@ export function configureWindowHost(
     content.style.cssText =
       'width:min(1200px,96vw);height:calc(100dvh - 70px);padding:0;overflow:hidden;max-height:calc(100dvh - 50px)';
     document.getElementById('top-settings-holder')?.append(element);
+    fullscreenObserver.observe(element, { attributes: true, subtree: true, attributeFilter: ['class'] });
     try {
       const importModule = (host as Window & typeof globalThis).Function('url', 'return import(url)') as (
         url: string,
@@ -122,6 +183,10 @@ export function configureWindowHost(
       const main = await importModule(new URL('/script.js', host.location.href).href);
       if (disposed || drawer !== element) return;
       const toggle = element.querySelector<HTMLElement>('.drawer-toggle')!;
+      closeDrawer = () => {
+        if (drawer !== element || !content.classList.contains('openDrawer')) return;
+        void main.doNavbarIconClick.call(toggle).catch(error => toastr.error(String(error), '梦境创客'));
+      };
       toggle.addEventListener('click', () => {
         if (external && !external.closed) {
           external.focus();
@@ -160,7 +225,7 @@ export function configureWindowHost(
     }
     const modes = runtime.snapshot().interfaceModes;
     if (modes.overlay) {
-      if (drawer?.querySelector('.openDrawer')) drawer.querySelector<HTMLElement>('.drawer-toggle')?.click();
+      closeDrawer();
       clearEmbedded();
       openDreamCardAgentWindow();
     } else if (modes.navigation) {
@@ -170,6 +235,10 @@ export function configureWindowHost(
 
   return () => {
     disposed = true;
+    if (startupTimer !== undefined) host.clearTimeout(startupTimer);
+    if (handoffTimer !== undefined) host.clearTimeout(handoffTimer);
+    fullscreenObserver.disconnect();
+    fullscreenListeners.clear();
     unsubscribe();
     clearEmbedded();
     drawer?.remove();

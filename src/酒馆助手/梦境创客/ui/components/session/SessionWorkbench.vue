@@ -1,8 +1,9 @@
 <template>
   <section
+    ref="workbenchRoot"
     class="dca-workbench"
-    :class="{ 'sidebar-collapsed': sidebarCollapsed }"
-    :style="{ '--dca-sidebar-width': `${sidebarWidth}px` }"
+    :class="{ 'sidebar-collapsed': sidebarCollapsed, 'is-narrow': workbenchWidth < 646 }"
+    :style="{ '--dca-sidebar-width': `${Math.min(sidebarWidth, Math.max(320, workbenchWidth - 326))}px` }"
   >
     <div class="dca-session-panel">
       <SessionToolbar :sidebar-collapsed="sidebarCollapsed" @toggle-sidebar="toggleSidebar" />
@@ -35,6 +36,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from 'vue';
+import { useElementWidth } from '../../composables/element-width';
 import { useDreamCardAgent, type SidebarTab } from '../../composables/runtime';
 import type { OperationDiffFocus } from '../../composables/operation-diff';
 import { useSidebarResize } from '../../composables/sidebar-resize';
@@ -47,6 +49,8 @@ import SessionSidebar from './sidebar/SessionSidebar.vue';
 const { sidebarFocus, state } = useDreamCardAgent();
 
 const sidebarCollapsed = ref(true);
+const workbenchRoot = ref<HTMLElement>();
+const workbenchWidth = useElementWidth(workbenchRoot);
 const sidebarWidth = ref(390);
 const sidebarTab = ref<SidebarTab>('files');
 const focusFilePath = ref('');
@@ -65,7 +69,7 @@ function openSidebar(tab: SidebarTab) {
 function openDiff(focus: OperationDiffFocus) {
   diffFocus.value = { ...focus, requestId: Date.now() };
   if (window.innerWidth > 720) {
-    sidebarWidth.value = Math.max(sidebarWidth.value, Math.min(680, window.innerWidth * (2 / 3)));
+    sidebarWidth.value = Math.max(sidebarWidth.value, Math.min(680, workbenchWidth.value * (2 / 3)));
   }
   openSidebar('diff');
 }
@@ -168,6 +172,25 @@ watch(
   user-select: none !important;
 }
 
+.dca-workbench.is-narrow:not(.sidebar-collapsed) {
+  display: block;
+  > .dca-session-panel {
+    height: 100%;
+  }
+  > .dca-session-sidebar {
+    position: absolute;
+    z-index: 30;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border-left: 0;
+    background: var(--dca-surface);
+    box-shadow: var(--dca-shadow-3);
+  }
+  > .dca-sidebar-resizer {
+    display: none;
+  }
+}
 @media (max-width: 720px) {
   .dca-workbench:not(.sidebar-collapsed) {
     display: block;

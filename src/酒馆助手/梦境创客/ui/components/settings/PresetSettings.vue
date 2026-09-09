@@ -468,12 +468,26 @@ async function copyText(content: string, label: PresetMacro | string) {
   overflow-wrap: anywhere;
 }
 
+.dca-settings-content-inner.is-tight .dca-preset-node > header {
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  > input {
+    min-width: 0;
+  }
+  > .dca-select {
+    grid-column: 3 / -1;
+    grid-row: 2;
+  }
+  > .dca-icon-btn {
+    grid-column: 4;
+    grid-row: 1;
+  }
+}
 @media (max-width: 720px) {
   .dca-preset-node > header {
     grid-template-columns: auto auto 1fr 7rem;
   }
 
-  .dca-preset-node > header button {
+  .dca-preset-node > header > .dca-icon-btn {
     grid-row: 2;
   }
 }

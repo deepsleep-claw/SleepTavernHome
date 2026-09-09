@@ -81,7 +81,9 @@ const CLIENT_METHODS = [
 ] as const satisfies readonly (keyof DreamCardAgentRuntime)[];
 export type DreamCardAgentClient = Pick<DreamCardAgentRuntime, (typeof CLIENT_METHODS)[number]>;
 export type ClientHost = {
-  registerView: (mode: 'embedded' | 'detached', dispose: () => void) => () => void;
+  registerView: (mode: 'embedded' | 'detached', dispose: () => void, view?: Window) => () => void;
+  toggleNativeFullscreen: () => void;
+  subscribeNativeFullscreen: (listener: (fullscreen: boolean) => void) => () => void;
   globals: Record<string, unknown>;
   owner: string;
   client: DreamCardAgentClient;

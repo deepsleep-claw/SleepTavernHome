@@ -1,5 +1,5 @@
 <template>
-  <section class="dca-settings-workspace">
+  <section ref="workspaceRoot" class="dca-settings-workspace" :class="{ 'is-compact': workspaceWidth < 640 }">
     <aside class="dca-settings-nav">
       <strong>设置</strong>
       <button
@@ -13,7 +13,11 @@
       </button>
     </aside>
     <div class="dca-settings-content">
-      <div class="dca-settings-content-inner">
+      <div
+        ref="contentRoot"
+        class="dca-settings-content-inner"
+        :class="{ 'is-narrow': contentWidth < 700, 'is-tight': contentWidth < 520 }"
+      >
         <GeneralSettings v-if="settingsSection === 'general'" />
         <ThemeSettings v-else-if="settingsSection === 'theme'" />
         <AgentSettings v-else-if="settingsSection === 'agent'" />
@@ -30,7 +34,8 @@
 </template>
 
 <script setup lang="ts">
-import { defineAsyncComponent } from 'vue';
+import { defineAsyncComponent, ref } from 'vue';
+import { useElementWidth } from '../../composables/element-width';
 import { useDreamCardAgent, type SettingsSection } from '../../composables/runtime';
 import ApiSettings from './ApiSettings.vue';
 import AgentSettings from './AgentSettings.vue';
@@ -45,6 +50,10 @@ import UpdateSettings from './UpdateSettings.vue';
 const ThemeSettings = defineAsyncComponent(() => import('./ThemeSettings.vue'));
 
 const { settingsSection } = useDreamCardAgent();
+const workspaceRoot = ref<HTMLElement>();
+const contentRoot = ref<HTMLElement>();
+const workspaceWidth = useElementWidth(workspaceRoot);
+const contentWidth = useElementWidth(contentRoot);
 
 const navItems: { icon: string; label: string; section: SettingsSection }[] = [
   { icon: 'fa-solid fa-sliders', label: '常规', section: 'general' },
@@ -115,6 +124,7 @@ const navItems: { icon: string; label: string; section: SettingsSection }[] = [
 }
 
 .dca-settings-content {
+  min-width: 0;
   min-height: 0;
   overflow: auto;
   scrollbar-gutter: stable;
@@ -125,6 +135,30 @@ const navItems: { icon: string; label: string; section: SettingsSection }[] = [
   max-width: 60rem;
   min-height: 100%;
   margin: 0 auto;
+}
+
+.dca-settings-workspace.is-compact {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  .dca-settings-nav {
+    flex-direction: row;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--dca-border);
+    padding: 0.4rem;
+  }
+  .dca-settings-nav > strong {
+    display: none;
+  }
+  .dca-settings-nav button {
+    flex: 0 0 auto;
+  }
+  .dca-settings-nav button.active {
+    box-shadow: inset 0 -2px 0 var(--dca-accent);
+  }
+}
+.dca-settings-content-inner.is-tight .dca-form-grid {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 @media (max-width: 720px) {

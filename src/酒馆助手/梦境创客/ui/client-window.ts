@@ -42,7 +42,7 @@ export function mountClientWindow(): void {
     cleanUpdater = configureDreamCardAgentUpdater(host.context);
     app = createApp(WorkspaceWindow);
     app.mount(root);
-    unregister = host.registerView(environment.mode, unmount);
+    unregister = host.registerView(environment.mode, unmount, window);
   };
   connect();
   const clock = setInterval(connect, 1000);

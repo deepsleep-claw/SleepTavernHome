@@ -1,5 +1,5 @@
 <template>
-  <div class="dca-session-bar">
+  <div ref="toolbarRoot" class="dca-session-bar" :class="{ 'is-narrow': toolbarWidth < 540 }">
     <div class="dca-session-bar-main">
       <div v-if="renaming" class="dca-session-rename">
         <input
@@ -102,6 +102,7 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { useElementWidth } from '../../composables/element-width';
 import { useDreamCardAgent } from '../../composables/runtime';
 import DcaSelect from '../DcaSelect.vue';
 
@@ -111,6 +112,8 @@ const emit = defineEmits<{ 'toggle-sidebar': [] }>();
 const { action, deleteCharacterSession, deleteSession, isSessionTabRunning, runtime, state } = useDreamCardAgent();
 
 const renaming = ref(false);
+const toolbarRoot = ref<HTMLElement>();
+const toolbarWidth = useElementWidth(toolbarRoot);
 const titleDraft = ref('');
 const deletePending = ref(false);
 const pendingAgentId = ref('');
@@ -190,11 +193,15 @@ async function confirmAgentChange() {
 
 .dca-session-bar-main {
   display: flex;
+  flex: 1 1 auto;
   min-width: 0;
   flex-direction: column;
 }
 
 .dca-session-bar-main > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--dca-text-muted);
   font-size: 0.74rem;
 }
@@ -222,7 +229,8 @@ async function confirmAgentChange() {
 
 .dca-session-controls {
   display: flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
 }
@@ -286,6 +294,26 @@ async function confirmAgentChange() {
 
 .dca-app .dca-sidebar-toggle span {
   font-size: 0.82rem;
+}
+
+.dca-session-bar.is-narrow {
+  & {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.35rem;
+  }
+  .dca-session-bar-main {
+    flex: 0 0 auto;
+    width: 100%;
+  }
+  .dca-session-controls {
+    justify-content: flex-end;
+    min-width: 0;
+  }
+  .dca-session-agent-select {
+    flex: 1 1 10rem;
+    min-width: 0;
+  }
 }
 
 @media (max-width: 720px) {

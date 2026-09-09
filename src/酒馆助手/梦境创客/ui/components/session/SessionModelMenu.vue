@@ -284,6 +284,10 @@ async function chooseReasoning(value: string) {
   position: relative;
   min-width: 0;
 }
+.dca-session-model-trigger > small {
+  white-space: nowrap;
+  flex-shrink: 0;
+}
 .dca-app .dca-session-model-trigger {
   display: flex;
   width: 100%;
