@@ -16,7 +16,7 @@
             type="button"
             :disabled="state.busy"
             title="新建会话"
-            @click="newSessionOpen = true"
+            @click="startSession"
           >
             <i class="fa-solid fa-plus" aria-hidden="true"></i> 新建会话
           </button>
@@ -103,11 +103,15 @@
 import { computed, ref, watch } from 'vue';
 import { formatSessionDate } from '../../composables/format';
 import { useDreamCardAgent } from '../../composables/runtime';
-const { createGlobalSession, createSessionForAvatar, deleteSession, isSessionTabRunning, openCharacterSession, openSettings, state } =
+const { createSession, createGlobalSession, createSessionForAvatar, deleteSession, isSessionTabRunning, openCharacterSession, openSettings, state } =
   useDreamCardAgent();
 const deletePendingSessionId = ref('');
 const newSessionOpen = ref(false);
 const showCharacters = ref(false);
+async function startSession() {
+  if (state.value.currentCharacter) await createSession();
+  else newSessionOpen.value = true;
+}
 const currentSessions = computed(() =>
   state.value.sessions.filter(item => item.bindingId === state.value.currentCharacter?.bindingId),
 );

@@ -523,6 +523,10 @@ function characterAvatarUrl(avatarId: string): string {
 }
 
 async function createSessionFromTop() {
+  if (state.value.currentCharacter) {
+    await createSession();
+    return;
+  }
   if (collapsed.value) {
     await createGlobalSession();
     return;

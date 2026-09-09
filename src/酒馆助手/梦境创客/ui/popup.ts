@@ -3,6 +3,7 @@ import { createApp } from 'vue';
 import WorkspaceWindow from './WorkspaceWindow.vue';
 import {
   isolateDocumentDoubleClick,
+  isWindowDragTarget,
   resizeFrame,
   type Frame,
   type ResizeBounds,
@@ -255,6 +256,7 @@ export function openDreamCardAgentWindow(): void {
     if (destroyed) return;
     destroyed = true;
     removePointer();
+    mountPoint.removeEventListener('pointerdown', dragFromWorkspace);
     removeDoubleClickIsolation();
     app.unmount();
     mountPoint.remove();
@@ -282,8 +284,8 @@ export function openDreamCardAgentWindow(): void {
     event.stopPropagation();
     removePointer();
     const start = readFrame($window);
-    const startX = event.clientX;
-    const startY = event.clientY;
+    const startX = event.screenX;
+    const startY = event.screenY;
     const pointerId = event.pointerId;
     const previousUserSelect = host.document.body.style.userSelect;
     const interactionCursor = host.getComputedStyle(captureTarget).cursor;
@@ -300,8 +302,8 @@ export function openDreamCardAgentWindow(): void {
       next.preventDefault();
       placeFrame(
         operation.type === 'resize'
-          ? resizeFrame(start, operation.direction, next.clientX - startX, next.clientY - startY, resizeBounds())
-          : { ...start, x: start.x + next.clientX - startX, y: start.y + next.clientY - startY },
+          ? resizeFrame(start, operation.direction, next.screenX - startX, next.screenY - startY, resizeBounds())
+          : { ...start, x: start.x + next.screenX - startX, y: start.y + next.screenY - startY },
       );
     };
     const end = (next?: Event) => {
@@ -310,6 +312,9 @@ export function openDreamCardAgentWindow(): void {
       host.document.removeEventListener('pointermove', move);
       host.document.removeEventListener('pointerup', end);
       host.document.removeEventListener('pointercancel', end);
+      document.removeEventListener('pointermove', move);
+      document.removeEventListener('pointerup', end);
+      document.removeEventListener('pointercancel', end);
       captureTarget.removeEventListener('lostpointercapture', end);
       if (captureTarget.hasPointerCapture(pointerId)) captureTarget.releasePointerCapture(pointerId);
       host.document.body.style.userSelect = previousUserSelect;
@@ -322,8 +327,18 @@ export function openDreamCardAgentWindow(): void {
     host.document.addEventListener('pointermove', move);
     host.document.addEventListener('pointerup', end);
     host.document.addEventListener('pointercancel', end);
+    document.addEventListener('pointermove', move);
+    document.addEventListener('pointerup', end);
+    document.addEventListener('pointercancel', end);
     captureTarget.addEventListener('lostpointercapture', end);
   };
+  const dragFromWorkspace = (event: PointerEvent) => {
+    const target = event.target;
+    if (target instanceof Element && isWindowDragTarget(target)) {
+      track(event, mountPoint, { type: 'move' });
+    }
+  };
+  mountPoint.addEventListener('pointerdown', dragFromWorkspace);
   $dragSurface.on('pointerdown', event =>
     track(event.originalEvent as PointerEvent, $dragSurface[0], { type: 'move' }),
   );

@@ -56,7 +56,7 @@
           type="button"
           :disabled="state.busy"
           title="新建会话"
-          @click="newSessionChoiceOpen = true"
+          @click="startSession"
         >
           <i class="fa-solid fa-plus" aria-hidden="true"></i>
         </button>
@@ -163,6 +163,10 @@ const mobileCharacterTitle = computed(() => state.value.currentCharacter?.name |
 const closingSessionId = ref('');
 const newSessionChoiceOpen = ref(false);
 const showCharacterChoices = ref(false);
+async function startSession() {
+  if (state.value.currentCharacter) await createSession();
+  else newSessionChoiceOpen.value = true;
+}
 const versionTitle = computed(() => {
   if (updaterSnapshot.value.status === 'checking')
     return `正在检查更新 · 当前 v${updaterSnapshot.value.runningVersion}`;

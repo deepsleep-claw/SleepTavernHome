@@ -1,7 +1,15 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it, vi } from 'vitest';
-import { isolateDocumentDoubleClick, resizeFrame, type ResizeBounds, type ResizeDirection } from './window-interaction';
+import { isolateDocumentDoubleClick, isWindowDragTarget, resizeFrame, type ResizeBounds, type ResizeDirection } from './window-interaction';
+
+it('窗口顶部空白可拖动，按钮和弹窗保持可交互', () => {
+  const root = document.createElement('div');
+  root.innerHTML = '<nav class="dca-tabs"><div class="dca-tab-strip"></div><button><i></i></button><div class="dca-modal-backdrop"><span></span></div></nav>';
+  expect(isWindowDragTarget(root.querySelector('.dca-tab-strip')!)).toBe(true);
+  expect(isWindowDragTarget(root.querySelector('i')!)).toBe(false);
+  expect(isWindowDragTarget(root.querySelector('span')!)).toBe(false);
+});
 
 const bounds: ResizeBounds = { bottom: 800, left: 10, minHeight: 380, minWidth: 420, right: 1000, top: 10 };
 const start = { height: 500, width: 600, x: 200, y: 150 };

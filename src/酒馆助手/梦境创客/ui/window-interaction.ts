@@ -1,5 +1,10 @@
 export type Frame = { height: number; width: number; x: number; y: number };
 
+export function isWindowDragTarget(target: Element): boolean {
+  return Boolean(target.closest('.dca-tabs, .dca-sidebar-brand')) &&
+    !target.closest('button, input, textarea, select, a, [role="button"], [contenteditable], .dca-modal-backdrop');
+}
+
 export type ResizeDirection = 'e' | 'n' | 'ne' | 'nw' | 's' | 'se' | 'sw' | 'w';
 
 export type ResizeBounds = {
