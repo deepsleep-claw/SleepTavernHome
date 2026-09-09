@@ -66,6 +66,9 @@
                 <button type="button" @click="openCompactModelMenu">
                   <i class="fa-solid fa-microchip"></i><span>模型与推理</span>
                 </button>
+                <button type="button" @click="plusLevel = 'agent'">
+                  <i class="fa-solid fa-robot"></i><span>选择 Agent</span>
+                </button>
                 <button type="button" @click="plusLevel = 'approval'">
                   <i class="fa-solid fa-shield-halved"></i><span>审批模式</span
                   ><small>{{ currentApprovalLabel }}</small>
@@ -79,19 +82,22 @@
                 <button type="button" @click="plusLevel = 'root'">
                   <i class="fa-solid fa-arrow-left"></i><span>返回</span>
                 </button>
-                <button
-                  v-for="option in approvalModeOptions"
-                  :key="option.value"
-                  type="button"
-                  :class="{ active: option.value === (state.approvalMode ?? state.active?.mode ?? 'normal') }"
-                  @click="changeModeFromMenu(option.value)"
-                >
-                  <i
-                    class="fa-solid fa-check"
-                    :class="{ invisible: option.value !== (state.approvalMode ?? state.active?.mode ?? 'normal') }"
-                  ></i>
-                  <span>{{ option.label }}</span>
-                </button>
+                <SessionAgentPicker v-if="plusLevel === 'agent'" mode="menu" @picked="plusOpen = false" />
+                <template v-else>
+                  <button
+                    v-for="option in approvalModeOptions"
+                    :key="option.value"
+                    type="button"
+                    :class="{ active: option.value === (state.active?.mode ?? state.approvalMode ?? 'normal') }"
+                    @click="changeModeFromMenu(option.value)"
+                  >
+                    <i
+                      class="fa-solid fa-check"
+                      :class="{ invisible: option.value !== (state.active?.mode ?? state.approvalMode ?? 'normal') }"
+                    ></i>
+                    <span>{{ option.label }}</span>
+                  </button>
+                </template>
               </template>
             </div>
           </div>
@@ -222,6 +228,7 @@ import { useDreamCardAgent } from '../../composables/runtime';
 import { useStoredDraft } from '../../composables/stored-draft';
 import DcaSelect from '../DcaSelect.vue';
 import SessionModelMenu from './SessionModelMenu.vue';
+import SessionAgentPicker from './SessionAgentPicker.vue';
 
 type AttachmentDraft = { file: File; id: string };
 const previews = new Map<string, string>();
@@ -245,7 +252,7 @@ const attachments = computed({
 const attachmentBusy = ref(false);
 const showFullAccessWarning = ref(false);
 const plusOpen = ref(false);
-const plusLevel = ref<'approval' | 'root'>('root');
+const plusLevel = ref<'approval' | 'root' | 'agent'>('root');
 const compactModelOpen = ref(false);
 const compact = ref(false);
 const composerShell = ref<HTMLElement>();
@@ -725,7 +732,7 @@ onBeforeUnmount(() => {
   background: var(--dca-surface);
   box-shadow: var(--dca-shadow-2);
 }
-.dca-plus-menu button {
+.dca-app .dca-plus-menu button {
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -733,6 +740,14 @@ onBeforeUnmount(() => {
   border-color: transparent;
   background: transparent;
   text-align: left;
+}
+.dca-app .dca-plus-menu button > i {
+  flex: 0 0 1rem;
+  width: 1rem;
+}
+.dca-app .dca-plus-menu button > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .dca-plus-menu button.active {
   background: var(--dca-accent-soft);

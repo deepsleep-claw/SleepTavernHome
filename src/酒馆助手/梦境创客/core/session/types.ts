@@ -39,6 +39,7 @@ export type SessionUiItem = {
   status?: 'completed' | 'failed' | 'running';
   toolCallId?: string;
   toolInput?: string;
+  toolCode?: string;
   toolName?: string;
   toolPhase?: 'executing' | 'generating' | 'ready';
   providerTool?: boolean;

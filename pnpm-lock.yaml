@@ -74,6 +74,9 @@ importers:
       '@vueuse/shared':
         specifier: ^13.9.0
         version: 13.9.0(vue@3.5.42(typescript@6.0.0-dev.20250807))
+      acorn:
+        specifier: 8.18.0
+        version: 8.18.0
       ai:
         specifier: 7.0.58
         version: 7.0.58(zod@4.5.4)

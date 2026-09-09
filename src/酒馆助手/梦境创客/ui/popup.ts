@@ -224,12 +224,20 @@ export function openDreamCardAgentWindow(): void {
   const style = teleportStyle();
   let preferences = readPreferences();
   let fullscreen = viewport().mobile || preferences.desktopMode === 'fullscreen';
+  const updateActionInset = () => {
+    const width = $titleActions[0].getBoundingClientRect().width;
+    const padding = Number.parseFloat(host.getComputedStyle($title[0]).paddingRight) || 0;
+    mountPoint.style.setProperty('--dca-window-actions-width', `${Math.ceil(width + padding + 8)}px`);
+  };
+  const actionsObserver = new ResizeObserver(updateActionInset);
+  actionsObserver.observe($titleActions[0]);
   const updateModeButton = () => {
     const mobile = viewport().mobile;
     $mode.toggle(!mobile);
     $mode.attr('title', fullscreen ? '退出全屏' : '填满酒馆可用区域');
     $mode.find('i').attr('class', fullscreen ? 'fa-solid fa-compress' : 'fa-solid fa-expand');
     $resizeHandles.toggle(!fullscreen && !mobile);
+    updateActionInset();
   };
   const placeFrame = (value: Frame, nextFullscreen = fullscreen) => {
     fullscreen = viewport().mobile || nextFullscreen;
@@ -258,6 +266,7 @@ export function openDreamCardAgentWindow(): void {
     removePointer();
     mountPoint.removeEventListener('pointerdown', dragFromWorkspace);
     removeDoubleClickIsolation();
+    actionsObserver.disconnect();
     app.unmount();
     mountPoint.remove();
     if (originalClass === null) frame.removeAttribute('class');

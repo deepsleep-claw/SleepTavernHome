@@ -14,3 +14,7 @@ loading: on-demand
 - 预览时读取 `window.__DREAM_CREATOR_RENDER_ENV__`；真实MVU状态只在非预览路径初始化。
 - 网络导入要考虑CORS和离线失败；关键功能不要只依赖第三方CDN。
 - 在Playground通过后仍需在真实酒馆验证，预览不能证明宿主副作用安全。
+
+工程设置 `renderer: tavern-helper`，将实际创建的 JS 路径列入 `build.scripts`。使用 `manage_html_project` 的 `check`、`compile`，按返回的正则路径调用 `prepare_render`；预览标记的格式见 HTML 工程 Skill 的 `references/preview.md`。
+
+角色脚本/界面使用 `$(() => {...})` 作为入口，卸载监听 `pagehide`。远程导入后 `DOMContentLoaded` 可能已经发生，不能把它作为唯一初始化时机。模块代码中的相对导入与清单路径规则见 HTML 工程格式，不把 VFS 路径直接当浏览器 URL。

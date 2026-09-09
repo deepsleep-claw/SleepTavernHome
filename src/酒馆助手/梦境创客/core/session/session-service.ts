@@ -86,7 +86,7 @@ type SessionServiceOptions = {
   onUpdate?: (view: SessionView) => void;
   operationRecoveryStore?: OperationRecoveryStore;
   preset?: StructuredPreset;
-  requestToolApproval?: (request: ToolConfirmation) => Promise<boolean>;
+  requestToolApproval?: (request: ToolConfirmation, signal?: AbortSignal) => Promise<boolean>;
   resourceBaseUrl?: string;
   scheduleStreamingUpdate?: (callback: () => void) => () => void;
   sessionId?: string;
@@ -804,7 +804,10 @@ export class CardAgentSessionService {
       }
     }
     this.modelMessages = messages;
-    this.modelMessages.push({ role: 'assistant', content: '本轮已由用户结束，已完成的操作保留。接下来的用户消息是新的请求。' });
+    this.modelMessages.push({
+      role: 'assistant',
+      content: '本轮已由用户结束，已完成的操作保留。接下来的用户消息是新的请求。',
+    });
     for (const item of this.ui) if (item.guidanceStatus === 'queued') item.guidanceStatus = 'cancelled';
     this.pendingGuidance = [];
     this.runner = undefined;
@@ -1409,6 +1412,15 @@ export class CardAgentSessionService {
           : []),
         ...createPlaygroundRunnerTools(this.repository, {
           approvalMode: () => (this.mode === 'full' ? 'full' : this.mode === 'yolo' ? 'yolo' : 'manual'),
+          onCodeResolved: (toolCallId, code) => {
+            const item = this.ui.find(item => item.toolCallId === toolCallId);
+            if (item) {
+              item.toolCode = code;
+              this.notify();
+            }
+          },
+          requestApproval: (request, signal) =>
+            this.requestToolApproval?.({ ...request, sessionId: this.sessionId }, signal) ?? Promise.resolve(false),
           prepareRender: render => {
             this.renderPreviews[render.renderId] = klona(render);
           },

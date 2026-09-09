@@ -1,5 +1,5 @@
 <template>
-  <div ref="toolbarRoot" class="dca-session-bar" :class="{ 'is-narrow': toolbarWidth < 540 }">
+  <div ref="toolbarRoot" class="dca-session-bar" :class="{ 'is-narrow': toolbarWidth < 680 || isMobile }">
     <div class="dca-session-bar-main">
       <div v-if="renaming" class="dca-session-rename">
         <input
@@ -28,31 +28,9 @@
           <i class="fa-solid fa-pencil" aria-hidden="true"></i>
         </button>
       </div>
-      <small
-        >{{ state.active?.scope === 'global' ? '全局会话' : state.active?.characterName }} ·
-        {{
-          state.activeSessionAccess === 'readonly-history'
-            ? '只读历史记录'
-            : state.active?.mode === 'yolo'
-              ? 'YOLO：低风险自动写入'
-              : state.active?.mode === 'full'
-                ? '完全权限：自动批准工具调用'
-                : '普通：批准后写入'
-        }}</small
-      >
     </div>
     <div class="dca-session-controls">
-      <label v-if="state.activeSessionAccess === 'live'" class="dca-session-agent-select">
-        <span>Agent</span>
-        <DcaSelect
-          :model-value="selectedAgentId"
-          :options="agentOptions"
-          placeholder="请选择 Agent"
-          aria-label="当前会话 Agent"
-          :disabled="!state.active || isSessionTabRunning(state.active.sessionId)"
-          @update:model-value="requestAgentChange"
-        />
-      </label>
+      <SessionAgentPicker v-if="state.activeSessionAccess === 'live' && toolbarWidth >= 680 && !isMobile" />
       <div v-if="deletePending" class="dca-session-delete-confirm">
         <span>删除当前会话？</span>
         <button type="button" @click="deletePending = false">取消</button>
@@ -82,49 +60,25 @@
         <span>{{ sidebarCollapsed ? '侧栏' : '收起' }}</span>
       </button>
     </div>
-    <div v-if="pendingAgentId" class="dca-modal-backdrop" role="presentation">
-      <section class="dca-modal dca-agent-change-dialog" role="dialog" aria-modal="true" @click.stop>
-        <header>
-          <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
-          <div>
-            <strong>切换当前会话的 Agent？</strong>
-            <span>这个会话已经开始。新的预设、Skill 与工具会立即生效，并可能失去已有请求的缓存命中。</span>
-          </div>
-        </header>
-        <footer>
-          <button type="button" @click="pendingAgentId = ''">取消</button>
-          <button class="dca-btn-primary" type="button" @click="confirmAgentChange">仍然切换</button>
-        </footer>
-      </section>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { ref, watch } from 'vue';
 import { useElementWidth } from '../../composables/element-width';
 import { useDreamCardAgent } from '../../composables/runtime';
-import DcaSelect from '../DcaSelect.vue';
+import SessionAgentPicker from './SessionAgentPicker.vue';
 
 defineProps<{ sidebarCollapsed: boolean }>();
 const emit = defineEmits<{ 'toggle-sidebar': [] }>();
 
-const { action, deleteCharacterSession, deleteSession, isSessionTabRunning, runtime, state } = useDreamCardAgent();
+const { action, deleteCharacterSession, deleteSession, isMobile, isSessionTabRunning, runtime, state } = useDreamCardAgent();
 
 const renaming = ref(false);
 const toolbarRoot = ref<HTMLElement>();
 const toolbarWidth = useElementWidth(toolbarRoot);
 const titleDraft = ref('');
 const deletePending = ref(false);
-const pendingAgentId = ref('');
-const agentOptions = computed(() =>
-  state.value.agentConfigurations.map(configuration => ({ label: configuration.name, value: configuration.id })),
-);
-const selectedAgentId = computed(() => {
-  const id = state.value.active?.agentConfiguration.id ?? '';
-  return state.value.agentConfigurations.some(configuration => configuration.id === id) ? id : '';
-});
-const hasStarted = computed(() => state.value.active?.ui.some(item => item.kind === 'user') === true);
 
 watch(
   () => state.value.active?.sessionId,
@@ -132,7 +86,6 @@ watch(
     renaming.value = false;
     titleDraft.value = '';
     deletePending.value = false;
-    pendingAgentId.value = '';
   },
 );
 
@@ -159,23 +112,6 @@ async function confirmDelete() {
       ? await deleteCharacterSession(bindingId, sessionId)
       : await deleteSession(sessionId);
   if (deleted) deletePending.value = false;
-}
-
-function requestAgentChange(id: string) {
-  if (!id || id === selectedAgentId.value) return;
-  if (hasStarted.value) pendingAgentId.value = id;
-  else void applyAgent(id);
-}
-
-async function applyAgent(id: string) {
-  if (await action(() => runtime.applyAgentConfiguration(id))) {
-    pendingAgentId.value = '';
-    toastr.success('当前会话的 Agent 已切换。', '梦境创客');
-  }
-}
-
-async function confirmAgentChange() {
-  if (pendingAgentId.value) await applyAgent(pendingAgentId.value);
 }
 </script>
 
@@ -222,7 +158,9 @@ async function confirmAgentChange() {
 }
 
 .dca-app .dca-session-rename input {
-  width: min(26rem, 55vw);
+  width: 100%;
+  min-width: 0;
+  max-width: 26rem;
   padding: 0.3rem 0.5rem;
   font-weight: 700;
 }
@@ -297,22 +235,20 @@ async function confirmAgentChange() {
 }
 
 .dca-session-bar.is-narrow {
-  & {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 0.35rem;
-  }
+  flex-direction: row;
+  align-items: center;
+  gap: 0.35rem;
   .dca-session-bar-main {
-    flex: 0 0 auto;
-    width: 100%;
+    flex: 1 1 auto;
+    width: auto;
   }
   .dca-session-controls {
-    justify-content: flex-end;
-    min-width: 0;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
+    gap: 0.25rem;
   }
-  .dca-session-agent-select {
-    flex: 1 1 10rem;
-    min-width: 0;
+  .dca-sidebar-toggle span {
+    display: none;
   }
 }
 

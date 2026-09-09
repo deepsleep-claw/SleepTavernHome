@@ -6,16 +6,23 @@ loading: on-demand
 ---
 # MVU角色卡
 
-本Skill提供MVU角色卡的版本识别、核心安装模板和维护规则。Skill里的文件只是参考模板，不会自行安装；只有用户要求创建或修改MVU卡时，才通过文件工具把资源写入当前角色作用域，并遵循当前审批模式。
+本Skill提供MVU角色卡的版本识别、核心安装模板和维护规则。创建或修改 MVU 卡时，通过文件工具把所需模板写入角色作用域。
+
+安装任务先读取 `/skills/builtin/mvu-zod-card/references/installation.md`。其中包含完整写入顺序、工具参数、模板清单和错误诊断。涉及真实聊天验收时还需读取 `/skills/builtin/card-workspace-io/references/tavern-chat.md`。
+
+仅安装或修复 MVU 运行时时，处理运行时脚本及加载验证即可；创建完整变量系统时才继续配置 Schema、初始值和协议。字段设计应来自角色设定，不为“安装框架”额外编造业务变量。
 
 ## 先识别版本
 
-先查看当前角色的 `/scripts/character/`、`/regexes/character/` 和已挂载 `/worldbooks/`，不要扫描全局或当前预设作用域，除非用户明确要求。
+先读取 `references/versions.md`，再查看当前角色的 `/scripts/character/`、`/regexes/character/` 和已挂载 `/worldbooks/`。框架发布版本、更新协议和 Schema 层是三个维度，不能互相代替；识别以实际启用资源为准。
 
-- **Zod方案**：存在 `registerMvuSchema`、`[mvu_update]` 条目，或JSON Patch形式的变量输出协议。读取 `references/zod/guide.md`，再按需读取同目录其他资料。
+- **Zod方案**：启用的变量结构脚本实际调用 `registerMvuSchema`。读取 `references/zod/guide.md`，再按需读取同目录其他资料。
+- **JSON Patch 基础方案**：启用的输出协议使用 `<JSONPatch>`，但没有 Schema 注册。读取 `references/json-patch/guide.md` 维护现有结构；JSON Patch 本身不代表已安装 Zod。
 - **旧版方案**：存在 `<UpdateVariable>`、三参数 `_.set(path, old, new)`、成对的 `[初始值, 更新说明]`，且没有Zod注册脚本。读取 `references/legacy/guide.md`。
 - **新卡**：没有任何MVU设施，而用户要求创建MVU卡。直接采用Zod方案，不额外询问版本。
 - **混合状态**：同时存在明显的新旧协议。停止修改，列出识别依据并询问用户；不要猜测或混用。
+
+`<UpdateVariable>` 是共用外层标签，单独看到它不能判定旧版或混合。`[mvu_update]` 也是命名约定，不是版本号。普通 `_.set(object, path, value)` 只是 lodash 操作，不能作为旧版协议证据。
 
 旧版卡只按原协议维护。除非用户明确要求迁移，否则禁止把旧版卡改成Zod，也不要用旧版协议创建新卡。
 
@@ -25,6 +32,7 @@ loading: on-demand
 
 1. 角色MVU运行时脚本已启用，并位于变量结构脚本之前。
 2. 角色变量结构脚本直接定义Schema并调用 `registerMvuSchema(Schema)`。
+   两个脚本异步加载；顺序不能替代 `await waitGlobalInitialized('Mvu')`。
 3. 绑定世界书包含 `[initvar]变量初始化勿开`、`变量列表`、`[mvu_update]变量更新规则`、`[mvu_update]变量输出格式`。
 4. 角色作用域存在防止历史变量更新块重新进入提示词的核心正则。
 5. 在真实聊天中验证 `stat_data` 完成初始化，合法更新能通过Schema，非法更新会被拒绝或修正。

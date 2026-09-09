@@ -16,3 +16,7 @@ loading: on-demand
 - 编译前检查HTML、CSS与正则；用自定义 `inputText` 预览匹配和渲染结果。
 
 详细约定见 `references/patterns.md`。
+
+最小流程：读取 HTML 工程的 `templates/minimal/`，将三个文件写入自己的工程目录，修改 HTML/CSS，执行 `manage_html_project` 的 `check` 和 `compile`。编译返回真实正则路径后，调用 `prepare_render`，使用 `sourceType: "regex"`、`renderer: "plain-html"` 和能匹配正则的 `inputText`。最后将返回标记单独放在回复的一行。
+
+正则替换不会自动转义 `$1` 等捕获值。纯展示样例使用固定标记 `[STATUS]`；需要展示任意不可信文本时，用受控代码通过 `textContent` 渲染，而不是直接拼入 HTML。

@@ -42,17 +42,29 @@ function usesCurrentResourceSuffix(url: string): boolean {
 function validManifest(value: unknown): value is RemoteSkillManifest {
   if (!value || typeof value !== 'object') return false;
   const manifest = value as Partial<RemoteSkillManifest>;
-  return manifest.protocolVersion === SUPPORTED_RESOURCE_PROTOCOL && Array.isArray(manifest.skills) &&
-    manifest.skills.every(skill =>
-      skill && typeof skill === 'object' && typeof skill.id === 'string' && typeof skill.name === 'string' &&
-      typeof skill.file === 'string' && skill.file.endsWith(RESOURCE_FILE_SUFFIX) &&
-      typeof skill.sha256 === 'string' && Number.isFinite(skill.size) &&
-      Number.isInteger(skill.version) && skill.loading === 'on-demand');
+  return (
+    manifest.protocolVersion === SUPPORTED_RESOURCE_PROTOCOL &&
+    Array.isArray(manifest.skills) &&
+    manifest.skills.every(
+      skill =>
+        skill &&
+        typeof skill === 'object' &&
+        typeof skill.id === 'string' &&
+        typeof skill.name === 'string' &&
+        typeof skill.file === 'string' &&
+        skill.file.endsWith(RESOURCE_FILE_SUFFIX) &&
+        typeof skill.sha256 === 'string' &&
+        Number.isFinite(skill.size) &&
+        Number.isInteger(skill.version) &&
+        skill.loading === 'on-demand',
+    )
+  );
 }
 
 export class RemoteBuiltinSkillStore {
   private readonly errors = new Map<string, string>();
   private readonly loaded = new Map<string, AgentSkill>();
+  private readonly loadedHashes = new Map<string, string>();
   private manifest?: RemoteSkillManifest;
   private readonly pending = new Map<string, Promise<AgentSkill>>();
 
@@ -67,7 +79,7 @@ export class RemoteBuiltinSkillStore {
     const url = new URL('manifest.json', this.baseUrl).href;
     const response = await fetch(url, { cache: 'no-store' });
     if (!response.ok) throw new Error(`内置Skill清单下载失败（HTTP ${response.status}）：${url}`);
-    const value = await response.json() as unknown;
+    const value = (await response.json()) as unknown;
     if (!validManifest(value)) throw new Error(`内置Skill清单格式或协议版本不受支持：${url}`);
     const known = new Set(REMOTE_BUILTIN_SKILLS.map(skill => skill.id));
     this.manifest = {
@@ -87,17 +99,20 @@ export class RemoteBuiltinSkillStore {
 
   statuses(): RemoteBuiltinSkillStatus[] {
     const settings = this.settingsStore.load();
-    const entries = this.manifest?.skills ?? REMOTE_BUILTIN_SKILLS.map(skill => ({
-      ...skill,
-      file: `${skill.id}${RESOURCE_FILE_SUFFIX}`,
-      loading: 'on-demand' as const,
-      sha256: '',
-      size: 0,
-      version: 0,
-    }));
+    const entries =
+      this.manifest?.skills ??
+      REMOTE_BUILTIN_SKILLS.map(skill => ({
+        ...skill,
+        file: `${skill.id}${RESOURCE_FILE_SUFFIX}`,
+        loading: 'on-demand' as const,
+        sha256: '',
+        size: 0,
+        version: 0,
+      }));
     return entries.map(entry => {
       const cached = settings.builtinSkillPackages[entry.id];
-      const current = cached && usesCurrentResourceSuffix(cached.url) && (!entry.sha256 || cached.sha256 === entry.sha256);
+      const current =
+        cached && usesCurrentResourceSuffix(cached.url) && (!entry.sha256 || cached.sha256 === entry.sha256);
       return {
         ...entry,
         cached: Boolean(cached),
@@ -119,14 +134,17 @@ export class RemoteBuiltinSkillStore {
   async syncEnabled(enabledIds: Iterable<string>): Promise<void> {
     if (!this.manifest) await this.refreshManifest();
     const enabled = new Set(enabledIds);
-    await Promise.allSettled((this.manifest?.skills ?? []).filter(skill => enabled.has(skill.id)).map(skill => this.ensure(skill.id)));
+    await Promise.allSettled(
+      (this.manifest?.skills ?? []).filter(skill => enabled.has(skill.id)).map(skill => this.ensure(skill.id)),
+    );
   }
 
   async ensure(id: string, force = false): Promise<AgentSkill> {
     if (!this.manifest) await this.refreshManifest();
     const descriptor = this.manifest?.skills.find(skill => skill.id === id);
     if (!descriptor) throw new Error(`远程内置Skill不存在：${id}`);
-    if (!force && this.loaded.has(id)) return structuredClone(this.loaded.get(id)!);
+    if (!force && this.loaded.has(id) && this.loadedHashes.get(id) === descriptor.sha256)
+      return structuredClone(this.loaded.get(id)!);
     const existing = this.pending.get(id);
     if (existing) return structuredClone(await existing);
     const task = this.loadOrDownload(descriptor, force);
@@ -134,6 +152,7 @@ export class RemoteBuiltinSkillStore {
     try {
       const skill = await task;
       this.loaded.set(id, skill);
+      this.loadedHashes.set(id, this.settingsStore.load().builtinSkillPackages[id]?.sha256 ?? '');
       this.errors.delete(id);
       return structuredClone(skill);
     } catch (error) {
@@ -152,6 +171,7 @@ export class RemoteBuiltinSkillStore {
     delete settings.builtinSkillPackages[id];
     await this.settingsStore.save(settings);
     this.loaded.delete(id);
+    this.loadedHashes.delete(id);
     this.errors.delete(id);
   }
 
@@ -164,11 +184,12 @@ export class RemoteBuiltinSkillStore {
   private async loadOrDownload(descriptor: RemoteSkillManifestEntry, force: boolean): Promise<AgentSkill> {
     const settings = this.settingsStore.load();
     const cached = settings.builtinSkillPackages[descriptor.id];
-    const currentCache = cached?.protocolVersion === SUPPORTED_RESOURCE_PROTOCOL && usesCurrentResourceSuffix(cached.url);
+    const currentCache =
+      cached?.protocolVersion === SUPPORTED_RESOURCE_PROTOCOL && usesCurrentResourceSuffix(cached.url);
     if (!force && currentCache) {
       try {
         const bytes = await this.client.download(cached.url);
-        if (await sha256(bytes) === descriptor.sha256) return this.parse(descriptor, bytes);
+        if ((await sha256(bytes)) === descriptor.sha256) return this.parse(descriptor, bytes);
       } catch {
         // 损坏或丢失的缓存直接重下；错误会由下载阶段给出完整URL。
       }
@@ -182,13 +203,15 @@ export class RemoteBuiltinSkillStore {
       if (currentCache) {
         try {
           return this.parse(descriptor, await this.client.download(cached.url), true);
-        } catch { /* 使用原始下载错误。 */ }
+        } catch {
+          /* 使用原始下载错误。 */
+        }
       }
       throw new Error(`内置Skill下载失败：${sourceUrl}。${error instanceof Error ? error.message : String(error)}`);
     }
     if (!response.ok) throw new Error(`内置Skill下载失败（HTTP ${response.status}）：${sourceUrl}`);
     const bytes = new Uint8Array(await response.arrayBuffer());
-    if (bytes.byteLength !== descriptor.size || await sha256(bytes) !== descriptor.sha256) {
+    if (bytes.byteLength !== descriptor.size || (await sha256(bytes)) !== descriptor.sha256) {
       throw new Error(`内置Skill下载校验失败：${sourceUrl}`);
     }
     const skill = this.parse(descriptor, bytes);

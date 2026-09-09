@@ -1,0 +1,10 @@
+name: 角色状态
+renderer: plain-html
+regex:
+  find: '/\[STATUS\]/g'
+  placement: [2]
+  disabled: false
+build:
+  entry: template.html
+  styles: [style.css]
+  scripts: []

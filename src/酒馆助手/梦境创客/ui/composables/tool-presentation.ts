@@ -66,12 +66,27 @@ export type ToolWebSearchPresentation = {
 };
 
 export type ToolPresentation = {
+  javascript?: { code?: string; intent?: string; path?: string };
   expandable: boolean;
   icon: string;
-  kind: 'context' | 'file' | 'generic' | 'search' | 'tavern' | 'web' | 'worldbook';
+  kind:
+    | 'context'
+    | 'file'
+    | 'generic'
+    | 'search'
+    | 'tavern'
+    | 'web'
+    | 'worldbook'
+    | 'javascript'
+    | 'project'
+    | 'preview'
+    | 'preset'
+    | 'avatar';
   metrics: ToolCardMetric[];
   path?: string;
   preview?: ToolCardPreview;
+  previewLabel?: string;
+  rowsLabel?: string;
   rawInput: string;
   rawOutput: string;
   rows: ToolCardRow[];
@@ -86,6 +101,9 @@ type ToolDescriptor = Pick<ToolPresentation, 'icon' | 'kind' | 'title' | 'tone'>
 
 const TOOL_DESCRIPTORS: Record<string, ToolDescriptor> = {
   apply_patch: { icon: 'fa-solid fa-code-compare', kind: 'file', title: '应用补丁', tone: 'success' },
+  copy_path: { icon: 'fa-regular fa-copy', kind: 'file', title: '复制路径', tone: 'info' },
+  manage_preset: { icon: 'fa-solid fa-sliders', kind: 'preset', title: '管理酒馆预设', tone: 'accent' },
+  set_avatar: { icon: 'fa-regular fa-image', kind: 'avatar', title: '设置头像', tone: 'accent' },
   clone_worldbook: { icon: 'fa-solid fa-book-open', kind: 'worldbook', title: '克隆世界书', tone: 'warning' },
   check_html_project: { icon: 'fa-solid fa-list-check', kind: 'file', title: '检查 HTML 工程', tone: 'info' },
   compile_html_project: { icon: 'fa-solid fa-hammer', kind: 'file', title: '编译 HTML 工程', tone: 'success' },
@@ -112,11 +130,11 @@ const TOOL_DESCRIPTORS: Record<string, ToolDescriptor> = {
   manage_worldbook: { icon: 'fa-solid fa-book', kind: 'worldbook', title: '管理世界书', tone: 'warning' },
   manage_tavern_chat: { icon: 'fa-solid fa-comments', kind: 'tavern', title: '管理酒馆会话', tone: 'accent' },
   manage_character: { icon: 'fa-regular fa-address-card', kind: 'tavern', title: '管理角色', tone: 'accent' },
-  manage_html_project: { icon: 'fa-solid fa-diagram-project', kind: 'file', title: '管理 HTML 工程', tone: 'info' },
+  manage_html_project: { icon: 'fa-solid fa-diagram-project', kind: 'project', title: '管理 HTML 工程', tone: 'info' },
   move_path: { icon: 'fa-solid fa-arrow-right-arrow-left', kind: 'file', title: '移动路径', tone: 'info' },
   read_file: { icon: 'fa-regular fa-file-lines', kind: 'file', title: '读取文件', tone: 'info' },
-  prepare_render: { icon: 'fa-solid fa-window-maximize', kind: 'file', title: '准备交互预览', tone: 'accent' },
-  run_javascript: { icon: 'fa-brands fa-js', kind: 'generic', title: '运行 JavaScript', tone: 'accent' },
+  prepare_render: { icon: 'fa-solid fa-window-maximize', kind: 'preview', title: '准备交互预览', tone: 'accent' },
+  run_javascript: { icon: 'fa-brands fa-js', kind: 'javascript', title: '运行 JavaScript', tone: 'accent' },
   open_page: { icon: 'fa-solid fa-arrow-up-right-from-square', kind: 'web', title: '打开网页', tone: 'info' },
   search: { icon: 'fa-solid fa-globe', kind: 'web', title: '网页搜索', tone: 'info' },
   search_files: { icon: 'fa-solid fa-magnifying-glass', kind: 'search', title: '搜索文件', tone: 'info' },
@@ -219,7 +237,9 @@ function webSearchResult(value: JsonRecord): ToolWebSearchResult | undefined {
 }
 
 function webSearchResults(value: unknown): ToolWebSearchResult[] {
-  return records(value).map(webSearchResult).filter((item): item is ToolWebSearchResult => item !== undefined);
+  return records(value)
+    .map(webSearchResult)
+    .filter((item): item is ToolWebSearchResult => item !== undefined);
 }
 
 function compactLine(value: string, fallback: string): string {
@@ -423,12 +443,13 @@ function streamingFilePresentation(
   if (item.toolName === 'write_file') {
     const content = text(input, 'content') ?? partialJsonString(rawInput, 'content');
     return {
-      metrics: content === undefined
-        ? []
-        : [
-            { label: '已编写', value: `${lineCount(content)} 行` },
-            { label: '字符', value: String(content.length) },
-          ],
+      metrics:
+        content === undefined
+          ? []
+          : [
+              { label: '已编写', value: `${lineCount(content)} 行` },
+              { label: '字符', value: String(content.length) },
+            ],
       path,
       summary: executing ? '正在写入文件…' : waiting ? '写入参数已就绪' : '正在编写文件内容…',
     };
@@ -529,7 +550,8 @@ function worldbookPresentation(
       {
         clone_worldbook: '克隆完成',
         create_worldbook: '创建完成',
-        mount_worldbook_reference: '已只读挂载',
+        mount_worldbook_reference:
+          output.readonly === true ? '已只读挂载' : output.readonly === false ? '已挂载，可编辑' : '已挂载',
       }[name] ?? '操作完成'
     }`,
   };
@@ -617,8 +639,7 @@ function webPresentation(
           typeof value === 'string' && value.trim().length > 0 && !value.startsWith('ws_call_id='),
       )
     : [];
-  const fallbackQuery =
-    text(action, 'query') ?? actionQueries[0] ?? text(output, 'query') ?? text(input, 'query');
+  const fallbackQuery = text(action, 'query') ?? actionQueries[0] ?? text(output, 'query') ?? text(input, 'query');
   const errorCode = text(output, 'error_code', 'errorCode');
   if (errorCode) {
     const message = text(output, 'message') ?? errorCode;
@@ -745,13 +766,182 @@ export function formatToolRaw(value: string | undefined): string {
   }
 }
 
+function specializedPresentation(
+  item: SessionUiItem,
+  input: JsonRecord,
+  output: JsonRecord,
+): Partial<ToolPresentation> | undefined {
+  const running = item.status === 'running';
+  const name = item.toolName;
+  if (name === 'run_javascript') {
+    const consoleRows = records(output.console).map(log => ({
+      label: Array.isArray(log.values)
+        ? log.values.map(value => (typeof value === 'string' ? value : JSON.stringify(value))).join(' ')
+        : '',
+      meta: text(log, 'level') ?? 'log',
+      icon: log.level === 'error' ? 'fa-solid fa-circle-xmark' : 'fa-solid fa-terminal',
+      tone: log.level === 'error' ? ('danger' as const) : log.level === 'warn' ? ('warning' as const) : undefined,
+    }));
+    const duration = number(output, 'durationMs');
+    const result =
+      Object.hasOwn(output, 'result') && output.hasResult !== false
+        ? JSON.stringify(output.result, null, 2)
+        : undefined;
+    return {
+      metrics: [
+        { label: '环境', value: text(input, 'environment') ?? text(output, 'environment') ?? 'sandbox' },
+        ...(duration !== undefined ? [{ label: '耗时', value: `${(duration / 1000).toFixed(2)}s` }] : []),
+        ...(output.hasResult === false ? [{ label: '返回值', value: '无' }] : []),
+      ],
+      preview: result === undefined ? undefined : { content: result, mode: 'code' },
+      previewLabel: '返回值',
+      rowsLabel: 'Console',
+      rows: consoleRows,
+      expandable: consoleRows.length > 6 || (result?.split('\n').length ?? 0) > 8,
+      summary: running ? '正在执行代码' : '执行完成',
+    };
+  }
+  if (['manage_html_project', 'check_html_project', 'compile_html_project'].includes(name ?? '')) {
+    const action = text(input, 'action') ?? (name === 'check_html_project' ? 'check' : 'compile');
+    const diagnostics = records(output.diagnostics);
+    const errors = diagnostics.filter(row => row.severity === 'error').length;
+    const warnings = diagnostics.filter(row => row.severity === 'warning').length;
+    const measured = Array.isArray(output.diagnostics);
+    const valid = output.valid === true || (measured && errors === 0 && output.valid !== false);
+    const bytes = number(output, 'outputBytes');
+    return {
+      title: action === 'check' ? '检查 HTML 工程' : '编译 HTML 工程',
+      path: text(output, 'path') ?? text(input, 'project'),
+      summary: running
+        ? '正在处理工程'
+        : errors || output.valid === false
+          ? '检查未通过'
+          : action === 'compile' && text(output, 'path')
+            ? '正则产物已生成'
+            : valid
+              ? '检查通过'
+              : '工程结果已返回',
+      tone: errors || output.valid === false ? 'danger' : warnings ? 'warning' : valid ? 'success' : 'info',
+      metrics: [
+        ...(text(output, 'projectName') ? [{ label: '工程', value: text(output, 'projectName')! }] : []),
+        ...(measured
+          ? [
+              { label: '错误', value: String(errors), tone: errors ? ('danger' as const) : undefined },
+              { label: '警告', value: String(warnings), tone: warnings ? ('warning' as const) : undefined },
+            ]
+          : []),
+        ...(bytes !== undefined ? [{ label: '产物大小', value: formatBytes(bytes) }] : []),
+      ],
+      rowsLabel: '诊断',
+      rows: diagnostics.map(row => ({
+        label: text(row, 'message') ?? '',
+        detail: [text(row, 'file'), text(row, 'line')].filter(Boolean).join(':'),
+        meta: text(row, 'severity'),
+        tone: row.severity === 'error' ? 'danger' : row.severity === 'warning' ? 'warning' : 'info',
+        icon: row.severity === 'error' ? 'fa-solid fa-circle-xmark' : 'fa-solid fa-circle-info',
+      })),
+      expandable: diagnostics.length > 6,
+    };
+  }
+  if (name === 'prepare_render')
+    return {
+      path: text(input, 'sourcePath') ?? text(output, 'sourcePath'),
+      summary: running ? '正在准备预览' : text(output, 'renderId') ? '预览已就绪' : '未返回预览标识',
+      metrics: [
+        { label: '渲染器', value: text(output, 'renderer') ?? text(input, 'renderer') ?? '未知' },
+        { label: '来源', value: input.sourceType === 'regex' ? '正则' : '文件' },
+      ],
+      rows: text(output, 'renderId')
+        ? [{ label: text(output, 'renderId')!, meta: '预览标识', icon: 'fa-solid fa-desktop' }]
+        : [],
+    };
+  if (name === 'manage_preset') {
+    const action = text(input, 'action') ?? '';
+    const labels: Record<string, string> = {
+      search: '查找酒馆预设',
+      mount: '挂载酒馆预设',
+      unmount: '卸载酒馆预设',
+      switch: '切换酒馆预设',
+      save: '保存酒馆预设',
+      save_as: '另存酒馆预设',
+    };
+    const presets = Array.isArray(output.presets)
+      ? output.presets.filter((value): value is string => typeof value === 'string')
+      : [];
+    const target = text(input, 'name') ?? text(output, 'savedAs', 'saved', 'mounted', 'unmounted', 'switched');
+    return {
+      title: labels[action] ?? '管理酒馆预设',
+      path: text(output, 'path'),
+      summary: running
+        ? (target ?? text(input, 'query') ?? '正在处理预设')
+        : action === 'search'
+          ? `找到 ${presets.length} 个预设`
+          : (target ?? '预设操作完成'),
+      metrics: [
+        ...(text(output, 'loaded') ? [{ label: '当前预设', value: text(output, 'loaded')! }] : []),
+        ...(output.overwritten === true ? [{ label: '写入方式', value: '覆盖同名', tone: 'warning' as const }] : []),
+        ...(output.discardedUnsavedChanges === true
+          ? [{ label: '原修改', value: '已丢弃', tone: 'warning' as const }]
+          : []),
+      ],
+      rows: presets.map(label => ({
+        label,
+        meta: label === output.loaded ? '当前' : undefined,
+        icon: 'fa-solid fa-sliders',
+      })),
+      expandable: presets.length > 6,
+    };
+  }
+  if (name === 'set_avatar')
+    return {
+      summary: running ? '正在更新头像' : output.updated === true ? '头像已更新' : '头像操作结果已返回',
+      rows: [
+        {
+          label: text(input, 'sourcePath') ?? text(output, 'sourcePath') ?? '',
+          meta: '来源图片',
+          icon: 'fa-regular fa-image',
+        },
+        {
+          label: text(output, 'target') ?? (input.target === 'user' ? (text(input, 'userName') ?? 'User') : '当前角色'),
+          meta: '目标',
+          icon: 'fa-regular fa-address-card',
+        },
+      ],
+    };
+  if (name === 'copy_path' || name === 'move_path')
+    return {
+      path: text(output, 'to') ?? text(input, 'to'),
+      summary: running
+        ? name === 'copy_path'
+          ? '正在复制路径'
+          : '正在移动路径'
+        : name === 'copy_path'
+          ? '路径已复制'
+          : '路径已移动',
+      rows: [
+        { label: text(output, 'from') ?? text(input, 'from') ?? '', meta: '来源', icon: 'fa-regular fa-folder-open' },
+        { label: text(output, 'to') ?? text(input, 'to') ?? '', meta: '目标', icon: 'fa-solid fa-arrow-right' },
+      ],
+    };
+  return undefined;
+}
+
 export function buildToolPresentation(item: SessionUiItem): ToolPresentation {
   const descriptor = descriptorFor(item);
   const inputValue = parsePayload(item.toolInput);
   const outputValue = item.status === 'running' ? undefined : parsePayload(item.content);
   const input = record(inputValue);
   const output = record(outputValue);
+  const javascript =
+    item.toolName === 'run_javascript'
+      ? {
+          code: item.toolCode ?? (typeof input.code === 'string' ? input.code : undefined),
+          intent: text(input, 'intent'),
+          path: text(input, 'path'),
+        }
+      : undefined;
   let details: Partial<ToolPresentation> = {};
+  const specialized = specializedPresentation(item, input, output);
   if (item.status === 'failed') {
     details = {
       expandable: item.content.split(/\r?\n/u).length > 5,
@@ -759,17 +949,20 @@ export function buildToolPresentation(item: SessionUiItem): ToolPresentation {
       summary: compactLine(item.content, '工具执行失败'),
       tone: 'danger',
     };
+  } else if (specialized && item.toolPhase !== 'generating') {
+    details = specialized;
   } else if (item.status === 'running') {
-    details = descriptor.kind === 'file'
-      ? streamingFilePresentation(item, input)
-      : {
-          summary:
-            item.toolPhase === 'generating'
-              ? '正在生成调用参数…'
-              : item.toolPhase === 'ready'
-                ? '参数已就绪，等待执行…'
-                : '正在执行工具…',
-        };
+    details =
+      descriptor.kind === 'file'
+        ? streamingFilePresentation(item, input)
+        : {
+            summary:
+              item.toolPhase === 'generating'
+                ? '正在生成调用参数…'
+                : item.toolPhase === 'ready'
+                  ? '参数已就绪，等待执行…'
+                  : '正在执行工具…',
+          };
   } else if (descriptor.kind === 'file') {
     details = filePresentation(item.toolName ?? '', input, output, outputValue);
   } else if (descriptor.kind === 'search') {
@@ -803,5 +996,7 @@ export function buildToolPresentation(item: SessionUiItem): ToolPresentation {
     rows: [],
     summary: item.status === 'running' ? '正在执行工具…' : '工具执行完成',
     ...details,
+    javascript,
+    ...(javascript?.intent ? { summary: javascript.intent } : {}),
   };
 }

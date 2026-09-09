@@ -7,6 +7,7 @@ const Schema = z.object({
   }),
 });
 
-$(() => {
+$(async () => {
+  await waitGlobalInitialized('Mvu');
   registerMvuSchema(Schema);
 });

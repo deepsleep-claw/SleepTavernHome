@@ -6,6 +6,14 @@ import type { SessionUiItem } from '../../../../core/session/types';
 import ReasoningBlock from './ReasoningBlock.vue';
 import RunBlock from './RunBlock.vue';
 import ToolGroup from './ToolGroup.vue';
+import ToolResultCard from './ToolResultCard.vue';
+
+vi.mock('../../../editor/VfsTextEditor.vue', () => ({
+  default: {
+    props: { modelValue: String, path: String, readonly: Boolean },
+    template: '<pre class="test-js-view" :data-readonly="readonly" :data-path="path">{{ modelValue }}</pre>',
+  },
+}));
 
 const mountedApps: Array<{ root: HTMLElement; unmount: () => void }> = [];
 
@@ -26,6 +34,33 @@ afterEach(() => {
 });
 
 describe('timeline cards', () => {
+  it('JS 卡片展示意图、只读代码视图和独立的结果区', async () => {
+    const root = mount(ToolResultCard, {
+      tool: {
+        id: 'js',
+        at: 1,
+        kind: 'tool',
+        toolName: 'run_javascript',
+        status: 'completed',
+        toolInput: JSON.stringify({ intent: '检查变量类型', code: 'const n = 42;\nreturn n;' }),
+        content: JSON.stringify({
+          result: 42,
+          hasResult: true,
+          console: [{ level: 'log', values: ['ready'] }],
+          durationMs: 20,
+        }),
+      },
+    });
+    expect(root.querySelector('.dca-tool-result-heading')?.textContent).toContain('检查变量类型');
+    root.querySelector<HTMLButtonElement>('.dca-tool-code-toggle')!.click();
+    await nextTick();
+    const code = root.querySelector<HTMLElement>('.test-js-view')!;
+    expect(code.textContent).toBe('const n = 42;\nreturn n;');
+    expect(code.dataset.readonly).toBe('true');
+    expect(code.dataset.path).toBe('execution.js');
+    expect(root.textContent).toContain('返回值');
+    expect(root.textContent).toContain('Console');
+  });
   it('短思考使用可贴底的预览内容容器', () => {
     const root = mount(ReasoningBlock, {
       item: {
@@ -185,7 +220,10 @@ describe('timeline cards', () => {
         {
           at: 2,
           content: JSON.stringify({
-            action: { type: 'openPage', url: 'https://github.com/SillyTavern/SillyTavern/releases/tag/1.17.0#ws_call_id=call_2' },
+            action: {
+              type: 'openPage',
+              url: 'https://github.com/SillyTavern/SillyTavern/releases/tag/1.17.0#ws_call_id=call_2',
+            },
           }),
           id: 'tool:open-action',
           kind: 'tool',

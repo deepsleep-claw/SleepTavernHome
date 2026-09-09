@@ -10,6 +10,8 @@ loading: on-demand
 
 1. 读取 `references/project-format.md`，按格式创建 `project.yaml` 和源码。
 2. 使用文件工具迭代；相对模块仅允许 `.js/.mjs`，HTML片段使用工程 include。
-3. 让用户或工具先“检查工程”，修复 error 后再手动编译。
+3. 调用 `manage_html_project` 的 `check`，修复所有 error 后再调用 `compile`。
 4. 编译只生成一次性的酒馆正则，源码与产物之后互不绑定。
 5. 需要看效果时读取 `references/preview.md`，使用渲染预览而非修改真实聊天。
+
+`templates/minimal/` 提供可直接复制的纯展示工程，三个文件一起写入 `/character/files/<工程名>/`，再修改内容。`references/project-format.md` 包含完整工具参数与交互工程的配置差异。

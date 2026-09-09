@@ -5,6 +5,7 @@
       `dca-tool-result-${presentation.tone}`,
       `dca-tool-result-${tool.status ?? 'completed'}`,
       { 'dca-tool-result-expanded': expanded },
+      { 'is-javascript': presentation.javascript },
     ]"
   >
     <header class="dca-tool-result-header">
@@ -29,6 +30,25 @@
         <span>原始数据</span>
       </button>
     </header>
+
+    <section v-if="presentation.javascript && presentation.javascript.code !== undefined" class="dca-javascript-input">
+      <button type="button" class="dca-tool-code-toggle" :aria-expanded="codeOpen" @click="codeOpen = !codeOpen">
+        <i class="fa-brands fa-js" aria-hidden="true"></i>
+        <span>JavaScript 代码 · {{ codeLines }} 行</span>
+        <i :class="codeOpen ? 'fa-solid fa-chevron-up' : 'fa-solid fa-chevron-down'" aria-hidden="true"></i>
+      </button>
+      <div
+        v-if="codeOpen"
+        class="dca-javascript-code"
+        :style="{ height: `${Math.min(420, Math.max(128, (codeLines + 1) * 18))}px` }"
+      >
+        <VfsTextEditor
+          :model-value="presentation.javascript.code"
+          :path="presentation.javascript.path ?? 'execution.js'"
+          readonly
+        />
+      </div>
+    </section>
 
     <div v-if="presentation.path" class="dca-tool-result-path" :title="presentation.path">
       <i class="fa-regular fa-folder-open" aria-hidden="true"></i>
@@ -57,7 +77,8 @@
       </header>
       <div class="dca-web-query-list">
         <span v-for="(query, index) in presentation.webAction.queries" :key="`${index}:${query}`">
-          <small>{{ index + 1 }}</small>{{ query }}
+          <small>{{ index + 1 }}</small
+          >{{ query }}
         </span>
       </div>
       <p v-if="!presentation.webAction.resultsReturned">
@@ -132,7 +153,10 @@
             @error="handleFaviconError"
           />
         </span>
-        <span><strong>{{ presentation.webAction.target.domain }}</strong><small>{{ presentation.webAction.target.displayUrl }}</small></span>
+        <span
+          ><strong>{{ presentation.webAction.target.domain }}</strong
+          ><small>{{ presentation.webAction.target.displayUrl }}</small></span
+        >
       </a>
       <ol v-if="presentation.webAction.matches?.length" class="dca-web-find-matches">
         <li v-for="(match, index) in presentation.webAction.matches" :key="`${index}:${match}`">{{ match }}</li>
@@ -166,13 +190,7 @@
             </span>
             <div class="dca-web-search-result-main">
               <div class="dca-web-search-result-title">
-                <a
-                  v-if="result.url"
-                  :href="result.url"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  :title="result.title"
-                >
+                <a v-if="result.url" :href="result.url" target="_blank" rel="noopener noreferrer" :title="result.title">
                   {{ result.title }}
                 </a>
                 <strong v-else :title="result.title">{{ result.title }}</strong>
@@ -186,6 +204,9 @@
       </section>
     </section>
 
+    <div v-if="presentation.preview && presentation.previewLabel" class="dca-tool-section-label">
+      {{ presentation.previewLabel }}
+    </div>
     <div
       v-if="presentation.preview"
       class="dca-tool-content-scroll dca-tool-preview"
@@ -200,13 +221,21 @@
       <pre v-else>{{ presentation.preview.content }}</pre>
     </div>
 
+    <div v-if="presentation.rows.length > 0 && presentation.rowsLabel" class="dca-tool-section-label">
+      {{ presentation.rowsLabel }}
+    </div>
     <div
       v-if="presentation.rows.length > 0"
       class="dca-tool-content-scroll dca-tool-result-rows"
       :class="{ expanded }"
       tabindex="0"
     >
-      <div v-for="(row, index) in presentation.rows" :key="`${index}:${row.label}`" class="dca-tool-result-row">
+      <div
+        v-for="(row, index) in presentation.rows"
+        :key="`${index}:${row.label}`"
+        class="dca-tool-result-row"
+        :class="row.tone ? `dca-row-tone-${row.tone}` : undefined"
+      >
         <i :class="row.icon ?? 'fa-regular fa-circle'" aria-hidden="true"></i>
         <div>
           <strong :title="row.label">{{ row.label }}</strong>
@@ -281,7 +310,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { ToolConfirmation } from '../../../../core/runner/tools';
 import type { SessionUiItem } from '../../../../core/session/types';
 import {
@@ -291,6 +320,7 @@ import {
 } from '../../../composables/tool-presentation';
 import type { ActiveThemeDetail } from '../../../theme/runtime';
 import { toolStatusLabel } from '../../../composables/timeline';
+import VfsTextEditor from '../../../editor/VfsTextEditor.vue';
 
 const props = defineProps<{ confirmation?: ToolConfirmation; tool: SessionUiItem }>();
 const emit = defineEmits<{ 'resolve-confirmation': [approved: boolean] }>();
@@ -298,9 +328,18 @@ const emit = defineEmits<{ 'resolve-confirmation': [approved: boolean] }>();
 const copied = ref(false);
 const expanded = ref(false);
 const rawOpen = ref(false);
+const codeOpen = ref(false);
+watch(
+  () => Boolean(props.confirmation),
+  pending => {
+    if (pending) codeOpen.value = true;
+  },
+  { immediate: true },
+);
 const rawTab = ref<'input' | 'output'>(props.tool.toolInput ? 'input' : 'output');
 const colorScheme = ref<'dark' | 'light'>('dark');
 const presentation = computed(() => buildToolPresentation(props.tool));
+const codeLines = computed(() => (presentation.value.javascript?.code ?? '').split(/\r?\n/u).length);
 const previewLines = computed(() => presentation.value.preview?.content.split(/\r?\n/u) ?? []);
 const visibleWebSearchGroups = computed(() =>
   (presentation.value.webSearch?.groups ?? []).map(group => ({
@@ -309,7 +348,10 @@ const visibleWebSearchGroups = computed(() =>
   })),
 );
 const hiddenWebSearchResults = computed(() =>
-  (presentation.value.webSearch?.groups ?? []).reduce((total, group) => total + Math.max(0, group.results.length - 3), 0),
+  (presentation.value.webSearch?.groups ?? []).reduce(
+    (total, group) => total + Math.max(0, group.results.length - 3),
+    0,
+  ),
 );
 const expandLabel = computed(() => {
   if (expanded.value) return '收起内容';
@@ -391,7 +433,38 @@ async function copyRaw(): Promise<void> {
 </script>
 
 <style lang="scss">
+.dca-javascript-input {
+  min-width: 0;
+  margin: 0.5rem;
+}
+.dca-tool-code-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  text-align: left;
+}
+.dca-tool-code-toggle > span {
+  flex: 1;
+}
+.dca-javascript-code {
+  display: flex;
+  min-width: 0;
+  margin-top: 0.4rem;
+}
+.dca-javascript-code > .dca-vfs-editor {
+  min-width: 0;
+  height: 100%;
+}
+.dca-tool-result-card.is-javascript .dca-tool-result-heading > span {
+  display: block;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: unset;
+}
 .dca-tool-result-card {
+  container-type: inline-size;
+  container-name: dca-tool;
   --dca-tool-tone: var(--dca-accent);
 
   position: relative;
@@ -450,8 +523,9 @@ async function copyRaw(): Promise<void> {
 .dca-tool-result-heading {
   display: flex;
   min-width: 0;
-  align-items: baseline;
-  gap: 0.5rem;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15rem;
 }
 
 .dca-tool-result-heading strong {
@@ -461,11 +535,38 @@ async function copyRaw(): Promise<void> {
 }
 
 .dca-tool-result-heading span {
+  max-width: 100%;
   overflow: hidden;
   color: var(--dca-text-muted);
   font-size: 0.72rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.dca-tool-section-label {
+  margin-top: 0.65rem;
+  color: var(--dca-text-muted);
+  font-size: 0.68rem;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+}
+.dca-row-tone-danger > i {
+  color: var(--dca-danger);
+}
+.dca-row-tone-warning > i {
+  color: var(--dca-warning);
+}
+@container dca-tool (max-width: 380px) {
+  .dca-tool-result-header {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .dca-tool-raw-toggle {
+    grid-column: 2 / -1;
+    justify-self: end;
+  }
+  .dca-tool-result-heading strong {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
 }
 
 .dca-tool-result-status {

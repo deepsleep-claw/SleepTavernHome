@@ -10,7 +10,9 @@ loading: on-demand
 
 1. 先用 `search_files` 在 `/skills/builtin/tavern-helper-api/references/types/**` 搜索接口名或概念。
 2. 只读取命中的 `.d.ts` 及直接关联类型。
-3. 以类型定义为签名依据；运行环境行为仍需处理失败、权限和版本差异。
+3. 以类型定义为签名依据，核对运行时版本并处理调用错误。
 4. 类型目录是只读参考，不代表所有内部接口都适合角色卡前端调用。
 
 常见入口词：变量、聊天消息、世界书、正则、事件、脚本、Slash、iframe、MVU。
+
+一次性 `run_javascript` 的 Promise、联网和桥接接口用法见 `references/javascript.md`。它与永久酒馆助手脚本的全局环境不同；不要把查询到的任意 `.d.ts` 函数当作一次性执行器已经开放的能力。

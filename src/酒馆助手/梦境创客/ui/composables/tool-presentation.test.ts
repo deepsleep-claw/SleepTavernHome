@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionUiItem } from '../../core/session/types';
 import { buildToolPresentation, formatToolRaw } from './tool-presentation';
+import { ALL_AGENT_TOOL_IDS } from '../../core/runner/tool-catalog';
 
 function tool(overrides: Partial<SessionUiItem> = {}): SessionUiItem {
   return {
@@ -16,6 +17,71 @@ function tool(overrides: Partial<SessionUiItem> = {}): SessionUiItem {
 }
 
 describe('tool presentation', () => {
+  it('当前工具目录中的工具都有专用类别与中文标题', () => {
+    for (const name of ALL_AGENT_TOOL_IDS) {
+      const presentation = buildToolPresentation(tool({ toolName: name }));
+      expect(presentation.kind, name).not.toBe('generic');
+      expect(presentation.title, name).not.toBe(name);
+    }
+  });
+  it('工程检查失败按诊断展示，而不是声称文件操作完成', () => {
+    const presentation = buildToolPresentation(
+      tool({
+        toolName: 'manage_html_project',
+        toolInput: JSON.stringify({ action: 'check', project: '/character/files/ui/project.yaml' }),
+        content: JSON.stringify({
+          valid: false,
+          diagnostics: [{ severity: 'error', file: 'main.js', line: 3, message: '语法错误' }],
+          outputBytes: 0,
+        }),
+      }),
+    );
+    expect(presentation.tone).toBe('danger');
+    expect(presentation.summary).toBe('检查未通过');
+    expect(presentation.rows[0]).toMatchObject({ label: '语法错误', detail: 'main.js:3' });
+  });
+  it('复制、预设和预览卡片保留实际目标信息', () => {
+    const copy = buildToolPresentation(
+      tool({
+        toolName: 'copy_path',
+        toolInput: JSON.stringify({ from: '/files/a', to: '/files/b' }),
+        content: '{"copied":true}',
+      }),
+    );
+    expect(copy.rows.map(row => row.label)).toEqual(['/files/a', '/files/b']);
+    const preset = buildToolPresentation(
+      tool({
+        toolName: 'manage_preset',
+        toolInput: '{"action":"search"}',
+        content: '{"presets":["A","B"],"loaded":"B"}',
+      }),
+    );
+    expect(preset.rows[1]).toMatchObject({ label: 'B', meta: '当前' });
+    const preview = buildToolPresentation(
+      tool({
+        toolName: 'prepare_render',
+        toolInput: '{"sourcePath":"/files/demo.html","renderer":"plain-html","sourceType":"file"}',
+        content: '{"renderId":"render_test"}',
+      }),
+    );
+    expect(preview.rows[0].label).toBe('render_test');
+    expect(preview.summary).toBe('预览已就绪');
+  });
+  it('JavaScript 用意图作摘要，并保留执行时的文件代码快照', () => {
+    const presentation = buildToolPresentation(
+      tool({
+        toolName: 'run_javascript',
+        toolInput: JSON.stringify({ intent: '检查变量初始化', path: '/character/files/check.js' }),
+        toolCode: 'return await Promise.resolve(42);',
+      }),
+    );
+    expect(presentation.summary).toBe('检查变量初始化');
+    expect(presentation.javascript).toEqual({
+      intent: '检查变量初始化',
+      path: '/character/files/check.js',
+      code: 'return await Promise.resolve(42);',
+    });
+  });
   it('把文件读取结果转换为紧凑代码卡', () => {
     const presentation = buildToolPresentation(
       tool({

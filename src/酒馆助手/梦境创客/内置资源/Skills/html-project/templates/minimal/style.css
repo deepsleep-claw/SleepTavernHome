@@ -1,0 +1,11 @@
+.character-status {
+  box-sizing: border-box;
+  max-width: 100%;
+  padding: 1rem;
+  border: 1px solid currentColor;
+  border-radius: 0.75rem;
+  color: inherit;
+  overflow-wrap: anywhere;
+}
+.character-status h2 { margin: 0 0 0.5rem; font-size: 1rem; }
+.character-status p { margin: 0; }

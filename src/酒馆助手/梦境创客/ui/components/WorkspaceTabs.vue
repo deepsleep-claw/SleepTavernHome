@@ -254,7 +254,7 @@ async function createCharacterFromTab(avatarId: string) {
   align-items: stretch;
   gap: 0.2rem;
   border-bottom: 1px solid var(--dca-border);
-  padding: 0.3rem 4.7rem 0 0.5rem;
+  padding: 0.3rem var(--dca-window-actions-width, 4.7rem) 0 0.5rem;
   background: var(--dca-surface);
 }
 
@@ -513,7 +513,7 @@ async function createCharacterFromTab(avatarId: string) {
 @media (max-width: 720px) {
   .dca-tabs {
     min-width: 0;
-    padding-right: 2.65rem;
+    padding-right: var(--dca-window-actions-width, 4.7rem);
   }
 
   .dca-tab-strip {

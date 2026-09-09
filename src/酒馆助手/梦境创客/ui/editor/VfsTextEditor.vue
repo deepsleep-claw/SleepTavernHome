@@ -9,7 +9,9 @@
       aria-label="文件内容编辑器"
       @input="emitTextarea"
     ></textarea>
-    <small v-if="status === 'loading'" class="dca-editor-engine-state">正在加载增强编辑器，可直接继续输入…</small>
+    <small v-if="status === 'loading'" class="dca-editor-engine-state">
+      {{ readonly ? '正在加载代码高亮…' : '正在加载增强编辑器，可直接继续输入…' }}
+    </small>
     <small v-else-if="status === 'fallback'" class="dca-editor-engine-state" title="两个CDN均不可用">
       增强编辑器不可用，已使用基础文本框
     </small>

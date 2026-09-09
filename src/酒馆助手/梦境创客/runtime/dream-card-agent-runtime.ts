@@ -530,7 +530,7 @@ export class DreamCardAgentRuntime {
         onSkillsCommit: (skills, mountedIds) => this.commitMountedSkills(skills, mountedIds),
         onUpdate: view => this.updateService(view),
         operationRecoveryStore: this.operationRecoveryStore,
-        requestToolApproval: request => this.requestToolConfirmation(request),
+        requestToolApproval: (request, signal) => this.requestToolConfirmation(request, signal),
         resourceBaseUrl: this.resourceBaseUrl,
         preset: this.selectedPreset(agentConfiguration.presetId),
         tavernBridge: this.bridge,
@@ -632,7 +632,7 @@ export class DreamCardAgentRuntime {
           onSkillsCommit: (skills, mountedIds) => this.commitMountedSkills(skills, mountedIds),
           onUpdate: view => this.updateService(view),
           operationRecoveryStore: this.operationRecoveryStore,
-          requestToolApproval: request => this.requestToolConfirmation(request),
+          requestToolApproval: (request, signal) => this.requestToolConfirmation(request, signal),
           resourceBaseUrl: this.resourceBaseUrl,
           scope,
           tavernBridge: this.bridge,
@@ -738,7 +738,7 @@ export class DreamCardAgentRuntime {
           onSkillsCommit: (skills, mountedIds) => this.commitMountedSkills(skills, mountedIds),
           onUpdate: view => this.updateService(view),
           operationRecoveryStore: this.operationRecoveryStore,
-          requestToolApproval: request => this.requestToolConfirmation(request),
+          requestToolApproval: (request, signal) => this.requestToolConfirmation(request, signal),
           resourceBaseUrl: this.resourceBaseUrl,
           scope: revision.runtime.scope,
           tavernBridge: this.bridge,
@@ -819,7 +819,7 @@ export class DreamCardAgentRuntime {
           onSkillsCommit: (skills, mountedIds) => this.commitMountedSkills(skills, mountedIds),
           onUpdate: view => this.updateService(view),
           operationRecoveryStore: this.operationRecoveryStore,
-          requestToolApproval: request => this.requestToolConfirmation(request),
+          requestToolApproval: (request, signal) => this.requestToolConfirmation(request, signal),
           resourceBaseUrl: this.resourceBaseUrl,
           scope: 'global',
           tavernBridge: this.bridge,
@@ -2140,17 +2140,26 @@ export class DreamCardAgentRuntime {
     return this.activeService;
   }
 
-  private requestToolConfirmation(request: ToolConfirmation): Promise<boolean> {
-    if (this.toolConfirmationResolve) throw new Error('已有高危工具正在等待确认。');
+  private requestToolConfirmation(request: ToolConfirmation, signal?: AbortSignal): Promise<boolean> {
+    if (signal?.aborted) return Promise.resolve(false);
+    if (this.toolConfirmationResolve) throw new Error('已有工具正在等待确认。');
     if (!request.sessionId) throw new Error('工具审批缺少会话归属。');
-    this.state.toolConfirmation = request;
-    this.emit();
     return new Promise(resolve => {
-      this.toolConfirmationResolve = {
-        resolve,
+      const abort = () => {
+        if (this.toolConfirmationResolve === pending) this.resolveToolConfirmation(false, request.sessionId);
+      };
+      const pending = {
+        resolve: (approved: boolean) => {
+          signal?.removeEventListener('abort', abort);
+          resolve(approved);
+        },
         sessionId: request.sessionId!,
         toolCallId: request.toolCallId,
       };
+      this.toolConfirmationResolve = pending;
+      signal?.addEventListener('abort', abort, { once: true });
+      this.state.toolConfirmation = request;
+      this.emit();
     });
   }
 

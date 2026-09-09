@@ -121,6 +121,7 @@
     "@vueuse/core": "^13.9.0",
     "@vueuse/integrations": "^13.9.0",
     "@vueuse/shared": "^13.9.0",
+    "acorn": "8.18.0",
     "ai": "7.0.58",
     "async-wait-until": "^2.0.31",
     "axios": "1.14.0",
