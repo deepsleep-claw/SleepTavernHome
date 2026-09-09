@@ -1,7 +1,7 @@
 import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
 import { useDreamCardAgent } from './runtime';
 
-type DraftEntry = { value: unknown; revision: number; loaded: boolean; saving?: ReturnType<typeof setTimeout> };
+type DraftEntry = { value: unknown; revision: number; loaded: boolean };
 const buffers = new WeakMap<object, Map<string, DraftEntry>>();
 
 export function useStoredDraft<T>(key: () => string, initial: () => T): { draft: Ref<T>; ready: Ref<boolean> } {
@@ -17,8 +17,6 @@ export function useStoredDraft<T>(key: () => string, initial: () => T): { draft:
   let assigning = false;
 
   const persist = (id: string, entry: DraftEntry) => {
-    if (entry.saving) clearTimeout(entry.saving);
-    entry.saving = undefined;
     void runtime.saveBrowserDraft?.(id, entry.value).catch(error => {
       toastr.error(`草稿本地保存失败：${error instanceof Error ? error.message : String(error)}`, '梦境创客');
     });
@@ -28,7 +26,7 @@ export function useStoredDraft<T>(key: () => string, initial: () => T): { draft:
     key,
     async id => {
       const previous = entries!.get(activeKey);
-      if (previous?.saving) persist(activeKey, previous);
+      if (previous && previous.revision > 0) persist(activeKey, previous);
       activeKey = id;
       let entry = entries!.get(id);
       if (!entry) {
@@ -66,16 +64,15 @@ export function useStoredDraft<T>(key: () => string, initial: () => T): { draft:
       const entry = entries!.get(activeKey)!;
       entry.value = value;
       entry.revision += 1;
-      if (entry.saving) clearTimeout(entry.saving);
       const id = activeKey;
-      entry.saving = setTimeout(() => persist(id, entry), 200);
+      persist(id, entry);
     },
     { deep: true, flush: 'sync' },
   );
 
   onBeforeUnmount(() => {
     const entry = entries!.get(activeKey);
-    if (entry?.saving) persist(activeKey, entry);
+    if (entry && entry.revision > 0) persist(activeKey, entry);
   });
   return { draft, ready };
 }

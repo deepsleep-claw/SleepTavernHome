@@ -262,7 +262,7 @@ function initializeDreamCardAgent(context: PluginActivationContext): PluginRunti
   });
   const runtime = getDreamCardAgentRuntime();
   const destroyUpdater = configureDreamCardAgentUpdater(context);
-  const destroyWindowHost = configureWindowHost(runtime, context, import.meta.url);
+  const destroyWindowHost = configureWindowHost(runtime, context, context.release.url);
   const style = teleportStyle();
   const floating = mountFloatingButton(owner);
   const wand = mountWandEntry(owner);

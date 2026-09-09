@@ -125,6 +125,16 @@ function agentConfiguration(id: string, name: string, presetId: string, skillIds
 }
 
 describe('DreamCardAgentRuntime', () => {
+  it('界面模式开关保存后立即更新快照', async () => {
+    const settingsStore = new MemoryAgentSettingsStore();
+    const runtime = new DreamCardAgentRuntime({ bridge: new FakeTavernBridge(), fileClient: new MemoryTavernFileClient(), settingsStore });
+    try {
+      const modes = { overlay: true, navigation: true, detached: true };
+      await runtime.updateSettings({ interfaceModes: modes });
+      expect(runtime.snapshot().interfaceModes).toEqual(modes);
+      expect(settingsStore.load().interfaceModes).toEqual(modes);
+    } finally { runtime.destroy(); }
+  });
   it('浏览器会话在备份前也能重新加载并显示到角色列表', async () => {
     const records = new MemoryBrowserRecordStore();
     const files = new MemoryTavernFileClient();

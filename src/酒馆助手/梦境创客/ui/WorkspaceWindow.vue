@@ -111,6 +111,10 @@ watch(
   id => void applyActiveTheme(id),
 );
 
+watch(() => state.value.active?.title, title => {
+  if (clientEnvironment()?.mode === 'detached') document.title = title ? `${title} — 梦境创客` : '梦境创客';
+}, { immediate: true });
+
 watch([sidebarCollapsed, isMobile], publishWindowLayout, { immediate: true });
 
 onBeforeUnmount(() => {

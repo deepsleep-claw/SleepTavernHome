@@ -1608,6 +1608,7 @@ export class DreamCardAgentRuntime {
   }): Promise<void> {
     const settings = this.settingsStore.load();
     const previous = {
+      interfaceModes: klona(this.state.interfaceModes),
       activeThemeId: this.state.activeThemeId,
       compressImages: this.state.compressImages,
       dangerousNonCharacterResourceWrites: this.state.dangerousNonCharacterResourceWrites,
@@ -2026,6 +2027,7 @@ export class DreamCardAgentRuntime {
   }
 
   private applyLightweightSettingsState(settings: {
+    interfaceModes: { overlay: boolean; navigation: boolean; detached: boolean };
     activeThemeId: string;
     compressImages: boolean;
     dangerousNonCharacterResourceWrites: boolean;
@@ -2040,7 +2042,7 @@ export class DreamCardAgentRuntime {
     this.state.compressImages = settings.compressImages;
     this.state.dangerousNonCharacterResourceWrites = settings.dangerousNonCharacterResourceWrites;
     this.state.developerMode = settings.developerMode;
-    this.state.interfaceModes = klona(this.settingsStore.load().interfaceModes);
+    this.state.interfaceModes = klona(settings.interfaceModes);
     this.state.floatingButton = settings.floatingButton;
     this.state.floatingButtonAnchor = settings.floatingButtonAnchor;
     this.state.floatingButtonOffset = klona(settings.floatingButtonOffset);
@@ -2209,6 +2211,7 @@ export class DreamCardAgentRuntime {
     this.state.defaultModelSelection = settings.defaultModelSelection;
     this.state.activePresetId = settings.activePresetId;
     this.state.approvalMode = settings.approvalMode;
+    this.state.interfaceModes = klona(settings.interfaceModes);
     this.state.agentConfigurations = settings.agentConfigurations;
     this.state.compressImages = settings.compressImages;
     this.state.developerMode = settings.developerMode;

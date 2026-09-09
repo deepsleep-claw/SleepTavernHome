@@ -804,6 +804,7 @@ export class CardAgentSessionService {
       }
     }
     this.modelMessages = messages;
+    this.modelMessages.push({ role: 'assistant', content: '本轮已由用户结束，已完成的操作保留。接下来的用户消息是新的请求。' });
     for (const item of this.ui) if (item.guidanceStatus === 'queued') item.guidanceStatus = 'cancelled';
     this.pendingGuidance = [];
     this.runner = undefined;
@@ -1291,7 +1292,7 @@ export class CardAgentSessionService {
       this.events = events;
       this.consumeLatestEvent(events.at(-1)!);
       this.modelMessages = klona(this.runner?.state.messages ?? this.modelMessages);
-      this.notify();
+      await this.persist();
     });
     this.runner = new AgentRunner({
       compactionEnabled: this.agentConfiguration.toolIds.includes('compact_context'),

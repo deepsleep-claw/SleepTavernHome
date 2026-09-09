@@ -65,6 +65,30 @@ function createService(input: {
 }
 
 describe('card agent realtime session service', () => {
+  it('请求开始即保存用户消息，停止后重载仍可交付排队引导', async () => {
+    let saved!: PersistedSessionRuntime;
+    let started!: () => void;
+    const startedPromise = new Promise<void>(resolve => { started = resolve; });
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const executor: ModelStepExecutor = { execute: request => new Promise((_resolve, reject) => {
+      request.abortSignal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+      started();
+    }) };
+    const service = await createService({ adapter, executor, onPersist: async value => { saved = structuredClone(value); } });
+    const running = service.send('持久化中的请求');
+    await startedPromise;
+    expect(saved.status).toBe('running');
+    expect(saved.ui.some(item => item.kind === 'user' && item.content === '持久化中的请求')).toBe(true);
+    await service.enqueueGuidance('改为回答新的目标');
+    expect(saved.pendingGuidance).toHaveLength(1);
+    service.stop();
+    await running;
+    const resumedExecutor = new QueueExecutor([step()]);
+    const restored = await CardAgentSessionService.restore({ adapter, executor: resumedExecutor, lock: new GlobalAgentTaskLock(), agentConfiguration: defaultBuiltinAgentConfiguration() }, saved);
+    expect((await restored.resume()).status).toBe('completed');
+    expect(JSON.stringify(resumedExecutor.requests[0].messages)).toContain('改为回答新的目标');
+    expect(restored.view().ui.find(item => item.kind === 'guidance')?.guidanceStatus).toBe('delivered');
+  });
   it('结束中断轮次保留真实修改并允许发送新要求', async () => {
     const adapter = new MemoryCardStateAdapter(transactionState());
     const service = await createService({

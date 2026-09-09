@@ -14,7 +14,9 @@ function scriptString(value: string): string {
 }
 
 export function clientDocument(entryUrl: string, mode: 'embedded' | 'detached'): string {
+  const icon = encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#172536"/><text x="32" y="47" font-size="42" text-anchor="middle">🐋</text></svg>');
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>梦境创客</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,${icon}">
 <link rel="stylesheet" href="https://testingcf.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css">
 <style>html,body{height:100%;margin:0;overflow:hidden}#dca-client-loading{padding:24px;font:14px sans-serif} .dca-client-toast{position:fixed;z-index:99999;right:16px;top:16px;max-width:80%;padding:12px;background:#292b34;color:#fff;border-radius:8px}</style></head>
 <body><div id="dca-client-loading">正在连接酒馆……</div><script type="module">

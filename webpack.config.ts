@@ -227,6 +227,9 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
       },
     },
     module: {
+      parser: entry.script.replaceAll('\\', '/').endsWith('梦境创客/index.ts')
+        ? { javascript: { importMeta: false, url: false } }
+        : undefined,
       rules: [
         {
           test: /\.vue$/,
