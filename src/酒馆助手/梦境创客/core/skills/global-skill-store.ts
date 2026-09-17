@@ -94,7 +94,10 @@ function safeSkillId(id: string): string {
 }
 
 function fileExtension(path: string): string {
-  const match = path.split('/').at(-1)?.match(/\.[a-zA-Z\d]{1,10}$/u);
+  const match = path
+    .split('/')
+    .at(-1)
+    ?.match(/\.[a-zA-Z\d]{1,10}$/u);
   return match?.[0].toLocaleLowerCase() ?? '.bin';
 }
 
@@ -123,6 +126,7 @@ function normalizeResource(resource: SkillResource, path: string): SkillResource
 
 /** 每个用户Skill由一个SKILL.md和若干独立资源文件组成；设置中的文件清单是原子生效点。 */
 export class GlobalSkillStore {
+  readonly warnings: string[] = [];
   constructor(
     private readonly client: TavernFileClient,
     private readonly settingsStore: AgentSettingsStore,
@@ -133,7 +137,13 @@ export class GlobalSkillStore {
     const entries = Object.values(this.settingsStore.load().globalSkills).sort((left, right) =>
       left.name.localeCompare(right.name, 'zh-CN'),
     );
-    return Promise.all(entries.map(entry => this.readEntry(entry, false)));
+    this.warnings.length = 0;
+    const results = await Promise.allSettled(entries.map(entry => this.readEntry(entry, false)));
+    return results.flatMap((result, index) => {
+      if (result.status === 'fulfilled') return [result.value];
+      this.warnings.push(`资料“${entries[index].name}”读取失败：${String(result.reason)}`);
+      return [];
+    });
   }
 
   async load(id: string): Promise<AgentSkill> {
@@ -221,7 +231,8 @@ export class GlobalSkillStore {
         at,
       );
       for (const key of Object.keys(settings.files)) {
-        if (key === `global-skill:${skill.id}` || key.startsWith(`global-skill:${skill.id}:`)) delete settings.files[key];
+        if (key === `global-skill:${skill.id}` || key.startsWith(`global-skill:${skill.id}:`))
+          delete settings.files[key];
       }
       const references: Array<[string, StoredFileReference]> = [
         [
@@ -266,7 +277,8 @@ export class GlobalSkillStore {
       if (!incoming.has(id)) await this.remove(id);
     }
     for (const skill of skills) {
-      if (JSON.stringify(current.get(skill.id)) !== JSON.stringify(stripTransientSkillData(skill))) await this.save(skill);
+      if (JSON.stringify(current.get(skill.id)) !== JSON.stringify(stripTransientSkillData(skill)))
+        await this.save(skill);
     }
     return this.list();
   }

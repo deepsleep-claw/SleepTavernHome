@@ -52,6 +52,54 @@ function runnerTool(
 }
 
 describe('AgentRunner', () => {
+  it('阈值以下主动调用压缩也实际替换旧上下文', async () => {
+    const executor = new QueueExecutor([
+      modelStep([], 'old-answer'.repeat(100)),
+      modelStep([{ input: { summary: '保留目标' }, toolCallId: 'compact-low', toolName: 'compact_context' }]),
+      modelStep([], 'done'),
+    ]);
+    const journal = new MemoryRunnerJournal();
+    const runner = new AgentRunner({ contextWindow: 100_000, executor, journal, tools: [] });
+    await runner.start('first');
+    const result = await runner.start('second');
+    expect(result.status).toBe('completed');
+    expect(JSON.stringify(result.messages)).not.toContain('old-answer');
+    expect(journal.events.some(event => event.type === 'context-compacted')).toBe(true);
+  });
+
+  it('手动压缩强制请求摘要，完成后不继续模型任务', async () => {
+    const executor = new QueueExecutor([modelStep(), modelStep([], '摘要')]);
+    const runner = new AgentRunner({ executor, journal: new MemoryRunnerJournal(), tools: [] });
+    await runner.start('first');
+    expect((await runner.compact()).status).toBe('completed');
+    expect(executor.requests).toHaveLength(2);
+    expect(executor.requests[1].tools).toEqual([]);
+    expect(executor.requests[1].forceTool).toBeUndefined();
+  });
+  it('保存运行状态挂起时仍能停止，且不向模型发出请求', async () => {
+    const execute = vi.fn(async () => modelStep());
+    let entered!: () => void;
+    const saving = new Promise<void>(resolve => {
+      entered = resolve;
+    });
+    const runner = new AgentRunner({
+      executor: { execute },
+      tools: [],
+      journal: {
+        append: async event => {
+          if (event.type === 'status' && event.status === 'running') {
+            entered();
+            await new Promise(() => {});
+          }
+        },
+      },
+    });
+    const run = runner.start('test');
+    await saving;
+    runner.stop();
+    expect((await run).status).toBe('stopped');
+    expect(execute).not.toHaveBeenCalled();
+  });
   it('无工具回复直接完成并保存规范化ModelMessage', async () => {
     const executor = new QueueExecutor([modelStep([], 'answer')]);
     const journal = new MemoryRunnerJournal();
@@ -361,9 +409,8 @@ describe('AgentRunner', () => {
     expect(executor.requests[1].messages.at(-1)).toMatchObject({ role: 'tool' });
   });
 
-  it('达到阈值时强制compact_context并保留摘要后继续', async () => {
-    const compactCall = { input: { summary: '保留目标与完成项' }, toolCallId: 'compact', toolName: 'compact_context' };
-    const executor = new QueueExecutor([modelStep([compactCall]), modelStep([], 'after compact')]);
+  it('下一次调用前达到阈值时先独立压缩，再带摘要继续原任务', async () => {
+    const executor = new QueueExecutor([modelStep([], '保留目标与完成项'), modelStep([], 'after compact')]);
     const runner = new AgentRunner({
       contextWindow: 500,
       executor,
@@ -378,7 +425,8 @@ describe('AgentRunner', () => {
       tools: [],
     });
     const state = await runner.start('small user');
-    expect(executor.requests[0].forceTool).toBe('compact_context');
+    expect(executor.requests[0].tools).toEqual([]);
+    expect(executor.requests[0].forceTool).toBeUndefined();
     expect(executor.requests[1].forceTool).toBeUndefined();
     expect(
       state.messages.some(message => message.role === 'system' && String(message.content).includes('保留目标与完成项')),
@@ -388,7 +436,7 @@ describe('AgentRunner', () => {
     expect(state.status).toBe('completed');
   });
 
-  it('用户消息超过80%时暂停；强制压缩未调用工具时失败', async () => {
+  it('用户消息超过80%时暂停；空压缩摘要不会覆盖原上下文', async () => {
     const exhaustedExecutor = new QueueExecutor([]);
     const exhausted = new AgentRunner({
       contextWindow: 100,
@@ -401,14 +449,15 @@ describe('AgentRunner', () => {
 
     const missing = new AgentRunner({
       contextWindow: 100,
-      executor: new QueueExecutor([modelStep([], 'refused')]),
+      executor: new QueueExecutor([modelStep([], '')]),
       initialMessages: [{ content: 'a'.repeat(500), role: 'assistant' }],
       journal: new MemoryRunnerJournal(),
       tools: [],
     });
     const failed = await missing.start('small');
     expect(failed.status).toBe('failed');
-    expect(failed.failure).toContain('没有按要求');
+    expect(failed.failure).toContain('原上下文已保留');
+    expect(JSON.stringify(failed.messages)).toContain('a'.repeat(500));
   });
 
   it('拒绝并发启动和没有中断点的恢复', async () => {

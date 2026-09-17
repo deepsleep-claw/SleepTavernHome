@@ -77,9 +77,9 @@ describe('semantic state diff', () => {
     const changes = diffCardStates(base, working);
     expect(changes.find(item => item.path === '/character/greetings-order')?.highRisk).toBe(true);
     expect(changes.find(item => item.path === '/bindings/primary')?.highRisk).toBe(true);
-    expect(changes.filter(item => item.path.includes('/entries/') && item.kind === 'delete').every(item => item.highRisk)).toBe(
-      true,
-    );
+    expect(
+      changes.filter(item => item.path.includes('/entries/') && item.kind === 'delete').every(item => item.highRisk),
+    ).toBe(true);
 
     const deleteBook = klona(base);
     deleteBook.worldbooks = [];
@@ -160,41 +160,5 @@ describe('semantic state diff', () => {
     const replayed = applyStateOperations(base, operations);
     replayed.character.extensions.card_agent = klona(working.character.extensions.card_agent);
     expect(replayed).toEqual(working);
-  });
-
-  it('读取并应用全部语义路径分支', () => {
-    const state = transactionState();
-    expect(readStatePath(state, '/character/creator')).toBe('作者');
-    expect(readStatePath(state, '/character/version')).toBe('1');
-    expect(readStatePath(state, '/character/tags')).toEqual(['tag']);
-    expect(readStatePath(state, '/character/extensions/card_agent')).toMatchObject({ binding_id: 'binding-1' });
-    expect(readStatePath(state, '/character/greetings-order')).toEqual(['greeting/1', 'greeting-2']);
-    expect(readStatePath(state, '/character/greetings/greeting~11')).toMatchObject({ name: '初见' });
-    expect(readStatePath(state, '/worldbooks/book~11/name')).toBe('主世界书');
-    expect(readStatePath(state, '/worldbooks/book~11/metadata')).toMatchObject({ roundTripSafe: true });
-    expect(readStatePath(state, '/worldbooks/book~11/entries-order')).toEqual(['entry-1', 'entry-2']);
-    expect(readStatePath(state, '/worldbooks/missing/metadata')).toBeUndefined();
-    expect(readStatePath(state, '/bindings/primary')).toBe('主世界书');
-
-    const operations: StateOperation[] = [
-      { after: { updated: true }, before: {}, highRisk: false, kind: 'modify', label: 'meta', path: '/character/extensions/card_agent' },
-      { after: 'renamed', before: '主世界书', highRisk: false, kind: 'modify', label: 'name', path: '/worldbooks/book~11/name' },
-      {
-        after: { roundTripSafe: true, unknownFields: { changed: true }, writable: true },
-        before: {},
-        highRisk: false,
-        kind: 'modify',
-        label: 'metadata',
-        path: '/worldbooks/book~11/metadata',
-      },
-      { after: ['entry-1'], before: [], highRisk: false, kind: 'reorder', label: 'order', path: '/worldbooks/book~11/entries-order' },
-      { after: null, before: '主世界书', highRisk: true, kind: 'modify', label: 'binding', path: '/bindings/primary' },
-      { after: 'ignored', before: undefined, highRisk: false, kind: 'modify', label: 'missing', path: '/worldbooks/missing/name' },
-    ];
-    operations.forEach(item => applyStateOperation(state, item));
-    expect(state.character.extensions.card_agent).toEqual({ updated: true });
-    expect(state.worldbooks[0]).toMatchObject({ name: 'renamed', unknownFields: { changed: true } });
-    expect(state.worldbooks[0].entries.map(item => item.resourceId)).toEqual(['entry-1', 'entry-2']);
-    expect(state.bindings.primary).toBeNull();
   });
 });

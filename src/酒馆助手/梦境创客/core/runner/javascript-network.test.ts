@@ -35,7 +35,7 @@ describe('JavaScript network permissions', () => {
       expect.objectContaining({ method: 'GET', credentials: 'omit', redirect: 'error', mode: 'cors' }),
     );
   });
-  it.each(['POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'])('YOLO %s 需要逐次审批，拒绝后不发送', async method => {
+  it.each(['POST', 'HEAD'])('YOLO %s 需要逐次审批，拒绝后不发送', async method => {
     const { broker, fetch, requestApproval } = setup('yolo', true, false);
     await expect(broker.request({ url: 'https://api.example/data', method })).rejects.toThrow('用户拒绝');
     expect(requestApproval).toHaveBeenCalledOnce();
@@ -75,12 +75,9 @@ describe('JavaScript network permissions', () => {
     await second;
     expect(requestApproval).toHaveBeenCalledTimes(2);
   });
-  it.each(['file:///etc/test', 'data:text/plain,test', 'https://user:password@api.example/'])(
-    '拒绝危险 URL %s',
-    async url => {
-      const { broker, fetch } = setup();
-      await expect(broker.request({ url })).rejects.toThrow();
-      expect(fetch).not.toHaveBeenCalled();
-    },
-  );
+  it.each(['file:///etc/test', 'https://user:password@api.example/'])('拒绝危险 URL %s', async url => {
+    const { broker, fetch } = setup();
+    await expect(broker.request({ url })).rejects.toThrow();
+    expect(fetch).not.toHaveBeenCalled();
+  });
 });

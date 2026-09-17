@@ -7,13 +7,30 @@
   >
     <div class="dca-session-panel">
       <SessionToolbar :sidebar-collapsed="sidebarCollapsed" @toggle-sidebar="toggleSidebar" />
+      <details v-if="state.active?.warnings.length" class="dca-session-warnings">
+        <summary>会话提示（{{ state.active.warnings.length }}）</summary>
+        <ul>
+          <li v-for="warning in state.active.warnings" :key="warning">{{ warning }}</li>
+        </ul>
+      </details>
       <SessionTimeline @open-diff="openDiff" />
       <div v-if="state.activeSessionAccess === 'readonly-history'" class="dca-readonly-composer">
         <i class="fa-solid fa-lock" aria-hidden="true"></i>
         <div>
           <strong>历史记录只读</strong
-          ><span>对应角色卡已不可用。你仍可查看消息、工具过程、操作记录与 Diff，但不能发送或修改内容。</span>
+          ><span>{{
+            state.active?.error ||
+            '对应角色卡已不可用。你仍可查看消息、工具过程、操作记录与 Diff，但不能发送或修改内容。'
+          }}</span>
         </div>
+        <button
+          v-if="state.active?.scope === 'global' || state.active?.bindingId === state.currentCharacter?.bindingId"
+          type="button"
+          :disabled="state.busy"
+          @click="retryWorkspace"
+        >
+          重新加载工作区
+        </button>
       </div>
       <SessionComposer v-else />
     </div>
@@ -46,7 +63,15 @@ import SessionTimeline from './SessionTimeline.vue';
 import SessionToolbar from './SessionToolbar.vue';
 import SessionSidebar from './sidebar/SessionSidebar.vue';
 
-const { sidebarFocus, state } = useDreamCardAgent();
+const { sidebarFocus, state, runtime, action } = useDreamCardAgent();
+
+async function retryWorkspace() {
+  const active = state.value.active;
+  if (!active) return;
+  await action(() =>
+    active.scope === 'global' ? runtime.openGlobalSession(active.sessionId) : runtime.openSession(active.sessionId),
+  );
+}
 
 const sidebarCollapsed = ref(true);
 const workbenchRoot = ref<HTMLElement>();
@@ -91,6 +116,18 @@ watch(
   { immediate: true },
 );
 </script>
+
+<style scoped>
+.dca-session-warnings {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--dca-border);
+  font-size: 0.85rem;
+  overflow-wrap: anywhere;
+}
+.dca-session-warnings summary {
+  cursor: pointer;
+}
+</style>
 
 <style lang="scss">
 .dca-workbench {

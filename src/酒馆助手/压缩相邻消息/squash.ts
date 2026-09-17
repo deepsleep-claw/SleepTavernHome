@@ -10,7 +10,38 @@ import {
   writeGreenCacheVariables,
 } from './green_cache';
 import { publishSquashDebugRecord } from './debug';
+import { captureFinalPrompt } from './debug_snapshot';
+import { GenerationTrace } from './generation_trace';
+import { generationAnchorDepth, selectGenerationHistory, type GenerationHistory } from './generation_history';
+import type { DebugGeneration } from './debug_types';
 import { Settings, WorldbookExtractionPositionOrder } from './store';
+import {
+  applyWorldbookEntryMetadataAnalysis,
+  getSafeGetwiTemplateCalls,
+  hasDynamicPromptMacroOrGetwi,
+  SAFE_GETWI_TEMPLATE_REGEX,
+  type SplitGetwiExtractionPart,
+  type WorldbookEntryMetadata,
+} from './worldbook_analysis';
+import {
+  compileWorldbookRules,
+  getWorldbookPlacements,
+  hasGreenCacheRules,
+  planWorldbookExtraction,
+  type WorldbookExtractionPlan,
+  type WorldbookRuleContext,
+  type WorldbookRuleFacts,
+} from './worldbook_rules';
+import { type WorldbookSource } from './worldbook_settings';
+import { collectWorldbookSources } from './worldbook_sources';
+import { WorldbookScanLedger, type WorldbookScanSnapshot } from './worldbook_scan';
+import { getBaiBaiInjections, getEntryKeywords, identifyRubyEntries, readPluginSourceContext } from './plugin_sources';
+import {
+  groupWorldbookExtractions,
+  replaceWorldbookPlaceholders,
+  sortWorldbookExtractionItems,
+  type SortableWorldbookExtractionItem,
+} from './worldbook_output';
 
 const GREEN_CACHE_ANCHOR_PREFIX = '§§TH_SQUASH_GREEN_CACHE_ANCHOR';
 const GREEN_CACHE_ANCHOR_REGEX = /§§TH_SQUASH_GREEN_CACHE_ANCHOR:([^§]+)§§/g;
@@ -27,7 +58,7 @@ function getPromptContent(prompt: SillyTavern.SendingMessage, settings: Settings
   if (typeof prompt.content === 'string') {
     content = prompt.content;
   } else {
-    content = prompt.content
+    content = (prompt.content ?? [])
       .filter(({ type }) => type === 'text')
       .map(({ text }: any) => text)
       .join(settings.delimiter.value);
@@ -37,13 +68,14 @@ function getPromptContent(prompt: SillyTavern.SendingMessage, settings: Settings
 }
 function updatePromptContentWith(
   prompt: SillyTavern.SendingMessage,
-  updater: (prompt: { role: 'system' | 'assistant' | 'user'; content: string }) => string,
+  updater: (prompt: { role: SillyTavern.SendingMessage['role']; content: string }) => string,
   settings: Settings,
 ): SillyTavern.SendingMessage {
   const content = updater({ role: prompt.role, content: getPromptContent(prompt, settings) });
   if (typeof prompt.content === 'string') {
     prompt.content = content;
   } else {
+    prompt.content ??= [];
     _.remove(prompt.content, item => item.type === 'text');
     if (content) {
       prompt.content.splice(0, 0, { type: 'text', text: content });
@@ -59,7 +91,7 @@ export type Separators = {
   tail: InjectionPrompt;
 };
 
-export function injectSeparators(settings: Settings) {
+export function injectSeparators(settings: Settings, shouldEnable: () => boolean = () => true) {
   const separators: Readonly<Separators> = Object.freeze({
     head: {
       id: `\0${getComplementString('压缩相邻消息-聊天记录开头')}`,
@@ -84,29 +116,72 @@ export function injectSeparators(settings: Settings) {
     },
   } as const);
   let green_anchor_prompt_ids: string[] = [];
+  let generation_type = 'normal';
+  let active_generation = false;
+  let regenerate_target: { id: number; message: SillyTavern.ChatMessage } | undefined;
+  let history = readGenerationCacheHistory();
 
   const injectGreenAnchors = () => {
+    if (!shouldEnable()) return;
+    const target_id =
+      regenerate_target && SillyTavern.chat[regenerate_target.id] === regenerate_target.message
+        ? regenerate_target.id
+        : undefined;
+    history = readGenerationCacheHistory(generation_type, target_id);
     if (green_anchor_prompt_ids.length > 0) {
       uninjectPrompts(green_anchor_prompt_ids);
     }
-    const green_anchor_prompts = getGreenCacheAnchorInjectionPrompts(settings);
+    const green_anchor_prompts = getGreenCacheAnchorInjectionPrompts(settings, history);
     green_anchor_prompt_ids = green_anchor_prompts.map(prompt => prompt.id);
     if (green_anchor_prompts.length > 0) {
       injectPrompts(green_anchor_prompts);
     }
   };
-  const inject = () => {
+  const inject = (type = 'normal', options?: { depth?: number }, dry_run = false) => {
+    if (!shouldEnable()) return;
     injectPrompts(Object.values(separators));
+    if (dry_run) return;
+    generation_type = type;
+    active_generation = true;
+    const last_id = SillyTavern.chat.length - 1;
+    const last = SillyTavern.chat[last_id];
+    regenerate_target =
+      type === 'regenerate' && !options?.depth && last && !last.is_user ? { id: last_id, message: last } : undefined;
     injectGreenAnchors();
   };
+  const messageSent = () => {
+    if (!active_generation) {
+      generation_type = 'normal';
+      regenerate_target = undefined;
+    }
+    injectGreenAnchors();
+  };
+  const messageDeleted = () => {
+    if (active_generation && generation_type === 'regenerate') injectGreenAnchors();
+  };
+  const finishGeneration = () => {
+    active_generation = false;
+  };
+  const promptsPrepared = (_data: unknown, dry_run = false) => {
+    if (!dry_run) finishGeneration();
+  };
   eventOn(tavern_events.GENERATION_AFTER_COMMANDS, inject);
-  eventOn(tavern_events.MESSAGE_SENT, injectGreenAnchors);
+  eventOn(tavern_events.MESSAGE_SENT, messageSent);
+  eventOn(tavern_events.MESSAGE_DELETED, messageDeleted);
+  eventOn(tavern_events.GENERATE_AFTER_DATA, promptsPrepared);
+  eventOn(tavern_events.GENERATION_ENDED, finishGeneration);
+  eventOn(tavern_events.GENERATION_STOPPED, finishGeneration);
 
   return {
     separators,
+    getHistory: () => history,
     uninject: () => {
       eventRemoveListener(tavern_events.GENERATION_AFTER_COMMANDS, inject);
-      eventRemoveListener(tavern_events.MESSAGE_SENT, injectGreenAnchors);
+      eventRemoveListener(tavern_events.MESSAGE_SENT, messageSent);
+      eventRemoveListener(tavern_events.MESSAGE_DELETED, messageDeleted);
+      eventRemoveListener(tavern_events.GENERATE_AFTER_DATA, promptsPrepared);
+      eventRemoveListener(tavern_events.GENERATION_ENDED, finishGeneration);
+      eventRemoveListener(tavern_events.GENERATION_STOPPED, finishGeneration);
       uninjectPrompts([...Object.values(separators).map(({ id }) => id), ...green_anchor_prompt_ids]);
       green_anchor_prompt_ids = [];
     },
@@ -283,6 +358,7 @@ function squashChatHistory(prompts: SillyTavern.SendingMessage[], settings: Sett
     updatePromptContentWith(
       prompt,
       ({ role, content }) => {
+        if (role === 'tool') return content;
         const prompt_prefix = substituteFloor(prefix[role], floor);
         const prompt_suffix = substituteFloor(suffix[role], floor);
         content = content.includes(prompt_prefix) ? content : prompt_prefix + content;
@@ -308,22 +384,13 @@ function squashChatHistory(prompts: SillyTavern.SendingMessage[], settings: Sett
 
 type WorldbookExtractionPosition = (typeof WorldbookExtractionPositionOrder)[number];
 
-type SplitGetwiExtractionPart = {
-  trigger_type: 'constant' | 'keyed';
-  content_candidates: string[];
-  wrapper_id?: string;
-  source?: string;
-  target_key?: string;
-  target_name?: string;
-};
-
 type ActivatedWorldbookEntry = {
+  rule_context: WorldbookRuleContext;
   key: string;
   world: string;
   uid: number;
   name: string;
   index: number;
-  trigger_type: 'constant' | 'keyed';
   position: WorldbookExtractionPosition;
   depth: number;
   order: number;
@@ -335,20 +402,9 @@ type ActivatedWorldbookEntry = {
   content_hash: string;
   has_source_macro: boolean;
   is_selective: boolean;
-};
-
-type WorldbookCustomRoute = {
-  tag: string;
-  placeholder: string;
-};
-
-type WorldbookCustomRouteRule = WorldbookCustomRoute & {
-  title_regex: RegExp;
-};
-
-type WorldbookCustomRouting = {
-  rules: WorldbookCustomRouteRule[];
-  entry_routes: Map<string, WorldbookCustomRoute>;
+  native_position: number;
+  preserve_reason?: string;
+  source_role?: 'system' | 'user' | 'assistant';
 };
 
 const FLATTENED_WORLDBOOK_POSITION: Record<number, WorldbookExtractionPosition> = {
@@ -372,28 +428,28 @@ function getWorldbookEntryKey(entry: { world: string } & Pick<SillyTavern.Flatte
   return `${entry.world}.${entry.uid}`;
 }
 
-type WorldbookEntryMetadata = {
-  key: string;
-  world: string;
-  uid: number;
-  name: string;
-  is_constant: boolean;
-  content: string;
-  content_candidates: string[];
-  split_getwi_parts: SplitGetwiExtractionPart[];
-  wrapper_id?: string;
-  content_hash: string;
-  has_dynamic_macro: boolean;
-};
-
-function parseWorldbookEntryMetadata(entry: { world: string } & SillyTavern.FlattenedWorldInfoEntry): WorldbookEntryMetadata {
+function parseWorldbookEntryMetadata(
+  entry: { world: string } & SillyTavern.FlattenedWorldInfoEntry,
+  sources: WorldbookSource[],
+): WorldbookEntryMetadata {
   const content = trimEmptyLines(unwrapWorldbookExtractionWrapperText(entry.content ?? ''));
   return {
     key: getWorldbookEntryKey(entry),
+    rule_context: {
+      world: entry.world,
+      name: entry.comment ?? '',
+      content,
+      sources,
+      trigger: entry.constant ? 'constant' : entry.vectorized ? 'vectorized' : 'selective',
+      keywords: getEntryKeywords(entry.key),
+    },
     world: entry.world,
     uid: entry.uid,
     name: entry.comment ?? '',
     is_constant: entry.constant,
+    is_disabled: entry.disable === true,
+    position: entry.position,
+    depth: entry.depth,
     content,
     content_candidates: [content],
     split_getwi_parts: [],
@@ -402,45 +458,6 @@ function parseWorldbookEntryMetadata(entry: { world: string } & SillyTavern.Flat
     has_dynamic_macro: true,
   };
 }
-
-function removeStableIdentityMacros(content: string): string {
-  return content
-    .replace(/<USER>/gi, '')
-    .replace(/<BOT>/gi, '')
-    .replace(/<CHAR>/gi, '')
-    .replace(/\{\{\s*user\s*\}\}/gi, '')
-    .replace(/\{\{\s*char\s*\}\}/gi, '');
-}
-
-const MAX_GETWI_RECURSION_DEPTH = 3;
-const SAFE_GETWI_ARGUMENT = String.raw`(null|'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?)`;
-const SAFE_GETWI_TEMPLATE_REGEX = new RegExp(
-  String.raw`<%[-=]\s*await\s+(?:getwi|getWorldInfo)\s*\(\s*${SAFE_GETWI_ARGUMENT}(?:\s*,\s*${SAFE_GETWI_ARGUMENT})?\s*\)\s*[-_]?%>`,
-  'g',
-);
-
-type SafeGetwiArgument = string | number | null;
-
-type SafeGetwiTemplateCall = {
-  raw: string;
-  first_argument: SafeGetwiArgument;
-  second_argument: SafeGetwiArgument | undefined;
-};
-
-type AnalyzedGetwiCall = {
-  has_dynamic_macro: boolean;
-  content_candidates: string[];
-  source?: string;
-  target_key?: string;
-  target_name?: string;
-};
-
-type WorldbookContentAnalysis = {
-  has_dynamic_macro: boolean;
-  content_candidates: string[];
-  is_pure_getwi: boolean;
-  getwi_calls: AnalyzedGetwiCall[];
-};
 
 type WorldbookWrapperPresenceDebug = {
   paired: boolean;
@@ -485,10 +502,7 @@ type WorldbookDebugPromptRows = {
   rows: WorldbookDebugTotalRow[];
 };
 
-type GreenCacheInsertionSource =
-  | 'custom_anchor'
-  | 'before_chat_history'
-  | 'before_chat_anchor';
+type GreenCacheInsertionSource = 'custom_anchor' | 'before_chat_history' | 'before_chat_anchor';
 
 type ChatDebugRole = 'system' | 'assistant' | 'user';
 
@@ -503,8 +517,15 @@ type ChatPromptSnapshot = {
   content_hash: string;
   content_length: number;
 };
+type CacheHistory = GenerationHistory<ChatPromptSnapshot>;
 
 type GreenCacheDebugState = {
+  request_history?: {
+    generation_type: string;
+    message_ids: number[];
+    injection_message_ids: number[];
+    anchor_message_ids: number[];
+  };
   summary?: {
     cache_total: number;
     valid_cache_total: number;
@@ -527,6 +548,8 @@ type GreenCacheDebugState = {
     is_hidden: boolean;
     message_hash: string;
     message_length: number;
+    in_request: boolean;
+    anchor_eligible: boolean;
     anchor_depth?: number;
     prompt_chunk_index?: PromptInsertionLocation['chunk_index'];
     prompt_index?: number;
@@ -592,56 +615,18 @@ type GreenCacheDebugState = {
   }[];
 };
 
-function removeSafeGetwiTemplateMacros(content: string): string {
-  return content.replace(SAFE_GETWI_TEMPLATE_REGEX, '');
+function getWorldbookRegexDepth(entry: { position: number; depth?: number }): number | undefined {
+  return entry.position === 4 ? (entry.depth ?? DEFAULT_WORLDBOOK_DEPTH) : undefined;
 }
 
-function parseSafeGetwiArgument(argument: string): SafeGetwiArgument {
-  const trimmed = argument.trim();
-  if (trimmed === 'null') {
-    return null;
-  }
-  if (/^-?\d+(?:\.\d+)?$/.test(trimmed)) {
-    return Number(trimmed);
-  }
-  return trimmed
-    .slice(1, -1)
-    .replace(/\\'/g, "'")
-    .replace(/\\"/g, '"')
-    .replace(/\\\\/g, '\\');
-}
-
-function getSafeGetwiTemplateCalls(content: string): SafeGetwiTemplateCall[] {
-  return [...content.matchAll(SAFE_GETWI_TEMPLATE_REGEX)].map(match => ({
-    raw: match[0],
-    first_argument: parseSafeGetwiArgument(match[1]),
-    second_argument: match[2] === undefined ? undefined : parseSafeGetwiArgument(match[2]),
-  }));
-}
-
-function hasDynamicPromptMacro(content: string): boolean {
-  const checked_content = removeSafeGetwiTemplateMacros(removeStableIdentityMacros(content));
-  return /\{\{[\s\S]*?\}\}/.test(checked_content) || /<%(?:[-_=#_%])?[\s\S]*?(?:[-_]?%>)/.test(checked_content);
-}
-
-function getWorldbookRegexDepth(entry: Pick<SillyTavern.FlattenedWorldInfoEntry, 'position' | 'depth'>): number | undefined {
-  return entry.position === 4 ? entry.depth ?? DEFAULT_WORLDBOOK_DEPTH : undefined;
-}
-
-function formatAsWorldbookPromptRegexedContent(
-  content: string,
-  entry: Pick<SillyTavern.FlattenedWorldInfoEntry, 'position' | 'depth'>,
-): string {
+function formatAsWorldbookPromptRegexedContent(content: string, entry: { position: number; depth?: number }): string {
   const depth = getWorldbookRegexDepth(entry);
   return depth === undefined
     ? formatAsTavernRegexedString(content, 'world_info', 'prompt')
     : formatAsTavernRegexedString(content, 'world_info', 'prompt', { depth });
 }
 
-function isRegexDepthMatched(
-  regex: TavernRegex,
-  entry: Pick<SillyTavern.FlattenedWorldInfoEntry, 'position' | 'depth'>,
-): boolean {
+function isRegexDepthMatched(regex: TavernRegex, entry: { position: number; depth?: number }): boolean {
   const depth = getWorldbookRegexDepth(entry);
   if (depth === undefined) {
     return true;
@@ -658,8 +643,8 @@ function isRegexDepthMatched(
 function getWorldInfoPromptRegexes(): TavernRegex[] {
   const regexes = [
     ...getTavernRegexes({ type: 'global' }),
-    ...(isCharacterTavernRegexesEnabled() ? getTavernRegexes({ type: 'character', name: 'current' }) : []),
     ...getTavernRegexes({ type: 'preset', name: 'in_use' }),
+    ...(isCharacterTavernRegexesEnabled() ? getTavernRegexes({ type: 'character', name: 'current' }) : []),
   ];
   return regexes.filter(regex => regex.enabled && regex.source.world_info && regex.destination.prompt);
 }
@@ -679,49 +664,34 @@ function parseTavernRegex(pattern: string): RegExp | undefined {
   }
 }
 
-function doesRegexMatchContent(regex: TavernRegex, content: string): boolean {
-  const parsed_regex = parseTavernRegex(substitudeMacros(regex.find_regex));
-  return !!parsed_regex && parsed_regex.test(content);
+function hasUnstableTavernMacro(content: string): boolean {
+  return [...content.matchAll(/\{\{([\s\S]*?)\}\}/g)].some(match => !/^(user|char|match)$/i.test(match[1].trim()));
 }
 
-function hasDynamicWorldInfoPromptRegexReplacement(
-  original_content: string,
-  regexed_content: string,
-  entry: Pick<SillyTavern.FlattenedWorldInfoEntry, 'position' | 'depth'>,
+function hasUnstableWorldInfoPromptRegex(
+  content: string,
+  entry: { position: number; depth?: number },
+  for_cache = false,
 ): boolean {
-  const dynamic_regexes = getWorldInfoPromptRegexes().filter(
-    regex => isRegexDepthMatched(regex, entry) && hasDynamicPromptMacro(regex.replace_string),
-  );
-  if (dynamic_regexes.length === 0) {
-    return false;
+  let previous_may_change = false;
+  for (const regex of getWorldInfoPromptRegexes().filter(regex => isRegexDepthMatched(regex, entry))) {
+    if (hasUnstableTavernMacro(regex.find_regex)) return true;
+    const pattern = parseTavernRegex(substitudeMacros(regex.find_regex));
+    const matches = !!pattern?.test(content);
+    const dynamic_replacement =
+      hasUnstableTavernMacro(regex.replace_string) ||
+      (regex.trim_strings ?? []).some(hasUnstableTavernMacro) ||
+      (for_cache && hasDynamicPromptMacroOrGetwi(regex.replace_string.replace(/\{\{match\}\}/gi, '')));
+    if (dynamic_replacement && (matches || previous_may_change)) return true;
+    previous_may_change ||= matches;
   }
-
-  if (
-    dynamic_regexes.some(
-      regex => doesRegexMatchContent(regex, original_content) || doesRegexMatchContent(regex, regexed_content),
-    )
-  ) {
-    return true;
-  }
-
-  // 若动态正则依赖前序静态正则的改写结果，直接匹配原文/终文可能会漏判；保守归入 lora_key。
-  return original_content !== regexed_content;
+  return false;
 }
 
 const WORLDBOOK_EXTRACTION_WRAPPER_PREFIX = '§§TH_SQUASH_WI';
 const WORLDBOOK_EXTRACTION_WRAPPER_SUFFIX = '§§';
-const REGEXED_WORLDBOOK_MARKER_PREFIX = '§§TH_SQUASH_REGEXED_WI';
-const REGEXED_WORLDBOOK_MARKER_REGEX = /§§TH_SQUASH_REGEXED_WI:([0-9a-z]+)§§/g;
 const DEFAULT_WORLDBOOK_DEPTH = 4;
 const WORLDBOOK_PLACEHOLDER_SEPARATOR = '\n';
-
-type RegexedWorldbookIntercept = {
-  key: string;
-  marker: string;
-  original_content: string;
-  regexed_content: string;
-  trigger_type: ActivatedWorldbookEntry['trigger_type'];
-};
 
 type WorldInfoScanDoneEvent = {
   state: {
@@ -730,6 +700,7 @@ type WorldInfoScanDoneEvent = {
   activated: {
     entries: Map<string, SillyTavern.FlattenedWorldInfoEntry>;
   };
+  sortedEntries?: SillyTavern.FlattenedWorldInfoEntry[];
 };
 
 type WorldbookExtractionDebugState = {
@@ -787,33 +758,6 @@ function createWorldbookExtractionDebugState(): WorldbookExtractionDebugState {
 
 function pushDebugLogItem<T>(items: T[], item: T) {
   items.push(item);
-}
-
-function resetWorldbookExtractionDebugState(state: WorldbookExtractionDebugState) {
-  state.loaded = {
-    total: 0,
-    constant_with_getwi: 0,
-    dynamic: 0,
-    split: 0,
-    wrapped: 0,
-    split_wrapped_parts: 0,
-  };
-  state.total_rows.length = 0;
-  state.triggered_rows.length = 0;
-  state.prompt_rows.length = 0;
-  state.error_logs.length = 0;
-  state.green_cache.summary = undefined;
-  state.green_cache.chat_messages.length = 0;
-  state.green_cache.cache_entries.length = 0;
-  state.green_cache.activations.length = 0;
-  state.green_cache.insertions.length = 0;
-  state.wrapper_before_unwrap = {
-    paired: 0,
-    orphan: 0,
-  };
-  state.total_activated = 0;
-  state.total_extraction = 0;
-  state.total_consumed = 0;
 }
 
 function getWorldbookExtractionWrapperStats(
@@ -950,163 +894,6 @@ function unwrapWorldbookExtractionWrapperText(content: string): string {
   }
 }
 
-function hasDynamicPromptMacroOrGetwi(content: string): boolean {
-  return hasDynamicPromptMacro(content) || getSafeGetwiTemplateCalls(content).length > 0;
-}
-
-function isPureGetwiAggregation(content: string): boolean {
-  return getSafeGetwiTemplateCalls(content).length > 0 && removeSafeGetwiTemplateMacros(content).trim() === '';
-}
-
-function resolveSafeGetwiTarget(
-  call: SafeGetwiTemplateCall,
-  worldbook_entry_metadata: Map<string, WorldbookEntryMetadata>,
-  loaded_worldbook_names: Set<string>,
-): WorldbookEntryMetadata | undefined {
-  let target_world: string | undefined;
-  let target_identifier: string | number | null | undefined;
-
-  if (call.second_argument === undefined) {
-    target_identifier = call.first_argument;
-  } else {
-    if (call.first_argument !== null && typeof call.first_argument !== 'string') {
-      return undefined;
-    }
-    target_world = call.first_argument ?? undefined;
-    target_identifier = call.second_argument;
-  }
-
-  if (target_identifier === null || target_identifier === undefined) {
-    return undefined;
-  }
-  if (target_world !== undefined && !loaded_worldbook_names.has(target_world)) {
-    return undefined;
-  }
-
-  const candidates = [...worldbook_entry_metadata.values()].filter(metadata => {
-    if (target_world !== undefined && metadata.world !== target_world) {
-      return false;
-    }
-    return typeof target_identifier === 'number'
-      ? metadata.uid === target_identifier
-      : metadata.name === target_identifier;
-  });
-  return candidates.length === 1 ? candidates[0] : undefined;
-}
-
-function getKnownExpandedContent(content: string, analyzed_calls: AnalyzedGetwiCall[]): string {
-  let call_index = 0;
-  return content.replace(SAFE_GETWI_TEMPLATE_REGEX, () => analyzed_calls[call_index++]?.content_candidates[0] ?? '');
-}
-
-function analyzeWorldbookContent(
-  content: string,
-  worldbook_entry_metadata: Map<string, WorldbookEntryMetadata>,
-  loaded_worldbook_names: Set<string>,
-  depth: number,
-  visiting_entry_keys: Set<string>,
-): WorldbookContentAnalysis {
-  const getwi_calls = getSafeGetwiTemplateCalls(content);
-  const has_other_dynamic_macro = hasDynamicPromptMacro(content);
-  const is_pure_getwi = isPureGetwiAggregation(content);
-
-  if (getwi_calls.length === 0) {
-    return {
-      has_dynamic_macro: has_other_dynamic_macro,
-      content_candidates: [content],
-      is_pure_getwi,
-      getwi_calls: [],
-    };
-  }
-
-  if (depth >= MAX_GETWI_RECURSION_DEPTH) {
-    return {
-      has_dynamic_macro: true,
-      content_candidates: [content],
-      is_pure_getwi,
-      getwi_calls: getwi_calls.map(call => ({
-        has_dynamic_macro: true,
-        content_candidates: [call.raw],
-        source: call.raw,
-      })),
-    };
-  }
-
-  const analyzed_calls = getwi_calls.map(call => {
-    const target = resolveSafeGetwiTarget(call, worldbook_entry_metadata, loaded_worldbook_names);
-    if (!target || visiting_entry_keys.has(target.key)) {
-      return {
-        has_dynamic_macro: true,
-        content_candidates: [call.raw],
-        source: call.raw,
-      };
-    }
-
-    const nested_visiting_entry_keys = new Set(visiting_entry_keys).add(target.key);
-    const target_analysis = analyzeWorldbookContent(
-      target.content,
-      worldbook_entry_metadata,
-      loaded_worldbook_names,
-      depth + 1,
-      nested_visiting_entry_keys,
-    );
-    return {
-      has_dynamic_macro: target_analysis.has_dynamic_macro,
-      content_candidates: target_analysis.content_candidates,
-      source: call.raw,
-      target_key: target.key,
-      target_name: target.name,
-    };
-  });
-
-  const has_dynamic_getwi = analyzed_calls.some(call => call.has_dynamic_macro);
-  const has_dynamic_macro = has_other_dynamic_macro || has_dynamic_getwi;
-  const content_candidates =
-    !has_dynamic_macro || (is_pure_getwi && getwi_calls.length === 1)
-      ? [getKnownExpandedContent(content, analyzed_calls)]
-      : [content];
-
-  return {
-    has_dynamic_macro,
-    content_candidates,
-    is_pure_getwi,
-    getwi_calls: analyzed_calls,
-  };
-}
-
-function applyWorldbookEntryMetadataAnalysis(
-  metadata: WorldbookEntryMetadata,
-  worldbook_entry_metadata: Map<string, WorldbookEntryMetadata>,
-  loaded_worldbook_names: Set<string>,
-) {
-  if (!metadata.is_constant) {
-    metadata.has_dynamic_macro = hasDynamicPromptMacroOrGetwi(metadata.content);
-    metadata.content_candidates = [metadata.content];
-    metadata.split_getwi_parts = [];
-    return;
-  }
-
-  const analysis = analyzeWorldbookContent(
-    metadata.content,
-    worldbook_entry_metadata,
-    loaded_worldbook_names,
-    0,
-    new Set([metadata.key]),
-  );
-  metadata.has_dynamic_macro = analysis.has_dynamic_macro;
-  metadata.content_candidates = _.uniq([metadata.content, ...analysis.content_candidates]);
-  metadata.split_getwi_parts =
-    analysis.is_pure_getwi && analysis.getwi_calls.length > 1 && analysis.has_dynamic_macro
-      ? analysis.getwi_calls.map(call => ({
-          trigger_type: call.has_dynamic_macro ? 'keyed' : 'constant',
-          content_candidates: call.content_candidates,
-          source: call.source,
-          target_key: call.target_key,
-          target_name: call.target_name,
-        }))
-      : [];
-}
-
 type MacroLikeVariableType = 'message' | 'chat' | 'character' | 'preset' | 'global';
 
 function getLastMessageVariableId(): number {
@@ -1145,12 +932,7 @@ const FORMAT_VARIABLE_REPLACE_REGEX = /^(.*)\{\{format_(message|chat|character|p
 const FORMAT_VARIABLE_PREFIX_REGEX = /^(.*)\{\{format_(message|chat|character|preset|global)_variable::(.*?)\}\}/im;
 const GET_VARIABLE_REPLACE_REGEX = /\{\{get_(message|chat|character|preset|global)_variable::(.*?)\}\}/gi;
 
-function applyFormatVariable(
-  _substring: string,
-  prefix: string,
-  type: MacroLikeVariableType,
-  path: string,
-): string {
+function applyFormatVariable(_substring: string, prefix: string, type: MacroLikeVariableType, path: string): string {
   const match = prefix.match(FORMAT_VARIABLE_PREFIX_REGEX);
   if (match) {
     prefix =
@@ -1158,7 +940,8 @@ function applyFormatVariable(
   }
 
   const value = getMacroLikeVariableValue(type, path);
-  const formatted_value = typeof value === 'string' ? value : YAML.stringify(value, { blockQuote: 'literal' }).trimEnd();
+  const formatted_value =
+    typeof value === 'string' ? value : YAML.stringify(value, { blockQuote: 'literal' }).trimEnd();
   return prefix + formatted_value.replaceAll('\n', '\n' + ' '.repeat(prefix.length));
 }
 
@@ -1200,262 +983,142 @@ function parseActivatedWorldbookEntry(
   metadata: WorldbookEntryMetadata | undefined,
 ): ActivatedWorldbookEntry | undefined {
   const content = trimEmptyLines(unwrapWorldbookExtractionWrapperText(entry.content ?? ''));
-  if (!content) {
+  if (!content || entry.disable) {
     return undefined;
   }
 
-  const has_source_macro = metadata?.has_dynamic_macro ?? hasDynamicPromptMacroOrGetwi(entry.content ?? '');
-  const trigger_type = entry.constant
-    ? has_source_macro
-      ? 'keyed'
-      : 'constant'
-    : entry.vectorized
-      ? undefined
-      : 'keyed';
-  if (!trigger_type) {
+  const has_source_macro = metadata?.has_dynamic_macro ?? true;
+  if (!entry.constant && entry.vectorized) {
     return undefined;
   }
 
   return {
     key: getWorldbookEntryKey(entry),
+    rule_context: metadata?.rule_context ?? {
+      world: entry.world,
+      name: entry.comment ?? '',
+      content,
+      sources: [],
+      trigger: entry.constant ? 'constant' : entry.vectorized ? 'vectorized' : 'selective',
+    },
     world: entry.world,
     uid: entry.uid,
     name: metadata?.name ?? entry.comment ?? '',
     index,
-    trigger_type,
     position: FLATTENED_WORLDBOOK_POSITION[entry.position] ?? 'at_depth',
     depth: entry.depth ?? 0,
     order: entry.order ?? 0,
     content,
     content_candidates: [...(metadata?.content_candidates ?? [content])],
-    split_getwi_parts: metadata?.split_getwi_parts.map(part => ({
-      ...part,
-      content_candidates: [...part.content_candidates],
-    })) ?? [],
+    split_getwi_parts:
+      metadata?.split_getwi_parts.map(part => ({
+        ...part,
+        content_candidates: [...part.content_candidates],
+      })) ?? [],
     wrapper_id: metadata?.wrapper_id,
     content_hash: metadata?.content_hash ?? hashGreenCacheContent(content),
     has_source_macro,
     is_selective: !entry.constant && !entry.vectorized,
+    native_position: entry.position,
+    preserve_reason: metadata ? undefined : '扫描原文无法关联',
   };
 }
 
-function wrapActivatedWorldbookEntrySourceContent(
-  source_entry: SillyTavern.FlattenedWorldInfoEntry,
-  activated_entry: ActivatedWorldbookEntry,
-  next_wrapper_id: () => string,
-) {
-  const content = unwrapWorldbookExtractionWrapperText(source_entry.content);
-  if (activated_entry.split_getwi_parts.length > 0) {
-    let part_index = 0;
-    source_entry.content = content.replace(SAFE_GETWI_TEMPLATE_REGEX, template => {
-      const part = activated_entry.split_getwi_parts[part_index++];
-      if (!part) {
-        return template;
-      }
-
-      const wrapper_id = part.wrapper_id ?? next_wrapper_id();
-      part.wrapper_id = wrapper_id;
-      return wrapWorldbookExtractionContent(wrapper_id, template);
-    });
-    return;
-  }
-
-  if (activated_entry.trigger_type !== 'keyed' || !activated_entry.has_source_macro) {
-    return;
-  }
-
-  const wrapper_id = activated_entry.wrapper_id ?? next_wrapper_id();
-  activated_entry.wrapper_id = wrapper_id;
-  source_entry.content = wrapWorldbookExtractionContent(wrapper_id, content);
-}
-
-function wrapWorldbookEntryMetadataSourceContent(
-  source_entry: { content: string },
-  metadata: WorldbookEntryMetadata,
-  next_wrapper_id: () => string,
-  { allow_non_constant = false }: { allow_non_constant?: boolean } = {},
-) {
-  const content = unwrapWorldbookExtractionWrapperText(source_entry.content);
-  if (!allow_non_constant && !metadata.is_constant) {
-    source_entry.content = content;
-    return;
-  }
-
-  if (metadata.split_getwi_parts.length > 0) {
-    let part_index = 0;
-    source_entry.content = content.replace(SAFE_GETWI_TEMPLATE_REGEX, template => {
-      const part = metadata.split_getwi_parts[part_index++];
-      if (!part) {
-        return template;
-      }
-
-      const wrapper_id = part.wrapper_id ?? next_wrapper_id();
-      part.wrapper_id = wrapper_id;
-      return wrapWorldbookExtractionContent(wrapper_id, template);
-    });
-    return;
-  }
-
-  if (!metadata.has_dynamic_macro) {
-    return;
-  }
-
-  const wrapper_id = metadata.wrapper_id ?? next_wrapper_id();
-  metadata.wrapper_id = wrapper_id;
-  source_entry.content = wrapWorldbookExtractionContent(wrapper_id, content);
-}
-
-type SortableWorldbookExtractionItem = Pick<
-  ActivatedWorldbookEntry,
-  'position' | 'depth' | 'order' | 'index'
-> & {
-  part_index?: number;
-  stable_key?: string;
-};
-
-function sortWorldbookExtractionItems<T extends SortableWorldbookExtractionItem>(entries: T[], settings: Settings): T[] {
-  const position_order = settings.entry_processing.worldbook.position_order;
-  const position_index = (position: WorldbookExtractionPosition) => {
-    const index = position_order.indexOf(position);
-    return index === -1 ? WorldbookExtractionPositionOrder.indexOf(position) : index;
-  };
-
-  return [...entries].sort((lhs, rhs) => {
-    const position_difference = position_index(lhs.position) - position_index(rhs.position);
-    if (position_difference !== 0) {
-      return position_difference;
-    }
-
-    if (lhs.position === 'at_depth' && rhs.position === 'at_depth' && lhs.depth !== rhs.depth) {
-      return rhs.depth - lhs.depth;
-    }
-
-    if (lhs.order !== rhs.order) {
-      return lhs.order - rhs.order;
-    }
-
-    const stable_key_difference = (lhs.stable_key ?? '').localeCompare(rhs.stable_key ?? '');
-    if (stable_key_difference !== 0) {
-      return stable_key_difference;
-    }
-
-    if (lhs.index !== rhs.index) {
-      return lhs.index - rhs.index;
-    }
-
-    return (lhs.part_index ?? 0) - (rhs.part_index ?? 0);
-  });
-}
-
-function sortActivatedWorldbookEntries(
+function prepareRequestWorldbookEntries(
+  prompts: SillyTavern.SendingMessage[],
   entries: ActivatedWorldbookEntry[],
   settings: Settings,
-): ActivatedWorldbookEntry[] {
-  return sortWorldbookExtractionItems(entries, settings);
-}
-
-function getPromptsWithPlaceholder(
-  prompts: SillyTavern.SendingMessage[],
-  placeholder: string,
-  settings: Settings,
-): SillyTavern.SendingMessage[] {
-  return prompts.filter(prompt => getPromptContent(prompt, settings).includes(placeholder));
-}
-
-function replacePlaceholderInPrompts(
-  prompts: SillyTavern.SendingMessage[],
-  placeholder: string,
-  replacement: string,
-  settings: Settings,
+  debug: WorldbookExtractionDebugState,
 ) {
-  prompts.forEach(prompt => {
-    updatePromptContentWith(prompt, ({ content }) => content.replaceAll(placeholder, replacement), settings);
-  });
-}
-
-function getWorldbookCustomPlaceholder(tag: string): string {
-  return `{{压缩相邻消息::lora_custom::${tag}}}`;
-}
-
-function findWorldbookCustomRoute(
-  rules: WorldbookCustomRouteRule[],
-  name: string,
-): WorldbookCustomRoute | undefined {
-  for (const rule of rules) {
-    // parseTavernRegex 会移除 g；仍重置 lastIndex，避免用户填入 y 时影响后续条目。
-    rule.title_regex.lastIndex = 0;
-    if (rule.title_regex.test(name)) {
-      return rule;
-    }
-  }
-  return undefined;
-}
-
-function buildWorldbookCustomRouting(
-  activated_entries: ActivatedWorldbookEntry[],
-  prompts: SillyTavern.SendingMessage[],
-  settings: Settings,
-): WorldbookCustomRouting {
-  const rules: WorldbookCustomRouteRule[] = [];
-  const warned_invalid_patterns = new Set<string>();
-
-  settings.entry_processing.worldbook.custom_routes.forEach(({ title_regex, tag }) => {
-    const normalized_pattern = title_regex.trim();
-    const normalized_tag = tag.trim();
-    if (!normalized_pattern || !normalized_tag) {
-      return;
-    }
-
-    const parsed_regex = parseTavernRegex(normalized_pattern);
-    if (!parsed_regex) {
-      if (!warned_invalid_patterns.has(normalized_pattern)) {
-        warned_invalid_patterns.add(normalized_pattern);
-        console.warn('[压缩相邻消息] 已忽略无效的世界书标题正则', normalized_pattern);
+  const nonce = crypto.randomUUID().replaceAll('-', '');
+  let serial = 0;
+  const nextId = () => nonce + (serial++).toString(36);
+  const replacements = new Map<string, string>();
+  const preserve = (entry: ActivatedWorldbookEntry, reason: string) => {
+    entry.preserve_reason = reason;
+    updateWorldbookTriggeredRecord(debug, entry.key, { 提取状态: '保留原位', 失败原因: reason });
+  };
+  try {
+    // 较长正文先定位；已定位块临时占位，避免其他同文条目再次匹配它。
+    for (const entry of [...entries].sort((a, b) => b.content.length - a.content.length || a.index - b.index)) {
+      if (entry.preserve_reason) {
+        preserve(entry, entry.preserve_reason);
+        continue;
       }
-      return;
+      const native = { position: entry.native_position, depth: entry.depth };
+      const extension = entry.rule_context.trigger === 'extension';
+      if (!extension && hasUnstableWorldInfoPromptRegex(entry.content, native)) {
+        preserve(entry, '动态正则结果无法安全定位');
+        continue;
+      }
+      const candidate = extension ? entry.content : formatAsWorldbookPromptRegexedContent(entry.content, native);
+      if (!candidate) {
+        preserve(entry, '正文经过正则处理后为空');
+        continue;
+      }
+      const calls = getSafeGetwiTemplateCalls(candidate);
+      if (entry.split_getwi_parts.length && calls.length !== entry.split_getwi_parts.length) {
+        preserve(entry, '聚合正文无法安全拆分');
+        continue;
+      }
+      const candidates = entry.source_role ? prompts.filter(prompt => prompt.role === entry.source_role) : prompts;
+      if (extension) {
+        const count = candidates.reduce(
+          (total, prompt) =>
+            total +
+            countStringOccurrences(
+              getNormalizedTargetContent(getPromptContent(prompt, settings)),
+              getNormalizedTargetContent(candidate),
+            ),
+          0,
+        );
+        if (count !== 1) {
+          preserve(entry, '插件注入未能唯一定位');
+          continue;
+        }
+      }
+      const consumed = candidate.includes('<%')
+        ? consumePromptContent(candidates, candidate, settings)
+        : consumePromptContentCandidate(candidates, candidate, settings);
+      if (!consumed) {
+        preserve(entry, '未在本次请求中定位到完整正文');
+        continue;
+      }
+      const token = '§§TH_SQUASH_PENDING:' + nextId() + '§§';
+      let wrapped: string;
+      if (entry.split_getwi_parts.length) {
+        let index = 0;
+        wrapped = consumed.content.replace(SAFE_GETWI_TEMPLATE_REGEX, template => {
+          const part = entry.split_getwi_parts[index++];
+          part.wrapper_id = nextId();
+          part.content_candidates = [template];
+          return wrapWorldbookExtractionContent(part.wrapper_id, template);
+        });
+        debug.loaded.split_wrapped_parts += entry.split_getwi_parts.length;
+      } else {
+        entry.wrapper_id = nextId();
+        wrapped = wrapWorldbookExtractionContent(entry.wrapper_id, consumed.content);
+      }
+      replacements.set(token, wrapped);
+      updatePromptContentWith(
+        consumed.prompt,
+        () => consumed.original_content.replace(consumed.content, () => token),
+        settings,
+      );
+      entry.content = consumed.content;
+      entry.content_candidates = [consumed.content];
+      entry.has_source_macro ||= hasDynamicPromptMacroOrGetwi(consumed.content);
+      debug.loaded.wrapped++;
     }
-
-    const placeholder = getWorldbookCustomPlaceholder(normalized_tag);
-    if (getPromptsWithPlaceholder(prompts, placeholder, settings).length === 0) {
-      return;
+  } finally {
+    for (const prompt of prompts) {
+      updatePromptContentWith(prompt, ({ content }) => replaceWorldbookPlaceholders(content, replacements), settings);
     }
-    rules.push({ title_regex: parsed_regex, tag: normalized_tag, placeholder });
-  });
-
-  const entry_routes = new Map<string, WorldbookCustomRoute>();
-  activated_entries.forEach(entry => {
-    const route = findWorldbookCustomRoute(rules, entry.name);
-    if (route) {
-      entry_routes.set(entry.key, route);
-    }
-  });
-  return { rules, entry_routes };
-}
-
-function restoreUnconsumedRegexedWorldbookMarkers(
-  prompts: SillyTavern.SendingMessage[],
-  intercepts: Map<string, RegexedWorldbookIntercept>,
-  settings: Settings,
-) {
-  if (intercepts.size === 0) {
-    return;
   }
-
-  const intercepts_by_marker = new Map([...intercepts.values()].map(intercept => [intercept.marker, intercept]));
-  prompts.forEach(prompt => {
-    updatePromptContentWith(
-      prompt,
-      ({ content }) =>
-        content.replace(REGEXED_WORLDBOOK_MARKER_REGEX, marker => {
-          const intercept = intercepts_by_marker.get(marker);
-          return intercept?.regexed_content ?? marker;
-        }),
-      settings,
-    );
-  });
 }
 
 type ConsumedPromptContent = {
+  original_content: string;
   prompt: SillyTavern.SendingMessage;
   index: number;
   content: string;
@@ -1525,7 +1188,7 @@ function consumePromptContent(
       ({ content }) => content.slice(0, content_index) + content.slice(content_index + target.length),
       settings,
     );
-    return { prompt, index: prompt_index, content: target, method: 'exact' };
+    return { prompt, index: prompt_index, content: target, original_content: content, method: 'exact' };
   }
   return undefined;
 }
@@ -1566,7 +1229,10 @@ function getNormalizedTargetContent(target: string): string {
   return normalized;
 }
 
-function findPromptContentByNormalizedWhitespace(content: string, target: string): { start: number; end: number } | undefined {
+function findPromptContentByNormalizedWhitespace(
+  content: string,
+  target: string,
+): { start: number; end: number } | undefined {
   const normalized_target = getNormalizedTargetContent(target);
   if (!normalized_target) {
     return undefined;
@@ -1607,7 +1273,7 @@ function consumePromptContentByNormalizedWhitespace(
       ({ content }) => content.slice(0, match.start) + content.slice(match.end),
       settings,
     );
-    return { prompt, index: prompt_index, content: consumed_content, method: 'normalized' };
+    return { prompt, index: prompt_index, content: consumed_content, original_content: content, method: 'normalized' };
   }
   return undefined;
 }
@@ -1667,12 +1333,11 @@ function consumeWrappedPromptContentInPrompt(
   }
 
   const inner_content = content.slice(inner_start_index, end_index);
-  updatePromptContentWith(
-    prompt,
-    ({ content }) => content.slice(0, start_index) + content.slice(end_index + wrapper_end.length),
-    settings,
-  );
-  return { prompt, index: prompt_index, content: inner_content, method: 'wrapper' };
+  let before = content.slice(0, start_index);
+  const after = content.slice(end_index + wrapper_end.length);
+  if (!after.trim()) before = before.replace(/\r?\n$/, '');
+  updatePromptContentWith(prompt, () => before + after, settings);
+  return { prompt, index: prompt_index, content: inner_content, original_content: content, method: 'wrapper' };
 }
 
 function buildWorldbookWrapperPromptIndex(
@@ -1706,6 +1371,7 @@ function buildWorldbookWrapperPromptIndex(
 }
 
 function countStringOccurrences(content: string, target: string): number {
+  if (!target) return 0;
   let count = 0;
   let index = 0;
   while ((index = content.indexOf(target, index)) !== -1) {
@@ -1797,7 +1463,7 @@ function getGreenCacheFixedTrigger(anchor: GreenCacheAnchor): string {
 }
 
 function isAggressiveGreenEntry(entry: ActivatedWorldbookEntry): boolean {
-  return entry.is_selective && !entry.has_source_macro;
+  return entry.is_selective && !entry.has_source_macro && !entry.preserve_reason && !entry.rule_context.plugin;
 }
 
 function normalizeContentForMatch(content: string): string {
@@ -1809,10 +1475,12 @@ function getWorldbookDebugType(is_selective: boolean): string {
 }
 
 function getActivatedWorldbookDebugTrigger(entry: ActivatedWorldbookEntry): string {
+  if (entry.rule_context.plugin === 'ruby') return 'RUBY分析输出';
+  if (entry.rule_context.trigger === 'extension') return '插件注入';
   if (entry.is_selective) {
     return '绿灯非固定';
   }
-  return entry.trigger_type === 'constant' ? '蓝灯固定' : '蓝灯非固定';
+  return entry.has_source_macro ? '蓝灯非固定' : '蓝灯固定';
 }
 
 function getWorldbookPositionLabel(entry: Pick<ActivatedWorldbookEntry, 'position' | 'depth'>): string {
@@ -1855,7 +1523,7 @@ function updateWorldbookTriggeredRecord(
 
 function recordActivatedWorldbookDebug(state: WorldbookExtractionDebugState, entry: ActivatedWorldbookEntry) {
   upsertWorldbookTriggeredRecord(state, entry.key, {
-    触发原因: entry.is_selective ? '关键词触发' : '常驻触发',
+    触发原因: entry.rule_context.trigger === 'extension' ? '扩展注入' : entry.is_selective ? '关键词触发' : '常驻触发',
     触发类型: getActivatedWorldbookDebugTrigger(entry),
     固定位置: getWorldbookPositionLabel(entry),
     提取状态: '等待处理',
@@ -1966,10 +1634,13 @@ function getRawChatMessageContent(message: any): string {
 }
 
 function getRawChatMessageIsHidden(message: any): boolean {
-  return message.is_hidden === true;
+  return message.is_system === true;
 }
 
-function readChatPromptSnapshots(hide_state: 'all' | 'hidden' | 'unhidden', include_hash = false): ChatPromptSnapshot[] {
+function readChatPromptSnapshots(
+  hide_state: 'all' | 'hidden' | 'unhidden',
+  include_hash = false,
+): ChatPromptSnapshot[] {
   const snapshots: ChatPromptSnapshot[] = [];
   SillyTavern.chat.forEach((message: any, message_id) => {
     const is_hidden = getRawChatMessageIsHidden(message);
@@ -2061,8 +1732,7 @@ function isPromptLikelySameAsLargeChatMessage(prompt_content: string, chat_conte
     return false;
   }
   return (
-    prompt_content.slice(0, 80) === chat_content.slice(0, 80) ||
-    prompt_content.slice(-80) === chat_content.slice(-80)
+    prompt_content.slice(0, 80) === chat_content.slice(0, 80) || prompt_content.slice(-80) === chat_content.slice(-80)
   );
 }
 
@@ -2124,12 +1794,13 @@ function captureWorldbookDebugTotalRows(
   chunks: SillyTavern.SendingMessage[][],
   state: WorldbookExtractionDebugState,
   settings: Settings,
+  history: CacheHistory,
 ) {
   const prompt_rows = new Map<SillyTavern.SendingMessage, WorldbookDebugTotalRow[]>();
   state.prompt_rows.forEach(({ prompt, rows }) => {
     prompt_rows.set(prompt, [...(prompt_rows.get(prompt) ?? []), ...rows]);
   });
-  const chat_messages = readUnhiddenChatMessages();
+  const chat_messages = history.messages;
   const used_chat_indexes = new Set<number>();
   let chat_cursor = 0;
   let preset_index = 0;
@@ -2180,12 +1851,12 @@ function captureWorldbookDebugTotalRows(
   );
 }
 
-function readUnhiddenChatMessages(): ChatPromptSnapshot[] {
-  return readChatPromptSnapshots('unhidden');
-}
-
-function readAllChatMessages(include_hash = false): ChatPromptSnapshot[] {
-  return readChatPromptSnapshots('all', include_hash);
+function readGenerationCacheHistory(type = 'normal', regenerate_target_id?: number): CacheHistory {
+  return selectGenerationHistory(readChatPromptSnapshots('all', true), {
+    type,
+    regenerate_target_id,
+    continue_prefill: SillyTavern.mainApi === 'openai' && SillyTavern.chatCompletionSettings?.continue_prefill === true,
+  });
 }
 
 function getChatMessageAnchorKey(message: Pick<ChatPromptSnapshot, 'message_id' | 'swipe_id'>): string {
@@ -2213,14 +1884,8 @@ function getChatMessageContentForAnchor(anchor: Pick<GreenCacheAnchor, 'message_
   return swipe_id === 0 ? message.mes : undefined;
 }
 
-function getChatMessageHashForAnchor(anchor: Pick<GreenCacheAnchor, 'message_id' | 'swipe_id'>): string | null {
-  const content = getChatMessageContentForAnchor(anchor);
-  return typeof content === 'string' ? hashGreenCacheContent(normalizeContentForMatch(content)) : null;
-}
-
-function getLatestUnhiddenChatAnchor(): GreenCacheAnchor {
-  const messages = readUnhiddenChatMessages();
-  const latest = _.last(messages);
+function getLatestGenerationChatAnchor(history: CacheHistory): GreenCacheAnchor {
+  const latest = _.last(history.anchors);
   if (!latest) {
     return { ...BEFORE_CHAT_GREEN_CACHE_ANCHOR };
   }
@@ -2230,22 +1895,15 @@ function getLatestUnhiddenChatAnchor(): GreenCacheAnchor {
   };
   return {
     ...anchor,
-    message_hash: getChatMessageHashForAnchor(anchor),
+    message_hash: hashGreenCacheContent(normalizeContentForMatch(latest.content)),
   };
 }
 
-function getGreenCacheAnchorDepth(anchor: GreenCacheAnchor): number | undefined {
+function getGreenCacheAnchorDepth(anchor: GreenCacheAnchor, history: CacheHistory): number | undefined {
   if (anchor.message_id === null || !cacheAnchorMessageExists(anchor)) {
     return undefined;
   }
-  const unhidden_messages = readUnhiddenChatMessages();
-  const message_index = unhidden_messages.findIndex(
-    message => message.message_id === anchor.message_id && message.swipe_id === (anchor.swipe_id ?? 0),
-  );
-  if (message_index === -1) {
-    return undefined;
-  }
-  return Math.max(0, unhidden_messages.length - message_index - 1);
+  return generationAnchorDepth(history, anchor);
 }
 
 function getGreenCacheAnchorContent(anchor_key: string): string {
@@ -2256,10 +1914,10 @@ function getGreenCacheAnchorPromptId(anchor_key: string): string {
   return `\xff压缩相邻消息-green-anchor-${anchor_key}`;
 }
 
-function getGreenCacheAnchorInjectionPrompts(settings: Settings): InjectionPrompt[] {
+function getGreenCacheAnchorInjectionPrompts(settings: Settings, history: CacheHistory): InjectionPrompt[] {
   if (
     settings.entry_processing.mode !== 'worldbook' ||
-    !settings.entry_processing.worldbook.aggressive_green_cache.enabled
+    !hasGreenCacheRules(settings.entry_processing.worldbook.rules)
   ) {
     return [];
   }
@@ -2268,18 +1926,18 @@ function getGreenCacheAnchorInjectionPrompts(settings: Settings): InjectionPromp
   chooseFirstGreenCacheEntries(readGreenCacheVariables().entries)
     .map(entry => entry.fixed_at)
     .filter(anchor => anchor.message_id !== null && cacheAnchorExists(anchor))
-    .sort((lhs, rhs) => (lhs.message_id! - rhs.message_id!) || ((lhs.swipe_id ?? 0) - (rhs.swipe_id ?? 0)))
+    .sort((lhs, rhs) => lhs.message_id! - rhs.message_id! || (lhs.swipe_id ?? 0) - (rhs.swipe_id ?? 0))
     .forEach(anchor => {
       anchors.set(getAnchorKey(anchor), anchor);
-  });
-  const latest_anchor = getLatestUnhiddenChatAnchor();
+    });
+  const latest_anchor = getLatestGenerationChatAnchor(history);
   if (latest_anchor.message_id !== null && cacheAnchorMessageExists(latest_anchor)) {
     anchors.set(getAnchorKey(latest_anchor), latest_anchor);
   }
 
   const prompts: InjectionPrompt[] = [];
   [...anchors.entries()].forEach(([anchor_key, anchor]) => {
-    const depth = getGreenCacheAnchorDepth(anchor);
+    const depth = getGreenCacheAnchorDepth(anchor, history);
     if (depth === undefined) {
       return;
     }
@@ -2335,15 +1993,26 @@ function cacheAnchorMessageExists(anchor: Pick<GreenCacheAnchor, 'message_id' | 
 function buildGreenCacheInsertionLocationMap(
   chunks: SillyTavern.SendingMessage[][],
   settings: Settings,
+  history: CacheHistory,
   debug_state?: GreenCacheDebugState,
 ): Map<string, PromptInsertionLocation> {
   const insertion_locations = new Map<string, PromptInsertionLocation>();
-  const all_messages = readAllChatMessages(!!debug_state);
+  const all_messages = history.all;
+  const eligible_anchors = new Set(history.anchors.map(getChatMessageAnchorKey));
+  const request_ids = new Set(history.messages.map(message => message.message_id));
+  if (debug_state)
+    debug_state.request_history = {
+      generation_type: history.type,
+      message_ids: history.messages.map(message => message.message_id),
+      injection_message_ids: history.injection_messages.map(message => message.message_id),
+      anchor_message_ids: history.anchors.map(message => message.message_id),
+    };
   ([1, 2] as const).forEach(chunk_index => {
     chunks[chunk_index].forEach((prompt, prompt_index) => {
       const content = getPromptContent(prompt, settings);
       for (const match of content.matchAll(GREEN_CACHE_ANCHOR_REGEX)) {
         const anchor_key = match[1];
+        if (!eligible_anchors.has(anchor_key)) continue;
         insertion_locations.set(anchor_key, {
           chunk_index,
           insert_index: prompt_index,
@@ -2367,11 +2036,16 @@ function buildGreenCacheInsertionLocationMap(
         is_hidden: message.is_hidden,
         message_hash: message.content_hash,
         message_length: message.content_length,
-        anchor_depth: getGreenCacheAnchorDepth({
-          message_id: message.message_id,
-          swipe_id: message.swipe_id,
-          message_hash: null,
-        }),
+        in_request: request_ids.has(message.message_id),
+        anchor_eligible: eligible_anchors.has(anchor_key),
+        anchor_depth: getGreenCacheAnchorDepth(
+          {
+            message_id: message.message_id,
+            swipe_id: message.swipe_id,
+            message_hash: null,
+          },
+          history,
+        ),
         prompt_chunk_index: insertion_location?.chunk_index,
         prompt_index: insertion_location?.insert_index,
         insertion_source: insertion_location?.source,
@@ -2441,7 +2115,7 @@ function getValidGreenCacheEntries(
         const updated_entry = { ...entry, uid: fallback_entries[0].uid };
         changed = true;
         kept_entries.push(updated_entry);
-        injectable_entries.push(updated_entry);
+        if (!fallback_entries[0].is_disabled) injectable_entries.push(updated_entry);
         continue;
       }
       kept_entries.push(entry);
@@ -2454,7 +2128,7 @@ function getValidGreenCacheEntries(
     }
 
     kept_entries.push(entry);
-    injectable_entries.push(entry);
+    if (!metadata.is_disabled) injectable_entries.push(entry);
   }
 
   return { entries: kept_entries, injectable_entries, changed };
@@ -2473,10 +2147,7 @@ function chooseFirstGreenCacheEntries(entries: GreenCacheEntry[]): GreenCacheEnt
   return [...selected.values()];
 }
 
-function canInsertGreenCacheAnchor(
-  anchor: GreenCacheAnchor,
-  locations: Map<string, PromptInsertionLocation>,
-): boolean {
+function canInsertGreenCacheAnchor(anchor: GreenCacheAnchor, locations: Map<string, PromptInsertionLocation>): boolean {
   return anchor.message_id === null || locations.has(getAnchorKey(anchor));
 }
 
@@ -2534,8 +2205,7 @@ function insertGreenCacheEntries(
       return location ? [{ ...location, entries }] : [];
     })
     .sort(
-      (lhs, rhs) =>
-        rhs.chunk_index - lhs.chunk_index || rhs.insert_index - lhs.insert_index || rhs.order - lhs.order,
+      (lhs, rhs) => rhs.chunk_index - lhs.chunk_index || rhs.insert_index - lhs.insert_index || rhs.order - lhs.order,
     );
 
   insertions.forEach(({ chunk_index, insert_index, entries }) => {
@@ -2583,11 +2253,12 @@ function processAggressiveGreenCache(
   settings: Settings,
   worldbook_entry_metadata: Map<string, WorldbookEntryMetadata>,
   loaded_worldbook_names: Set<string>,
-  custom_routing: WorldbookCustomRouting,
+  plan: WorldbookExtractionPlan,
+  history: CacheHistory,
   debug_state?: WorldbookExtractionDebugState,
 ): Set<string> {
   const handled_entry_keys = new Set<string>();
-  if (!settings.entry_processing.worldbook.aggressive_green_cache.enabled) {
+  if (!hasGreenCacheRules(settings.entry_processing.worldbook.rules)) {
     return handled_entry_keys;
   }
   const green_cache_debug = debug_state?.green_cache;
@@ -2596,22 +2267,53 @@ function processAggressiveGreenCache(
   const valid_cache = getValidGreenCacheEntries(cache.entries, worldbook_entry_metadata, loaded_worldbook_names);
   const valid_cache_entries = chooseFirstGreenCacheEntries(valid_cache.entries);
   const valid_cache_changed = valid_cache.changed || valid_cache.entries.length !== valid_cache_entries.length;
-  const insertion_locations = buildGreenCacheInsertionLocationMap(chunks, settings, green_cache_debug);
+  const insertion_locations = buildGreenCacheInsertionLocationMap(chunks, settings, history, green_cache_debug);
+  const active_by_key = new Map(activated_entries.map(entry => [entry.key, entry]));
   const suppressed_cache_identities = new Set(
     valid_cache_entries
-      .filter(entry => findWorldbookCustomRoute(custom_routing.rules, entry.name))
+      .filter(entry => {
+        const metadata = worldbook_entry_metadata.get(`${entry.world}.${entry.uid}`);
+        if (
+          !metadata ||
+          metadata.is_disabled ||
+          hasUnstableWorldInfoPromptRegex(
+            metadata.content,
+            { position: metadata.position ?? 0, depth: metadata.depth ?? 0 },
+            true,
+          )
+        )
+          return true;
+        const active = active_by_key.get(metadata.key);
+        if (active && !isAggressiveGreenEntry(active)) return true;
+        const placements = getWorldbookPlacements(
+          {
+            ...metadata.rule_context,
+            has_dynamic_content: metadata.has_dynamic_macro,
+            can_cache: metadata.rule_context.trigger === 'selective' && !metadata.has_dynamic_macro,
+          },
+          plan.compiled,
+          plan.available_placeholders,
+        );
+        return placements[0]?.kind !== 'cache';
+      })
       .map(getGreenCacheIdentity),
   );
-  const injectable_cache_entries = valid_cache_entries.filter(entry =>
-    !suppressed_cache_identities.has(getGreenCacheIdentity(entry)) &&
-    canInsertGreenCacheAnchor(entry.fixed_at, insertion_locations),
+  const injectable_cache_entries = valid_cache_entries.filter(
+    entry =>
+      !suppressed_cache_identities.has(getGreenCacheIdentity(entry)) &&
+      canInsertGreenCacheAnchor(entry.fixed_at, insertion_locations),
   );
-  const fixed_cache_identities = new Map(valid_cache_entries.map(entry => [getGreenCacheIdentity(entry), entry] as const));
-  const new_anchor = getLatestUnhiddenChatAnchor();
-  const can_insert_new_anchor = canInsertGreenCacheAnchor(new_anchor, insertion_locations);
+  const fixed_cache_identities = new Map(
+    valid_cache_entries.map(entry => [getGreenCacheIdentity(entry), entry] as const),
+  );
+  const new_anchor = getLatestGenerationChatAnchor(history);
+  const can_insert_new_anchor =
+    canInsertGreenCacheAnchor(new_anchor, insertion_locations) && cacheAnchorExists(new_anchor);
   const new_cache_entries: GreenCacheEntry[] = [];
-  const aggressive_entries = sortActivatedWorldbookEntries(
-    activated_entries.filter(entry => isAggressiveGreenEntry(entry) && !custom_routing.entry_routes.has(entry.key)),
+  const aggressive_entries = sortWorldbookExtractionItems(
+    activated_entries.filter(
+      entry => isAggressiveGreenEntry(entry) && plan.placements.get(entry.key)?.[0]?.kind === 'cache',
+    ),
     settings,
   );
   const wrapper_prompt_index = aggressive_entries.some(entry => entry.wrapper_id)
@@ -2857,11 +2559,11 @@ function processAggressiveGreenCache(
 }
 
 type WorldbookExtractionItem = SortableWorldbookExtractionItem & {
+  facts: WorldbookRuleFacts;
   key: string;
   world: string;
   name: string;
   is_selective: boolean;
-  trigger_type: ActivatedWorldbookEntry['trigger_type'];
   content_candidates: string[];
   wrapper_id?: string;
   preconsumed_content?: string;
@@ -2870,13 +2572,14 @@ type WorldbookExtractionItem = SortableWorldbookExtractionItem & {
 };
 
 function getWorldbookExtractionItems(entry: ActivatedWorldbookEntry): WorldbookExtractionItem[] {
+  if (entry.preserve_reason) return [];
   if (entry.split_getwi_parts.length > 0) {
     return entry.split_getwi_parts.map((part, part_index) => ({
       key: `${entry.key}.getwi.${part_index}`,
+      facts: { ...entry.rule_context, has_dynamic_content: part.has_dynamic_content, can_cache: false },
       world: entry.world,
       name: part.target_name ?? entry.name,
       is_selective: entry.is_selective,
-      trigger_type: part.trigger_type,
       position: entry.position,
       depth: entry.depth,
       order: entry.order,
@@ -2893,10 +2596,14 @@ function getWorldbookExtractionItems(entry: ActivatedWorldbookEntry): WorldbookE
   return [
     {
       key: entry.key,
+      facts: {
+        ...entry.rule_context,
+        has_dynamic_content: entry.has_source_macro,
+        can_cache: isAggressiveGreenEntry(entry),
+      },
       world: entry.world,
       name: entry.name,
       is_selective: entry.is_selective,
-      trigger_type: entry.trigger_type,
       position: entry.position,
       depth: entry.depth,
       order: entry.order,
@@ -2912,10 +2619,12 @@ function getWorldbookExtractionItems(entry: ActivatedWorldbookEntry): WorldbookE
 }
 
 function getWorldbookExtractionItemTrigger(entry: WorldbookExtractionItem): string {
+  if (entry.facts.plugin === 'ruby') return 'RUBY分析输出';
+  if (entry.facts.trigger === 'extension') return '插件注入';
   if (entry.is_selective) {
     return '绿灯非固定';
   }
-  return entry.trigger_type === 'constant' ? '蓝灯固定' : '蓝灯非固定';
+  return entry.facts.has_dynamic_content ? '蓝灯非固定' : '蓝灯固定';
 }
 
 function recordWorldbookExtractionItemDebug(state: WorldbookExtractionDebugState, entry: WorldbookExtractionItem) {
@@ -2932,13 +2641,16 @@ function recordWorldbookExtractionItemDebug(state: WorldbookExtractionDebugState
 }
 
 function createWorldbookExtractionTotalRow(entry: WorldbookExtractionItem, content: string): WorldbookDebugTotalRow {
-  return createWorldbookTotalRow(
+  const row = createWorldbookTotalRow(
     entry.is_selective,
     getWorldbookExtractionItemTrigger(entry),
     entry.target_name ?? entry.name,
     entry.world,
     content,
   );
+  if (entry.facts.trigger === 'extension') row.类型 = '插件注入';
+  else if (entry.facts.plugin === 'ruby') row.类型 = 'RUBY分析输出';
+  return row;
 }
 
 function consumeWorldbookExtractionItem(
@@ -2988,15 +2700,59 @@ function getWorldbookExtractionFailureReason(
 
 function extractWorldbookEntriesToPlaceholders(
   flattened_chunks: SillyTavern.SendingMessage[],
-  activated_entries: ActivatedWorldbookEntry[],
+  extraction_items: WorldbookExtractionItem[],
   settings: Settings,
-  custom_routing: WorldbookCustomRouting,
+  plan: WorldbookExtractionPlan,
   debug_state?: WorldbookExtractionDebugState,
 ) {
-  const { constant, keyed } = settings.entry_processing.worldbook;
+  const replacements = new Map<string, string>();
+  const required_destinations = new Set<string>();
+  const execution_plan = { ...plan, placements: new Map(plan.placements) };
+  extraction_items.forEach(entry => {
+    const candidates = plan.placements.get(entry.key) ?? [];
+    const aliases = candidates.flatMap(candidate => plan.compiled.placeholders.get(candidate.placeholder) ?? []);
+    const sources = [entry.facts.content, entry.preconsumed_content ?? '', ...entry.content_candidates];
+    if (!aliases.some(alias => sources.some(content => content.includes(alias)))) return;
+    const probe = consumeWorldbookExtractionItem(flattened_chunks, entry, settings);
+    if (!probe) return;
+    // 占位符需要位于来源正文之外；探测后立即还原，再选择可用的后续规则。
+    try {
+      execution_plan.placements.set(
+        entry.key,
+        candidates.filter(
+          candidate =>
+            candidate.kind === 'cache' ||
+            candidate.kind === 'keep' ||
+            (plan.compiled.placeholders.get(candidate.placeholder) ?? []).some(alias =>
+              flattened_chunks.some(prompt => getPromptContent(prompt, settings).includes(alias)),
+            ),
+        ),
+      );
+    } finally {
+      updatePromptContentWith(probe.prompt, () => probe.original_content, settings);
+    }
+  });
 
-  const applyExtraction = (placeholder: string, extraction_entries: WorldbookExtractionItem[], trigger_type: string) => {
-    const placeholder_prompts = getPromptsWithPlaceholder(flattened_chunks, placeholder, settings);
+  for (const entry of extraction_items) {
+    if (execution_plan.placements.get(entry.key)?.[0]?.kind !== 'keep' || !debug_state) continue;
+    recordWorldbookExtractionItemDebug(debug_state, entry);
+    const probe = consumeWorldbookExtractionItem(flattened_chunks, entry, settings);
+    updateWorldbookTriggeredRecord(debug_state, entry.key, {
+      提取状态: '保留原位',
+      详细内容: probe?.content ?? entry.content_candidates[0] ?? '',
+    });
+    if (probe) updatePromptContentWith(probe.prompt, () => probe.original_content, settings);
+  }
+
+  const applyExtraction = (
+    placeholder: string,
+    extraction_entries: WorldbookExtractionItem[],
+    trigger_type: string,
+  ) => {
+    const aliases = plan.compiled.placeholders.get(placeholder) ?? [placeholder];
+    const placeholder_prompts = flattened_chunks.filter(prompt =>
+      aliases.some(alias => getPromptContent(prompt, settings).includes(alias)),
+    );
     if (placeholder_prompts.length === 0) {
       return;
     }
@@ -3015,9 +2771,27 @@ function extractWorldbookEntriesToPlaceholders(
       entries.forEach(entry => recordWorldbookExtractionItemDebug(debug_state, entry));
     }
     consuming_entries.forEach(entry => {
-      const consumed = consumeWorldbookExtractionItem(flattened_chunks, entry, settings, wrapper_prompt_index);
+      let consumed = consumeWorldbookExtractionItem(flattened_chunks, entry, settings, wrapper_prompt_index);
+      if (consumed) {
+        const destination_removed = [...required_destinations, placeholder].some(target => {
+          const target_aliases = plan.compiled.placeholders.get(target) ?? [target];
+          return (
+            target_aliases.some(alias => consumed!.original_content.includes(alias)) &&
+            !flattened_chunks.some(prompt =>
+              target_aliases.some(alias => getPromptContent(prompt, settings).includes(alias)),
+            )
+          );
+        });
+        if (destination_removed) {
+          const original_content = consumed.original_content;
+          updatePromptContentWith(consumed.prompt, () => original_content, settings);
+          consumed = undefined;
+        }
+      }
       const wrapper_presence_before_consume =
-        !consumed && entry.wrapper_id ? getWorldbookWrapperPresence(flattened_chunks, entry.wrapper_id, settings) : undefined;
+        !consumed && entry.wrapper_id
+          ? getWorldbookWrapperPresence(flattened_chunks, entry.wrapper_id, settings)
+          : undefined;
       const failure_reason = getWorldbookExtractionFailureReason(entry, consumed, wrapper_presence_before_consume);
       if (debug_state) {
         debug_state.total_extraction++;
@@ -3049,6 +2823,7 @@ function extractWorldbookEntriesToPlaceholders(
         }
       }
       if (consumed) {
+        required_destinations.add(placeholder);
         if (['before_example_messages', 'after_example_messages'].includes(entry.position)) {
           cleanupDialogueExampleSeparatorAfterConsumption(flattened_chunks, consumed, settings);
         }
@@ -3056,7 +2831,9 @@ function extractWorldbookEntriesToPlaceholders(
       }
     });
 
-    const replacement_prompts = getPromptsWithPlaceholder(placeholder_prompts, placeholder, settings);
+    const replacement_prompts = placeholder_prompts.filter(prompt =>
+      aliases.some(alias => getPromptContent(prompt, settings).includes(alias)),
+    );
     const placeholder_content = entries
       .filter(entry => consumed_entry_contents.has(entry.key))
       .map(entry => consumed_entry_contents.get(entry.key)!)
@@ -3069,95 +2846,108 @@ function extractWorldbookEntriesToPlaceholders(
         debug_state.prompt_rows.push({ prompt, rows: replacement_rows });
       });
     }
-    replacePlaceholderInPrompts(replacement_prompts, placeholder, placeholder_content, settings);
+    aliases.forEach(alias => replacements.set(alias, placeholder_content));
   };
 
-  const getExtractionItems = (entries: ActivatedWorldbookEntry[]) =>
-    sortActivatedWorldbookEntries(entries, settings).flatMap(getWorldbookExtractionItems);
-  const entries_by_placeholder = new Map<string, ActivatedWorldbookEntry[]>();
-  custom_routing.rules.forEach(route => {
-    if (!entries_by_placeholder.has(route.placeholder)) {
-      entries_by_placeholder.set(route.placeholder, []);
-    }
-  });
-  activated_entries.forEach(entry => {
-    const route = custom_routing.entry_routes.get(entry.key);
-    if (route) {
-      entries_by_placeholder.get(route.placeholder)!.push(entry);
-    }
-  });
-  entries_by_placeholder.forEach((entries, placeholder) => {
-    applyExtraction(placeholder, getExtractionItems(entries), 'custom');
-  });
-
-  const default_entries = activated_entries.filter(entry => !custom_routing.entry_routes.has(entry.key));
-  applyExtraction(
-    constant.placeholder,
-    constant.enabled
-      ? getExtractionItems(default_entries).filter(entry => entry.trigger_type === 'constant')
-      : [],
-    'constant',
+  groupWorldbookExtractions(extraction_items, execution_plan).forEach((items, placeholder) =>
+    applyExtraction(placeholder, items, 'rule'),
   );
-  applyExtraction(
-    keyed.placeholder,
-    keyed.enabled ? getExtractionItems(default_entries).filter(entry => entry.trigger_type === 'keyed') : [],
-    'keyed',
+  const empty_placeholders = new Map(
+    [...plan.compiled.placeholders.values()].flat().map(placeholder => [placeholder, '']),
   );
-
-  // 提取内容本身也可能再次带入默认占位符；无论对应条目是否成功提取，都不能将宏原样发送给模型。
-  [constant.placeholder, keyed.placeholder].filter(Boolean).forEach(placeholder => {
-    replacePlaceholderInPrompts(flattened_chunks, placeholder, '', settings);
+  // 所有正文消费结束后统一回填，避免回填结果再次成为其他规则的消费候选。
+  flattened_chunks.forEach(prompt => {
+    updatePromptContentWith(
+      prompt,
+      ({ content }) =>
+        replaceWorldbookPlaceholders(replaceWorldbookPlaceholders(content, replacements), empty_placeholders),
+      settings,
+    );
   });
 }
 
-function listenEvent(settings: Settings, separators: Separators, shouldEnable: () => boolean) {
+function listenEvent(
+  settings: Settings,
+  separators: Separators,
+  shouldEnable: () => boolean,
+  getHistory: () => CacheHistory,
+) {
+  const generation_trace = new GenerationTrace();
+  const getGenerationContext = () => ({
+    chat_id: SillyTavern.getCurrentChatId() ?? '',
+    character_name: SillyTavern.name2 ?? '',
+    script_id: getScriptId(),
+  });
+  const compiled_rules = compileWorldbookRules(settings.entry_processing.worldbook.rules);
+  const plugin_providers = new Set(
+    compiled_rules.rules.map(({ rule }) => rule.provider).filter(provider => provider !== 'worldbook'),
+  );
+  compiled_rules.errors.forEach(error => console.warn('[压缩相邻消息] 世界书规则无效', error));
   const activated_worldbook_entries = new Map<string, ActivatedWorldbookEntry>();
   const worldbook_entry_metadata = new Map<string, WorldbookEntryMetadata>();
   const loaded_worldbook_names = new Set<string>();
-  const regexed_worldbook_intercepts = new Map<string, RegexedWorldbookIntercept>();
-  const worldbook_extraction_debug = createWorldbookExtractionDebugState();
-  let worldbook_extraction_wrapper_counter = 0;
-  let regexed_worldbook_marker_counter = 0;
+  const scans = new WorldbookScanLedger();
+  let worldbook_extraction_debug = createWorldbookExtractionDebugState();
+  let confirmed_scan = false;
 
-  const nextWorldbookExtractionWrapperId = () => (worldbook_extraction_wrapper_counter++).toString(36);
-  const nextRegexedWorldbookMarker = () =>
-    `${REGEXED_WORLDBOOK_MARKER_PREFIX}:${(regexed_worldbook_marker_counter++).toString(36)}§§`;
-
-  const resetActivatedWorldbookEntries = () => {
-    activated_worldbook_entries.clear();
-    worldbook_entry_metadata.clear();
-    loaded_worldbook_names.clear();
-    regexed_worldbook_intercepts.clear();
-    resetWorldbookExtractionDebugState(worldbook_extraction_debug);
-    worldbook_extraction_wrapper_counter = 0;
-    regexed_worldbook_marker_counter = 0;
-    normalized_target_cache.clear();
-  };
-  eventOn(tavern_events.GENERATION_AFTER_COMMANDS, resetActivatedWorldbookEntries);
-
-  const handleWorldInfoEntriesLoaded = (lores: WorldbookEntriesLoadedEvent) => {
-    if (!shouldEnable() || settings.entry_processing.mode !== 'worldbook') {
-      return;
+  const collectPluginEntries = (entries: ActivatedWorldbookEntry[]) => {
+    if (!plugin_providers.size) return entries;
+    let context;
+    try {
+      context = readPluginSourceContext();
+    } catch {
+      return entries;
     }
+    if (plugin_providers.has('ruby')) {
+      identifyRubyEntries(worldbook_entry_metadata, context);
+      for (const entry of entries) {
+        const metadata = worldbook_entry_metadata.get(entry.key);
+        if (metadata) entry.rule_context = structuredClone(metadata.rule_context);
+        if (entry.rule_context.plugin === 'ruby') recordActivatedWorldbookDebug(worldbook_extraction_debug, entry);
+      }
+    }
+    const injections: ActivatedWorldbookEntry[] = getBaiBaiInjections(context, plugin_providers).map(
+      (injection, index) => ({
+        key: 'extension:' + injection.id,
+        world: '柏宝书',
+        uid: -1 - index,
+        name: injection.name,
+        index: entries.length + index,
+        position: 'at_depth',
+        native_position: -1,
+        depth: injection.depth,
+        order: 100,
+        source_role: injection.role,
+        content: injection.content,
+        content_candidates: [injection.content],
+        content_hash: hashGreenCacheContent(injection.content),
+        split_getwi_parts: [],
+        has_source_macro:
+          injection.provider !== 'baibai_instructions' || hasDynamicPromptMacroOrGetwi(injection.content),
+        is_selective: false,
+        rule_context: {
+          world: '柏宝书',
+          name: injection.name,
+          content: injection.content,
+          sources: [],
+          trigger: 'extension',
+          plugin: injection.provider,
+        },
+      }),
+    );
+    for (const entry of injections) {
+      recordActivatedWorldbookDebug(worldbook_extraction_debug, entry);
+      worldbook_extraction_debug.total_activated++;
+    }
+    return [...entries, ...injections];
+  };
 
+  const applySnapshot = (snapshot: WorldbookScanSnapshot) => {
     worldbook_entry_metadata.clear();
     loaded_worldbook_names.clear();
-    const loaded_entries = [lores.globalLore, lores.characterLore, lores.chatLore, lores.personaLore].flat();
-    loaded_entries.forEach(entry => {
-      const metadata = parseWorldbookEntryMetadata(entry);
-      loaded_worldbook_names.add(metadata.world);
-      worldbook_entry_metadata.set(metadata.key, metadata);
-    });
-    worldbook_entry_metadata.forEach(metadata => {
-      applyWorldbookEntryMetadataAnalysis(metadata, worldbook_entry_metadata, loaded_worldbook_names);
-    });
-    loaded_entries.forEach(entry => {
-      const metadata = worldbook_entry_metadata.get(getWorldbookEntryKey(entry));
-      if (metadata) {
-        wrapWorldbookEntryMetadataSourceContent(entry, metadata, nextWorldbookExtractionWrapperId);
-      }
-    });
-    const metadata_entries = [...worldbook_entry_metadata.values()];
+    snapshot.metadata.forEach((metadata, key) => worldbook_entry_metadata.set(key, metadata));
+    snapshot.worlds.forEach(world => loaded_worldbook_names.add(world));
+    const metadata_entries = [...snapshot.metadata.values()];
     worldbook_extraction_debug.loaded = {
       total: metadata_entries.length,
       constant_with_getwi: metadata_entries.filter(
@@ -3165,123 +2955,99 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
       ).length,
       dynamic: metadata_entries.filter(metadata => metadata.has_dynamic_macro).length,
       split: metadata_entries.filter(metadata => metadata.split_getwi_parts.length > 0).length,
-      wrapped: metadata_entries.filter(
-        metadata => metadata.wrapper_id || metadata.split_getwi_parts.some(part => part.wrapper_id),
-      ).length,
-      split_wrapped_parts: metadata_entries.reduce(
-        (count, metadata) => count + metadata.split_getwi_parts.filter(part => part.wrapper_id).length,
-        0,
-      ),
+      wrapped: 0,
+      split_wrapped_parts: 0,
     };
   };
-  eventOn(tavern_events.WORLDINFO_ENTRIES_LOADED, handleWorldInfoEntriesLoaded);
 
-  const shouldInterceptRegexedConstantEntry = (
-    entry: SillyTavern.FlattenedWorldInfoEntry,
-    metadata: WorldbookEntryMetadata | undefined,
-  ): metadata is WorldbookEntryMetadata =>
-    !!metadata &&
-    entry.constant &&
-    metadata.is_constant &&
-    !entry.vectorized &&
-    !metadata.has_dynamic_macro &&
-    metadata.split_getwi_parts.length === 0;
+  const resetActivatedWorldbookEntries = (type = 'normal', _options?: unknown, dry_run = false) => {
+    generation_trace.begin(type, dry_run, getGenerationContext());
+    if (dry_run) return;
+    scans.begin();
+    confirmed_scan = false;
+    activated_worldbook_entries.clear();
+    worldbook_entry_metadata.clear();
+    loaded_worldbook_names.clear();
+    worldbook_extraction_debug = createWorldbookExtractionDebugState();
+    normalized_target_cache.clear();
+  };
+  eventOn(tavern_events.GENERATION_AFTER_COMMANDS, resetActivatedWorldbookEntries);
 
-  const handleWorldInfoScanDone = (event_data: WorldInfoScanDoneEvent) => {
-    if (!shouldEnable() || settings.entry_processing.mode !== 'worldbook' || event_data.state.next) {
-      return;
+  const handleWorldInfoEntriesLoaded = (lores: WorldbookEntriesLoadedEvent) => {
+    if (!shouldEnable() || settings.entry_processing.mode !== 'worldbook') return;
+    const loaded_entries = [lores.globalLore, lores.characterLore, lores.chatLore, lores.personaLore].flat();
+    let bindings: CharWorldbooks = { primary: null, additional: [] };
+    try {
+      bindings = getCharWorldbookNames('current');
+    } catch {
+      // 欢迎页没有当前角色，但仍可能存在全局世界书。
     }
+    let chat: string | null = null;
+    try {
+      chat = getChatWorldbookName('current');
+    } catch {
+      /* 当前聊天尚未就绪。 */
+    }
+    const entry_sources = collectWorldbookSources(lores, { ...bindings, chat });
+    const metadata = new Map(
+      loaded_entries.map(entry => {
+        const value = parseWorldbookEntryMetadata(entry, entry_sources.get(getWorldbookEntryKey(entry)) ?? []);
+        return [value.key, value] as const;
+      }),
+    );
+    const worlds = new Set(loaded_entries.map(entry => entry.world));
+    metadata.forEach(value => applyWorldbookEntryMetadataAnalysis(value, metadata, worlds));
+    scans.loaded(loaded_entries, metadata);
+  };
+  eventMakeLast(tavern_events.WORLDINFO_ENTRIES_LOADED, handleWorldInfoEntriesLoaded);
 
-    event_data.activated.entries.forEach((entry, key) => {
-      const metadata = worldbook_entry_metadata.get(key);
-      if (!metadata || entry.vectorized) {
-        return;
-      }
-      wrapWorldbookEntryMetadataSourceContent(entry, metadata, nextWorldbookExtractionWrapperId, {
-        allow_non_constant: true,
-      });
-    });
-
-    event_data.activated.entries.forEach((entry, key) => {
-      if (regexed_worldbook_intercepts.has(key)) {
-        return;
-      }
-
-      const metadata = worldbook_entry_metadata.get(key);
-      if (!shouldInterceptRegexedConstantEntry(entry, metadata)) {
-        return;
-      }
-
-      const original_content = entry.content ?? '';
-      const regexed_content = formatAsWorldbookPromptRegexedContent(original_content, entry);
-      if (!regexed_content || regexed_content === original_content) {
-        return;
-      }
-
-      const trigger_type = hasDynamicWorldInfoPromptRegexReplacement(original_content, regexed_content, entry)
-        ? 'keyed'
-        : 'constant';
-      const marker = nextRegexedWorldbookMarker();
-      regexed_worldbook_intercepts.set(key, {
-        key,
-        marker,
-        original_content,
-        regexed_content,
-        trigger_type,
-      });
-      entry.content = marker;
-    });
+  const handleWorldInfoScanDone = (data: WorldInfoScanDoneEvent) => {
+    if (!shouldEnable() || settings.entry_processing.mode !== 'worldbook' || data.state.next) return;
+    const activated = [...data.activated.entries.values()];
+    const hasWorld = (
+      entry: SillyTavern.FlattenedWorldInfoEntry,
+    ): entry is { world: string } & SillyTavern.FlattenedWorldInfoEntry => typeof _.get(entry, 'world') === 'string';
+    scans.scanned((data.sortedEntries ?? activated).filter(hasWorld), activated.filter(hasWorld));
   };
   eventMakeLast(tavern_events.WORLDINFO_SCAN_DONE, handleWorldInfoScanDone);
 
   const handleWorldInfoActivated = (entries: ({ world: string } & SillyTavern.FlattenedWorldInfoEntry)[]) => {
-    if (!shouldEnable() || settings.entry_processing.mode !== 'worldbook') {
-      return;
-    }
-
-    const start_index = activated_worldbook_entries.size;
+    if (!shouldEnable() || settings.entry_processing.mode !== 'worldbook') return;
+    const snapshot = scans.activated(entries);
+    confirmed_scan = true;
+    activated_worldbook_entries.clear();
+    worldbook_extraction_debug = createWorldbookExtractionDebugState();
+    applySnapshot(snapshot ?? { metadata: new Map(), worlds: new Set() });
     entries.forEach((entry, index) => {
-      const key = getWorldbookEntryKey(entry);
-      const regexed_intercept = regexed_worldbook_intercepts.get(key);
-      const should_restore_regexed_marker = !!regexed_intercept && entry.content === regexed_intercept.marker;
-      if (should_restore_regexed_marker) {
-        entry.content = regexed_intercept.original_content;
-      }
-      const parsed_entry = parseActivatedWorldbookEntry(
+      const parsed = parseActivatedWorldbookEntry(
         entry,
-        start_index + index,
-        worldbook_entry_metadata.get(key),
+        index,
+        worldbook_entry_metadata.get(getWorldbookEntryKey(entry)),
       );
-      if (should_restore_regexed_marker) {
-        entry.content = regexed_intercept.marker;
-      }
-      if (!parsed_entry || activated_worldbook_entries.has(parsed_entry.key)) {
-        return;
-      }
-      if (regexed_intercept) {
-        parsed_entry.trigger_type = regexed_intercept.trigger_type;
-        parsed_entry.content = regexed_intercept.marker;
-        parsed_entry.content_candidates = [regexed_intercept.marker];
-        parsed_entry.preconsumed_content = regexed_intercept.regexed_content;
-        parsed_entry.has_source_macro ||= regexed_intercept.trigger_type === 'keyed';
-        parsed_entry.wrapper_id = undefined;
-        parsed_entry.split_getwi_parts = [];
-      } else {
-        wrapActivatedWorldbookEntrySourceContent(entry, parsed_entry, nextWorldbookExtractionWrapperId);
-      }
-      activated_worldbook_entries.set(parsed_entry.key, parsed_entry);
+      if (!parsed || activated_worldbook_entries.has(parsed.key)) return;
+      activated_worldbook_entries.set(parsed.key, parsed);
       worldbook_extraction_debug.total_activated++;
-      if (parsed_entry.split_getwi_parts.length === 0) {
-        recordActivatedWorldbookDebug(worldbook_extraction_debug, parsed_entry);
-      }
+      if (!parsed.split_getwi_parts.length) recordActivatedWorldbookDebug(worldbook_extraction_debug, parsed);
     });
   };
   eventMakeFirst(tavern_events.WORLD_INFO_ACTIVATED, handleWorldInfoActivated);
 
-  const handlePrompts = ({ prompt }: { prompt: SillyTavern.SendingMessage[] }) => {
+  const handlePrompts = (
+    { prompt }: { prompt: SillyTavern.SendingMessage[] },
+    dry_run?: boolean,
+    source_event = 'generate_after_data',
+    prepared_generation?: DebugGeneration,
+    request?: { messages?: unknown; [key: string]: unknown },
+    request_history = getHistory(),
+  ) => {
     if (!shouldEnable()) {
       return;
     }
+    prompt.forEach(message => prompt_content_cache.delete(message));
+    const generation =
+      prepared_generation ?? generation_trace.accept(prompt, dry_run, source_event, getGenerationContext());
+    if (!generation) return;
+    const process_worldbook = settings.entry_processing.mode === 'worldbook' && !generation.dry_run;
 
     const chunks = seperatePrompts(prompt, separators)?.map(chunk =>
       rejectEmptyPrompts(chunk).map(prompt =>
@@ -3339,49 +3105,65 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
       applyInjection(above, 1, 0);
       applyInjection(below, 2, 3);
     }
-    if (settings.entry_processing.mode === 'worldbook') {
+    if (process_worldbook) {
       const activated_entries = [...activated_worldbook_entries.values()];
       const flattened_chunks_before_worldbook = _.flatten(chunks);
-      const custom_routing = buildWorldbookCustomRouting(
-        activated_entries,
-        flattened_chunks_before_worldbook,
-        settings,
+      const extraction_items = activated_entries.flatMap(getWorldbookExtractionItems);
+      const plan = planWorldbookExtraction(
+        extraction_items,
+        compiled_rules,
+        flattened_chunks_before_worldbook.map(prompt => getPromptContent(prompt, settings)),
       );
-      const handled_entry_keys = processAggressiveGreenCache(
-        chunks,
-        flattened_chunks_before_worldbook,
-        activated_entries,
-        settings,
-        worldbook_entry_metadata,
-        loaded_worldbook_names,
-        custom_routing,
-        worldbook_extraction_debug,
-      );
+      const handled_entry_keys =
+        generation.chat_id === (SillyTavern.getCurrentChatId() ?? '')
+          ? processAggressiveGreenCache(
+              chunks,
+              flattened_chunks_before_worldbook,
+              activated_entries,
+              settings,
+              worldbook_entry_metadata,
+              loaded_worldbook_names,
+              plan,
+              request_history,
+              worldbook_extraction_debug,
+            )
+          : new Set<string>();
       extractWorldbookEntriesToPlaceholders(
         flattened_chunks_before_worldbook,
-        activated_entries.filter(entry => !handled_entry_keys.has(entry.key)),
+        extraction_items.filter(entry => !handled_entry_keys.has(entry.key)),
         settings,
-        custom_routing,
+        plan,
         worldbook_extraction_debug,
       );
-      restoreUnconsumedRegexedWorldbookMarkers(flattened_chunks_before_worldbook, regexed_worldbook_intercepts, settings);
     }
 
     const flattened_chunks_after_worldbook = _.flatten(chunks);
-    if (settings.entry_processing.mode === 'worldbook') {
+    if (process_worldbook) {
       worldbook_extraction_debug.wrapper_before_unwrap = getWorldbookExtractionWrapperStats(
         flattened_chunks_after_worldbook,
         settings,
       );
     }
     unwrapRemainingWorldbookExtractionWrappers(flattened_chunks_after_worldbook, settings);
-    cleanupChunks(chunks, settings);
+    cleanupGreenCacheAnchorMarkers(flattened_chunks_after_worldbook, settings);
     if (settings.entry_processing.mode === 'worldbook') {
-      captureWorldbookDebugTotalRows(chunks, worldbook_extraction_debug, settings);
-      printWorldbookDebugState(worldbook_extraction_debug);
-      if (!isWorldbookDebugStateEmpty(worldbook_extraction_debug)) {
-        publishSquashDebugRecord(getWorldbookDebugTitle(worldbook_extraction_debug), worldbook_extraction_debug);
-      }
+      flattened_chunks_after_worldbook.forEach(prompt =>
+        updatePromptContentWith(
+          prompt,
+          ({ content }) => content.replace(/\{\{压缩相邻消息::[^{}]*\}\}/g, ''),
+          settings,
+        ),
+      );
+    }
+    if (generation.dry_run && settings.entry_processing.mode === 'worldbook') {
+      const placeholders = new Map([...compiled_rules.placeholders.values()].flat().map(value => [value, '']));
+      flattened_chunks_after_worldbook.forEach(prompt =>
+        updatePromptContentWith(prompt, ({ content }) => replaceWorldbookPlaceholders(content, placeholders), settings),
+      );
+    }
+    cleanupChunks(chunks, settings);
+    if (process_worldbook) {
+      captureWorldbookDebugTotalRows(chunks, worldbook_extraction_debug, settings, request_history);
     }
 
     const [head, above_chat_history, below_chat_history, tail] = chunks;
@@ -3400,16 +3182,204 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
     }
 
     assignInplace(prompt, result);
+    if (generation.dry_run) {
+      console.debug('[压缩相邻消息] 提示词预演完成', { type: generation.type, dry_run: true, recorded: false });
+    } else if (process_worldbook && !isWorldbookDebugStateEmpty(worldbook_extraction_debug)) {
+      printWorldbookDebugState(worldbook_extraction_debug);
+      publishSquashDebugRecord(
+        getWorldbookDebugTitle(worldbook_extraction_debug),
+        {
+          ...worldbook_extraction_debug,
+          final_prompt: captureFinalPrompt(result),
+        },
+        generation,
+        prompt,
+        request,
+      );
+    }
+    if (!generation.dry_run) {
+      activated_worldbook_entries.clear();
+      confirmed_scan = false;
+      scans.begin();
+    }
   };
-  const handlePrompts2 = ({ messages }: { messages: SillyTavern.SendingMessage[] }) => {
-    handlePrompts({ prompt: messages });
+  type PreparedRequest = {
+    generation: DebugGeneration;
+    history: CacheHistory;
+    snapshot: WorldbookScanSnapshot;
+    entries: ActivatedWorldbookEntry[];
+    debug: WorldbookExtractionDebugState;
+    token: string;
+    sources: Set<SillyTavern.SendingMessage[]>;
+    consumed: boolean;
+    created_at: number;
+  };
+  const prepared_requests = new Map<string, PreparedRequest>();
+  const prepared_arrays = new WeakMap<object, PreparedRequest>();
+  const request_prefix = '§§TH_SQUASH_REQUEST_' + getScriptId().replace(/\W/g, '') + ':';
+  const request_pattern = new RegExp(_.escapeRegExp(request_prefix) + '([0-9a-f]+)§§', 'g');
+  const use_preparation = compare(getTavernVersion(), '1.13.4', '>');
+
+  const preparePrompts = ({ prompt }: { prompt: SillyTavern.SendingMessage[] }, dry_run?: boolean) => {
+    if (!shouldEnable() || !Array.isArray(prompt)) return;
+    prompt.forEach(message => prompt_content_cache.delete(message));
+    const existing_tokens = _.uniq(
+      prompt.flatMap(message => getPromptContent(message, settings).match(request_pattern) ?? []),
+    );
+    if (existing_tokens.length === 1) {
+      const existing = prepared_requests.get(existing_tokens[0]);
+      if (existing && !existing.consumed) {
+        existing.sources.add(prompt);
+        prepared_arrays.set(prompt, existing);
+        return;
+      }
+    }
+    const generation = generation_trace.accept(prompt, dry_run, 'generate_after_data', getGenerationContext());
+    if (!generation) return;
+    if (generation.dry_run) {
+      handlePrompts({ prompt }, true, 'generate_after_data', generation);
+      return;
+    }
+    if (!seperatePrompts(prompt, separators)) return;
+    if (!confirmed_scan) applySnapshot(scans.cacheSnapshot());
+    let entries = collectPluginEntries([...activated_worldbook_entries.values()].map(entry => structuredClone(entry)));
+    let preparation_failed = false;
+    if (settings.entry_processing.mode === 'worldbook') {
+      const original = _.cloneDeep(prompt);
+      try {
+        prepareRequestWorldbookEntries(prompt, entries, settings, worldbook_extraction_debug);
+      } catch (error) {
+        assignInplace(prompt, original);
+        prompt.forEach(message => prompt_content_cache.delete(message));
+        entries = [];
+        preparation_failed = true;
+        worldbook_extraction_debug.error_logs.push('条目预处理失败，正文保留原位。');
+        console.warn('[压缩相邻消息] 条目预处理失败', error);
+      }
+    }
+    const marker_prompt = prompt.find(message => getPromptContent(message, settings).includes(separators.head.content));
+    if (!marker_prompt) return;
+    const token = request_prefix + crypto.randomUUID().replaceAll('-', '') + '§§';
+    const prepared: PreparedRequest = {
+      generation,
+      history: getHistory(),
+      snapshot: preparation_failed
+        ? { metadata: new Map(), worlds: new Set() }
+        : structuredClone({ metadata: worldbook_entry_metadata, worlds: loaded_worldbook_names }),
+      entries,
+      debug: structuredClone(worldbook_extraction_debug),
+      token,
+      sources: new Set([prompt]),
+      consumed: false,
+      created_at: Date.now(),
+    };
+    updatePromptContentWith(
+      marker_prompt,
+      ({ content }) => content.replace(separators.head.content, () => separators.head.content + token),
+      settings,
+    );
+    prepared_requests.set(token, prepared);
+    prepared_arrays.set(prompt, prepared);
+    for (const [key, item] of prepared_requests) {
+      if (Date.now() - item.created_at > 300_000 || prepared_requests.size > 32) prepared_requests.delete(key);
+    }
+    activated_worldbook_entries.clear();
+    confirmed_scan = false;
   };
 
-  if (compare(getTavernVersion(), '1.13.4', '>')) {
-    eventOn(tavern_events.GENERATE_AFTER_DATA, handlePrompts);
-  } else {
-    eventOn(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handlePrompts2);
-  }
+  const handlePrompts2 = (request: { messages: SillyTavern.SendingMessage[]; [key: string]: unknown }) => {
+    const prompt = request.messages;
+    if (!shouldEnable() || !Array.isArray(prompt)) return;
+    prompt.forEach(message => prompt_content_cache.delete(message));
+    const tokens = _.uniq(prompt.flatMap(message => getPromptContent(message, settings).match(request_pattern) ?? []));
+    let prepared = prepared_arrays.get(prompt);
+    if (!prepared && tokens.length === 1) prepared = prepared_requests.get(tokens[0]);
+    if (prepared?.consumed && !tokens.length) return;
+    if (prepared?.consumed) prepared = undefined;
+    if (!prepared && !tokens.length && use_preparation) return;
+    if (!prepared && !tokens.length && !seperatePrompts(prompt, separators)) return;
+
+    const original = _.cloneDeep(prompt);
+    try {
+      if (!prepared && !tokens.length && !use_preparation) {
+        const generation = generation_trace.accept(
+          prompt,
+          false,
+          'chat_completion_settings_ready',
+          getGenerationContext(),
+        );
+        if (!generation) return;
+        if (!confirmed_scan) applySnapshot(scans.cacheSnapshot());
+        if (settings.entry_processing.mode === 'worldbook') {
+          const entries = collectPluginEntries([...activated_worldbook_entries.values()]);
+          activated_worldbook_entries.clear();
+          entries.forEach(entry => activated_worldbook_entries.set(entry.key, entry));
+          prepareRequestWorldbookEntries(
+            prompt,
+            [...activated_worldbook_entries.values()],
+            settings,
+            worldbook_extraction_debug,
+          );
+        }
+        handlePrompts({ prompt }, false, 'chat_completion_settings_ready', generation, request);
+        return;
+      }
+
+      // 请求内标记用于跨模板插件的数组替换关联，最终发送前统一移除。
+      for (const message of prompt)
+        updatePromptContentWith(message, ({ content }) => content.replace(request_pattern, ''), settings);
+      if (prepared) {
+        prepared.consumed = true;
+        prepared_requests.delete(prepared.token);
+        applySnapshot(prepared.snapshot);
+        worldbook_extraction_debug = prepared.debug;
+        activated_worldbook_entries.clear();
+        prepared.entries.forEach(entry => activated_worldbook_entries.set(entry.key, entry));
+        handlePrompts(
+          { prompt },
+          false,
+          'chat_completion_settings_ready',
+          { ...prepared.generation, event: 'chat_completion_settings_ready' },
+          request,
+          prepared.history,
+        );
+      } else {
+        // 设置重载或过期请求保持正文，仅清理临时边界。
+        activated_worldbook_entries.clear();
+        applySnapshot({ metadata: new Map(), worlds: new Set() });
+        worldbook_extraction_debug = createWorldbookExtractionDebugState();
+        handlePrompts({ prompt }, false, 'chat_completion_settings_ready', undefined, request);
+      }
+    } catch (error) {
+      assignInplace(prompt, original);
+      if (prepared) {
+        prepared.consumed = true;
+        prepared_requests.delete(prepared.token);
+      }
+      console.warn('[压缩相邻消息] 请求整理失败，保留原始正文', error);
+    } finally {
+      for (const target of new Set([prompt, ...(prepared?.sources ?? [])])) {
+        target.forEach(message => prompt_content_cache.delete(message));
+        for (const message of target) {
+          updatePromptContentWith(
+            message,
+            ({ content }) => {
+              let result = unwrapWorldbookExtractionWrapperText(content.replace(request_pattern, ''));
+              for (const separator of Object.values(separators)) result = result.replaceAll(separator.content, '');
+              return settings.entry_processing.mode === 'worldbook'
+                ? result.replace(/\{\{压缩相邻消息::[^{}]*\}\}/g, '')
+                : result;
+            },
+            settings,
+          );
+        }
+        cleanupGreenCacheAnchorMarkers(target, settings);
+        assignInplace(target, rejectEmptyPrompts(target));
+      }
+    }
+  };
+  if (use_preparation) eventOn(tavern_events.GENERATE_AFTER_DATA, preparePrompts);
+  eventMakeLast(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handlePrompts2);
 
   const handleStopStringOnStream = (text: string) => {
     if (!settings.stop_string || !shouldEnable()) {
@@ -3461,7 +3431,7 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
 
   return {
     unlisten: () => {
-      eventRemoveListener(tavern_events.GENERATE_AFTER_DATA, handlePrompts);
+      eventRemoveListener(tavern_events.GENERATE_AFTER_DATA, preparePrompts);
       eventRemoveListener(tavern_events.CHAT_COMPLETION_SETTINGS_READY, handlePrompts2);
       eventRemoveListener(tavern_events.GENERATION_AFTER_COMMANDS, resetActivatedWorldbookEntries);
       eventRemoveListener(tavern_events.WORLDINFO_ENTRIES_LOADED, handleWorldInfoEntriesLoaded);
@@ -3475,8 +3445,9 @@ function listenEvent(settings: Settings, separators: Separators, shouldEnable: (
 
 export function initSquashWithoutPanel(settings: Settings) {
   const { unregister, getPreferredScriptId } = registerAsUniqueScript('压缩相邻消息');
-  const { separators, uninject } = injectSeparators(settings);
-  const { unlisten } = listenEvent(settings, separators, () => getPreferredScriptId() === getScriptId());
+  const shouldEnable = () => getPreferredScriptId() === getScriptId();
+  const { separators, uninject, getHistory } = injectSeparators(settings, shouldEnable);
+  const { unlisten } = listenEvent(settings, separators, shouldEnable, getHistory);
   return {
     destroy: () => {
       unregister();

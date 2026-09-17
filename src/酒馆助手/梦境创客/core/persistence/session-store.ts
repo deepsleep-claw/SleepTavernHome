@@ -20,6 +20,8 @@ type SessionFileEnvelope = {
 
 export type SessionRevision = {
   entry: SessionIndexEntry;
+  /** 索引实际引用的版本，用于后续备份的并发校验。 */
+  referencedRevision?: number;
   runtime: PersistedSessionRuntime;
 };
 
@@ -158,13 +160,25 @@ export class SessionRevisionStore {
     const entry = metadata.sessions[sessionId];
     if (!entry) throw new Error(`会话不存在：${sessionId}`);
     const bytes = await this.client.download(entry.url);
-    if ((await sha256(bytes)) !== entry.sha256) throw new Error(`会话文件校验失败：${sessionId}`);
     const packed = canonicalParse<SessionFileEnvelope>(new TextDecoder().decode(bytes));
-    if (packed.revision !== entry.revision) throw new Error(`会话Revision不匹配：${sessionId}`);
     const payload = await openEnvelope(packed);
     if (payload.runtime.sessionId !== sessionId) throw new Error(`会话ID不匹配：${sessionId}`);
+    const actualHash = await sha256(bytes);
+    if (packed.revision < entry.revision) throw new Error(`会话Revision落后于索引：${sessionId}`);
+    if (packed.revision === entry.revision && actualHash !== entry.sha256)
+      throw new Error(`会话文件校验失败：${sessionId}`);
+    // 覆盖式旧备份可能先写正文、后写索引；仅接纳通过内部校验且版本更高的同一会话。
+    if (packed.revision > entry.revision)
+      payload.runtime.warnings = [...(payload.runtime.warnings ?? []), '会话索引落后，已读取通过校验的较新记录。'];
     return {
-      entry,
+      entry: {
+        ...entry,
+        revision: packed.revision,
+        sha256: actualHash,
+        size: bytes.byteLength,
+        title: payload.runtime.title,
+      },
+      referencedRevision: entry.revision,
       runtime: payload.runtime,
     };
   }

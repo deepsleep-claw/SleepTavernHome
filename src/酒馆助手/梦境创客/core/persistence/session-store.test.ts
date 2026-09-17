@@ -36,6 +36,33 @@ async function runtime(sessionId = 'session'): Promise<PersistedSessionRuntime> 
 }
 
 describe('single-file session store', () => {
+  it('正文写入成功但索引更新失败后仍能加载较新且校验完整的记录', async () => {
+    class PartialClient extends MemoryTavernFileClient {
+      failMetadata = false;
+      override async upload(name: string, bytes: Uint8Array) {
+        if (this.failMetadata && name.includes('--Meta--')) throw new Error('metadata offline');
+        return super.upload(name, bytes);
+      }
+    }
+    const client = new PartialClient();
+    const settings = new MemoryAgentSettingsStore();
+    const store = new SessionRevisionStore(client, settings);
+    const state = await runtime();
+    await store.commit({ bindingId: 'role', characterName: '梦梦', runtime: state, status: 'completed' });
+    client.failMetadata = true;
+    await expect(
+      store.commit({
+        bindingId: 'role',
+        characterName: '梦梦',
+        runtime: { ...state, title: '新记录' },
+        status: 'completed',
+      }),
+    ).rejects.toThrow('metadata offline');
+    const loaded = await new SessionRevisionStore(client, settings).load('role', state.sessionId);
+    expect(loaded.runtime.title).toBe('新记录');
+    expect(loaded.entry.revision).toBe(2);
+    expect(loaded.runtime.warnings).toContain('会话索引落后，已读取通过校验的较新记录。');
+  });
   it('每个角色一个元信息文件、每个会话一个压缩文件', async () => {
     const client = new MemoryTavernFileClient();
     const settings = new MemoryAgentSettingsStore();
@@ -62,11 +89,17 @@ describe('single-file session store', () => {
     const store = new SessionRevisionStore(client, settings, () => 200);
     const first = await runtime('same');
     await store.commit({
-      bindingId: 'role', characterName: '梦梦', runtime: first, status: 'idle',
+      bindingId: 'role',
+      characterName: '梦梦',
+      runtime: first,
+      status: 'idle',
     });
     const second = { ...first, title: '新版', updatedAt: 3 };
     const entry = await store.commit({
-      bindingId: 'role', characterName: '梦梦', runtime: second, status: 'completed',
+      bindingId: 'role',
+      characterName: '梦梦',
+      runtime: second,
+      status: 'completed',
     });
     expect(entry.revision).toBe(2);
     expect(client.urls()).toHaveLength(2);
@@ -82,7 +115,10 @@ describe('single-file session store', () => {
     const store = new SessionRevisionStore(client, new MemoryAgentSettingsStore());
     await expect(store.load('role', 'missing')).rejects.toThrow('会话不存在');
     const entry = await store.commit({
-      bindingId: 'role', characterName: '梦梦', runtime: await runtime('bad'), status: 'idle',
+      bindingId: 'role',
+      characterName: '梦梦',
+      runtime: await runtime('bad'),
+      status: 'idle',
     });
     client.corrupt(entry.url);
     await expect(store.load('role', 'bad')).rejects.toThrow('missing');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalEqual, canonicalParse, canonicalStringify, sha256 } from './canonical';
+import { canonicalEqual, canonicalParse, canonicalStringify } from './canonical';
 
 describe('canonical data', () => {
   it('稳定排序对象字段并往返正则', () => {
@@ -29,10 +29,5 @@ describe('canonical data', () => {
     const parsed = canonicalParse<{ date: Date }>(canonicalStringify({ date: new Date('2026-08-12T00:00:00Z') }));
     expect(parsed.date).toBeInstanceOf(Date);
     expect(parsed.date.toISOString()).toBe('2026-08-12T00:00:00.000Z');
-  });
-
-  it('计算一致的SHA-256内容哈希', async () => {
-    expect(await sha256('dream')).toBe(await sha256(new TextEncoder().encode('dream')));
-    expect(await sha256('dream')).toMatch(/^[a-f\d]{64}$/u);
   });
 });

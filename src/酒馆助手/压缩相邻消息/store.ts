@@ -1,24 +1,6 @@
 import { registerAsUniqueScript } from '@util/script';
-
-export const WorldbookExtractionPositionOrder = [
-  'before_character_definition',
-  'after_character_definition',
-  'before_example_messages',
-  'after_example_messages',
-  'before_author_note',
-  'after_author_note',
-  'at_depth',
-] as const;
-
-const WorldbookExtractionPosition = z.enum(WorldbookExtractionPositionOrder);
-const WorldbookExtractionPositionOrderSetting = z
-  .array(WorldbookExtractionPosition)
-  .default(() => [...WorldbookExtractionPositionOrder])
-  .catch(() => [...WorldbookExtractionPositionOrder])
-  .transform(order => [
-    ..._.uniq(order.filter(position => WorldbookExtractionPositionOrder.includes(position))),
-    ...WorldbookExtractionPositionOrder.filter(position => !order.includes(position)),
-  ]);
+import { WorldbookSettings } from './worldbook_settings';
+export { WorldbookExtractionPositionOrder } from './worldbook_settings';
 
 const OldSettings = z
   .object({
@@ -80,21 +62,7 @@ const OldSettings = z
       },
       entry_processing: {
         mode: 'none',
-        worldbook: {
-          aggressive_green_cache: {
-            enabled: false,
-          },
-          constant: {
-            enabled: true,
-            placeholder: '{{压缩相邻消息::lora_constant}}',
-          },
-          keyed: {
-            enabled: true,
-            placeholder: '{{压缩相邻消息::lora_key}}',
-          },
-          custom_routes: [],
-          position_order: [...WorldbookExtractionPositionOrder],
-        },
+        worldbook: WorldbookSettings.parse({}),
       },
     } satisfies z.infer<typeof Settings>);
   });
@@ -153,39 +121,7 @@ export const Settings = z
     entry_processing: z
       .object({
         mode: z.enum(['none', 'depth', 'worldbook']).default('none').catch('none'),
-        worldbook: z
-          .object({
-            aggressive_green_cache: z
-              .object({
-                enabled: z.boolean().default(false).catch(false),
-              })
-              .prefault({}),
-            constant: z
-              .object({
-                enabled: z.boolean().default(true).catch(true),
-                placeholder: z.string().default('{{压缩相邻消息::lora_constant}}'),
-              })
-              .prefault({}),
-            keyed: z
-              .object({
-                enabled: z.boolean().default(true).catch(true),
-                placeholder: z.string().default('{{压缩相邻消息::lora_key}}'),
-              })
-              .prefault({}),
-            custom_routes: z
-              .array(
-                z
-                  .object({
-                    title_regex: z.string().default('').catch(''),
-                    tag: z.string().default('').catch(''),
-                  })
-                  .prefault({}),
-              )
-              .default([])
-              .catch([]),
-            position_order: WorldbookExtractionPositionOrderSetting,
-          })
-          .prefault({}),
+        worldbook: WorldbookSettings,
       })
       .prefault({}),
 

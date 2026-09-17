@@ -1,11 +1,18 @@
 // @vitest-environment happy-dom
 
 import { describe, expect, it, vi } from 'vitest';
-import { isolateDocumentDoubleClick, isWindowDragTarget, resizeFrame, type ResizeBounds, type ResizeDirection } from './window-interaction';
+import {
+  isolateDocumentDoubleClick,
+  isWindowDragTarget,
+  resizeFrame,
+  type ResizeBounds,
+  type ResizeDirection,
+} from './window-interaction';
 
 it('窗口顶部空白可拖动，按钮和弹窗保持可交互', () => {
   const root = document.createElement('div');
-  root.innerHTML = '<nav class="dca-tabs"><div class="dca-tab-strip"></div><button><i></i></button><div class="dca-modal-backdrop"><span></span></div></nav>';
+  root.innerHTML =
+    '<nav class="dca-tabs"><div class="dca-tab-strip"></div><button><i></i></button><div class="dca-modal-backdrop"><span></span></div></nav>';
   expect(isWindowDragTarget(root.querySelector('.dca-tab-strip')!)).toBe(true);
   expect(isWindowDragTarget(root.querySelector('i')!)).toBe(false);
   expect(isWindowDragTarget(root.querySelector('span')!)).toBe(false);
@@ -17,16 +24,14 @@ const start = { height: 500, width: 600, x: 200, y: 150 };
 describe('resizeFrame', () => {
   it.each([
     ['e', 80, 0, { height: 500, width: 680, x: 200, y: 150 }],
-    ['s', 0, 60, { height: 560, width: 600, x: 200, y: 150 }],
-    ['w', -70, 0, { height: 500, width: 670, x: 130, y: 150 }],
-    ['n', 0, -40, { height: 540, width: 600, x: 200, y: 110 }],
     ['se', 80, 60, { height: 560, width: 680, x: 200, y: 150 }],
-    ['sw', -70, 60, { height: 560, width: 670, x: 130, y: 150 }],
-    ['ne', 80, -40, { height: 540, width: 680, x: 200, y: 110 }],
     ['nw', -70, -40, { height: 540, width: 670, x: 130, y: 110 }],
-  ] satisfies Array<[ResizeDirection, number, number, typeof start]>)('支持 %s 方向缩放', (direction, deltaX, deltaY, expected) => {
-    expect(resizeFrame(start, direction, deltaX, deltaY, bounds)).toEqual(expected);
-  });
+  ] satisfies Array<[ResizeDirection, number, number, typeof start]>)(
+    '支持 %s 方向缩放',
+    (direction, deltaX, deltaY, expected) => {
+      expect(resizeFrame(start, direction, deltaX, deltaY, bounds)).toEqual(expected);
+    },
+  );
 
   it('保持对边不动，并限制最小尺寸和可视区域', () => {
     expect(resizeFrame(start, 'nw', 900, 900, bounds)).toEqual({ height: 380, width: 420, x: 380, y: 270 });

@@ -4,6 +4,10 @@ import {
   openIndexedDbDebugStorage,
   SQUASH_DEBUG_DATABASE_NAME,
 } from './debug_storage';
+import type { DebugGeneration, DebugTokenUsage, SquashDebugRecord } from './debug_types';
+import { countTextCharacters } from './debug_snapshot';
+import { createTokenUsageMonitor } from './usage_monitor';
+export type { SquashDebugRecord } from './debug_types';
 
 export const SQUASH_DEBUG_GLOBAL_KEY = '__dream_whale_squash_debug_api__';
 
@@ -13,23 +17,6 @@ const MAX_RECORDS = 50;
 const CONTENT_PREVIEW_LENGTH = 120;
 
 type DebugState = Record<string, any>;
-
-export type SquashDebugRecord = {
-  id: string;
-  created_at: string;
-  title: string;
-  summary: {
-    error_count: number;
-    failed: number;
-    green_cache_insertions: number;
-    loaded_total: number;
-    total_rows: number;
-    triggered_rows: number;
-    wrapper_orphan: number;
-    wrapper_paired: number;
-  };
-  state: DebugState;
-};
 
 export type SquashDebugApi = {
   clearRecords: () => Promise<void>;
@@ -56,6 +43,7 @@ let storage_initialization_started = false;
 let storage_ready: Promise<void> = Promise.resolve();
 let storage_queue: Promise<void> = Promise.resolve();
 let storage_warning_emitted = false;
+let usage_monitor: ReturnType<typeof createTokenUsageMonitor> | undefined;
 
 function getHostWindow(): Window {
   return window.parent ?? window;
@@ -269,6 +257,7 @@ function sanitizeDebugValue(value: any, contents: Record<string, string>, nextCo
       result[key] = preview;
       result['详细内容摘要'] = preview;
       result['详细内容长度'] = item.length;
+      result['详细内容字数'] = countTextCharacters(item);
       result['详细内容hash'] = getContentHash(item);
       result['详细内容缓存键'] = content_id;
       return;
@@ -298,10 +287,19 @@ function getSummary(state: DebugState): SquashDebugRecord['summary'] {
     triggered_rows: state.triggered_rows?.length ?? 0,
     wrapper_orphan: state.wrapper_before_unwrap?.orphan ?? 0,
     wrapper_paired: state.wrapper_before_unwrap?.paired ?? 0,
+    prompt_chars: state.final_prompt?.text_chars,
+    prompt_messages: state.final_prompt?.messages?.length,
   };
 }
 
-export function publishSquashDebugRecord(title: string, state: DebugState) {
+export function publishSquashDebugRecord(
+  title: string,
+  state: DebugState,
+  generation?: DebugGeneration,
+  prompt?: SillyTavern.SendingMessage[],
+  request?: { messages?: unknown; [key: string]: unknown },
+) {
+  if (generation?.dry_run) return;
   void ensureStorageInitialized();
   const id = getRecordId();
   const { state: state_snapshot, contents } = createSanitizedDebugState(state);
@@ -309,10 +307,13 @@ export function publishSquashDebugRecord(title: string, state: DebugState) {
     id,
     created_at: new Date().toISOString(),
     title,
+    generation: generation ? { ...generation } : undefined,
     summary: getSummary(state_snapshot),
     state: state_snapshot,
   };
   records = sortAndLimitRecords([record, ...records]);
+  if (prompt) usage_monitor?.register(id, prompt);
+  if (request) usage_monitor?.prepare(request);
   if (Object.keys(contents).length > 0) {
     session_content_store.set(id, contents);
   }
@@ -324,6 +325,18 @@ export function publishSquashDebugRecord(title: string, state: DebugState) {
     if (session_content_store.get(id) === contents) {
       session_content_store.delete(id);
     }
+  });
+}
+
+function updateTokenUsage(record_id: string, usage: DebugTokenUsage) {
+  const record = records.find(item => item.id === record_id);
+  if (!record) return;
+  const updated = { ...record, token_usage: usage };
+  records = records.map(item => (item.id === record_id ? updated : item));
+  emitRecords();
+  void enqueueStorage(async backend => {
+    const current = records.find(item => item.id === record_id);
+    if (current) await backend.saveRecord(current, {}, MAX_RECORDS);
   });
 }
 
@@ -356,6 +369,10 @@ async function clearRecords(): Promise<void> {
 
 export function initializeSquashDebugGlobal(): { destroy: () => void } {
   const host_window = getHostWindow() as Window & { [SQUASH_DEBUG_GLOBAL_KEY]?: SquashDebugApi };
+  const monitor = createTokenUsageMonitor(host_window, updateTokenUsage);
+  usage_monitor = monitor;
+  const prepareUsage = (data: { messages?: unknown; [key: string]: unknown }) => monitor.prepare(data);
+  eventMakeLast(tavern_events.CHAT_COMPLETION_SETTINGS_READY, prepareUsage);
   const api: SquashDebugApi = {
     clearRecords,
     database_name: SQUASH_DEBUG_DATABASE_NAME,
@@ -378,6 +395,9 @@ export function initializeSquashDebugGlobal(): { destroy: () => void } {
   host_window[SQUASH_DEBUG_GLOBAL_KEY] = api;
   return {
     destroy: () => {
+      eventRemoveListener(tavern_events.CHAT_COMPLETION_SETTINGS_READY, prepareUsage);
+      monitor.destroy();
+      if (usage_monitor === monitor) usage_monitor = undefined;
       listeners.clear();
       if (host_window[SQUASH_DEBUG_GLOBAL_KEY] === api) {
         delete host_window[SQUASH_DEBUG_GLOBAL_KEY];

@@ -40,6 +40,7 @@ export type ModelRequestControls = {
 };
 
 export type ModelRequestSettings = ModelRequestControls & {
+  modelId?: string;
   compatibilityMode?: ProviderCompatibilityMode;
   interfaceType?: ProviderInterfaceType;
   maxOutputTokens?: number;
@@ -89,6 +90,20 @@ export function requestProviderOptions(
   const effort = reasoningEffort(settings);
   const mode = settings?.compatibilityMode ?? 'standard';
   switch (settings?.interfaceType) {
+    case 'gemini': {
+      const isGemini3 = /gemini-3/u.test(settings.modelId ?? '');
+      if (effort === 'none' && (isGemini3 || /gemini-2\.5-pro/u.test(settings.modelId ?? '')))
+        throw new Error('当前 Gemini 模型不能关闭思考，请选择自动或支持的思考档位。');
+      return {
+        google: {
+          thinkingConfig: {
+            includeThoughts: effort !== 'none',
+            ...(isGemini3 && effort ? { thinkingLevel: effort } : {}),
+            ...(!isGemini3 && effort === 'none' ? { thinkingBudget: 0 } : {}),
+          },
+        },
+      };
+    }
     case 'anthropic':
       if (mode === 'deepseek') {
         return {
@@ -142,7 +157,7 @@ export function requestProviderOptions(
       return {
         openai: {
           include: ['reasoning.encrypted_content'],
-          maxToolCalls: settings.webSearch ? settings.webSearchMaxUses ?? 10 : undefined,
+          maxToolCalls: settings.webSearch ? (settings.webSearchMaxUses ?? 10) : undefined,
           reasoningEffort: effort,
         },
       };
@@ -321,7 +336,8 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
       providerToolCalls: providerCalls.map(call => ({
         input: call.input,
         output:
-          providerOutputByCallId.get(call.toolCallId) ?? sanitizeProviderOutput(resultByCallId.get(call.toolCallId)?.output),
+          providerOutputByCallId.get(call.toolCallId) ??
+          sanitizeProviderOutput(resultByCallId.get(call.toolCallId)?.output),
         providerExecuted: true,
         toolCallId: call.toolCallId,
         toolName: call.toolName,
@@ -348,23 +364,31 @@ export class ProviderModelStepExecutor implements ModelStepExecutor {
       const reasoningEffort = request.modelSettings?.reasoningEffort ?? 'auto';
       const reasoningActive = reasoningEffort !== 'off';
       const suppressSampling = this.model.compatibilityMode === 'deepseek' && reasoningActive;
-      const webSearch = request.modelSettings?.webSearch === true && modelSettings.capabilities.webSearch !== 'disabled';
+      const webSearch =
+        request.modelSettings?.webSearch === true && modelSettings.capabilities.webSearch !== 'disabled';
       return await withProviderModelRuntime(
         this.provider,
         this.model,
-        runtime => new AiSdkModelStepExecutor(async () => runtime).execute({
-          ...request,
-          modelSettings: {
-            compatibilityMode: this.model.compatibilityMode,
-            interfaceType: this.provider.interfaceType,
-            maxOutputTokens: modelSettings.maxOutputTokens || undefined,
-            reasoningEffort,
-            temperature: suppressSampling ? undefined : modelSettings.temperature,
-            topP: suppressSampling ? undefined : modelSettings.topP,
-            webSearch,
-            webSearchMaxUses: request.modelSettings?.webSearchMaxUses,
-          },
-        }),
+        runtime =>
+          new AiSdkModelStepExecutor(async () => runtime).execute({
+            ...request,
+            modelSettings: {
+              compatibilityMode: this.model.compatibilityMode,
+              interfaceType: this.provider.interfaceType,
+              modelId: this.model.modelId,
+              maxOutputTokens: request.modelSettings?.maxOutputTokens
+                ? Math.min(
+                    request.modelSettings.maxOutputTokens,
+                    modelSettings.maxOutputTokens || request.modelSettings.maxOutputTokens,
+                  )
+                : modelSettings.maxOutputTokens || undefined,
+              reasoningEffort,
+              temperature: suppressSampling ? undefined : modelSettings.temperature,
+              topP: suppressSampling ? undefined : modelSettings.topP,
+              webSearch,
+              webSearchMaxUses: request.modelSettings?.webSearchMaxUses,
+            },
+          }),
         request.modelSettings?.webSearchMaxUses ?? 10,
       );
     } catch (error) {

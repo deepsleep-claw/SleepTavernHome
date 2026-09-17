@@ -9,7 +9,7 @@ export function initSquash(settings?: Settings) {
 
   const store = useSettingsStore();
   if (settings) {
-    store.settings = settings;
+    store.settings = Settings.parse(settings);
   }
 
   let destroySquash: () => void;

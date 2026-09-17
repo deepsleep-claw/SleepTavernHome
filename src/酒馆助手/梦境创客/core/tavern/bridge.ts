@@ -88,6 +88,7 @@ export interface TavernBridge {
   getPersona(name: 'current' | string): TavernPersonaData;
   getPersonaAvatarPath(name: 'current' | string): string | null;
   getPersonaNames(): string[];
+  getPersonaIds(): string[];
   getCharacterAvatarPath(): string | null;
   getWorldbookNames(): string[];
   listCharacters(): TavernCharacterSummary[];
@@ -208,9 +209,9 @@ export function createGlobalTavernBridge(): TavernBridge {
       if (typeof getPersona !== 'function') throw new Error('当前酒馆助手版本不提供User Persona读取接口。');
       return klona(getPersona(name));
     },
-    getPersonaAvatarPath: name =>
-      typeof getPersonaAvatarPath === 'function' ? getPersonaAvatarPath(name) : null,
+    getPersonaAvatarPath: name => (typeof getPersonaAvatarPath === 'function' ? getPersonaAvatarPath(name) : null),
     getPersonaNames: () => (typeof getPersonaNames === 'function' ? getPersonaNames() : []),
+    getPersonaIds: () => (typeof getPersonaIds === 'function' ? getPersonaIds() : []),
     getCharacterAvatarPath: () => (typeof getCharAvatarPath === 'function' ? getCharAvatarPath('current') : null),
     getWorldbookNames: () => getWorldbookNames(),
     listCharacters: () =>
@@ -275,10 +276,14 @@ export function createGlobalTavernBridge(): TavernBridge {
       }));
     },
     setPersonaAvatar: async (name, bytes, mediaType) => {
-      await updatePersonaWith(name, persona => ({
-        ...persona,
-        avatar: new Blob([bytes.slice().buffer as ArrayBuffer], { type: mediaType }),
-      }), { render: 'immediate' });
+      await updatePersonaWith(
+        name,
+        persona => ({
+          ...persona,
+          avatar: new Blob([bytes.slice().buffer as ArrayBuffer], { type: mediaType }),
+        }),
+        { render: 'immediate' },
+      );
     },
     selectCharacterById: async index => {
       await SillyTavern.selectCharacterById(index, { switchMenu: false });

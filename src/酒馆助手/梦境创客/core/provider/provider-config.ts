@@ -105,7 +105,9 @@ export function normalizeApiProvider(provider: ApiProvider): ApiProvider {
     baseURL: String(provider.baseURL ?? '').trim(),
     enabled: provider.enabled !== false,
     interfaceType:
-      provider.interfaceType === 'anthropic' || provider.interfaceType === 'openai-responses'
+      provider.interfaceType === 'anthropic' ||
+      provider.interfaceType === 'openai-responses' ||
+      provider.interfaceType === 'gemini'
         ? provider.interfaceType
         : 'openai-chat',
     models: (provider.models ?? []).map(normalizeModel).filter(model => {
@@ -118,11 +120,13 @@ export function normalizeApiProvider(provider: ApiProvider): ApiProvider {
 }
 
 function normalizeAdvancedValues(
-  value: {
-    bodyParameters?: YamlRequestDocument;
-    excludedBodyParameters?: YamlRequestDocument;
-    requestHeaders?: YamlRequestDocument;
-  } | undefined,
+  value:
+    | {
+        bodyParameters?: YamlRequestDocument;
+        excludedBodyParameters?: YamlRequestDocument;
+        requestHeaders?: YamlRequestDocument;
+      }
+    | undefined,
 ): AdvancedRequestValues {
   return normalizeAdvancedRequestValues(value);
 }
@@ -207,7 +211,7 @@ export async function updateApiModel(model: ApiModel, input: ApiModelInput): Pro
       appliedModelTemplate:
         input.appliedModelTemplate === undefined
           ? structuredClone(model.appliedModelTemplate)
-          : input.appliedModelTemplate ?? undefined,
+          : (input.appliedModelTemplate ?? undefined),
       bodyParameters: input.bodyParameters ?? previous.bodyParameters,
       excludedBodyParameters: input.excludedBodyParameters ?? previous.excludedBodyParameters,
       id: model.id,
@@ -246,10 +250,12 @@ export async function withProviderModelRuntime<T>(
       parseBodyParameters(providerValues.bodyParameters),
       parseBodyParameters(modelValues.bodyParameters),
     );
-    const excludedBodyParameters = [...new Set([
-      ...parseExcludedBodyParameters(providerValues.excludedBodyParameters),
-      ...parseExcludedBodyParameters(modelValues.excludedBodyParameters),
-    ])];
+    const excludedBodyParameters = [
+      ...new Set([
+        ...parseExcludedBodyParameters(providerValues.excludedBodyParameters),
+        ...parseExcludedBodyParameters(modelValues.excludedBodyParameters),
+      ]),
+    ];
     return await action(
       createProviderRuntime(
         {
@@ -279,17 +285,49 @@ export async function withProviderModelRuntime<T>(
   }
 }
 
+async function listGeminiModels(baseURL: string, headers: Headers): Promise<string[]> {
+  const models = new Set<string>();
+  const seenPages = new Set<string>();
+  let pageToken = '';
+  do {
+    if (seenPages.has(pageToken)) throw new Error('模型列表分页标记重复。');
+    seenPages.add(pageToken);
+    const url = new URL('models', `${baseURL.replace(/\/+$/u, '')}/`);
+    url.searchParams.set('pageSize', '1000');
+    if (pageToken) url.searchParams.set('pageToken', pageToken);
+    const response = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) throw new Error(`获取模型失败（HTTP ${response.status}）。`);
+    const page = (await response.json()) as {
+      models?: { name?: string; supportedGenerationMethods?: string[] }[];
+      nextPageToken?: string;
+    };
+    if (!Array.isArray(page.models)) throw new Error('Gemini模型列表格式无法识别。');
+    for (const model of page.models) {
+      if (typeof model.name !== 'string' || !model.supportedGenerationMethods?.includes('generateContent')) continue;
+      models.add(model.name.replace(/^models\//u, ''));
+    }
+    pageToken = page.nextPageToken ?? '';
+  } while (pageToken);
+  return [...models].sort((left, right) => left.localeCompare(right));
+}
+
 export async function listProviderModels(provider: ApiProvider): Promise<string[]> {
   const values = await providerSecretValues(provider);
   try {
     const headers = new Headers(parseRequestHeaders(values.requestHeaders));
-    if (provider.interfaceType === 'anthropic') {
+    if (provider.interfaceType === 'gemini') {
+      if (!headers.has('x-goog-api-key')) headers.set('x-goog-api-key', values.apiKey);
+    } else if (provider.interfaceType === 'anthropic') {
       if (!headers.has('x-api-key')) headers.set('x-api-key', values.apiKey);
       if (!headers.has('anthropic-version')) headers.set('anthropic-version', '2023-06-01');
     } else if (!headers.has('authorization')) {
       headers.set('authorization', `Bearer ${values.apiKey}`);
     }
-    const response = await fetch(new URL('models', `${provider.baseURL.replace(/\/+$/u, '')}/`), {
+    const baseURL =
+      provider.baseURL ||
+      (provider.interfaceType === 'gemini' ? 'https://generativelanguage.googleapis.com/v1beta' : '');
+    if (provider.interfaceType === 'gemini') return await listGeminiModels(baseURL, headers);
+    const response = await fetch(new URL('models', `${baseURL.replace(/\/+$/u, '')}/`), {
       headers,
       method: 'GET',
     });
@@ -310,10 +348,29 @@ export async function listProviderModels(provider: ApiProvider): Promise<string[
         ? ((payload as { data?: unknown; models?: unknown }).data ?? (payload as { models?: unknown }).models)
         : undefined;
     if (!Array.isArray(valuesList)) throw new Error('接口返回的模型列表格式无法识别。');
-    return [...new Set(valuesList.flatMap(item => {
-      const id = typeof item === 'string' ? item : item && typeof item === 'object' ? (item as { id?: unknown }).id : undefined;
-      return typeof id === 'string' && id ? [id] : [];
-    }))].sort((left, right) => left.localeCompare(right));
+    return [
+      ...new Set(
+        valuesList.flatMap(item => {
+          const model =
+            item && typeof item === 'object'
+              ? (item as { id?: unknown; name?: unknown; supportedGenerationMethods?: string[] })
+              : undefined;
+          if (
+            provider.interfaceType === 'gemini' &&
+            model?.supportedGenerationMethods &&
+            !model.supportedGenerationMethods.includes('generateContent')
+          )
+            return [];
+          const id =
+            typeof item === 'string'
+              ? item
+              : (model?.id ?? (provider.interfaceType === 'gemini' ? model?.name : undefined));
+          return typeof id === 'string' && id
+            ? [provider.interfaceType === 'gemini' ? id.replace(/^models\//u, '') : id]
+            : [];
+        }),
+      ),
+    ].sort((left, right) => left.localeCompare(right));
   } finally {
     values.apiKey = '';
     values.bodyParameters.text = '';
@@ -322,17 +379,22 @@ export async function listProviderModels(provider: ApiProvider): Promise<string[
   }
 }
 
-export async function exportApiProviderBundle(provider: ApiProvider, includeSecrets = false): Promise<ApiProviderBundle> {
+export async function exportApiProviderBundle(
+  provider: ApiProvider,
+  includeSecrets = false,
+): Promise<ApiProviderBundle> {
   const providerRequest = includeSecrets ? await providerSecretValues(provider) : undefined;
-  const models = await Promise.all(provider.models.map(async model => ({
-    appliedModelTemplate: model.appliedModelTemplate,
-    compatibilityMode: model.compatibilityMode,
-    enabled: model.enabled,
-    modelId: model.modelId,
-    modelSettings: model.modelSettings,
-    name: model.name,
-    request: includeSecrets ? await modelSecretValues(model) : undefined,
-  })));
+  const models = await Promise.all(
+    provider.models.map(async model => ({
+      appliedModelTemplate: model.appliedModelTemplate,
+      compatibilityMode: model.compatibilityMode,
+      enabled: model.enabled,
+      modelId: model.modelId,
+      modelSettings: model.modelSettings,
+      name: model.name,
+      request: includeSecrets ? await modelSecretValues(model) : undefined,
+    })),
+  );
   return {
     models,
     provider: {
@@ -360,7 +422,12 @@ export function parseApiProviderBundle(source: string): ApiProviderBundle {
   }
   if (!parsed || typeof parsed !== 'object') throw new Error('Provider导入文件格式无效。');
   const value = parsed as Partial<ApiProviderBundle>;
-  if (value.type !== 'dream-card-agent-provider' || value.version !== 1 || !value.provider || !Array.isArray(value.models)) {
+  if (
+    value.type !== 'dream-card-agent-provider' ||
+    value.version !== 1 ||
+    !value.provider ||
+    !Array.isArray(value.models)
+  ) {
     throw new Error('这不是梦境创客支持的Provider导出文件。');
   }
   return structuredClone(value as ApiProviderBundle);

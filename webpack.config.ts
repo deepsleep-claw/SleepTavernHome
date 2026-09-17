@@ -20,6 +20,7 @@ import WebpackObfuscator from 'webpack-obfuscator';
 const require = createRequire(import.meta.url);
 const HTMLInlineCSSWebpackPlugin = require('html-inline-css-webpack-plugin').default;
 const pinia_version = (require('pinia/package.json') as { version: string }).version;
+const dependency_versions = (require('./package.json') as { dependencies: Record<string, string> }).dependencies;
 
 interface Config {
   port: number;
@@ -594,6 +595,9 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
         pinia: `https://testingcf.jsdelivr.net/npm/pinia@${pinia_version}/+esm`,
         sass: 'https://jspm.dev/sass',
       };
+      if (is_dream_card_agent && (request === 'ai' || request.startsWith('@ai-sdk/')) && dependency_versions[request]) {
+        return callback(null, `module-import https://testingcf.jsdelivr.net/npm/${request}@${dependency_versions[request]}/+esm`);
+      }
       return callback(
         null,
         'module-import ' + (cdn[request as keyof typeof cdn] ?? `https://testingcf.jsdelivr.net/npm/${request}/+esm`),

@@ -19,6 +19,7 @@ export interface TavernFileClient {
 export class GlobalTavernFileClient implements TavernFileClient {
   async delete(url: string): Promise<void> {
     const response = await fetch('/api/files/delete', {
+      signal: AbortSignal.timeout(15_000),
       body: JSON.stringify({ path: url }),
       headers: SillyTavern.getRequestHeaders(),
       method: 'POST',
@@ -27,13 +28,14 @@ export class GlobalTavernFileClient implements TavernFileClient {
   }
 
   async download(url: string): Promise<Uint8Array> {
-    const response = await fetch(url, { cache: 'no-cache' });
+    const response = await fetch(url, { cache: 'no-cache', signal: AbortSignal.timeout(15_000) });
     if (!response.ok) throw new Error(`文件读取失败：${response.status} ${url}`);
     return new Uint8Array(await response.arrayBuffer());
   }
 
   async upload(name: string, bytes: Uint8Array): Promise<string> {
     const response = await fetch('/api/files/upload', {
+      signal: AbortSignal.timeout(15_000),
       body: JSON.stringify({ data: toBase64(bytes), name }),
       headers: SillyTavern.getRequestHeaders(),
       method: 'POST',
@@ -94,7 +96,9 @@ export class FileBackedBlobStore implements BinaryBlobStore {
 
   async keys(): Promise<string[]> {
     return Object.entries(this.settingsStore.load().files)
-      .filter(([key, item]) => item.bindingId === this.bindingId && !key.startsWith('session:') && !key.startsWith('lease:'))
+      .filter(
+        ([key, item]) => item.bindingId === this.bindingId && !key.startsWith('session:') && !key.startsWith('lease:'),
+      )
       .map(([key]) => key)
       .sort();
   }

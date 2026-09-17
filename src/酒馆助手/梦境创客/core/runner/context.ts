@@ -34,10 +34,10 @@ function filePartTokens(part: FilePart): number {
   if (typeof part.data === 'object' && 'type' in part.data && part.data.type === 'text') {
     return estimateTokens(part.data.text);
   }
-  const data = typeof part.data === 'object' && 'type' in part.data && part.data.type === 'data'
-    ? part.data.data
-    : part.data;
-  const encodedLength = typeof data === 'string' ? data.length : data instanceof Uint8Array ? data.byteLength * 4 / 3 : 0;
+  const data =
+    typeof part.data === 'object' && 'type' in part.data && part.data.type === 'data' ? part.data.data : part.data;
+  const encodedLength =
+    typeof data === 'string' ? data.length : data instanceof Uint8Array ? (data.byteLength * 4) / 3 : 0;
   const bytes = Math.ceil(encodedLength * 0.75);
   return part.mediaType.toLocaleLowerCase().startsWith('text/')
     ? Math.max(1, Math.ceil(bytes / 4))
@@ -93,14 +93,8 @@ function isCompactCall(message: ModelMessage): boolean {
   return (
     message.role === 'assistant' &&
     Array.isArray(message.content) &&
-    message.content.some(part => part.type === 'tool-call' && part.toolName === 'compact_context')
-  );
-}
-
-function isCompactResult(message: ModelMessage): boolean {
-  return (
-    message.role === 'tool' &&
-    message.content.some(part => part.type === 'tool-result' && part.toolName === 'compact_context')
+    message.content.some(part => part.type === 'tool-call') &&
+    message.content.filter(part => part.type === 'tool-call').every(part => part.toolName === 'compact_context')
   );
 }
 
@@ -116,20 +110,36 @@ export function compactModelMessages(
       message.role === 'system' &&
       !(typeof message.content === 'string' && message.content.startsWith('【上下文压缩摘要】')),
   );
+  let latestUser = -1;
+  for (let index = conversation.length - 1; index >= 0; index -= 1) {
+    if (conversation[index].role === 'user') {
+      latestUser = index;
+      break;
+    }
+  }
   const users = conversation.filter(message => message.role === 'user');
   let latestAssistant = -1;
-  for (let index = conversation.length - 1; index >= 0; index -= 1) {
+  for (let index = conversation.length - 1; index > latestUser; index--) {
     if (conversation[index].role === 'assistant' && !isCompactCall(conversation[index])) {
       latestAssistant = index;
       break;
     }
   }
-  const latestChain =
-    latestAssistant < 0
-      ? []
-      : conversation
-          .slice(latestAssistant)
-          .filter(message => message.role !== 'user' && !isCompactCall(message) && !isCompactResult(message));
+  const currentTurn = latestAssistant < 0 ? [] : conversation.slice(latestAssistant);
+  const removedCalls = new Set(
+    currentTurn.flatMap(message =>
+      isCompactCall(message) && Array.isArray(message.content)
+        ? message.content.flatMap(part => (part.type === 'tool-call' ? [part.toolCallId] : []))
+        : [],
+    ),
+  );
+  // 保留最近一次模型步骤的完整调用/结果配对；混合批次及其签名不能拆散。
+  const latestChain = currentTurn.flatMap((message): ModelMessage[] => {
+    if (message.role === 'system' || isCompactCall(message)) return [];
+    if (message.role !== 'tool') return [message];
+    const content = message.content.filter(part => part.type !== 'tool-result' || !removedCalls.has(part.toolCallId));
+    return content.length ? [{ ...message, content }] : [];
+  });
   return [
     ...replacementHeader,
     ...systems,

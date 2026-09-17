@@ -173,6 +173,20 @@
           "description": "仅Mvu卡打开",
           "enable": [
             "MVU强制 - 掉格式打开"
+          ],
+          "disable": [
+            "MVU不更新 - 额外模型解析打开"
+          ]
+        },
+        {
+          "id": "MVU额外模型解析",
+          "label": "MVU额外模型解析",
+          "description": "使用额外模型解析时打开",
+          "enable": [
+            "MVU不更新 - 额外模型解析打开"
+          ],
+          "disable": [
+            "MVU强制 - 掉格式打开"
           ]
         }
       ]

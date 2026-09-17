@@ -1,4 +1,5 @@
 import { applyUnifiedPatch } from '../workspace/unified-patch';
+import { boundedWait } from '../async';
 import { parseFrontmatter, serializeFrontmatter, serializeYaml } from '../mapping/serde';
 import { sha256 } from '../transaction/canonical';
 import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
@@ -125,6 +126,7 @@ function requiredRole(value: unknown): TavernChatMessageData['role'] {
 }
 
 export class TavernChatWorkspace {
+  readonly warnings: string[] = [];
   private activeChat?: string;
   private authorized = false;
   private cachedFiles: WorkspaceFile[] = [];
@@ -173,11 +175,22 @@ export class TavernChatWorkspace {
   }
 
   async refresh(repository?: MemoryWorkspaceRepository): Promise<void> {
+    this.warnings.length = 0;
     this.syncCurrentChat();
     const projected = await Promise.all(
-      [...this.mounts.values()].map(async mount =>
-        projectChat(mount, await this.bridge.readChat(mount.ref), mount.alias === this.activeChat),
-      ),
+      [...this.mounts.values()].map(async mount => {
+        try {
+          return await projectChat(
+            mount,
+            await boundedWait(this.bridge.readChat(mount.ref), `读取聊天“${mount.name}”`),
+            mount.alias === this.activeChat,
+          );
+        } catch (error) {
+          const warning = `聊天“${mount.name}”暂不可读：${error instanceof Error ? error.message : String(error)}`;
+          this.warnings.push(warning);
+          return [textFile(`${CHAT_ROOT}/${mount.alias}/error.md`, warning, `tavern-chat:${mount.ref}:error`)];
+        }
+      }),
     );
     const index = textFile(
       `${CHAT_ROOT}/index.yaml`,
@@ -225,11 +238,7 @@ export class TavernChatWorkspace {
     return mount;
   }
 
-  async mountAndSwitch(
-    ref: string,
-    name: string,
-    repository: MemoryWorkspaceRepository,
-  ): Promise<TavernChatMount> {
+  async mountAndSwitch(ref: string, name: string, repository: MemoryWorkspaceRepository): Promise<TavernChatMount> {
     await this.bridge.switchChat(ref);
     const mount = this.mount(ref, name);
     this.activeChat = mount.alias;
@@ -237,11 +246,7 @@ export class TavernChatWorkspace {
     return mount;
   }
 
-  async setWorldbook(
-    alias: string,
-    worldbook: string | null,
-    repository: MemoryWorkspaceRepository,
-  ): Promise<void> {
+  async setWorldbook(alias: string, worldbook: string | null, repository: MemoryWorkspaceRepository): Promise<void> {
     await this.ensureActive(alias, repository);
     await this.bridge.setChatWorldbook(worldbook);
     await this.refresh(repository);
@@ -305,7 +310,9 @@ export class TavernChatWorkspace {
 
   assertNoMoveOrDelete(path: string): void {
     if (path.startsWith(`${CHAT_ROOT}/`)) {
-      throw new Error('CHAT_PATH_FORBIDDEN：聊天楼层不能通过move_path或delete_path操作；删除请使用truncate_tavern_chat。');
+      throw new Error(
+        'CHAT_PATH_FORBIDDEN：聊天楼层不能通过move_path或delete_path操作；删除请使用truncate_tavern_chat。',
+      );
     }
   }
 
@@ -316,10 +323,7 @@ export class TavernChatWorkspace {
     repository: MemoryWorkspaceRepository,
   ): Promise<void> {
     await this.ensureActive(alias, repository);
-    await this.bridge.sendMessageAndGenerate(
-      { hidden: false, message, role: 'user' },
-      images,
-    );
+    await this.bridge.sendMessageAndGenerate({ hidden: false, message, role: 'user' }, images);
     await this.refresh(repository);
   }
 
@@ -350,11 +354,7 @@ export class TavernChatWorkspace {
     await this.refresh(repository);
   }
 
-  async switchSwipe(
-    alias: string,
-    target: number | 'generate',
-    repository: MemoryWorkspaceRepository,
-  ): Promise<void> {
+  async switchSwipe(alias: string, target: number | 'generate', repository: MemoryWorkspaceRepository): Promise<void> {
     await this.ensureActive(alias, repository);
     const chat = await this.bridge.readChat(this.requireMount(alias).ref);
     const latest = chat.messages.at(-1);
@@ -430,11 +430,7 @@ export class TavernChatWorkspace {
     return mount;
   }
 
-  private async ensureActive(
-    alias: string,
-    repository: MemoryWorkspaceRepository,
-    allowSwitch = true,
-  ): Promise<void> {
+  private async ensureActive(alias: string, repository: MemoryWorkspaceRepository, allowSwitch = true): Promise<void> {
     const mount = this.requireMount(alias);
     if (this.activeChat === alias && this.bridge.getCurrentChatRef() === mount.ref) return;
     if (!allowSwitch) throw new Error(`CHAT_NOT_ACTIVE：只有active_chat（${this.activeChat ?? '无'}）可写。`);

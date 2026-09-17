@@ -1,6 +1,30 @@
 <template>
   <div class="dca-composer">
     <div
+      v-if="shortcutItems.length"
+      ref="shortcutMenu"
+      class="dca-shortcut-menu"
+      role="listbox"
+      aria-label="输入快捷指令"
+      :style="{ maxHeight: `${shortcutHeight}px` }"
+    >
+      <button
+        v-for="(item, index) in shortcutItems"
+        :key="item.value"
+        type="button"
+        role="option"
+        :aria-selected="index === shortcutIndex"
+        :class="{ active: index === shortcutIndex }"
+        :title="item.title"
+        @pointerdown.prevent
+        @click="selectShortcut(item.value)"
+      >
+        <i :class="item.icon" aria-hidden="true"></i>
+        <span class="dca-shortcut-name">{{ item.label }}</span>
+        <span class="dca-shortcut-detail">{{ item.description }}</span>
+      </button>
+    </div>
+    <div
       ref="composerShell"
       class="dca-composer-shell"
       :class="{ compact }"
@@ -103,6 +127,7 @@
           </div>
         </div>
         <textarea
+          ref="messageInput"
           v-model="message"
           rows="3"
           :disabled="!canCompose || !draftReady"
@@ -114,6 +139,11 @@
                 : '告诉梦境创客你想做什么……'
           "
           @keydown="handleKeydown"
+          @input="updateShortcut"
+          @click="updateShortcut"
+          @keyup.left="updateShortcut"
+          @keyup.right="updateShortcut"
+          @blur="shortcutsDismissed = true"
           @paste="handlePaste"
         ></textarea>
         <button
@@ -198,7 +228,7 @@
       </button>
       <input ref="imageInput" accept="image/*" hidden multiple type="file" @change="selectImages" />
     </div>
-    <small class="dca-shortcut-hint">{{ shortcutHint }} · 可拖入文件或粘贴图片</small>
+    <small class="dca-shortcut-hint">{{ shortcutHint }} · / 指令 · @ 引用文件</small>
 
     <div v-if="showFullAccessWarning" class="dca-modal-backdrop" role="presentation">
       <section class="dca-modal dca-full-access-warning" role="dialog" aria-modal="true">
@@ -219,13 +249,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { providerAdapterCapabilities } from '../../../core/provider-probe';
 import { findSelectedModel } from '../../../core/provider/provider-config';
 import { fileToSessionAttachment, isImageAttachment, validateAttachmentFiles } from '../../../core/session/attachments';
 import { formatBytes } from '../../composables/format';
 import { useDreamCardAgent } from '../../composables/runtime';
 import { useStoredDraft } from '../../composables/stored-draft';
+import { composerShortcut, fileMention, isCompressionCommand } from '../../composables/composer-shortcuts';
 import DcaSelect from '../DcaSelect.vue';
 import SessionModelMenu from './SessionModelMenu.vue';
 import SessionAgentPicker from './SessionAgentPicker.vue';
@@ -250,6 +281,69 @@ const attachments = computed({
   },
 });
 const attachmentBusy = ref(false);
+const messageInput = ref<HTMLTextAreaElement>();
+const shortcutMenu = ref<HTMLElement>();
+const shortcutHeight = ref(256);
+const caret = ref(0);
+const shortcutsDismissed = ref(false);
+const shortcutIndex = ref(0);
+const shortcut = computed(() => (shortcutsDismissed.value ? undefined : composerShortcut(message.value, caret.value)));
+const shortcutItems = computed(() => {
+  const current = shortcut.value;
+  if (!current) return [];
+  const query = current.query.toLocaleLowerCase();
+  if (current.kind === 'command')
+    return !isRunning.value && ['压缩', 'compact'].some(name => name.startsWith(query))
+      ? [
+          {
+            label: '压缩',
+            value: '/压缩',
+            description: '压缩当前会话上下文',
+            title: '压缩当前会话上下文',
+            icon: 'fa-solid fa-compress',
+          },
+        ]
+      : [];
+  return (state.value.active?.workingFiles ?? [])
+    .filter(file => !query || file.path.toLocaleLowerCase().includes(query))
+    .slice(0, 30)
+    .map(file => ({
+      label: file.path.split('/').at(-1) ?? file.path,
+      value: file.path,
+      description: file.path.slice(0, file.path.lastIndexOf('/')) || '/',
+      title: file.path,
+      icon: file.mediaType?.startsWith('image/') ? 'fa-regular fa-file-image' : 'fa-regular fa-file-lines',
+    }));
+});
+
+function updateShortcut() {
+  updateShortcutHeight();
+  caret.value = messageInput.value?.selectionStart ?? message.value.length;
+  shortcutIndex.value = 0;
+  shortcutsDismissed.value = false;
+}
+
+function updateShortcutHeight() {
+  const panel = composerShell.value?.closest('.dca-session-panel');
+  const toolbar = panel?.querySelector('.dca-session-bar')?.getBoundingClientRect();
+  const root = panel?.getBoundingClientRect() ?? composerShell.value?.closest('.dca-app')?.getBoundingClientRect();
+  const composer = composerShell.value?.getBoundingClientRect();
+  if (root && composer)
+    shortcutHeight.value = Math.max(44, Math.min(256, composer.top - (toolbar?.bottom ?? root.top) - 12));
+}
+
+async function selectShortcut(value: string) {
+  const current = shortcut.value;
+  if (!current) return;
+  const insertion = current.kind === 'file' ? `${fileMention(value)} ` : value;
+  message.value = message.value.slice(0, current.start) + insertion + message.value.slice(current.end);
+  const position = current.start + insertion.length;
+  shortcutsDismissed.value = true;
+  await nextTick();
+  messageInput.value?.focus();
+  messageInput.value?.setSelectionRange(position, position);
+  if (current.kind === 'command') await submit();
+}
 const showFullAccessWarning = ref(false);
 const plusOpen = ref(false);
 const plusLevel = ref<'approval' | 'root' | 'agent'>('root');
@@ -336,6 +430,17 @@ async function submit() {
   if (!canSubmit.value || !draftReady.value) return;
   const text = message.value;
   const sessionId = state.value.active?.sessionId;
+  if (isCompressionCommand(text)) {
+    if (isRunning.value || attachments.value.length) {
+      toastr.error('请在任务结束后单独执行压缩指令。', '梦境创客');
+      return;
+    }
+    shortcutsDismissed.value = true;
+    if (await action(() => runtime.compactContext())) {
+      if (state.value.active?.sessionId === sessionId && message.value === text) message.value = '';
+    }
+    return;
+  }
   if (isRunning.value) {
     if (!text.trim()) return;
     try {
@@ -385,6 +490,28 @@ function handlePrimaryAction() {
   else void submit();
 }
 function handleKeydown(event: KeyboardEvent) {
+  if (!event.isComposing && shortcutItems.value.length) {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      shortcutsDismissed.value = true;
+      return;
+    }
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      shortcutIndex.value =
+        (shortcutIndex.value + (event.key === 'ArrowDown' ? 1 : -1) + shortcutItems.value.length) %
+        shortcutItems.value.length;
+      void nextTick(() =>
+        shortcutMenu.value?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }),
+      );
+      return;
+    }
+    if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
+      event.preventDefault();
+      void selectShortcut(shortcutItems.value[shortcutIndex.value]?.value ?? shortcutItems.value[0].value);
+      return;
+    }
+  }
   if (event.isComposing || event.key !== 'Enter') return;
   const shouldSend = state.value.sendWithCtrlEnter
     ? (event.ctrlKey || event.metaKey) && !event.shiftKey
@@ -499,6 +626,7 @@ async function enableFullAccess() {
 watch(
   () => state.value.active?.sessionId,
   () => {
+    shortcutsDismissed.value = true;
     plusOpen.value = false;
     showFullAccessWarning.value = false;
     compactModelOpen.value = false;
@@ -506,6 +634,8 @@ watch(
 );
 
 onMounted(() => {
+  window.addEventListener('resize', updateShortcutHeight);
+  window.visualViewport?.addEventListener('resize', updateShortcutHeight);
   if (!composerShell.value) return;
   resizeObserver = new ResizeObserver(entries => {
     compact.value = (entries[0]?.contentRect.width ?? 1000) < 680;
@@ -513,6 +643,8 @@ onMounted(() => {
   resizeObserver.observe(composerShell.value);
 });
 onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateShortcutHeight);
+  window.visualViewport?.removeEventListener('resize', updateShortcutHeight);
   resizeObserver?.disconnect();
   for (const url of previews.values()) URL.revokeObjectURL?.(url);
   previews.clear();
@@ -521,6 +653,7 @@ onBeforeUnmount(() => {
 
 <style lang="scss">
 .dca-composer {
+  position: relative;
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
@@ -528,6 +661,72 @@ onBeforeUnmount(() => {
   border-top: 1px solid var(--dca-border);
   padding: 0.65rem 0.75rem 0.55rem;
   background: var(--dca-surface);
+}
+.dca-shortcut-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0.75rem;
+  z-index: 30;
+  width: min(36rem, calc(100% - 1.5rem));
+  max-height: 16rem;
+  overflow: hidden auto;
+  border: 1px solid var(--dca-border-strong);
+  border-radius: 0.8rem;
+  background: color-mix(in srgb, var(--dca-surface) 88%, var(--dca-text) 12%);
+  box-shadow: var(--dca-shadow-1);
+  padding: 0.2rem;
+}
+.dca-composer .dca-shortcut-menu button {
+  display: flex;
+  flex-direction: row;
+  justify-content: flex-start;
+  align-items: center;
+  width: 100%;
+  min-width: 0;
+  min-height: 1.875rem;
+  margin: 0;
+  border: 0;
+  border-radius: 0.6rem;
+  background: transparent;
+  box-shadow: none;
+  font-size: 0.8rem;
+  line-height: 1.3;
+  text-align: left;
+  gap: 0.45rem;
+  padding: 0.25rem 0.45rem;
+}
+.dca-composer .dca-shortcut-menu button.active,
+.dca-composer .dca-shortcut-menu button:hover {
+  background: var(--dca-accent-soft);
+}
+.dca-shortcut-menu button > i {
+  flex: 0 0 1rem;
+  width: 1rem;
+  text-align: center;
+  color: var(--dca-text-secondary);
+  font-size: 0.75rem;
+}
+.dca-shortcut-name {
+  flex: 0 1 auto;
+  max-width: 48%;
+  color: var(--dca-text);
+  font-weight: 500;
+}
+.dca-shortcut-detail {
+  flex: 1 1 0;
+  color: var(--dca-text-muted);
+}
+.dca-shortcut-name,
+.dca-shortcut-detail {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+@media (pointer: coarse) {
+  .dca-composer .dca-shortcut-menu button {
+    min-height: 2.125rem;
+  }
 }
 .dca-composer-shell {
   display: flex;

@@ -12,7 +12,13 @@ type LocalSession = {
   deleted?: boolean;
   remoteRevision: number;
 };
-export type SessionBackupStatus = { pending: number; syncing: boolean; error?: string; lastSavedAt?: number };
+export type SessionBackupStatus = {
+  pending: number;
+  syncing: boolean;
+  localPending?: number;
+  error?: string;
+  lastSavedAt?: number;
+};
 const keyFor = (bindingId: string, sessionId: string) =>
   `session:${encodeURIComponent(bindingId)}:${encodeURIComponent(sessionId)}`;
 
@@ -77,7 +83,7 @@ export class LocalSessionStore {
         current ?? {
           entry: revision.entry,
           dirty: false,
-          remoteRevision: revision.entry.revision,
+          remoteRevision: revision.referencedRevision ?? revision.entry.revision,
           input: {
             bindingId,
             avatarId: revision.entry.avatarId,
@@ -96,17 +102,22 @@ export class LocalSessionStore {
   ): Promise<CharacterMetadata> {
     const cacheKey = `metadata:${bindingId}`;
     let metadata = await this.local.get<CharacterMetadata>(cacheKey);
-    if (!metadata) {
-      metadata = await this.characters.load(bindingId, defaults).catch(() => ({
-        bindingId,
-        avatarId: defaults.avatarId,
-        characterName: defaults.characterName ?? '',
-        revision: 0,
-        schemaVersion: 1 as const,
-        sessions: {},
-        updatedAt: 0,
-      }));
-      await this.local.put(cacheKey, metadata);
+    if (!metadata || (metadata.revision === 0 && metadata.updatedAt === 0)) {
+      try {
+        metadata = await this.characters.load(bindingId, defaults);
+        await this.local.put(cacheKey, metadata);
+      } catch (error) {
+        this.error = `会话索引暂不可用：${String(error)}`;
+        metadata = {
+          bindingId,
+          avatarId: defaults.avatarId,
+          characterName: defaults.characterName ?? '',
+          revision: 0,
+          schemaVersion: 1 as const,
+          sessions: {},
+          updatedAt: 0,
+        };
+      }
     }
     for (const { value } of await this.local.list<LocalSessionIndex>(
       `session-index:${encodeURIComponent(bindingId)}:`,
@@ -141,8 +152,9 @@ export class LocalSessionStore {
     for (const sessionId of Object.keys(metadata.sessions)) await this.removeSession(bindingId, sessionId);
   }
 
-  private schedule(delay = 1500) {
-    if (this.disposed || this.timer) return;
+  private schedule(delay = 3000) {
+    if (this.disposed) return;
+    if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => {
       this.timer = undefined;
       void this.backup().catch(error => {
@@ -152,7 +164,7 @@ export class LocalSessionStore {
   }
 
   requestBackup() {
-    this.schedule();
+    if (!this.timer) this.schedule();
   }
 
   async backup(): Promise<void> {
@@ -238,7 +250,7 @@ export class LocalSessionStore {
     if (current) await this.local.put(`session-recovery:${sessionId}:${crypto.randomUUID()}`, current);
     await this.updateSession(key, () => ({
       dirty: false,
-      remoteRevision: revision.entry.revision,
+      remoteRevision: revision.referencedRevision ?? revision.entry.revision,
       entry: revision.entry,
       input: {
         bindingId,

@@ -1,4 +1,9 @@
-import { IndexedDbBrowserRecordStore, type BrowserRecordStore } from '../core/persistence/browser-record-store';
+import {
+  browserAccountNamespace,
+  IndexedDbBrowserRecordStore,
+  type BrowserRecordStore,
+} from '../core/persistence/browser-record-store';
+import { BufferedSessionRecordStore } from '../core/persistence/buffered-session-record-store';
 import { LocalSessionStore, type SessionBackupStatus } from '../core/persistence/local-session-store';
 import { klona } from 'klona';
 import { IndexedDbOperationRecoveryStore } from '../core/operations/recovery-store';
@@ -26,7 +31,7 @@ import {
   type SessionIndexEntry,
 } from '../core/persistence/settings';
 import { cloneStructuredPreset, compilePreset, DEFAULT_PRESET, type StructuredPreset } from '../core/preset/compiler';
-import { DEFAULT_CONTEXT_WINDOW } from '../core/provider/model-catalog';
+import { builtinModelTemplates, DEFAULT_CONTEXT_WINDOW, matchModelTemplates } from '../core/provider/model-catalog';
 import {
   createApiModel,
   createApiProvider,
@@ -196,6 +201,7 @@ export class DreamCardAgentRuntime {
     toolCallId: string;
   };
   private busyCount = 0;
+  private localSaveError?: string;
   private localDeferredSaveDepth = 0;
   private providerSettingsSignature = '';
   private skillIndexSignature = '';
@@ -222,7 +228,49 @@ export class DreamCardAgentRuntime {
     this.workspaceFileStore = new DreamCreatorWorkspaceFileStore(this.fileClient, this.settingsStore, this.now);
     this.characterStore = new CharacterMetadataStore(this.fileClient, this.settingsStore, this.now);
     this.browserRecords =
-      options.browserRecords ?? (typeof indexedDB !== 'undefined' ? new IndexedDbBrowserRecordStore() : undefined);
+      options.browserRecords ??
+      (typeof indexedDB !== 'undefined'
+        ? new BufferedSessionRecordStore(
+            new IndexedDbBrowserRecordStore(),
+            {
+              storage: {
+                getItem: key => window.sessionStorage.getItem(key),
+                setItem: (key, value) => window.sessionStorage.setItem(key, value),
+                removeItem: key => window.sessionStorage.removeItem(key),
+              },
+              key: async () => `dream-creator:pending-sessions:${await browserAccountNamespace()}`,
+            },
+            error => {
+              if (this.state) {
+                this.localSaveError = `本机会话保存失败：${String(error)}`;
+                this.state.sessionBackup = {
+                  pending: 0,
+                  syncing: false,
+                  ...this.state.sessionBackup,
+                  error: this.localSaveError,
+                };
+                this.emit();
+              }
+            },
+            count => {
+              if (this.state) {
+                if (count === 0) this.localSaveError = undefined;
+                this.state.sessionBackup = {
+                  pending: 0,
+                  syncing: false,
+                  ...this.state.sessionBackup,
+                  localPending: count,
+                  error:
+                    this.localSaveError ??
+                    (this.state.sessionBackup?.error?.startsWith('本机会话保存失败：')
+                      ? undefined
+                      : this.state.sessionBackup?.error),
+                };
+                this.emit();
+              }
+            },
+          )
+        : undefined);
     if (this.browserRecords)
       this.localSessions = new LocalSessionStore(
         this.browserRecords,
@@ -230,7 +278,11 @@ export class DreamCardAgentRuntime {
         this.characterStore,
         status => {
           if (this.state) {
-            this.state.sessionBackup = status;
+            this.state.sessionBackup = {
+              ...status,
+              localPending: this.state.sessionBackup?.localPending,
+              error: this.localSaveError ?? status.error,
+            };
             this.emit();
           }
         },
@@ -427,12 +479,10 @@ export class DreamCardAgentRuntime {
   }
 
   async selectCharacterAndCreateSession(avatarId: string): Promise<SessionView> {
+    this.reconcileTaskState();
     const target = this.bridge.listCharacters().find(character => character.avatarId === avatarId);
     if (!target) throw new Error('所选角色卡已经不可用。');
-    if (
-      this.state.toolConfirmation ||
-      [...this.services.values()].some(service => isSessionOperationActive(service.view().status))
-    ) {
+    if (this.state.toolConfirmation || [...this.services.values()].some(service => service.isOperationActive())) {
       throw new Error('仍有会话正在运行或等待处理，暂时不能切换角色卡。');
     }
     await this.activeService?.finalizeManualEdits();
@@ -747,7 +797,11 @@ export class DreamCardAgentRuntime {
           workspaceStore: this.workspaceFileStore,
         },
         revision.runtime,
-      );
+      ).catch(error => {
+        this.recoverHistory(index, revision.runtime, error);
+        return undefined;
+      });
+      if (!service) return;
       await this.refreshServiceSkills(service);
       this.services.set(service.sessionId, service);
       if (storedSelection && resolvedModel) {
@@ -763,7 +817,7 @@ export class DreamCardAgentRuntime {
       this.updateService(service.view());
       await this.reloadCharacterSessions();
     });
-    return this.requireService().view();
+    return klona(this.state.active!);
   }
 
   async openGlobalSession(sessionId: string): Promise<SessionView> {
@@ -828,16 +882,21 @@ export class DreamCardAgentRuntime {
           workspaceStore: this.workspaceFileStore,
         },
         revision.runtime,
-      );
+      ).catch(error => {
+        this.recoverHistory(revision.entry, revision.runtime, error);
+        return undefined;
+      });
+      if (!service) return;
       await this.refreshServiceSkills(service);
       this.services.set(sessionId, service);
       if (storedSelection && resolvedModel)
         this.serviceModelSelections.set(sessionId, this.modelSelectionKey(storedSelection));
+      this.historyViews.delete(sessionId);
       this.activeService = service;
       this.state.activeSessionAccess = 'live';
       this.updateService(service.view());
     });
-    return this.requireService().view();
+    return klona(this.state.active!);
   }
 
   /** 关闭页签只卸载前端运行实例，持久化的会话与操作记录仍保留，可从历史重新打开。 */
@@ -853,7 +912,7 @@ export class DreamCardAgentRuntime {
     }
     const loaded = this.services.get(sessionId);
     if (!loaded) return;
-    if (isSessionOperationActive(loaded.view().status)) {
+    if (loaded.isOperationActive()) {
       throw new Error('运行中或等待处理的会话不能关闭，请先停止或完成当前操作。');
     }
     await this.flushDeferredSessionSave(loaded);
@@ -1007,7 +1066,7 @@ export class DreamCardAgentRuntime {
   async deleteCharacterSession(bindingId: string, sessionId: string): Promise<void> {
     await this.run(async () => {
       const loaded = this.services.get(sessionId);
-      if (loaded && isSessionOperationActive(loaded.view().status)) {
+      if (loaded?.isOperationActive()) {
         throw new Error('运行中的会话不能删除，请先停止任务。');
       }
       if (loaded) await this.discardDeferredSessionSave(loaded);
@@ -1401,11 +1460,21 @@ export class DreamCardAgentRuntime {
   }
 
   stop(): void {
-    const running = [...this.services.values()].find(service => isSessionOperationActive(service.view().status));
+    this.reconcileTaskState();
+    const running = this.activeService?.isOperationActive()
+      ? this.activeService
+      : [...this.services.values()].find(service => service.isOperationActive());
     if (!running) return;
     if (this.toolConfirmationResolve?.sessionId === running.sessionId)
       this.resolveToolConfirmation(false, running.sessionId);
     running.stop();
+  }
+
+  async compactContext(): Promise<SessionView> {
+    return this.runActiveView(async service => {
+      await this.prepareServiceModel(service, service.view().modelSelection);
+      return service.compactContext();
+    });
   }
 
   stopSession(sessionId: string): void {
@@ -1654,6 +1723,7 @@ export class DreamCardAgentRuntime {
   }
 
   destroy(): void {
+    if (this.browserRecords instanceof BufferedSessionRecordStore) this.browserRecords.dispose();
     this.localSessions?.dispose();
     this.resolveToolConfirmation(false, this.toolConfirmationResolve?.sessionId);
     for (const service of this.services.values()) {
@@ -1689,11 +1759,9 @@ export class DreamCardAgentRuntime {
   }
 
   private async switchCharacterInternal(bindingId: string): Promise<void> {
+    this.reconcileTaskState();
     if (this.state.currentCharacter?.bindingId === bindingId) return;
-    if (
-      this.state.toolConfirmation ||
-      [...this.services.values()].some(service => isSessionOperationActive(service.view().status))
-    ) {
+    if (this.state.toolConfirmation || [...this.services.values()].some(service => service.isOperationActive())) {
       throw new Error('仍有会话正在运行或等待处理，暂时不能切换角色卡。');
     }
     await this.activeService?.finalizeManualEdits();
@@ -1748,6 +1816,19 @@ export class DreamCardAgentRuntime {
       warnings: [...(runtime.warnings ?? [])],
       workingFiles: [],
     };
+  }
+
+  private recoverHistory(entry: SessionIndexEntry, runtime: PersistedSessionRuntime, error: unknown): void {
+    const view = this.createHistoryView(entry, runtime);
+    view.status = 'abnormal';
+    view.error = `实时工作区加载失败，当前显示历史记录：${error instanceof Error ? error.message : String(error)}`;
+    view.warnings.push(view.error);
+    this.historyViews.set(entry.sessionId, view);
+    this.activeService = undefined;
+    this.state.active = view;
+    this.state.activeSessionAccess = 'readonly-history';
+    this.updateLoadedSessionIds();
+    this.emit();
   }
 
   private async refreshSessionIndex(current: CardWorkspaceState): Promise<void> {
@@ -2007,23 +2088,29 @@ export class DreamCardAgentRuntime {
   private async refreshServiceSkills(service: CardAgentSessionService): Promise<void> {
     const view = service.view();
     if (['running', 'waiting-approval'].includes(view.status)) return;
-    await this.reloadSkills();
-    const settings = this.settingsStore.load();
-    const storedConfiguration = settings.agentConfigurations.find(
-      configuration => configuration.id === view.agentConfiguration.id,
-    );
-    const configuration = storedConfiguration;
-    if (configuration) {
-      await this.assertRemoteSkillsReady(configuration);
-      await service.syncAgentConfiguration(
-        klona(configuration),
-        this.selectedPreset(configuration.presetId),
-        this.availableSkills(),
+    try {
+      await this.reloadSkills();
+      const settings = this.settingsStore.load();
+      const storedConfiguration = settings.agentConfigurations.find(
+        configuration => configuration.id === view.agentConfiguration.id,
       );
-      return;
+      const configuration = storedConfiguration;
+      if (configuration) {
+        await this.assertRemoteSkillsReady(configuration);
+        await service.syncAgentConfiguration(
+          klona(configuration),
+          this.selectedPreset(configuration.presetId),
+          this.availableSkills(),
+        );
+        return;
+      }
+      await this.assertRemoteSkillsReady(view.agentConfiguration);
+      await service.setSkills(this.availableSkills());
+    } catch (error) {
+      service.addWarning(
+        `会话参考资料暂不可用：${error instanceof Error ? error.message : String(error)}。可在设置中重试资源下载。`,
+      );
     }
-    await this.assertRemoteSkillsReady(view.agentConfiguration);
-    await service.setSkills(this.availableSkills());
   }
 
   private applyLightweightSettingsState(settings: {
@@ -2086,7 +2173,8 @@ export class DreamCardAgentRuntime {
     if (this.skillLoadPromise) return this.skillLoadPromise;
     this.skillLoadPromise = (async () => {
       this.state.skills = await this.globalSkillStore.list();
-      this.skillIndexSignature = this.currentSkillIndexSignature();
+      this.state.warnings = [...new Set([...this.state.warnings, ...this.globalSkillStore.warnings])];
+      this.skillIndexSignature = this.globalSkillStore.warnings.length ? '' : this.currentSkillIndexSignature();
       this.emit();
     })();
     try {
@@ -2132,12 +2220,24 @@ export class DreamCardAgentRuntime {
   }
 
   private modelContextWindow(model: ApiModel): number {
-    return model.modelSettings.contextWindow || DEFAULT_CONTEXT_WINDOW;
+    return (
+      model.modelSettings.contextWindow ||
+      matchModelTemplates(model.modelId, builtinModelTemplates(), 1)[0]?.template.settings.contextWindow ||
+      DEFAULT_CONTEXT_WINDOW
+    );
   }
 
   private requireService(): CardAgentSessionService {
     if (!this.activeService) throw new Error('请先创建或打开一个Agent会话。');
     return this.activeService;
+  }
+
+  private reconcileTaskState(): void {
+    for (const service of this.services.values())
+      if (!service.isOperationActive() && isSessionOperationActive(service.view().status)) service.stop();
+    const pending = this.toolConfirmationResolve;
+    if (pending && !this.services.get(pending.sessionId)?.isOperationActive())
+      this.resolveToolConfirmation(false, pending.sessionId);
   }
 
   private requestToolConfirmation(request: ToolConfirmation, signal?: AbortSignal): Promise<boolean> {
@@ -2164,6 +2264,8 @@ export class DreamCardAgentRuntime {
   }
 
   private updateService(view: SessionView): void {
+    if (!isSessionOperationActive(view.status) && this.toolConfirmationResolve?.sessionId === view.sessionId)
+      this.resolveToolConfirmation(false, view.sessionId);
     const effectiveView = this.effectiveSessionView(view);
     this.state.sessionStatuses[view.sessionId] = view.status;
     // 会话正文、当前标题、角色索引和已打开页签是同一份会话的不同投影。

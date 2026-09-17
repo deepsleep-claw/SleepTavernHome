@@ -1,10 +1,19 @@
 import { klona } from 'klona';
 import type { TavernBridge, TavernPersonaData, TavernPresetData } from '../tavern/bridge';
 import { canonicalEqual } from '../transaction/canonical';
-import { decodeWorkspaceSegment, encodeWorkspaceSegment, parseFrontmatter, parseYamlObject, serializeFrontmatter, serializeYaml, slugifyFileName } from '../mapping/serde';
+import {
+  decodeWorkspaceSegment,
+  encodeWorkspaceSegment,
+  parseFrontmatter,
+  parseYamlObject,
+  serializeFrontmatter,
+  serializeYaml,
+  slugifyFileName,
+} from '../mapping/serde';
 import { diffRequestedWorkspaceFiles } from './file-diff';
 import type { LiveWorkspaceApplyInput, LiveWorkspaceApplyResult, LiveWorkspaceSource } from './live-repository';
 import { WorkspaceError, type WorkspaceChange, type WorkspaceFile } from './types';
+import { personaWorkspacePath } from './persona-path';
 
 type BinaryReader = (file: WorkspaceFile) => Promise<Uint8Array>;
 
@@ -13,6 +22,7 @@ export type TavernWorkspaceSourceOptions = {
   bridge: TavernBridge;
   mountedPresets: Set<string>;
   readBinary: BinaryReader;
+  onWarning?: (message: string) => void;
 };
 
 type PresetPromptReference = {
@@ -25,7 +35,9 @@ type PresetPromptReference = {
   role: PresetPrompt['role'];
 };
 
-function file(input: Omit<WorkspaceFile, 'content' | 'mediaType'> & { content?: string; mediaType?: string }): WorkspaceFile {
+function file(
+  input: Omit<WorkspaceFile, 'content' | 'mediaType'> & { content?: string; mediaType?: string },
+): WorkspaceFile {
   return {
     content: input.content ?? '',
     mediaType: input.mediaType ?? 'text/markdown',
@@ -38,17 +50,10 @@ function file(input: Omit<WorkspaceFile, 'content' | 'mediaType'> & { content?: 
   };
 }
 
-function personaPath(name: string): string {
-  return `/users/${encodeWorkspaceSegment(name)}.md`;
-}
-
-function personaAvatarPath(name: string): string {
-  return `/users/${encodeWorkspaceSegment(name)}.avatar.png`;
-}
-
 function projectPersona(persona: TavernPersonaData, avatarUrl: string | null): WorkspaceFile[] {
   const metadata = {
-    avatar: personaAvatarPath(persona.name),
+    name: persona.name,
+    avatar: personaWorkspacePath(persona.name, persona.avatar_id, true),
     avatar_id: persona.avatar_id,
     connections: persona.connections,
     depth: persona.depth,
@@ -61,20 +66,22 @@ function projectPersona(persona: TavernPersonaData, avatarUrl: string | null): W
   const result = [
     file({
       content: serializeFrontmatter(metadata, persona.description ?? ''),
-      path: personaPath(persona.name),
+      path: personaWorkspacePath(persona.name, persona.avatar_id),
       readonly: false,
       resourceId: `persona:${persona.avatar_id}`,
     }),
   ];
   if (avatarUrl) {
-    result.push(file({
-      content: `avatar:${persona.avatar_id}`,
-      mediaType: 'image/png',
-      path: personaAvatarPath(persona.name),
-      readonly: true,
-      resourceId: `persona-avatar:${persona.avatar_id}`,
-      virtualBinary: { mediaType: 'image/png', source: 'persona-avatar', url: avatarUrl },
-    }));
+    result.push(
+      file({
+        content: `avatar:${persona.avatar_id}`,
+        mediaType: 'image/png',
+        path: personaWorkspacePath(persona.name, persona.avatar_id, true),
+        readonly: true,
+        resourceId: `persona-avatar:${persona.avatar_id}`,
+        virtualBinary: { mediaType: 'image/png', source: 'persona-avatar', url: avatarUrl },
+      }),
+    );
   }
   return result;
 }
@@ -95,23 +102,33 @@ function promptReference(prompt: PresetPrompt, index: number, persistedFile?: st
   };
 }
 
-function projectPreset(preset: TavernPresetData, root: string, readonly: boolean, loadedName?: string): WorkspaceFile[] {
+function projectPreset(
+  preset: TavernPresetData,
+  root: string,
+  readonly: boolean,
+  loadedName?: string,
+): WorkspaceFile[] {
   const cardAgent = preset.extensions?.card_agent;
-  const fileMetadata = cardAgent && typeof cardAgent === 'object' && !Array.isArray(cardAgent)
-    ? (cardAgent as Record<string, unknown>).dream_creator
-    : undefined;
-  const promptFiles = fileMetadata && typeof fileMetadata === 'object' && !Array.isArray(fileMetadata)
-    ? (fileMetadata as Record<string, unknown>).prompt_files
-    : undefined;
-  const fileGroups = promptFiles && typeof promptFiles === 'object' && !Array.isArray(promptFiles)
-    ? promptFiles as Record<string, unknown>
-    : {};
-  const activeFiles = fileGroups.prompts && typeof fileGroups.prompts === 'object' && !Array.isArray(fileGroups.prompts)
-    ? fileGroups.prompts as Record<string, unknown>
-    : {};
-  const unusedFiles = fileGroups.unused && typeof fileGroups.unused === 'object' && !Array.isArray(fileGroups.unused)
-    ? fileGroups.unused as Record<string, unknown>
-    : {};
+  const fileMetadata =
+    cardAgent && typeof cardAgent === 'object' && !Array.isArray(cardAgent)
+      ? (cardAgent as Record<string, unknown>).dream_creator
+      : undefined;
+  const promptFiles =
+    fileMetadata && typeof fileMetadata === 'object' && !Array.isArray(fileMetadata)
+      ? (fileMetadata as Record<string, unknown>).prompt_files
+      : undefined;
+  const fileGroups =
+    promptFiles && typeof promptFiles === 'object' && !Array.isArray(promptFiles)
+      ? (promptFiles as Record<string, unknown>)
+      : {};
+  const activeFiles =
+    fileGroups.prompts && typeof fileGroups.prompts === 'object' && !Array.isArray(fileGroups.prompts)
+      ? (fileGroups.prompts as Record<string, unknown>)
+      : {};
+  const unusedFiles =
+    fileGroups.unused && typeof fileGroups.unused === 'object' && !Array.isArray(fileGroups.unused)
+      ? (fileGroups.unused as Record<string, unknown>)
+      : {};
   const prompts = preset.prompts.map((prompt, index) => {
     const persisted = activeFiles[prompt.id];
     return promptReference(prompt, index, typeof persisted === 'string' ? persisted : undefined);
@@ -120,31 +137,41 @@ function projectPreset(preset: TavernPresetData, root: string, readonly: boolean
     const persisted = unusedFiles[prompt.id];
     return promptReference(prompt, index, typeof persisted === 'string' ? persisted : undefined);
   });
-  const result: WorkspaceFile[] = [file({
-    content: serializeYaml({
-      extensions: preset.extensions,
-      ...(loadedName === undefined ? {} : { loaded_name: loadedName }),
-      prompts,
-      prompts_unused: unused,
-      settings: preset.settings,
+  const result: WorkspaceFile[] = [
+    file({
+      content: serializeYaml({
+        extensions: preset.extensions,
+        ...(loadedName === undefined ? {} : { loaded_name: loadedName }),
+        prompts,
+        prompts_unused: unused,
+        settings: preset.settings,
+      }),
+      mediaType: 'text/yaml',
+      path: `${root}/index.yaml`,
+      readonly,
+      resourceId: `preset:${root}:index`,
     }),
-    mediaType: 'text/yaml',
-    path: `${root}/index.yaml`,
-    readonly,
-    resourceId: `preset:${root}:index`,
-  })];
-  preset.prompts.forEach((prompt, index) => result.push(file({
-    content: prompt.content ?? '',
-    path: `${root}/prompts/${prompts[index].file}`,
-    readonly,
-    resourceId: `preset:${root}:prompt:${prompt.id}`,
-  })));
-  preset.prompts_unused.forEach((prompt, index) => result.push(file({
-    content: prompt.content ?? '',
-    path: `${root}/unused/${unused[index].file}`,
-    readonly,
-    resourceId: `preset:${root}:unused:${prompt.id}`,
-  })));
+  ];
+  preset.prompts.forEach((prompt, index) =>
+    result.push(
+      file({
+        content: prompt.content ?? '',
+        path: `${root}/prompts/${prompts[index].file}`,
+        readonly,
+        resourceId: `preset:${root}:prompt:${prompt.id}`,
+      }),
+    ),
+  );
+  preset.prompts_unused.forEach((prompt, index) =>
+    result.push(
+      file({
+        content: prompt.content ?? '',
+        path: `${root}/unused/${unused[index].file}`,
+        readonly,
+        resourceId: `preset:${root}:unused:${prompt.id}`,
+      }),
+    ),
+  );
   return result;
 }
 
@@ -161,19 +188,41 @@ function booleanOr(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
 }
 
-function materializePersona(input: WorkspaceFile, previous?: TavernPersonaData): TavernPersonaData {
+function materializePersona(input: WorkspaceFile, previous?: TavernPersonaData, moved = false): TavernPersonaData {
   const { body, metadata } = parseFrontmatter(input.content, input.path);
-  const name = decodeWorkspaceSegment(input.path.slice('/users/'.length, -'.md'.length));
+  const stem = input.path.slice('/users/'.length, -'.md'.length);
+  const suffix = previous
+    ? personaWorkspacePath(previous.name, previous.avatar_id).slice(
+        '/users/'.length + encodeWorkspaceSegment(previous.name).length,
+        -3,
+      )
+    : '';
+  const pathName = decodeWorkspaceSegment(suffix && stem.endsWith(suffix) ? stem.slice(0, -suffix.length) : stem);
+  const name =
+    moved && metadata.name === previous?.name
+      ? pathName
+      : typeof metadata.name === 'string'
+        ? metadata.name.trim()
+        : (previous?.name ?? pathName);
   if (!name || name === 'current') throw new WorkspaceError('INVALID_PATH', `User名称无效：${input.path}`, input.path);
   if (metadata.avatar_id !== undefined && previous && metadata.avatar_id !== previous.avatar_id) {
-    throw new WorkspaceError('READ_ONLY_PATH', `avatar_id是只读字段，请使用set_avatar修改头像：${input.path}`, input.path);
+    throw new WorkspaceError(
+      'READ_ONLY_PATH',
+      `avatar_id是只读字段，请使用set_avatar修改头像：${input.path}`,
+      input.path,
+    );
   }
   if (
     metadata.avatar !== undefined &&
-    metadata.avatar !== personaAvatarPath(name) &&
-    (!previous || metadata.avatar !== personaAvatarPath(previous.name))
+    (!previous ||
+      (metadata.avatar !== personaWorkspacePath(name, previous.avatar_id, true) &&
+        metadata.avatar !== personaWorkspacePath(previous.name, previous.avatar_id, true)))
   ) {
-    throw new WorkspaceError('READ_ONLY_PATH', `avatar是只读虚拟引用，请使用set_avatar修改头像：${input.path}`, input.path);
+    throw new WorkspaceError(
+      'READ_ONLY_PATH',
+      `avatar是只读虚拟引用，请使用set_avatar修改头像：${input.path}`,
+      input.path,
+    );
   }
   const connections = Array.isArray(metadata.connections)
     ? metadata.connections.flatMap(item => {
@@ -245,20 +294,33 @@ function materializePreset(files: WorkspaceFile[], previous: TavernPresetData): 
   if (!metadata.settings || typeof metadata.settings !== 'object' || Array.isArray(metadata.settings)) {
     throw new WorkspaceError('INVALID_PATCH', 'index.yaml中的settings必须是对象。', indexPath);
   }
-  const extensions = metadata.extensions && typeof metadata.extensions === 'object' && !Array.isArray(metadata.extensions)
-    ? klona(metadata.extensions as TavernPresetData['extensions'])
-    : klona(previous.extensions);
+  const extensions =
+    metadata.extensions && typeof metadata.extensions === 'object' && !Array.isArray(metadata.extensions)
+      ? klona(metadata.extensions as TavernPresetData['extensions'])
+      : klona(previous.extensions);
   const activeReferences = metadata.prompts as Array<Record<string, unknown>>;
   const unusedReferences = metadata.prompts_unused as Array<Record<string, unknown>>;
-  const cardAgent = extensions.card_agent && typeof extensions.card_agent === 'object' && !Array.isArray(extensions.card_agent)
-    ? klona(extensions.card_agent as Record<string, unknown>)
-    : {};
-  const dreamCreator = cardAgent.dream_creator && typeof cardAgent.dream_creator === 'object' && !Array.isArray(cardAgent.dream_creator)
-    ? klona(cardAgent.dream_creator as Record<string, unknown>)
-    : {};
+  const cardAgent =
+    extensions.card_agent && typeof extensions.card_agent === 'object' && !Array.isArray(extensions.card_agent)
+      ? klona(extensions.card_agent as Record<string, unknown>)
+      : {};
+  const dreamCreator =
+    cardAgent.dream_creator && typeof cardAgent.dream_creator === 'object' && !Array.isArray(cardAgent.dream_creator)
+      ? klona(cardAgent.dream_creator as Record<string, unknown>)
+      : {};
   dreamCreator.prompt_files = {
-    prompts: Object.fromEntries(activeReferences.map(reference => [requiredString(reference.id, 'id', indexPath), requiredString(reference.file, 'file', indexPath)])),
-    unused: Object.fromEntries(unusedReferences.map(reference => [requiredString(reference.id, 'id', indexPath), requiredString(reference.file, 'file', indexPath)])),
+    prompts: Object.fromEntries(
+      activeReferences.map(reference => [
+        requiredString(reference.id, 'id', indexPath),
+        requiredString(reference.file, 'file', indexPath),
+      ]),
+    ),
+    unused: Object.fromEntries(
+      unusedReferences.map(reference => [
+        requiredString(reference.id, 'id', indexPath),
+        requiredString(reference.file, 'file', indexPath),
+      ]),
+    ),
   };
   cardAgent.dream_creator = dreamCreator;
   extensions.card_agent = cardAgent;
@@ -275,13 +337,16 @@ function isAvatarPath(path: string): boolean {
 }
 
 function requestedCurrentPresetFileDelete(change: WorkspaceChange, before: WorkspaceFile[]): boolean {
-  if (change.kind !== 'delete' || !/^\/presets\/current\/(?:prompts|unused)\/[^/]+\.md$/u.test(change.path)) return false;
+  if (change.kind !== 'delete' || !/^\/presets\/current\/(?:prompts|unused)\/[^/]+\.md$/u.test(change.path))
+    return false;
   const index = before.find(item => item.path === '/presets/current/index.yaml');
   if (!index) return false;
   const metadata = parseYamlObject(index.content, index.path);
   const filename = change.path.split('/').at(-1);
-  return [...(Array.isArray(metadata.prompts) ? metadata.prompts : []), ...(Array.isArray(metadata.prompts_unused) ? metadata.prompts_unused : [])]
-    .some(item => item && typeof item === 'object' && (item as { file?: unknown }).file === filename);
+  return [
+    ...(Array.isArray(metadata.prompts) ? metadata.prompts : []),
+    ...(Array.isArray(metadata.prompts_unused) ? metadata.prompts_unused : []),
+  ].some(item => item && typeof item === 'object' && (item as { file?: unknown }).file === filename);
 }
 
 /** 酒馆原生User、当前/挂载预设与头像的实时VFS投影。 */
@@ -291,28 +356,41 @@ export class TavernWorkspaceLiveSource implements LiveWorkspaceSource {
   async load(): Promise<WorkspaceFile[]> {
     const bridge = this.options.bridge;
     const result: WorkspaceFile[] = [];
-    for (const name of bridge.getPersonaNames()) {
-      const persona = bridge.getPersona(name);
-      result.push(...projectPersona(persona, bridge.getPersonaAvatarPath(name)));
-    }
+    const append = (label: string, read: () => WorkspaceFile[]) => {
+      try {
+        result.push(...read());
+      } catch (error) {
+        this.options.onWarning?.(`${label}读取失败：${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+    append('User列表', () => {
+      for (const id of bridge.getPersonaIds()) {
+        append(`User ${id}`, () => projectPersona(bridge.getPersona(id), bridge.getPersonaAvatarPath(id)));
+      }
+      return [];
+    });
     const currentCharacter = bridge.getCurrentCharacterId();
     const characterAvatar = bridge.getCharacterAvatarPath();
     if (currentCharacter && characterAvatar) {
-      result.push(file({
-        content: `avatar:${currentCharacter}`,
-        mediaType: 'image/png',
-        path: '/character/avatar.png',
-        readonly: true,
-        resourceId: `character-avatar:${currentCharacter}`,
-        virtualBinary: { mediaType: 'image/png', source: 'character-avatar', url: characterAvatar },
-      }));
+      result.push(
+        file({
+          content: `avatar:${currentCharacter}`,
+          mediaType: 'image/png',
+          path: '/character/avatar.png',
+          readonly: true,
+          resourceId: `character-avatar:${currentCharacter}`,
+          virtualBinary: { mediaType: 'image/png', source: 'character-avatar', url: characterAvatar },
+        }),
+      );
     }
     const loaded = bridge.getLoadedPresetName();
     if (loaded) {
-      result.push(...projectPreset(bridge.getPreset('in_use'), '/presets/current', false, loaded));
+      append('当前预设', () => projectPreset(bridge.getPreset('in_use'), '/presets/current', false, loaded));
       for (const name of [...this.options.mountedPresets].sort((a, b) => a.localeCompare(b, 'zh-CN'))) {
         if (!bridge.getPresetNames().includes(name)) continue;
-        result.push(...projectPreset(bridge.getPreset(name), `/presets/library/${encodeWorkspaceSegment(name)}`, true));
+        append(`预设 ${name}`, () =>
+          projectPreset(bridge.getPreset(name), `/presets/library/${encodeWorkspaceSegment(name)}`, true),
+        );
       }
     }
     return result.sort((left, right) => left.path.localeCompare(right.path));
@@ -331,7 +409,8 @@ export class TavernWorkspaceLiveSource implements LiveWorkspaceSource {
     try {
       const avatarChanges = input.changes.filter(change => isAvatarPath(change.path));
       for (const change of avatarChanges) {
-        if (change.kind !== 'modify') throw new WorkspaceError('READ_ONLY_PATH', '头像只能通过set_avatar替换。', change.path);
+        if (change.kind !== 'modify')
+          throw new WorkspaceError('READ_ONLY_PATH', '头像只能通过set_avatar替换。', change.path);
         const recoverableBefore = this.options.backupBinary
           ? await this.options.backupBinary(change.before, input.toolCallId)
           : change.before;
@@ -339,8 +418,8 @@ export class TavernWorkspaceLiveSource implements LiveWorkspaceSource {
         if (change.path === '/character/avatar.png') {
           await this.options.bridge.setCharacterAvatar(bytes, change.after.mediaType);
         } else {
-          const name = decodeWorkspaceSegment(change.path.slice('/users/'.length, -'.avatar.png'.length));
-          await this.options.bridge.setPersonaAvatar(name, bytes, change.after.mediaType);
+          const id = change.before.resourceId.slice('persona-avatar:'.length);
+          await this.options.bridge.setPersonaAvatar(id, bytes, change.after.mediaType);
         }
         actual.push({
           after: { ...klona(change.after), content: change.before.content },
@@ -356,24 +435,28 @@ export class TavernWorkspaceLiveSource implements LiveWorkspaceSource {
           const persona = materializePersona(change.after);
           const { avatar: _avatar, avatar_id: _avatarId, ...newPersona } = persona;
           await this.options.bridge.createPersona(persona.name, newPersona);
+          const created = this.options.bridge.getPersona(persona.name);
+          const projected = projectPersona(created, this.options.bridge.getPersonaAvatarPath(created.avatar_id))[0];
+          actual.push({ after: projected, kind: 'create', path: projected.path });
         } else if (change.kind === 'delete') {
-          const name = decodeWorkspaceSegment(change.path.slice('/users/'.length, -'.md'.length));
-          await this.options.bridge.deletePersona(name);
+          await this.options.bridge.deletePersona(change.before.resourceId.slice('persona:'.length));
         } else if (change.kind === 'move') {
-          const oldName = decodeWorkspaceSegment(change.from.slice('/users/'.length, -'.md'.length));
-          const previous = this.options.bridge.getPersona(oldName);
-          const next = materializePersona(change.after, previous);
-          await this.options.bridge.replacePersona(oldName, next);
+          const id = change.before.resourceId.slice('persona:'.length);
+          const previous = this.options.bridge.getPersona(id);
+          const next = materializePersona(change.after, previous, true);
+          await this.options.bridge.replacePersona(id, next);
         } else {
-          const name = decodeWorkspaceSegment(change.path.slice('/users/'.length, -'.md'.length));
-          const previous = this.options.bridge.getPersona(name);
-          await this.options.bridge.replacePersona(name, materializePersona(change.after, previous));
+          const id = change.before.resourceId.slice('persona:'.length);
+          const previous = this.options.bridge.getPersona(id);
+          await this.options.bridge.replacePersona(id, materializePersona(change.after, previous));
         }
       }
 
       const presetChanges = input.changes.filter(change => change.path.startsWith('/presets/current/'));
       if (presetChanges.length > 0) {
-        const desired = new Map(before.filter(item => item.path.startsWith('/presets/current/')).map(item => [item.path, klona(item)]));
+        const desired = new Map(
+          before.filter(item => item.path.startsWith('/presets/current/')).map(item => [item.path, klona(item)]),
+        );
         for (const change of presetChanges) {
           if (change.kind === 'delete') desired.delete(change.path);
           else if (change.kind === 'move') {
@@ -398,6 +481,10 @@ export class TavernWorkspaceLiveSource implements LiveWorkspaceSource {
     }
     const after = await this.load();
     const changed = diffRequestedWorkspaceFiles(input.changes, before, after);
-    return { changes: [...actual.filter(change => !changed.some(item => item.path === change.path)), ...changed], files: after, status: 'success' };
+    return {
+      changes: [...actual.filter(change => !changed.some(item => item.path === change.path)), ...changed],
+      files: after,
+      status: 'success',
+    };
   }
 }

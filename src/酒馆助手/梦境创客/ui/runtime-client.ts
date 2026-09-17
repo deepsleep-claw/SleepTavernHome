@@ -11,6 +11,7 @@ const CLIENT_METHODS = [
   'clearCharacterCache',
   'closeSession',
   'compileHtmlProject',
+  'compactContext',
   'confirmOperationReplay',
   'copyProvider',
   'createSession',

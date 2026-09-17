@@ -9,7 +9,9 @@
 
     <div class="dca-provider-layout">
       <aside class="dca-provider-list">
-        <header><strong>Providers</strong><small>{{ state.providers.length }}</small></header>
+        <header>
+          <strong>Providers</strong><small>{{ state.providers.length }}</small>
+        </header>
         <button class="dca-provider-new" type="button" @click="newProvider">
           <i class="fa-solid fa-plus" aria-hidden="true"></i><span>新建 Provider</span>
         </button>
@@ -21,7 +23,10 @@
         >
           <button class="dca-provider-select" type="button" @click="selectProvider(provider.id)">
             <i class="fa-solid fa-server" aria-hidden="true"></i>
-            <span><strong>{{ provider.name }}</strong><small>{{ provider.models.length }} 个模型</small></span>
+            <span
+              ><strong>{{ provider.name }}</strong
+              ><small>{{ provider.models.length }} 个模型</small></span
+            >
             <i v-if="!provider.enabled" class="fa-solid fa-ban" title="已禁用" aria-label="已禁用"></i>
           </button>
           <button
@@ -41,14 +46,23 @@
         <div class="dca-resource-toolbar dca-api-provider-toolbar">
           <div>
             <strong>{{ providerForm.id ? providerForm.name || '未命名 Provider' : '新建 Provider' }}</strong>
-            <small>{{ providerForm.id ? `${selectedProvider?.models.length ?? 0} 个模型` : '保存连接后即可添加模型' }}</small>
+            <small>{{
+              providerForm.id ? `${selectedProvider?.models.length ?? 0} 个模型` : '保存连接后即可添加模型'
+            }}</small>
           </div>
           <div class="dca-row-actions">
             <button v-if="providerForm.id" type="button" @click="copyProvider">复制</button>
             <button type="button" @click="importInput?.click()">导入</button>
             <input ref="importInput" hidden accept="application/json,.json" type="file" @change="importProvider" />
             <button v-if="providerForm.id" type="button" @click="exportChoiceOpen = true">导出</button>
-            <button v-if="providerForm.id" class="dca-btn-danger" type="button" @click="selectedProvider && requestProviderDelete(selectedProvider)">删除</button>
+            <button
+              v-if="providerForm.id"
+              class="dca-btn-danger"
+              type="button"
+              @click="selectedProvider && requestProviderDelete(selectedProvider)"
+            >
+              删除
+            </button>
             <button class="dca-btn-primary" type="button" @click="saveProvider">保存 Provider</button>
           </div>
         </div>
@@ -65,16 +79,27 @@
                 @update:model-value="setInterfaceType"
               />
             </label>
-            <label class="dca-field dca-provider-enabled"><input v-model="providerForm.enabled" type="checkbox" /><span>启用 Provider</span></label>
-            <label class="dca-field wide"><span>Base URL</span><input v-model="providerForm.baseURL" type="url" placeholder="https://服务地址/v1" /></label>
+            <label class="dca-field dca-provider-enabled"
+              ><input v-model="providerForm.enabled" type="checkbox" /><span>启用 Provider</span></label
+            >
+            <label class="dca-field wide"
+              ><span>Base URL</span><input v-model="providerForm.baseURL" type="url" placeholder="https://服务地址/v1"
+            /></label>
             <label class="dca-field wide">
               <span>API Key</span>
-              <input v-model="providerForm.apiKey" type="password" autocomplete="off" :placeholder="providerForm.id ? '留空则保留原 Key' : '仅在请求时临时解密'" />
+              <input
+                v-model="providerForm.apiKey"
+                type="password"
+                autocomplete="off"
+                :placeholder="providerForm.id ? '留空则保留原 Key' : '仅在请求时临时解密'"
+              />
             </label>
           </div>
 
           <div class="dca-model-fetch-row">
-            <div><strong>从渠道拉取模型</strong><small>需要先填写 Base URL 和 API Key；不会发送额外测试请求。</small></div>
+            <div>
+              <strong>从渠道拉取模型</strong><small>需要先填写 Base URL 和 API Key；不会发送额外测试请求。</small>
+            </div>
             <button type="button" :disabled="modelsLoading || !providerForm.baseURL.trim()" @click="fetchModels">
               <i class="fa-solid fa-cloud-arrow-down" aria-hidden="true"></i>{{ modelsLoading ? '读取中' : '拉取模型' }}
             </button>
@@ -85,17 +110,32 @@
             <div class="dca-form-grid">
               <label class="dca-field wide">
                 <span>包含主体参数</span>
-                <textarea v-model="providerForm.bodyParameters" rows="8" spellcheck="false" placeholder="metadata:&#10;  source: dream-card-agent"></textarea>
+                <textarea
+                  v-model="providerForm.bodyParameters"
+                  rows="8"
+                  spellcheck="false"
+                  placeholder="metadata:&#10;  source: dream-card-agent"
+                ></textarea>
                 <small>模型层递归覆盖这些值；数组与标量整体覆盖，null 删除继承字段。</small>
               </label>
               <label class="dca-field wide">
                 <span>排除主体参数</span>
-                <textarea v-model="providerForm.excludedBodyParameters" rows="5" spellcheck="false" placeholder="- frequency_penalty&#10;- presence_penalty"></textarea>
+                <textarea
+                  v-model="providerForm.excludedBodyParameters"
+                  rows="5"
+                  spellcheck="false"
+                  placeholder="- frequency_penalty&#10;- presence_penalty"
+                ></textarea>
                 <small>只删除请求主体的顶层字段；Agent必需字段始终受到保护。</small>
               </label>
               <label class="dca-field wide">
                 <span>包含请求标头</span>
-                <textarea v-model="providerForm.requestHeaders" rows="6" spellcheck="false" placeholder="X-Custom-Header: value"></textarea>
+                <textarea
+                  v-model="providerForm.requestHeaders"
+                  rows="6"
+                  spellcheck="false"
+                  placeholder="X-Custom-Header: value"
+                ></textarea>
                 <small>YAML对象中的值必须是字符串；模型层按不区分大小写的名称覆盖Provider。</small>
               </label>
             </div>
@@ -105,29 +145,49 @@
         <section class="dca-provider-models">
           <header>
             <div><strong>模型</strong><small>会话按 Provider 分组选择启用模型</small></div>
-            <button type="button" :disabled="!providerForm.id" @click="openModelEditor()"><i class="fa-solid fa-plus" aria-hidden="true"></i> 手动添加</button>
+            <button type="button" :disabled="!providerForm.id" @click="openModelEditor()">
+              <i class="fa-solid fa-plus" aria-hidden="true"></i> 手动添加
+            </button>
           </header>
           <div v-if="!providerForm.id" class="dca-empty">先保存 Provider，再添加模型。</div>
-          <div v-else-if="selectedProvider?.models.length === 0" class="dca-empty">尚未添加模型。可以手动添加，或从接口拉取。</div>
+          <div v-else-if="selectedProvider?.models.length === 0" class="dca-empty">
+            尚未添加模型。可以手动添加，或从接口拉取。
+          </div>
           <div v-else class="dca-model-list">
             <article v-for="model in selectedProvider?.models" :key="model.id" :class="{ disabled: !model.enabled }">
               <div class="dca-model-icon"><i class="fa-solid fa-microchip" aria-hidden="true"></i></div>
               <div>
-                <strong>{{ model.name }}</strong><code>{{ model.modelId }}</code>
-                <small>{{ compatibilityLabel(model.compatibilityMode) }} · {{ formatTokens(model.modelSettings.contextWindow) }} 上下文</small>
+                <strong>{{ model.name }}</strong
+                ><code>{{ model.modelId }}</code>
+                <small
+                  >{{ compatibilityLabel(model.compatibilityMode) }} ·
+                  {{ formatTokens(model.modelSettings.contextWindow) }} 上下文</small
+                >
               </div>
-              <span v-if="isDefaultModel(model.id)" class="dca-default-model"><i class="fa-solid fa-star" aria-hidden="true"></i> 新会话默认</span>
+              <span v-if="isDefaultModel(model.id)" class="dca-default-model"
+                ><i class="fa-solid fa-star" aria-hidden="true"></i> 新会话默认</span
+              >
               <span v-if="!model.enabled" class="dca-model-disabled">已禁用</span>
               <div class="dca-row-actions">
-                <button type="button" title="设为新会话默认" @click="setDefault(model.id)"><i class="fa-regular fa-star" aria-hidden="true"></i></button>
-                <button type="button" title="编辑" @click="openModelEditor(model)"><i class="fa-solid fa-pen" aria-hidden="true"></i></button>
-                <button type="button" title="复制" @click="openModelEditor(model, true)"><i class="fa-regular fa-copy" aria-hidden="true"></i></button>
-                <button class="dca-btn-danger" type="button" title="删除" @click="requestModelDelete(model)"><i class="fa-solid fa-trash" aria-hidden="true"></i></button>
+                <button type="button" title="设为新会话默认" @click="setDefault(model.id)">
+                  <i class="fa-regular fa-star" aria-hidden="true"></i>
+                </button>
+                <button type="button" title="编辑" @click="openModelEditor(model)">
+                  <i class="fa-solid fa-pen" aria-hidden="true"></i>
+                </button>
+                <button type="button" title="复制" @click="openModelEditor(model, true)">
+                  <i class="fa-regular fa-copy" aria-hidden="true"></i>
+                </button>
+                <button class="dca-btn-danger" type="button" title="删除" @click="requestModelDelete(model)">
+                  <i class="fa-solid fa-trash" aria-hidden="true"></i>
+                </button>
               </div>
             </article>
           </div>
         </section>
-        <p class="dca-security-note">API Key、请求标头和附加参数使用 AES-GCM 可逆混淆保存；这不是安全保险箱，建议只在本地酒馆使用。</p>
+        <p class="dca-security-note">
+          API Key、请求标头和附加参数使用 AES-GCM 可逆混淆保存；这不是安全保险箱，建议只在本地酒馆使用。
+        </p>
       </main>
     </div>
 
@@ -141,25 +201,49 @@
     />
 
     <div v-if="remoteModelsOpen" class="dca-modal-backdrop" role="presentation">
-      <section class="dca-modal dca-remote-models" role="dialog" aria-modal="true" aria-labelledby="dca-remote-model-title">
+      <section
+        class="dca-modal dca-remote-models"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="dca-remote-model-title"
+      >
         <header>
-          <div><h3 id="dca-remote-model-title">渠道模型</h3><p>点击加号添加；同一实际 ID 可以添加多次。</p></div>
-          <button class="dca-icon-btn" type="button" title="关闭" @click="remoteModelsOpen = false"><i class="fa-solid fa-xmark"></i></button>
+          <div>
+            <h3 id="dca-remote-model-title">渠道模型</h3>
+            <p>点击加号添加；同一实际 ID 可以添加多次。</p>
+          </div>
+          <button class="dca-icon-btn" type="button" title="关闭" @click="remoteModelsOpen = false">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
         </header>
-        <label class="dca-search-field"><i class="fa-solid fa-magnifying-glass"></i><input v-model="remoteFilter" type="search" placeholder="筛选模型 ID" /></label>
+        <label class="dca-search-field"
+          ><i class="fa-solid fa-magnifying-glass"></i
+          ><input v-model="remoteFilter" type="search" placeholder="筛选模型 ID"
+        /></label>
         <div class="dca-remote-model-list">
           <div v-for="modelId in filteredRemoteModels" :key="modelId">
-            <code>{{ modelId }}</code><small v-if="remoteCount(modelId)">已添加 ×{{ remoteCount(modelId) }}</small>
-            <button type="button" :disabled="remoteAdding === modelId" @click="addRemoteModel(modelId)"><i class="fa-solid fa-plus"></i></button>
+            <code>{{ modelId }}</code
+            ><small v-if="remoteCount(modelId)">已添加 ×{{ remoteCount(modelId) }}</small>
+            <button type="button" :disabled="remoteAdding === modelId" @click="addRemoteModel(modelId)">
+              <i class="fa-solid fa-plus"></i>
+            </button>
           </div>
         </div>
-        <footer><span>共 {{ remoteModels.length }} 个模型</span><button type="button" @click="remoteModelsOpen = false">完成</button></footer>
+        <footer>
+          <span>共 {{ remoteModels.length }} 个模型</span
+          ><button type="button" @click="remoteModelsOpen = false">完成</button>
+        </footer>
       </section>
     </div>
 
     <div v-if="exportChoiceOpen" class="dca-modal-backdrop" role="presentation">
       <section class="dca-modal dca-provider-confirm" role="dialog" aria-modal="true">
-        <header><div><h3>导出 Provider</h3><p>默认不会导出 API Key、自定义标头和附加参数。</p></div></header>
+        <header>
+          <div>
+            <h3>导出 Provider</h3>
+            <p>默认不会导出 API Key、自定义标头和附加参数。</p>
+          </div>
+        </header>
         <footer>
           <button type="button" @click="exportChoiceOpen = false">取消</button>
           <button type="button" @click="exportProvider(false)">不含敏感配置</button>
@@ -170,8 +254,22 @@
 
     <div v-if="deleteTarget" class="dca-modal-backdrop" role="presentation">
       <section class="dca-modal dca-provider-confirm" role="dialog" aria-modal="true">
-        <header><div><h3>确认删除</h3><p>{{ deleteTarget === 'provider' ? `删除 Provider“${deletingProvider?.name}”会同时删除其中全部模型；历史会话不会逐条扫描。` : `删除模型“${deletingModel?.name}”？` }}</p></div></header>
-        <footer><button type="button" @click="cancelDelete">取消</button><button class="dca-btn-danger" type="button" @click="confirmDelete">确认删除</button></footer>
+        <header>
+          <div>
+            <h3>确认删除</h3>
+            <p>
+              {{
+                deleteTarget === 'provider'
+                  ? `删除 Provider“${deletingProvider?.name}”会同时删除其中全部模型；历史会话不会逐条扫描。`
+                  : `删除模型“${deletingModel?.name}”？`
+              }}
+            </p>
+          </div>
+        </header>
+        <footer>
+          <button type="button" @click="cancelDelete">取消</button
+          ><button class="dca-btn-danger" type="button" @click="confirmDelete">确认删除</button>
+        </footer>
       </section>
     </div>
   </section>
@@ -179,7 +277,12 @@
 
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
-import { builtinModelTemplates, defaultModelSettings, matchModelTemplates, settingsForAppliedTemplate } from '../../../core/provider/model-catalog';
+import {
+  builtinModelTemplates,
+  defaultModelSettings,
+  matchModelTemplates,
+  settingsForAppliedTemplate,
+} from '../../../core/provider/model-catalog';
 import type { ApiModel, ApiProvider, ApiProviderInput } from '../../../core/provider/provider-config';
 import { useDreamCardAgent } from '../../composables/runtime';
 import DcaSelect, { type SelectOption } from '../DcaSelect.vue';
@@ -202,8 +305,15 @@ const deletingModel = ref<ApiModel>();
 const deletingProvider = ref<ApiProvider>();
 
 type ProviderForm = {
-  apiKey: string; baseURL: string; bodyParameters: string; enabled: boolean; excludedBodyParameters: string;
-  id: string; interfaceType: ApiProviderInput['interfaceType']; name: string; requestHeaders: string;
+  apiKey: string;
+  baseURL: string;
+  bodyParameters: string;
+  enabled: boolean;
+  excludedBodyParameters: string;
+  id: string;
+  interfaceType: ApiProviderInput['interfaceType'];
+  name: string;
+  requestHeaders: string;
 };
 const providerForm = reactive<ProviderForm>(emptyProviderForm());
 const selectedProvider = computed(() => state.value.providers.find(item => item.id === selectedProviderId.value));
@@ -211,61 +321,116 @@ const interfaceOptions: SelectOption[] = [
   { label: 'OpenAI Responses', value: 'openai-responses' },
   { label: 'OpenAI Chat / 兼容接口', value: 'openai-chat' },
   { label: 'Anthropic Messages', value: 'anthropic' },
+  { label: 'Google Gemini（原生接口）', value: 'gemini' },
 ];
 const filteredRemoteModels = computed(() => {
   const query = remoteFilter.value.trim().toLocaleLowerCase();
   return query ? remoteModels.value.filter(item => item.toLocaleLowerCase().includes(query)) : remoteModels.value;
 });
 
-watch(() => state.value.providers.map(item => item.id).join('|'), () => {
-  if (selectedProviderId.value && state.value.providers.some(item => item.id === selectedProviderId.value)) return;
-  selectedProviderId.value = state.value.providers[0]?.id ?? '';
-}, { immediate: true });
+watch(
+  () => state.value.providers.map(item => item.id).join('|'),
+  () => {
+    if (selectedProviderId.value && state.value.providers.some(item => item.id === selectedProviderId.value)) return;
+    selectedProviderId.value = state.value.providers[0]?.id ?? '';
+  },
+  { immediate: true },
+);
 
-watch(selectedProviderId, async id => {
-  const provider = state.value.providers.find(item => item.id === id);
-  if (!provider) { Object.assign(providerForm, emptyProviderForm()); return; }
-  Object.assign(providerForm, {
-    apiKey: '', baseURL: provider.baseURL, bodyParameters: '', enabled: provider.enabled, excludedBodyParameters: '',
-    id: provider.id, interfaceType: provider.interfaceType, name: provider.name,
+watch(
+  selectedProviderId,
+  async id => {
+    const provider = state.value.providers.find(item => item.id === id);
+    if (!provider) {
+      Object.assign(providerForm, emptyProviderForm());
+      return;
+    }
+    Object.assign(providerForm, {
+      apiKey: '',
+      baseURL: provider.baseURL,
+      bodyParameters: '',
+      enabled: provider.enabled,
+      excludedBodyParameters: '',
+      id: provider.id,
+      interfaceType: provider.interfaceType,
+      name: provider.name,
+      requestHeaders: '',
+    });
+    try {
+      const values = await runtime.revealProvider(provider.id);
+      if (selectedProviderId.value !== id) return;
+      providerForm.bodyParameters = values.bodyParameters.text;
+      providerForm.excludedBodyParameters = values.excludedBodyParameters.text;
+      providerForm.requestHeaders = values.requestHeaders.text;
+    } catch (error) {
+      toastr.error(error instanceof Error ? error.message : String(error), '梦境创客');
+    }
+  },
+  { immediate: true },
+);
+
+function emptyProviderForm(): ProviderForm {
+  return {
+    apiKey: '',
+    baseURL: '',
+    bodyParameters: '',
+    enabled: true,
+    excludedBodyParameters: '',
+    id: '',
+    interfaceType: 'openai-chat',
+    name: '',
     requestHeaders: '',
-  });
-  try {
-    const values = await runtime.revealProvider(provider.id);
-    if (selectedProviderId.value !== id) return;
-    providerForm.bodyParameters = values.bodyParameters.text;
-    providerForm.excludedBodyParameters = values.excludedBodyParameters.text;
-    providerForm.requestHeaders = values.requestHeaders.text;
-  } catch (error) { toastr.error(error instanceof Error ? error.message : String(error), '梦境创客'); }
-}, { immediate: true });
-
-function emptyProviderForm(): ProviderForm { return { apiKey: '', baseURL: '', bodyParameters: '', enabled: true, excludedBodyParameters: '', id: '', interfaceType: 'openai-chat', name: '', requestHeaders: '' }; }
-function selectProvider(id: string) { selectedProviderId.value = id; }
-function newProvider() { selectedProviderId.value = ''; Object.assign(providerForm, emptyProviderForm()); }
-function setInterfaceType(value: string) { if (value === 'anthropic' || value === 'openai-chat' || value === 'openai-responses') providerForm.interfaceType = value; }
+  };
+}
+function selectProvider(id: string) {
+  selectedProviderId.value = id;
+}
+function newProvider() {
+  selectedProviderId.value = '';
+  Object.assign(providerForm, emptyProviderForm());
+}
+function setInterfaceType(value: string) {
+  if (value === 'anthropic' || value === 'openai-chat' || value === 'openai-responses' || value === 'gemini') {
+    providerForm.interfaceType = value;
+    if (value === 'gemini' && !providerForm.baseURL.trim())
+      providerForm.baseURL = 'https://generativelanguage.googleapis.com/v1beta';
+  }
+}
 
 function providerInput(): ApiProviderInput {
   return {
-    apiKey: providerForm.apiKey, baseURL: providerForm.baseURL, enabled: providerForm.enabled,
+    apiKey: providerForm.apiKey,
+    baseURL: providerForm.baseURL,
+    enabled: providerForm.enabled,
     bodyParameters: { text: providerForm.bodyParameters },
     excludedBodyParameters: { text: providerForm.excludedBodyParameters },
-    id: providerForm.id || undefined, interfaceType: providerForm.interfaceType, name: providerForm.name,
+    id: providerForm.id || undefined,
+    interfaceType: providerForm.interfaceType,
+    name: providerForm.name,
     requestHeaders: { text: providerForm.requestHeaders },
   };
 }
 
 async function saveProvider() {
   let saved: ApiProvider | undefined;
-  const succeeded = await action(async () => { saved = await runtime.saveProvider(providerInput()); });
+  const succeeded = await action(async () => {
+    saved = await runtime.saveProvider(providerInput());
+  });
   if (succeeded && saved) {
-    selectedProviderId.value = saved.id; providerForm.id = saved.id; providerForm.apiKey = '';
+    selectedProviderId.value = saved.id;
+    providerForm.id = saved.id;
+    providerForm.apiKey = '';
     toastr.success(`Provider“${saved.name}”已保存。`, '梦境创客');
   }
 }
 async function copyProvider() {
   if (!providerForm.id) return;
   let copied: ApiProvider | undefined;
-  if (await action(async () => { copied = await runtime.copyProvider(providerForm.id); })) {
+  if (
+    await action(async () => {
+      copied = await runtime.copyProvider(providerForm.id);
+    })
+  ) {
     selectedProviderId.value = copied!.id;
     toastr.success(`已复制为 Provider“${copied!.name}”。`, '梦境创客');
   }
@@ -273,41 +438,82 @@ async function copyProvider() {
 async function fetchModels() {
   modelsLoading.value = true;
   try {
-    remoteModels.value = await runtime.listModels(providerInput()); remoteFilter.value = ''; remoteModelsOpen.value = true;
+    remoteModels.value = await runtime.listModels(providerInput());
+    remoteFilter.value = '';
+    remoteModelsOpen.value = true;
     if (!remoteModels.value.length) toastr.warning('接口返回了空模型列表。', '梦境创客');
-  } catch (error) { toastr.error(error instanceof Error ? error.message : String(error), '梦境创客'); }
-  finally { modelsLoading.value = false; }
+  } catch (error) {
+    toastr.error(error instanceof Error ? error.message : String(error), '梦境创客');
+  } finally {
+    modelsLoading.value = false;
+  }
 }
-function remoteCount(modelId: string) { return selectedProvider.value?.models.filter(item => item.modelId === modelId).length ?? 0; }
+function remoteCount(modelId: string) {
+  return selectedProvider.value?.models.filter(item => item.modelId === modelId).length ?? 0;
+}
 function uniqueModelName(base: string) {
   const used = new Set(selectedProvider.value?.models.map(item => item.name.normalize('NFC')) ?? []);
   if (!used.has(base.normalize('NFC'))) return base;
-  let index = 2; while (used.has(`${base} ${index}`.normalize('NFC'))) index += 1; return `${base} ${index}`;
+  let index = 2;
+  while (used.has(`${base} ${index}`.normalize('NFC'))) index += 1;
+  return `${base} ${index}`;
 }
 async function addRemoteModel(modelId: string) {
-  if (!selectedProvider.value) { toastr.error('请先保存 Provider。', '梦境创客'); return; }
+  if (!selectedProvider.value) {
+    toastr.error('请先保存 Provider。', '梦境创客');
+    return;
+  }
   remoteAdding.value = modelId;
   try {
-    const template = matchModelTemplates(modelId, builtinModelTemplates().filter(item => !item.interfaceType || item.interfaceType === selectedProvider.value!.interfaceType), 1)[0]?.template;
+    const template = matchModelTemplates(
+      modelId,
+      builtinModelTemplates().filter(
+        item => !item.interfaceType || item.interfaceType === selectedProvider.value!.interfaceType,
+      ),
+      1,
+    )[0]?.template;
     const settings = template ? settingsForAppliedTemplate(template, defaultModelSettings()) : defaultModelSettings();
     await runtime.saveModel(selectedProvider.value.id, {
       appliedModelTemplate: template ? { id: template.id, revision: template.revision, source: template.source } : null,
-      compatibilityMode: template?.compatibilityMode ?? 'standard', enabled: true, modelId, modelSettings: settings, name: uniqueModelName(modelId),
+      compatibilityMode: template?.compatibilityMode ?? 'standard',
+      enabled: true,
+      modelId,
+      modelSettings: settings,
+      name: uniqueModelName(modelId),
     });
     toastr.success(`模型“${modelId}”已添加。`, '梦境创客');
-  } catch (error) { toastr.error(error instanceof Error ? error.message : String(error), '梦境创客'); }
-  finally { remoteAdding.value = ''; }
+  } catch (error) {
+    toastr.error(error instanceof Error ? error.message : String(error), '梦境创客');
+  } finally {
+    remoteAdding.value = '';
+  }
 }
 
-function openModelEditor(model?: ApiModel, copy = false) { editingModel.value = model; copyingModel.value = copy; modelEditorOpen.value = true; }
+function openModelEditor(model?: ApiModel, copy = false) {
+  editingModel.value = model;
+  copyingModel.value = copy;
+  modelEditorOpen.value = true;
+}
 function modelSaved(model: ApiModel) {
   const verb = copyingModel.value ? '已复制' : editingModel.value ? '已保存' : '已添加';
-  modelEditorOpen.value = false; editingModel.value = undefined; copyingModel.value = false;
+  modelEditorOpen.value = false;
+  editingModel.value = undefined;
+  copyingModel.value = false;
   toastr.success(`模型“${model.name}”${verb}。`, '梦境创客');
 }
-function requestProviderDelete(provider: ApiProvider) { deletingProvider.value = provider; deleteTarget.value = 'provider'; }
-function requestModelDelete(model: ApiModel) { deletingModel.value = model; deleteTarget.value = 'model'; }
-function cancelDelete() { deleteTarget.value = undefined; deletingModel.value = undefined; deletingProvider.value = undefined; }
+function requestProviderDelete(provider: ApiProvider) {
+  deletingProvider.value = provider;
+  deleteTarget.value = 'provider';
+}
+function requestModelDelete(model: ApiModel) {
+  deletingModel.value = model;
+  deleteTarget.value = 'model';
+}
+function cancelDelete() {
+  deleteTarget.value = undefined;
+  deletingModel.value = undefined;
+  deletingProvider.value = undefined;
+}
 async function confirmDelete() {
   const target = deleteTarget.value;
   if (target === 'provider' && deletingProvider.value) {
@@ -327,11 +533,19 @@ async function confirmDelete() {
 
 async function setDefault(modelId: string) {
   const model = selectedProvider.value?.models.find(item => item.id === modelId);
-  if (selectedProvider.value && await action(() => runtime.selectDefaultModel({ providerId: selectedProvider.value!.id, modelId }))) {
+  if (
+    selectedProvider.value &&
+    (await action(() => runtime.selectDefaultModel({ providerId: selectedProvider.value!.id, modelId })))
+  ) {
     toastr.success(`“${model?.name ?? '模型'}”已设为新会话默认。`, '梦境创客');
   }
 }
-function isDefaultModel(modelId: string) { return state.value.defaultModelSelection?.providerId === selectedProvider.value?.id && state.value.defaultModelSelection.modelId === modelId; }
+function isDefaultModel(modelId: string) {
+  return (
+    state.value.defaultModelSelection?.providerId === selectedProvider.value?.id &&
+    state.value.defaultModelSelection.modelId === modelId
+  );
+}
 
 async function exportProvider(includeSecrets: boolean) {
   exportChoiceOpen.value = false;
@@ -339,68 +553,301 @@ async function exportProvider(includeSecrets: boolean) {
   try {
     const source = await runtime.exportProviderBundle(providerForm.id, includeSecrets);
     const blob = new Blob([source], { type: 'application/json;charset=utf-8' });
-    const url = URL.createObjectURL(blob); const anchor = document.createElement('a');
-    anchor.href = url; anchor.download = `${providerForm.name || 'provider'}.dream-provider.json`; anchor.click();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${providerForm.name || 'provider'}.dream-provider.json`;
+    anchor.click();
     queueMicrotask(() => URL.revokeObjectURL(url));
     toastr.success(`Provider“${providerForm.name}”已导出。`, '梦境创客');
-  } catch (error) { toastr.error(error instanceof Error ? error.message : String(error), '梦境创客'); }
+  } catch (error) {
+    toastr.error(error instanceof Error ? error.message : String(error), '梦境创客');
+  }
 }
 async function importProvider(event: Event) {
-  const input = event.target as HTMLInputElement; const file = input.files?.[0]; input.value = '';
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
   if (!file) return;
   let imported: ApiProvider | undefined;
-  if (await action(async () => { imported = await runtime.importProviderBundle(await file.text()); })) {
+  if (
+    await action(async () => {
+      imported = await runtime.importProviderBundle(await file.text());
+    })
+  ) {
     selectedProviderId.value = imported!.id;
     toastr.success(`Provider“${imported!.name}”已导入。`, '梦境创客');
   }
 }
 
-function compatibilityLabel(value: ApiModel['compatibilityMode']) { return value === 'deepseek' ? 'DeepSeek 模式' : '标准模式'; }
-function formatTokens(value: number) { if (!value) return '自动'; if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(2))}M`; if (value >= 1_000) return `${Number((value / 1_000).toFixed(1))}K`; return String(value); }
+function compatibilityLabel(value: ApiModel['compatibilityMode']) {
+  return value === 'deepseek' ? 'DeepSeek 模式' : '标准模式';
+}
+function formatTokens(value: number) {
+  if (!value) return '自动';
+  if (value >= 1_000_000) return `${Number((value / 1_000_000).toFixed(2))}M`;
+  if (value >= 1_000) return `${Number((value / 1_000).toFixed(1))}K`;
+  return String(value);
+}
 </script>
 
 <style lang="scss">
-.dca-provider-layout { display: grid; min-height: 32rem; grid-template-columns: 13rem minmax(0, 1fr); gap: .75rem; }
-.dca-provider-list { display: flex; min-width: 0; flex-direction: column; gap: .25rem; border-right: 1px solid var(--dca-border); padding-right: .65rem; }
-.dca-provider-list > header { display: flex; align-items: center; justify-content: space-between; padding: .35rem .45rem; }
-.dca-provider-list > header small { color: var(--dca-text-muted); }
-.dca-app .dca-provider-new { display: flex; width: 100%; align-items: center; justify-content: flex-start; gap: .45rem; margin-bottom: .2rem; padding: .52rem .58rem; text-align: left; }
-.dca-provider-item { display: grid; min-width: 0; grid-template-columns: minmax(0, 1fr) 2rem; align-items: stretch; gap: .2rem; border: 1px solid transparent; border-radius: var(--dca-radius-md); background: transparent; }
-.dca-provider-item.active { border-color: var(--dca-border); background: var(--dca-accent-soft); color: var(--dca-accent); }
-.dca-provider-item.disabled { opacity: .62; }
-.dca-app .dca-provider-select { display: grid; min-width: 0; grid-template-columns: 1.2rem minmax(0, 1fr) auto; align-items: center; justify-content: stretch; justify-items: start; gap: .45rem; border: 0; padding: .55rem; background: transparent; color: inherit; text-align: left; }
-.dca-provider-select span { display: flex; min-width: 0; align-items: flex-start; flex-direction: column; text-align: left; }
-.dca-provider-select strong, .dca-provider-select small { max-width: 100%; overflow: hidden; text-align: left; text-overflow: ellipsis; white-space: nowrap; }
-.dca-provider-select small { color: var(--dca-text-muted); font-size: .68rem; }
-.dca-app .dca-provider-delete { width: 1.9rem; min-width: 1.9rem; align-self: center; border-color: transparent; padding: .35rem 0; opacity: .72; }
-.dca-app .dca-provider-delete:hover { border-color: color-mix(in srgb, var(--dca-danger) 45%, transparent); background: var(--dca-danger-soft); opacity: 1; }
-.dca-provider-main { display: flex; min-width: 0; flex-direction: column; gap: .75rem; }
-.dca-api-provider-toolbar { position: sticky; z-index: 5; top: 0; justify-content: space-between; border: 1px solid var(--dca-border); border-radius: var(--dca-radius-md); padding: .55rem; background: color-mix(in srgb, var(--dca-surface) 94%, transparent); backdrop-filter: blur(10px); }
-.dca-api-provider-toolbar > div:first-child { display: flex; min-width: 0; flex-direction: column; }
-.dca-api-provider-toolbar small { color: var(--dca-text-muted); }
-.dca-provider-card, .dca-provider-models { display: flex; flex-direction: column; gap: .7rem; border: 1px solid var(--dca-border); border-radius: var(--dca-radius-lg); padding: .75rem; background: var(--dca-surface); }
-.dca-provider-enabled { flex-direction: row; align-items: center; gap: .45rem; }
-.dca-provider-enabled input { width: auto; }
-.dca-model-fetch-row, .dca-provider-models > header { display: flex; align-items: center; justify-content: space-between; gap: .6rem; border-top: 1px solid var(--dca-border); padding-top: .7rem; }
-.dca-model-fetch-row > div, .dca-provider-models > header > div { display: flex; flex-direction: column; }
-.dca-model-fetch-row small, .dca-provider-models > header small { color: var(--dca-text-muted); font-size: .72rem; }
-.dca-model-list { display: flex; flex-direction: column; gap: .4rem; }
-.dca-model-list article { display: grid; grid-template-columns: 2rem minmax(0, 1fr) auto auto auto; align-items: center; gap: .55rem; border: 1px solid var(--dca-border); border-radius: var(--dca-radius-md); padding: .55rem; background: var(--dca-raised); }
-.dca-model-list article.disabled { opacity: .62; }
-.dca-model-icon { display: grid; width: 2rem; height: 2rem; place-items: center; border-radius: var(--dca-radius-sm); background: var(--dca-accent-soft); color: var(--dca-accent); }
-.dca-model-list article > div:nth-child(2) { display: flex; min-width: 0; flex-direction: column; }
-.dca-model-list code { overflow: hidden; color: var(--dca-text-muted); font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }
-.dca-model-list small { color: var(--dca-text-muted); font-size: .68rem; }
-.dca-default-model { color: var(--dca-warning); font-size: .7rem; }
-.dca-model-disabled { color: var(--dca-text-muted); font-size: .7rem; }
-.dca-security-note { margin: 0; border-left: 3px solid var(--dca-warning); padding-left: .65rem; color: var(--dca-text-muted); font-size: .78rem; }
-.dca-remote-models { width: min(42rem, calc(100vw - 2rem)); max-height: min(80vh, 44rem); }
-.dca-search-field { display: flex; align-items: center; gap: .45rem; border: 1px solid var(--dca-border); border-radius: var(--dca-radius-md); padding: .35rem .55rem; }
-.dca-search-field input { flex: 1; border: 0; background: transparent; box-shadow: none; }
-.dca-remote-model-list { display: flex; min-height: 10rem; flex-direction: column; gap: .25rem; overflow-y: auto; }
-.dca-remote-model-list > div { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: .5rem; border-bottom: 1px solid var(--dca-border); padding: .45rem; }
-.dca-remote-model-list small { color: var(--dca-text-muted); }
-.dca-provider-confirm { width: min(34rem, calc(100vw - 2rem)); }
+.dca-provider-layout {
+  display: grid;
+  min-height: 32rem;
+  grid-template-columns: 13rem minmax(0, 1fr);
+  gap: 0.75rem;
+}
+.dca-provider-list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.25rem;
+  border-right: 1px solid var(--dca-border);
+  padding-right: 0.65rem;
+}
+.dca-provider-list > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.35rem 0.45rem;
+}
+.dca-provider-list > header small {
+  color: var(--dca-text-muted);
+}
+.dca-app .dca-provider-new {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.45rem;
+  margin-bottom: 0.2rem;
+  padding: 0.52rem 0.58rem;
+  text-align: left;
+}
+.dca-provider-item {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) 2rem;
+  align-items: stretch;
+  gap: 0.2rem;
+  border: 1px solid transparent;
+  border-radius: var(--dca-radius-md);
+  background: transparent;
+}
+.dca-provider-item.active {
+  border-color: var(--dca-border);
+  background: var(--dca-accent-soft);
+  color: var(--dca-accent);
+}
+.dca-provider-item.disabled {
+  opacity: 0.62;
+}
+.dca-app .dca-provider-select {
+  display: grid;
+  min-width: 0;
+  grid-template-columns: 1.2rem minmax(0, 1fr) auto;
+  align-items: center;
+  justify-content: stretch;
+  justify-items: start;
+  gap: 0.45rem;
+  border: 0;
+  padding: 0.55rem;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+.dca-provider-select span {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  flex-direction: column;
+  text-align: left;
+}
+.dca-provider-select strong,
+.dca-provider-select small {
+  max-width: 100%;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dca-provider-select small {
+  color: var(--dca-text-muted);
+  font-size: 0.68rem;
+}
+.dca-app .dca-provider-delete {
+  width: 1.9rem;
+  min-width: 1.9rem;
+  align-self: center;
+  border-color: transparent;
+  padding: 0.35rem 0;
+  opacity: 0.72;
+}
+.dca-app .dca-provider-delete:hover {
+  border-color: color-mix(in srgb, var(--dca-danger) 45%, transparent);
+  background: var(--dca-danger-soft);
+  opacity: 1;
+}
+.dca-provider-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.dca-api-provider-toolbar {
+  position: sticky;
+  z-index: 5;
+  top: 0;
+  justify-content: space-between;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-md);
+  padding: 0.55rem;
+  background: color-mix(in srgb, var(--dca-surface) 94%, transparent);
+  backdrop-filter: blur(10px);
+}
+.dca-api-provider-toolbar > div:first-child {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.dca-api-provider-toolbar small {
+  color: var(--dca-text-muted);
+}
+.dca-provider-card,
+.dca-provider-models {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-lg);
+  padding: 0.75rem;
+  background: var(--dca-surface);
+}
+.dca-provider-enabled {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.45rem;
+}
+.dca-provider-enabled input {
+  width: auto;
+}
+.dca-model-fetch-row,
+.dca-provider-models > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  border-top: 1px solid var(--dca-border);
+  padding-top: 0.7rem;
+}
+.dca-model-fetch-row > div,
+.dca-provider-models > header > div {
+  display: flex;
+  flex-direction: column;
+}
+.dca-model-fetch-row small,
+.dca-provider-models > header small {
+  color: var(--dca-text-muted);
+  font-size: 0.72rem;
+}
+.dca-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.dca-model-list article {
+  display: grid;
+  grid-template-columns: 2rem minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 0.55rem;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-md);
+  padding: 0.55rem;
+  background: var(--dca-raised);
+}
+.dca-model-list article.disabled {
+  opacity: 0.62;
+}
+.dca-model-icon {
+  display: grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  border-radius: var(--dca-radius-sm);
+  background: var(--dca-accent-soft);
+  color: var(--dca-accent);
+}
+.dca-model-list article > div:nth-child(2) {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.dca-model-list code {
+  overflow: hidden;
+  color: var(--dca-text-muted);
+  font-size: 0.72rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dca-model-list small {
+  color: var(--dca-text-muted);
+  font-size: 0.68rem;
+}
+.dca-default-model {
+  color: var(--dca-warning);
+  font-size: 0.7rem;
+}
+.dca-model-disabled {
+  color: var(--dca-text-muted);
+  font-size: 0.7rem;
+}
+.dca-security-note {
+  margin: 0;
+  border-left: 3px solid var(--dca-warning);
+  padding-left: 0.65rem;
+  color: var(--dca-text-muted);
+  font-size: 0.78rem;
+}
+.dca-remote-models {
+  width: min(42rem, calc(100vw - 2rem));
+  max-height: min(80vh, 44rem);
+}
+.dca-search-field {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-md);
+  padding: 0.35rem 0.55rem;
+}
+.dca-search-field input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.dca-remote-model-list {
+  display: flex;
+  min-height: 10rem;
+  flex-direction: column;
+  gap: 0.25rem;
+  overflow-y: auto;
+}
+.dca-remote-model-list > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--dca-border);
+  padding: 0.45rem;
+}
+.dca-remote-model-list small {
+  color: var(--dca-text-muted);
+}
+.dca-provider-confirm {
+  width: min(34rem, calc(100vw - 2rem));
+}
 .dca-settings-content-inner.is-narrow {
   .dca-provider-layout {
     grid-template-columns: minmax(0, 1fr);
@@ -430,14 +877,43 @@ function formatTokens(value: number) { if (!value) return '自动'; if (value >=
   }
 }
 @media (max-width: 720px) {
-  .dca-provider-layout { grid-template-columns: 1fr; }
-  .dca-provider-list { max-height: 10rem; border-right: 0; border-bottom: 1px solid var(--dca-border); padding: 0 0 .55rem; overflow-y: auto; }
-  .dca-api-provider-toolbar { position: static; align-items: stretch; }
-  .dca-api-provider-toolbar .dca-row-actions { overflow-x: auto; }
-  .dca-model-fetch-row { align-items: stretch; flex-direction: column; }
-  .dca-model-list article { grid-template-columns: 2rem minmax(0, 1fr) auto; }
-  .dca-model-list article > .dca-row-actions { grid-column: 2 / -1; justify-content: flex-end; }
-  .dca-default-model, .dca-model-disabled { grid-column: 2 / -1; }
-  .dca-remote-models { width: 100%; height: 100%; max-height: none; border-radius: 0; }
+  .dca-provider-layout {
+    grid-template-columns: 1fr;
+  }
+  .dca-provider-list {
+    max-height: 10rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--dca-border);
+    padding: 0 0 0.55rem;
+    overflow-y: auto;
+  }
+  .dca-api-provider-toolbar {
+    position: static;
+    align-items: stretch;
+  }
+  .dca-api-provider-toolbar .dca-row-actions {
+    overflow-x: auto;
+  }
+  .dca-model-fetch-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .dca-model-list article {
+    grid-template-columns: 2rem minmax(0, 1fr) auto;
+  }
+  .dca-model-list article > .dca-row-actions {
+    grid-column: 2 / -1;
+    justify-content: flex-end;
+  }
+  .dca-default-model,
+  .dca-model-disabled {
+    grid-column: 2 / -1;
+  }
+  .dca-remote-models {
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    border-radius: 0;
+  }
 }
 </style>

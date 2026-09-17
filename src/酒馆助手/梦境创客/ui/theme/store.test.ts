@@ -3,13 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUILTIN_THEMES } from './builtins';
 import { mountThemeRuntime } from './runtime';
-import {
-  getThemeStore,
-  parseThemePackage,
-  resetThemeStoreForTests,
-  ThemeStore,
-  themeJavascriptHash,
-} from './store';
+import { getThemeStore, parseThemePackage, resetThemeStoreForTests, ThemeStore, themeJavascriptHash } from './store';
 import { DEFAULT_THEME_ID, THEME_PACKAGE_VERSION, type ThemePackage } from './types';
 
 function packageValue(overrides: Partial<ThemePackage> = {}): ThemePackage {
@@ -34,11 +28,6 @@ describe('ThemeStore', () => {
   afterEach(() => {
     store.destroy();
     localStorage.clear();
-  });
-
-  it('始终提供简洁、原紫色与跟随酒馆三套内置主题', () => {
-    expect(store.all().filter(theme => theme.source === 'builtin')).toHaveLength(3);
-    expect(store.get(DEFAULT_THEME_ID)?.package.name).toBe('简洁夜幕');
   });
 
   it('导入时为主题分配本地 id，且内置主题导出后也能重新导入', async () => {

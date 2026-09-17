@@ -2,10 +2,12 @@ import { createApp, type App } from 'vue';
 import WorkspaceWindow from './WorkspaceWindow.vue';
 import { clientEnvironment, readClientHost } from './runtime-client';
 import { configureDreamCardAgentUpdater } from './updater';
+import { isolateDocumentDoubleClick } from './window-interaction';
 
 export function mountClientWindow(): void {
   const environment = clientEnvironment();
   if (!environment) return;
+  const releaseDoubleClickIsolation = environment.mode === 'embedded' ? isolateDocumentDoubleClick(document) : () => {};
   document.getElementById('dca-client-loading')?.remove();
   const root = document.createElement('div');
   root.className = 'dca-shadow-root dca-client-root';
@@ -50,6 +52,7 @@ export function mountClientWindow(): void {
     'pagehide',
     () => {
       clearInterval(clock);
+      releaseDoubleClickIsolation();
       unmount();
       root.remove();
       disconnected.remove();

@@ -1,7 +1,11 @@
 {
   "scripts": {
     "build:dev": "webpack --mode development",
-    "build": "pnpm run check:agent && pnpm run check:modern && pnpm run check:updater && pnpm run build:regex && webpack --mode production && pnpm run validate:updates",
+    "build": "pnpm run check:agent && pnpm run check:modern && pnpm run check:updater && pnpm run check:preset-adapter && pnpm run check:squash && pnpm run build:regex && webpack --mode production && pnpm run validate:updates",
+    "test:squash": "vitest run --config vitest.squash.config.mts",
+    "check:squash": "pnpm run test:squash && tsc --project tsconfig.squash.json --noEmit --pretty false && eslint \"src/酒馆助手/压缩相邻消息/**/*.{ts,vue}\" \"vitest.squash.config.mts\" --max-warnings 0",
+    "test:preset-adapter": "vitest run --config vitest.preset-adapter.config.mts",
+    "check:preset-adapter": "pnpm run test:preset-adapter && tsc --project tsconfig.preset-adapter.json --noEmit --pretty false && eslint \"src/酒馆助手/预设适配器/**/*.{ts,vue}\" \"vitest.preset-adapter.config.mts\" --max-warnings 0",
     "build:regex": "node util/build_tavern_regexes.mjs",
     "build:agent-resources": "node util/build_dream_card_agent_resources.mjs",
     "build:regex:dream-big-discuss": "node util/build_tavern_regexes.mjs src/酒馆助手/梦境讨论正则UI",
@@ -100,6 +104,7 @@
   },
   "dependencies": {
     "@ai-sdk/anthropic": "4.0.36",
+    "@ai-sdk/google": "4.0.39",
     "@ai-sdk/openai": "4.0.36",
     "@ai-sdk/openai-compatible": "3.0.27",
     "@eslint-community/regexpp": "4.12.2",

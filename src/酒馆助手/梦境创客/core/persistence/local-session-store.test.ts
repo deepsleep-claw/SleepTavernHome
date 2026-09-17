@@ -54,6 +54,30 @@ async function fixture() {
 }
 
 describe('local session persistence', () => {
+  it('临时索引读取失败不会被永久缓存为空列表', async () => {
+    const { store, characters, input } = await fixture();
+    const load = vi.spyOn(characters, 'load').mockRejectedValueOnce(new Error('offline'));
+    expect((await store.metadata(input.bindingId)).sessions).toEqual({});
+    await store.metadata(input.bindingId);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('后端备份等待最后一次更新后的三秒', async () => {
+    vi.useFakeTimers();
+    try {
+      const { store, input } = await fixture();
+      const backup = vi.spyOn(store, 'backup').mockResolvedValue();
+      await store.commit(input);
+      await vi.advanceTimersByTimeAsync(2500);
+      await store.commit({ ...input, runtime: { ...input.runtime, updatedAt: 3 } });
+      await vi.advanceTimersByTimeAsync(2999);
+      expect(backup).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(backup).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('本地提交和索引读取不需要后端上传', async () => {
     const { store, files, input, statuses } = await fixture();
     await store.commit(input);

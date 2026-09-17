@@ -1,13 +1,14 @@
 import { klona } from 'klona';
+import { boundedWait } from '../async';
 import type { ModelMessage } from 'ai';
 import { projectCardWorkspace } from '../mapping/card-workspace-mapper';
-import { encodeWorkspaceSegment } from '../mapping/serde';
+import { personaWorkspacePath } from '../workspace/persona-path';
 import type { CardWorkspaceState } from '../mapping/types';
 import { compilePreset, DEFAULT_PRESET, type CompiledPreset, type StructuredPreset } from '../preset/compiler';
 import { PersistentRunnerJournal } from '../persistence/journal';
 import { DreamCreatorWorkspaceFileStore } from '../persistence/workspace-file-store';
 import { AgentRunner, type PendingRunnerStep, type RunnerEvent, type RunnerStatus } from '../runner/agent-runner';
-import { measureContext } from '../runner/context';
+import { measureContext, type ApiUsageBaseline } from '../runner/context';
 import { recoverPendingRunnerStep } from '../runner/recovery';
 import type {
   ModelStepExecutor,
@@ -175,6 +176,9 @@ function mountConfiguredSkills(configuration: AgentConfiguration, availableSkill
 }
 
 export class CardAgentSessionService {
+  private executing = false;
+  private compacting = false;
+  private restoredUsageBaseline?: ApiUsageBaseline;
   readonly bindingId: string;
   readonly characterName: string;
   readonly createdAt: number;
@@ -302,6 +306,7 @@ export class CardAgentSessionService {
     this.events = klona(restored?.runtime.events ?? []);
     this.lastError = restored?.runtime.lastError;
     this.status = restored?.runtime.status ?? 'idle';
+    this.restoredUsageBaseline = klona(restored?.runtime.apiUsageBaseline);
     this.ui = repairMissingRunCheckpointIds(restored?.runtime.ui ?? []);
     this.warnings = [...(restored?.runtime.warnings ?? [])];
     this.repository = undefined;
@@ -326,8 +331,21 @@ export class CardAgentSessionService {
     options: SessionServiceOptions,
     runtime: PersistedSessionRuntime,
   ): Promise<CardAgentSessionService> {
+    if (!runtime.agentConfiguration && !options.agentConfiguration) {
+      options = {
+        ...options,
+        agentConfiguration: {
+          id: `recovered:${runtime.sessionId}`,
+          name: '恢复的会话',
+          presetId: runtime.preset.id,
+          skills: [],
+          toolIds: [],
+        },
+      };
+    }
     const initial = await options.adapter.read();
     const service = new CardAgentSessionService(options, initial, runtime.compiledPreset, { runtime });
+    if (!runtime.agentConfiguration) service.addWarning('会话缺少助手配置快照，请选择助手配置后继续创作。');
     service.repository = await service.createRepository();
     await service.refreshTavernChatWorkspace();
     if (runtime.status === 'running' || runtime.status === 'waiting-approval' || runtime.status === 'abnormal') {
@@ -343,7 +361,7 @@ export class CardAgentSessionService {
         kind: 'status',
         status: 'failed',
       });
-      await service.persist();
+      await service.persist().catch(error => service.addWarning(`中断状态暂未保存：${String(error)}`));
     } else if (runtime.status === 'failed' || runtime.status === 'stopped' || runtime.status === 'context-exhausted') {
       service.lastError ??=
         runtime.status === 'failed' ? '上次模型步骤失败，可从中断处继续或回退本轮消息。' : undefined;
@@ -358,7 +376,9 @@ export class CardAgentSessionService {
       agentConfiguration: klona(this.agentConfiguration),
       bindingId: this.bindingId,
       characterName: this.characterName,
-      contextUsage: this.runner?.state.contextUsage ?? measureContext(this.modelMessages, this.contextWindow),
+      contextUsage:
+        this.runner?.state.contextUsage ??
+        measureContext(this.modelMessages, this.contextWindow, this.restoredUsageBaseline),
       error: this.lastError,
       events: klona(this.events),
       mode: this.mode,
@@ -549,6 +569,8 @@ export class CardAgentSessionService {
       throw new Error('Agent运行期间不能切换API Profile。');
     }
     this.executor = executor;
+    this.restoredUsageBaseline = undefined;
+    this.runner?.resetUsageBaseline();
     this.contextWindow = contextWindow;
     this.modelVisionEnabled = visionEnabled;
     if (this.runner && ['failed', 'stopped', 'context-exhausted'].includes(this.runner.state.status)) {
@@ -623,8 +645,9 @@ export class CardAgentSessionService {
 
   async setWorkspaceAvatar(sourcePath: string, target: 'character' | { userName: string }): Promise<SessionView> {
     if (!this.repository) throw new Error('工作区尚未初始化。');
-    const targetPath =
-      target === 'character' ? '/character/avatar.png' : `/users/${encodeWorkspaceSegment(target.userName)}.avatar.png`;
+    const persona = target === 'character' ? undefined : this.tavernBridge?.getPersona(target.userName);
+    if (target !== 'character' && !persona) throw new Error('User不存在。');
+    const targetPath = persona ? personaWorkspacePath(persona.name, persona.avatar_id, true) : '/character/avatar.png';
     this.mutationActor = 'user';
     try {
       await this.repository.replaceReadonlyBinary(targetPath, sourcePath, `player-avatar:${crypto.randomUUID()}`);
@@ -654,6 +677,7 @@ export class CardAgentSessionService {
       : storeSessionAttachments(attachmentInputs);
     await this.finalizeManualEdits();
     this.lock.acquire(this.sessionId);
+    this.executing = true;
     try {
       if (this.title === DEFAULT_SESSION_TITLE && !this.ui.some(item => item.kind === 'user')) {
         this.title = sessionTitleFromMessage(text || attachments[0]?.filename || '');
@@ -721,16 +745,20 @@ export class CardAgentSessionService {
       if (state.status === 'completed') {
         await this.completeRealtimeTurn();
       }
-      await this.persist();
+      if (state.status === 'stopped')
+        void this.persist().catch(error => this.addWarning(`停止状态暂未保存：${String(error)}`));
+      else await this.persist();
       return this.view();
     } finally {
       this.lock.release(this.sessionId);
+      this.executing = false;
     }
   }
 
   async resume(): Promise<SessionView> {
     if (!this.runner) throw new Error('当前会话没有可恢复的Runner。');
     this.lock.acquire(this.sessionId);
+    this.executing = true;
     try {
       this.tavernChatWorkspace?.resetRunAuthorization();
       await this.refreshTavernChatWorkspace();
@@ -742,15 +770,67 @@ export class CardAgentSessionService {
       if (state.status === 'completed' && this.repository) {
         await this.completeRealtimeTurn();
       }
+      if (state.status === 'stopped')
+        void this.persist().catch(error => this.addWarning(`停止状态暂未保存：${String(error)}`));
+      else await this.persist();
+      return this.view();
+    } finally {
+      this.lock.release(this.sessionId);
+      this.executing = false;
+    }
+  }
+
+  async compactContext(): Promise<SessionView> {
+    if (this.executing || this.activeCheckpointId) throw new Error('请先完成或结束当前轮次再压缩。');
+    if (!this.agentConfiguration.toolIds.includes('compact_context')) throw new Error('当前助手未启用上下文压缩工具。');
+    const user = [...this.ui].reverse().find(item => item.kind === 'user' && !item.hidden);
+    if (!user) throw new Error('当前会话还没有需要压缩的对话。');
+    await this.finalizeManualEdits();
+    this.lock.acquire(this.sessionId);
+    this.executing = true;
+    this.compacting = true;
+    this.activeCheckpointId = user.checkpointId;
+    const before = this.view().contextUsage.totalTokens;
+    const item: SessionUiItem = {
+      id: `compact:${crypto.randomUUID()}`,
+      at: this.now(),
+      kind: 'status',
+      content: '正在压缩上下文…',
+    };
+    this.ui.push(item);
+    try {
+      this.buildRunner();
+      const state = await this.runner!.compact();
+      this.modelMessages = klona(state.messages);
+      this.status = state.status;
+      this.lastError = state.failure;
+      item.content =
+        state.status === 'completed'
+          ? `上下文压缩完成：约 ${before.toLocaleString()} → ${state.contextUsage.totalTokens.toLocaleString()} tokens。`
+          : (state.failure ?? '上下文压缩已停止。');
+      item.status = state.status === 'completed' ? 'completed' : 'failed';
+      this.activeCheckpointId = undefined;
       await this.persist();
       return this.view();
     } finally {
+      this.compacting = false;
+      this.activeCheckpointId = undefined;
+      this.executing = false;
       this.lock.release(this.sessionId);
     }
   }
 
   stop(): void {
     this.runner?.stop();
+    if (!this.executing && ['running', 'waiting-approval'].includes(this.status)) {
+      this.status = 'stopped';
+      this.completeRunUi('stopped', this.now());
+      this.notify();
+    }
+  }
+
+  isOperationActive(): boolean {
+    return this.executing;
   }
 
   async enqueueGuidance(message: string): Promise<void> {
@@ -824,7 +904,7 @@ export class CardAgentSessionService {
   async undoToUserMessage(messageId: string): Promise<SessionView> {
     this.assertHistoryRestoreAllowed();
     await this.finalizeManualEdits();
-    const latestVisible = [...this.ui].reverse().find(item => !item.hidden);
+    const latestVisible = [...this.ui].reverse().find(item => !item.hidden && item.kind !== 'status');
     const user = this.ui.find(item => item.id === messageId && item.kind === 'user' && !item.hidden);
     if (!user?.checkpointId) throw new Error('该用户消息当前不能回退。');
     if (latestVisible?.checkpointId !== user.checkpointId) throw new Error('只能回退最新一轮消息。');
@@ -1108,6 +1188,7 @@ export class CardAgentSessionService {
             bridge: this.tavernBridge,
             mountedPresets: this.mountedPresets,
             readBinary: file => this.readWorkspaceBinary(file),
+            onWarning: message => this.addWarning(message),
           })
         : undefined,
     });
@@ -1140,7 +1221,7 @@ export class CardAgentSessionService {
       `- 会话类型：${this.scope === 'global' ? '全局会话' : '角色会话'}`,
       `- 当前角色：${hasCharacter ? (this.tavernBridge?.getCurrentCharacterName() ?? '未知') : '未打开'}`,
       `- 当前User：${this.tavernBridge?.getCurrentPersonaName() ?? '未选择'}`,
-      `- 当前User文件：${this.tavernBridge?.getCurrentPersonaName() ? `/users/${this.tavernBridge.getCurrentPersonaName()}.md` : '未挂载'}`,
+      `- 当前User文件：${files.find(file => file.resourceId === `persona:${this.tavernBridge?.getCurrentPersonaId()}`)?.path ?? '未挂载'}`,
       `- 角色目录：${hasCharacter ? '/character' : '未挂载'}`,
       `- 已挂载世界书：${mountedWorldbooks.length > 0 ? mountedWorldbooks.join('、') : '无'}`,
       '- 全局持久文件：/files',
@@ -1265,7 +1346,15 @@ export class CardAgentSessionService {
   private async finishMessageUndo(messageId: string, turnId: string): Promise<SessionView> {
     const turn = this.operationLog.turn(turnId);
     if (!turn) throw new Error('消息对应的操作轮次已经丢失。');
-    if (turn.modelMessageStart !== undefined) this.modelMessages = this.modelMessages.slice(0, turn.modelMessageStart);
+    if (
+      turn.eventStart !== undefined &&
+      this.events.slice(turn.eventStart).some(event => event.type === 'context-compacted')
+    ) {
+      // 压缩后旧数组下标已经失效；从可见对话重建，避免把已撤销的摘要带入下一轮。
+      const target = this.ui.findIndex(item => item.id === messageId);
+      this.modelMessages = this.messagesFromHistory(this.ui.slice(0, target).filter(item => !item.hidden));
+    } else if (turn.modelMessageStart !== undefined)
+      this.modelMessages = this.modelMessages.slice(0, turn.modelMessageStart);
     if (turn.eventStart !== undefined) this.events = this.events.slice(0, turn.eventStart);
     for (const item of this.ui) {
       if (item.checkpointId !== turnId) continue;
@@ -1297,7 +1386,10 @@ export class CardAgentSessionService {
       this.modelMessages = klona(this.runner?.state.messages ?? this.modelMessages);
       await this.persist();
     });
+    const initialApiUsageBaseline = this.runner ? this.runner.usageBaseline() : this.restoredUsageBaseline;
+    this.restoredUsageBaseline = undefined;
     this.runner = new AgentRunner({
+      initialApiUsageBaseline,
       compactionEnabled: this.agentConfiguration.toolIds.includes('compact_context'),
       contextWindow: this.contextWindow,
       executor: this.executor,
@@ -1777,6 +1869,22 @@ export class CardAgentSessionService {
           id: crypto.randomUUID(),
           kind: 'guidance',
         });
+    } else if (event.type === 'context-compaction-started') {
+      if (!this.compacting)
+        this.ui.push({
+          at: event.at,
+          checkpointId: this.activeCheckpointId,
+          content: '正在压缩上下文…',
+          id: `compact:${crypto.randomUUID()}`,
+          kind: 'status',
+          status: 'running',
+        });
+    } else if (event.type === 'context-compacted') {
+      const item = [...this.ui].reverse().find(item => item.kind === 'status' && item.content === '正在压缩上下文…');
+      if (item) {
+        item.content = '上下文压缩完成，继续当前任务。';
+        item.status = 'completed';
+      }
     } else if (event.type === 'status') {
       this.status = event.status;
       if (!['running', 'waiting-approval'].includes(event.status)) {
@@ -1789,10 +1897,18 @@ export class CardAgentSessionService {
         }
       }
       if (event.failure) this.lastError = event.failure;
+      if (event.status === 'failed' || event.status === 'stopped') {
+        const item = [...this.ui].reverse().find(item => item.kind === 'status' && item.content === '正在压缩上下文…');
+        if (item) {
+          item.content = event.failure ?? '上下文压缩已停止。';
+          item.status = 'failed';
+        }
+      }
     }
   }
 
   private completeRunUi(status: NonNullable<SessionUiItem['runStatus']>, endedAt: number): void {
+    if (this.compacting || !this.activeCheckpointId) return;
     const user = [...this.ui]
       .reverse()
       .find(item => item.checkpointId === this.activeCheckpointId && item.kind === 'user');
@@ -1801,8 +1917,27 @@ export class CardAgentSessionService {
     user.runStatus = status;
   }
 
+  private messagesFromHistory(ui: SessionUiItem[]): ModelMessage[] {
+    const finalIds = new Map<string | undefined, string>();
+    for (const item of ui) if (item.kind === 'assistant') finalIds.set(item.checkpointId, item.id);
+    const messages = klona(this.compiledPreset.messages);
+    for (const item of ui) {
+      if (item.kind === 'user') {
+        const attachments = (item.attachments ?? []).flatMap(value =>
+          this.attachments[value.id] ? [this.attachments[value.id]] : [],
+        );
+        messages.push({ role: 'user', content: userContentWithAttachments(item.content, attachments) });
+      } else if (item.kind === 'guidance') messages.push({ role: 'user', content: item.content });
+      else if (item.kind === 'assistant' && finalIds.get(item.checkpointId) === item.id)
+        messages.push({ role: 'assistant', content: item.content });
+    }
+    this.headerMessageCount = this.compiledPreset.messages.length;
+    return messages;
+  }
+
   private exportRuntime(): PersistedSessionRuntime {
     return {
+      apiUsageBaseline: this.runner ? this.runner.usageBaseline() : this.restoredUsageBaseline,
       activeCheckpointId: this.activeCheckpointId,
       agentConfiguration: klona(this.agentConfiguration),
       attachments: klona(this.attachments),
@@ -1843,8 +1978,8 @@ export class CardAgentSessionService {
     Object.keys(this.attachments).forEach(id => {
       if (!referencedAttachments.has(id)) delete this.attachments[id];
     });
-    await this.onPersist?.(this.exportRuntime());
     this.notify();
+    if (this.onPersist) await boundedWait(this.onPersist(this.exportRuntime()), '保存会话', 15_000);
   }
 
   private async reloadStorageFiles(): Promise<void> {
@@ -1897,6 +2032,11 @@ export class CardAgentSessionService {
       return;
     }
     await this.tavernChatWorkspace.initialize(this.repository);
+    this.tavernChatWorkspace.warnings.forEach(message => this.addWarning(message));
+  }
+
+  addWarning(message: string): void {
+    if (!this.warnings.includes(message)) this.warnings.push(message);
   }
 
   private notify(): void {

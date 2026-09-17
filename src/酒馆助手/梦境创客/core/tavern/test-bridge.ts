@@ -100,19 +100,45 @@ export class FakeTavernBridge implements TavernBridge {
     this.scripts.set('global', []);
     this.scripts.set('preset-current', []);
     this.personas.set('玩家', {
-      avatar: 'player.png', avatar_id: 'player.png', connections: [], depth: 2, description: '玩家描述',
-      is_default: true, lorebook: '', name: '玩家', position: 0, role: 0, title: '玩家',
+      avatar: 'player.png',
+      avatar_id: 'player.png',
+      connections: [],
+      depth: 2,
+      description: '玩家描述',
+      is_default: true,
+      lorebook: '',
+      name: '玩家',
+      position: 0,
+      role: 0,
+      title: '玩家',
     });
     const preset = {
       extensions: {},
       prompts: [{ content: '系统提示', enabled: true, id: 'main', name: '主提示', role: 'system' }],
       prompts_unused: [],
       settings: {
-        allow_sending_images: 'auto', allow_sending_videos: false, character_name_prefix: 'none',
-        enable_function_calling: true, enable_web_search: false, frequency_penalty: 0, max_completion_tokens: 1024,
-        max_context: 8192, min_p: 0, presence_penalty: 0, reasoning_effort: 'auto', repetition_penalty: 1,
-        reply_count: 1, request_images: false, request_thoughts: false, seed: -1, should_stream: true,
-        squash_system_messages: false, temperature: 1, top_a: 0, top_k: 0, top_p: 1,
+        allow_sending_images: 'auto',
+        allow_sending_videos: false,
+        character_name_prefix: 'none',
+        enable_function_calling: true,
+        enable_web_search: false,
+        frequency_penalty: 0,
+        max_completion_tokens: 1024,
+        max_context: 8192,
+        min_p: 0,
+        presence_penalty: 0,
+        reasoning_effort: 'auto',
+        repetition_penalty: 1,
+        reply_count: 1,
+        request_images: false,
+        request_thoughts: false,
+        seed: -1,
+        should_stream: true,
+        squash_system_messages: false,
+        temperature: 1,
+        top_a: 0,
+        top_k: 0,
+        top_p: 1,
         wrap_user_messages_in_quotes: false,
       },
     } as TavernPresetData;
@@ -179,13 +205,26 @@ export class FakeTavernBridge implements TavernBridge {
     return this.loadedPresetName;
   }
 
-  getPreset(name: string): TavernPresetData { const value = this.presets.get(name); if (!value) throw new Error('missing preset'); return klona(value); }
-  getPresetNames(): string[] { return [...this.presets.keys()].filter(name => name !== 'in_use'); }
-  getCurrentPersonaId(): string | null { return this.currentPersonaName ? this.personas.get(this.currentPersonaName)?.avatar_id ?? null : null; }
-  getCurrentPersonaName(): string | null { return this.currentPersonaName; }
+  getPreset(name: string): TavernPresetData {
+    const value = this.presets.get(name);
+    if (!value) throw new Error('missing preset');
+    return klona(value);
+  }
+  getPresetNames(): string[] {
+    return [...this.presets.keys()].filter(name => name !== 'in_use');
+  }
+  getCurrentPersonaId(): string | null {
+    return this.currentPersonaName ? (this.personas.get(this.currentPersonaName)?.avatar_id ?? null) : null;
+  }
+  getCurrentPersonaName(): string | null {
+    return this.currentPersonaName;
+  }
   getPersona(name: string): TavernPersonaData {
     const resolved = name === 'current' ? this.currentPersonaName : name;
-    const value = resolved ? this.personas.get(resolved) : undefined;
+    const byId = [...this.personas.values()].find(persona => persona.avatar_id === resolved);
+    const matches = [...this.personas.values()].filter(persona => persona.name === resolved);
+    if (!byId && matches.length > 1) throw new Error('persona名称不唯一');
+    const value = byId ?? matches[0];
     if (!value) throw new Error('missing persona');
     return klona(value);
   }
@@ -193,8 +232,15 @@ export class FakeTavernBridge implements TavernBridge {
     const persona = this.getPersona(name);
     return `/User Avatars/${persona.avatar_id}`;
   }
-  getPersonaNames(): string[] { return [...this.personas.keys()]; }
-  getCharacterAvatarPath(): string | null { return this.raw ? `/characters/${this.raw.avatar}` : null; }
+  getPersonaNames(): string[] {
+    return [...this.personas.values()].map(persona => persona.name);
+  }
+  getPersonaIds(): string[] {
+    return [...this.personas.values()].map(persona => persona.avatar_id);
+  }
+  getCharacterAvatarPath(): string | null {
+    return this.raw ? `/characters/${this.raw.avatar}` : null;
+  }
 
   getWorldbookNames(): string[] {
     return [...this.books.keys()].sort((left, right) => left.localeCompare(right));
@@ -229,21 +275,56 @@ export class FakeTavernBridge implements TavernBridge {
 
   async createPersona(name: string, persona?: Partial<TavernPersonaData>): Promise<void> {
     if (this.personas.has(name)) throw new Error('exists persona');
-    this.personas.set(name, { avatar: `${name}.png`, avatar_id: `${name}.png`, connections: [], depth: 2,
-      description: '', is_default: false, lorebook: '', position: 0, role: 0, title: name, ...klona(persona ?? {}), name } as TavernPersonaData);
+    this.personas.set(name, {
+      avatar: `${name}.png`,
+      avatar_id: `${name}.png`,
+      connections: [],
+      depth: 2,
+      description: '',
+      is_default: false,
+      lorebook: '',
+      position: 0,
+      role: 0,
+      title: name,
+      ...klona(persona ?? {}),
+      name,
+    } as TavernPersonaData);
   }
-  async deletePersona(name: string): Promise<void> { if (!this.personas.delete(name)) throw new Error('missing persona'); if (this.currentPersonaName === name) this.currentPersonaName = null; }
+  async deletePersona(name: string): Promise<void> {
+    const persona = this.getPersona(name);
+    const key = [...this.personas].find(([, value]) => value.avatar_id === persona.avatar_id)![0];
+    this.personas.delete(key);
+    if (this.currentPersonaName === persona.name) this.currentPersonaName = null;
+  }
   async replacePersona(name: string, persona: Partial<TavernPersonaData>): Promise<void> {
-    const previous = this.personas.get(name); if (!previous) throw new Error('missing persona');
+    const previous = this.getPersona(name);
+    const key = [...this.personas].find(([, value]) => value.avatar_id === previous.avatar_id)![0];
     const next = { ...previous, ...klona(persona) } as TavernPersonaData;
-    this.personas.delete(name); this.personas.set(next.name, next);
+    this.personas.delete(key);
+    this.personas.set(this.personas.has(next.name) ? next.avatar_id : next.name, next);
     if (this.currentPersonaName === name) this.currentPersonaName = next.name;
   }
-  async loadPreset(name: string): Promise<void> { const preset = this.presets.get(name); if (!preset) throw new Error('missing preset'); this.loadedPresetName = name; this.presets.set('in_use', klona(preset)); }
-  async replacePreset(name: string, preset: TavernPresetData): Promise<void> { if (name !== 'in_use' && !this.presets.has(name)) throw new Error('missing preset'); this.presets.set(name, klona(preset)); }
-  async createPreset(name: string, preset: TavernPresetData, overwrite = false): Promise<void> { if (this.presets.has(name) && !overwrite) throw new Error('exists preset'); this.presets.set(name, klona(preset)); }
-  async setCharacterAvatar(_bytes: Uint8Array, _mediaType: string): Promise<void> { this.calls.push('set-character-avatar'); }
-  async setPersonaAvatar(name: string, _bytes: Uint8Array, _mediaType: string): Promise<void> { if (!this.personas.has(name)) throw new Error('missing persona'); this.calls.push(`set-persona-avatar:${name}`); }
+  async loadPreset(name: string): Promise<void> {
+    const preset = this.presets.get(name);
+    if (!preset) throw new Error('missing preset');
+    this.loadedPresetName = name;
+    this.presets.set('in_use', klona(preset));
+  }
+  async replacePreset(name: string, preset: TavernPresetData): Promise<void> {
+    if (name !== 'in_use' && !this.presets.has(name)) throw new Error('missing preset');
+    this.presets.set(name, klona(preset));
+  }
+  async createPreset(name: string, preset: TavernPresetData, overwrite = false): Promise<void> {
+    if (this.presets.has(name) && !overwrite) throw new Error('exists preset');
+    this.presets.set(name, klona(preset));
+  }
+  async setCharacterAvatar(_bytes: Uint8Array, _mediaType: string): Promise<void> {
+    this.calls.push('set-character-avatar');
+  }
+  async setPersonaAvatar(name: string, _bytes: Uint8Array, _mediaType: string): Promise<void> {
+    this.getPersona(name);
+    this.calls.push(`set-persona-avatar:${name}`);
+  }
 
   async selectCharacterById(index: number): Promise<void> {
     this.calls.push(`select-character:${index}`);

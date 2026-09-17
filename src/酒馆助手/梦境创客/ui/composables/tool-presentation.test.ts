@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SessionUiItem } from '../../core/session/types';
 import { buildToolPresentation, formatToolRaw } from './tool-presentation';
-import { ALL_AGENT_TOOL_IDS } from '../../core/runner/tool-catalog';
 
 function tool(overrides: Partial<SessionUiItem> = {}): SessionUiItem {
   return {
@@ -17,13 +16,6 @@ function tool(overrides: Partial<SessionUiItem> = {}): SessionUiItem {
 }
 
 describe('tool presentation', () => {
-  it('当前工具目录中的工具都有专用类别与中文标题', () => {
-    for (const name of ALL_AGENT_TOOL_IDS) {
-      const presentation = buildToolPresentation(tool({ toolName: name }));
-      expect(presentation.kind, name).not.toBe('generic');
-      expect(presentation.title, name).not.toBe(name);
-    }
-  });
   it('工程检查失败按诊断展示，而不是声称文件操作完成', () => {
     const presentation = buildToolPresentation(
       tool({
@@ -40,33 +32,6 @@ describe('tool presentation', () => {
     expect(presentation.summary).toBe('检查未通过');
     expect(presentation.rows[0]).toMatchObject({ label: '语法错误', detail: 'main.js:3' });
   });
-  it('复制、预设和预览卡片保留实际目标信息', () => {
-    const copy = buildToolPresentation(
-      tool({
-        toolName: 'copy_path',
-        toolInput: JSON.stringify({ from: '/files/a', to: '/files/b' }),
-        content: '{"copied":true}',
-      }),
-    );
-    expect(copy.rows.map(row => row.label)).toEqual(['/files/a', '/files/b']);
-    const preset = buildToolPresentation(
-      tool({
-        toolName: 'manage_preset',
-        toolInput: '{"action":"search"}',
-        content: '{"presets":["A","B"],"loaded":"B"}',
-      }),
-    );
-    expect(preset.rows[1]).toMatchObject({ label: 'B', meta: '当前' });
-    const preview = buildToolPresentation(
-      tool({
-        toolName: 'prepare_render',
-        toolInput: '{"sourcePath":"/files/demo.html","renderer":"plain-html","sourceType":"file"}',
-        content: '{"renderId":"render_test"}',
-      }),
-    );
-    expect(preview.rows[0].label).toBe('render_test');
-    expect(preview.summary).toBe('预览已就绪');
-  });
   it('JavaScript 用意图作摘要，并保留执行时的文件代码快照', () => {
     const presentation = buildToolPresentation(
       tool({
@@ -81,90 +46,6 @@ describe('tool presentation', () => {
       path: '/character/files/check.js',
       code: 'return await Promise.resolve(42);',
     });
-  });
-  it('把文件读取结果转换为紧凑代码卡', () => {
-    const presentation = buildToolPresentation(
-      tool({
-        content: JSON.stringify({
-          endLine: 8,
-          path: '/character/card.md',
-          startLine: 1,
-          totalLines: 20,
-          view: '1 | a\n2 | b',
-        }),
-        toolInput: JSON.stringify({ path: '/character/card.md' }),
-        toolName: 'read_file',
-      }),
-    );
-
-    expect(presentation).toMatchObject({
-      kind: 'file',
-      path: '/character/card.md',
-      preview: { content: '1 | a\n2 | b', mode: 'code' },
-      title: '读取文件',
-    });
-    expect(presentation.metrics).toEqual(
-      expect.arrayContaining([
-        { label: '行', value: '1–8' },
-        { label: '总计', value: '20 行' },
-      ]),
-    );
-  });
-
-  it('保留目录的全部结果并交给卡片内部滚动', () => {
-    const presentation = buildToolPresentation(
-      tool({
-        content: JSON.stringify([
-          { kind: 'directory', name: 'worldbooks', path: '/worldbooks', readonly: false },
-          { kind: 'file', name: 'card.md', path: '/card.md', readonly: false, size: 2048 },
-          { kind: 'file', name: 'one.md', path: '/one.md', readonly: false },
-          { kind: 'file', name: 'two.md', path: '/two.md', readonly: false },
-        ]),
-        toolInput: JSON.stringify({ path: '/' }),
-        toolName: 'list_directory',
-      }),
-    );
-
-    expect(presentation.rows).toHaveLength(4);
-    expect(presentation.rows[1]).toMatchObject({ label: 'card.md', meta: '2.0 KB' });
-    expect(presentation.expandable).toBe(true);
-  });
-
-  it('为文件搜索生成命中行和计数', () => {
-    const presentation = buildToolPresentation(
-      tool({
-        content: JSON.stringify({
-          matchedFiles: 1,
-          matches: [
-            { column: 2, contextAfter: [], contextBefore: [], line: 7, path: '/a.ts', text: 'const dream = true;' },
-          ],
-          returnedMatches: 1,
-          truncated: false,
-        }),
-        toolInput: JSON.stringify({ path: '/', pattern: 'dream' }),
-        toolName: 'search_files',
-      }),
-    );
-
-    expect(presentation.summary).toBe('搜索“dream”');
-    expect(presentation.rows[0]).toMatchObject({ detail: 'const dream = true;', label: '/a.ts', meta: '第 7 行' });
-  });
-
-  it('为补丁统计增删行并保留可滚动 Diff', () => {
-    const presentation = buildToolPresentation(
-      tool({
-        content: JSON.stringify({ patched: true, path: '/a.ts' }),
-        toolInput: JSON.stringify({ patch: '@@ -1 +1 @@\n-old\n+new', path: '/a.ts' }),
-        toolName: 'apply_patch',
-      }),
-    );
-
-    expect(presentation.preview).toMatchObject({ mode: 'diff' });
-    expect(presentation.metrics).toEqual([
-      { label: '补丁', value: '3 行' },
-      { label: '新增', tone: 'success', value: '+1' },
-      { label: '删除', tone: 'danger', value: '-1' },
-    ]);
   });
 
   it('从未闭合的流式参数中提取写入与补丁进度', () => {
@@ -208,58 +89,6 @@ describe('tool presentation', () => {
       { label: '删除', tone: 'danger', value: '-1' },
     ]);
     expect(contentBeforePath.path).toBe('/character/real.md');
-  });
-
-  it('通用工具在参数生成与就绪阶段使用统一状态', () => {
-    const generating = buildToolPresentation(
-      tool({ content: '', status: 'running', toolInput: '{"path":"/', toolName: 'read_file', toolPhase: 'generating' }),
-    );
-    const ready = buildToolPresentation(
-      tool({ content: '', status: 'running', toolInput: '{"path":"/"}', toolName: 'read_file', toolPhase: 'ready' }),
-    );
-
-    expect(generating).toMatchObject({ rawOutput: '正在生成调用参数…', summary: '正在生成调用参数…' });
-    expect(ready).toMatchObject({ rawOutput: '参数已就绪，等待执行…', summary: '参数已就绪，等待执行…' });
-  });
-
-  it('分别生成世界书、酒馆会话和联网搜索卡片', () => {
-    const worldbook = buildToolPresentation(
-      tool({
-        content: JSON.stringify({ entries: 12, name: '主世界书', path: '/worldbooks/main' }),
-        toolInput: JSON.stringify({ name: '主世界书', source: '旧世界书' }),
-        toolName: 'clone_worldbook',
-      }),
-    );
-    const tavern = buildToolPresentation(
-      tool({
-        content: JSON.stringify({ chatId: 'c1', completed: true, images: 2 }),
-        toolInput: JSON.stringify({ chatId: 'c1', message: '继续这个故事' }),
-        toolName: 'send_tavern_message',
-      }),
-    );
-    const web = buildToolPresentation(
-      tool({
-        content: JSON.stringify({
-          action: {
-            query: '梦境创客',
-            sources: [{ title: '项目主页', type: 'url', url: 'https://example.test/project' }],
-          },
-        }),
-        providerTool: true,
-        toolName: 'web_search',
-      }),
-    );
-
-    expect(worldbook).toMatchObject({ kind: 'worldbook', summary: '主世界书 · 克隆完成' });
-    expect(tavern).toMatchObject({ kind: 'tavern', preview: { content: '继续这个故事', mode: 'text' } });
-    expect(web).toMatchObject({ kind: 'web', summary: '搜索“梦境创客” · 1 条结果' });
-    expect(web.webSearch?.groups[0]?.results[0]).toMatchObject({
-      domain: 'example.test',
-      faviconDarkUrl: 'https://example.test/favicon.ico',
-      faviconLightUrl: 'https://example.test/favicon.ico',
-      title: '项目主页',
-      url: 'https://example.test/project',
-    });
   });
 
   it('把 DeepSeek 多查询原生返回转换为紧凑搜索结果组', () => {

@@ -3,7 +3,7 @@ import type { OperationReplayConflict, OperationReplayDirection } from '../opera
 import type { PersistedOperationLog } from '../operations/types';
 import type { CompiledPreset, StructuredPreset } from '../preset/compiler';
 import type { RunnerEvent, RunnerStatus } from '../runner/agent-runner';
-import type { ContextUsage } from '../runner/context';
+import type { ApiUsageBaseline, ContextUsage } from '../runner/context';
 import type { AgentSkill } from '../skills/types';
 import type { WorkspaceFile } from '../workspace/types';
 import type { TavernChatWorkspaceRuntime } from '../tavern/chat-workspace';
@@ -61,6 +61,7 @@ export type ManualEditGroup = {
 };
 
 export type PersistedSessionRuntime = {
+  apiUsageBaseline?: ApiUsageBaseline;
   pendingGuidance?: Array<{ id: string; message: string }>;
   activeCheckpointId?: string;
   agentConfiguration?: SessionAgentConfiguration;

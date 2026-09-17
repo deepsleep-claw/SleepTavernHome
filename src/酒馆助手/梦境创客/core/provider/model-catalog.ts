@@ -157,12 +157,19 @@ function parseMatchRules(value: unknown, id: string, aliases: string[], patterns
 }
 
 function parseBuiltinSource(source: string): ModelTemplate[] {
-  const root = record(parse(source));
+  const root = record(parse(source, { merge: true }));
   const revision = typeof root?.revision === 'string' ? root.revision : 'unknown';
   const rootCompatibilityMode =
-    root?.compatibilityMode === 'deepseek' ? 'deepseek' : root?.compatibilityMode === 'standard' ? 'standard' : undefined;
+    root?.compatibilityMode === 'deepseek'
+      ? 'deepseek'
+      : root?.compatibilityMode === 'standard'
+        ? 'standard'
+        : undefined;
   const rootInterfaceType =
-    root?.interfaceType === 'anthropic' || root?.interfaceType === 'openai-chat' || root?.interfaceType === 'openai-responses'
+    root?.interfaceType === 'anthropic' ||
+    root?.interfaceType === 'openai-chat' ||
+    root?.interfaceType === 'openai-responses' ||
+    root?.interfaceType === 'gemini'
       ? root.interfaceType
       : undefined;
   if (!Array.isArray(root?.models)) return [];
@@ -177,49 +184,58 @@ function parseBuiltinSource(source: string): ModelTemplate[] {
     const capabilities = record(settings?.capabilities);
     const aliases = strings(value.aliases);
     const patterns = strings(value.patterns);
-    return [{
-      aliases,
-      compatibilityMode:
-        value.compatibilityMode === 'deepseek'
-          ? 'deepseek'
-          : value.compatibilityMode === 'standard'
-            ? 'standard'
-            : rootCompatibilityMode,
-      confidence: value.confidence === 'low' || value.confidence === 'medium' ? value.confidence : 'high',
-      id,
-      interfaceType:
-        value.interfaceType === 'anthropic' || value.interfaceType === 'openai-chat' || value.interfaceType === 'openai-responses'
-          ? value.interfaceType
-          : rootInterfaceType,
-      name,
-      match: parseMatchRules(value.match, id, aliases, patterns),
-      patterns,
-      provider,
-      revision,
-      settings: {
-        capabilities: {
-          reasoning: capability(capabilities?.reasoning),
-          toolCalling: capability(capabilities?.toolCalling),
-          vision: capability(capabilities?.vision),
-          webSearch: capability(capabilities?.webSearch),
+    return [
+      {
+        aliases,
+        compatibilityMode:
+          value.compatibilityMode === 'deepseek'
+            ? 'deepseek'
+            : value.compatibilityMode === 'standard'
+              ? 'standard'
+              : rootCompatibilityMode,
+        confidence: value.confidence === 'low' || value.confidence === 'medium' ? value.confidence : 'high',
+        id,
+        interfaceType:
+          value.interfaceType === 'anthropic' ||
+          value.interfaceType === 'openai-chat' ||
+          value.interfaceType === 'openai-responses' ||
+          value.interfaceType === 'gemini'
+            ? value.interfaceType
+            : rootInterfaceType,
+        name,
+        match: parseMatchRules(value.match, id, aliases, patterns),
+        patterns,
+        provider,
+        revision,
+        settings: {
+          capabilities: {
+            reasoning: capability(capabilities?.reasoning),
+            toolCalling: capability(capabilities?.toolCalling),
+            vision: capability(capabilities?.vision),
+            webSearch: capability(capabilities?.webSearch),
+          },
+          contextWindow: number(settings?.contextWindow, DEFAULT_CONTEXT_WINDOW),
+          maxOutputTokens: number(settings?.maxOutputTokens),
+          reasoningEfforts: reasoningEfforts(settings?.reasoningEfforts),
+          temperature: typeof settings?.temperature === 'number' ? settings.temperature : undefined,
+          topP: typeof settings?.topP === 'number' ? settings.topP : undefined,
         },
-        contextWindow: number(settings?.contextWindow, DEFAULT_CONTEXT_WINDOW),
-        maxOutputTokens: number(settings?.maxOutputTokens),
-        reasoningEfforts: reasoningEfforts(settings?.reasoningEfforts),
-        temperature: typeof settings?.temperature === 'number' ? settings.temperature : undefined,
-        topP: typeof settings?.topP === 'number' ? settings.topP : undefined,
+        source: 'builtin' as const,
+        sourceUrl: typeof value.sourceUrl === 'string' ? value.sourceUrl : undefined,
+        status: value.status === 'preview' || value.status === 'unverified' ? value.status : 'active',
       },
-      source: 'builtin' as const,
-      sourceUrl: typeof value.sourceUrl === 'string' ? value.sourceUrl : undefined,
-      status: value.status === 'preview' || value.status === 'unverified' ? value.status : 'active',
-    }];
+    ];
   });
 }
 
 let builtinCache: ModelTemplate[] | undefined;
 
 export function builtinModelTemplates(): ModelTemplate[] {
-  builtinCache ??= BUILTIN_SOURCES.flatMap(parseBuiltinSource);
+  builtinCache ??= BUILTIN_SOURCES.flatMap(parseBuiltinSource).flatMap(template =>
+    template.provider === 'google'
+      ? [template, { ...template, id: `${template.id}:gemini`, interfaceType: 'gemini' as const }]
+      : [template],
+  );
   return structuredClone(builtinCache);
 }
 
@@ -243,22 +259,34 @@ export function normalizeModelSettings(value?: Partial<ModelSettings>): ModelSet
     contextWindow: number(value?.contextWindow),
     maxOutputTokens: number(value?.maxOutputTokens),
     reasoningEfforts: reasoningEfforts(value?.reasoningEfforts),
-    temperature: typeof value?.temperature === 'number' && Number.isFinite(value.temperature) ? value.temperature : undefined,
+    temperature:
+      typeof value?.temperature === 'number' && Number.isFinite(value.temperature) ? value.temperature : undefined,
     topP: typeof value?.topP === 'number' && Number.isFinite(value.topP) ? value.topP : undefined,
   };
 }
 
 function normalizeId(value: string): string {
-  return value.trim().toLocaleLowerCase().replace(/[\\_\s]+/gu, '-').replace(/-{2,}/gu, '-');
+  return value
+    .trim()
+    .toLocaleLowerCase()
+    .replace(/[\\_\s]+/gu, '-')
+    .replace(/-{2,}/gu, '-');
 }
 
-function matchScore(modelId: string, template: ModelTemplate): { length: number; rank: number; score: number } | undefined {
+function matchScore(
+  modelId: string,
+  template: ModelTemplate,
+): { length: number; rank: number; score: number } | undefined {
   const normalized = normalizeId(modelId);
   const candidates: Array<{ length: number; rank: number; score: number }> = [];
-  for (const value of template.match.exact) if (normalized === value) candidates.push({ length: value.length, rank: 4, score: 1 });
-  for (const value of template.match.prefix) if (normalized.startsWith(value)) candidates.push({ length: value.length, rank: 3, score: 0.9 });
-  for (const value of template.match.suffix) if (normalized.endsWith(value)) candidates.push({ length: value.length, rank: 3, score: 0.9 });
-  for (const value of template.match.contains) if (normalized.includes(value)) candidates.push({ length: value.length, rank: 2, score: 0.8 });
+  for (const value of template.match.exact)
+    if (normalized === value) candidates.push({ length: value.length, rank: 4, score: 1 });
+  for (const value of template.match.prefix)
+    if (normalized.startsWith(value)) candidates.push({ length: value.length, rank: 3, score: 0.9 });
+  for (const value of template.match.suffix)
+    if (normalized.endsWith(value)) candidates.push({ length: value.length, rank: 3, score: 0.9 });
+  for (const value of template.match.contains)
+    if (normalized.includes(value)) candidates.push({ length: value.length, rank: 2, score: 0.8 });
   return candidates.sort((left, right) => right.rank - left.rank || right.length - left.length)[0];
 }
 
@@ -275,19 +303,16 @@ export function matchModelTemplates(
     .filter((item): item is typeof item & { match: NonNullable<typeof item.match> } => Boolean(item.match))
     .sort(
       (left, right) =>
-        right.match.rank - left.match.rank ||
-        right.match.length - left.match.length ||
-        left.order - right.order,
+        right.match.rank - left.match.rank || right.match.length - left.match.length || left.order - right.order,
     )
     .map(item => ({ score: item.match.score, template: item.template }))
     .slice(0, limit);
 }
 
-export function filterModelTemplatesForScope(
-  templates: ModelTemplate[],
-  scope: ModelTemplateScope,
-): ModelTemplate[] {
-  return templates.filter(template => template.interfaceType === undefined || template.interfaceType === scope.interfaceType);
+export function filterModelTemplatesForScope(templates: ModelTemplate[], scope: ModelTemplateScope): ModelTemplate[] {
+  return templates.filter(
+    template => template.interfaceType === undefined || template.interfaceType === scope.interfaceType,
+  );
 }
 
 function modalitySupportsText(model: Record<string, unknown>): boolean {

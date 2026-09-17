@@ -20,6 +20,55 @@ afterEach(() => {
 });
 
 describe('SessionComposer', () => {
+  it('触屏可点选文件补全，斜杠补全执行客户端命令而不发送给AI', async () => {
+    const compactContext = vi.fn(async () => undefined);
+    const send = vi.fn();
+    runtimeMock.context = {
+      action: async (work: () => Promise<unknown>) => {
+        await work();
+        return true;
+      },
+      runtime: { compactContext, send },
+      state: shallowRef({
+        active: {
+          sessionId: 'shortcuts',
+          status: 'completed',
+          mode: 'normal',
+          modelControls: { reasoningEffort: 'auto', webSearch: false },
+          workingFiles: [{ path: '/files/note.md' }],
+        },
+        busy: false,
+        providers: [],
+        approvalMode: 'normal',
+        sendWithCtrlEnter: false,
+      }),
+    };
+    const root = document.createElement('div');
+    document.body.append(root);
+    const app = createApp(SessionComposer);
+    app.mount(root);
+    mounted = { root, unmount: () => app.unmount() };
+    await nextTick();
+    const input = root.querySelector<HTMLTextAreaElement>('textarea')!;
+    input.value = '@note';
+    input.setSelectionRange(5, 5);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await nextTick();
+    const file = root.querySelector<HTMLButtonElement>('[role="option"]')!;
+    const touch = new PointerEvent('pointerdown', { pointerType: 'touch', bubbles: true, cancelable: true });
+    file.dispatchEvent(touch);
+    expect(touch.defaultPrevented).toBe(true);
+    file.click();
+    await nextTick();
+    expect(input.value).toBe('[note.md](/files/note.md) ');
+    input.value = '/';
+    input.setSelectionRange(1, 1);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await nextTick();
+    root.querySelector<HTMLButtonElement>('[role="option"]')!.click();
+    await vi.waitFor(() => expect(compactContext).toHaveBeenCalledOnce());
+    expect(send).not.toHaveBeenCalled();
+  });
   it('逐工具审批等待期间仍可输入引导或停止任务', () => {
     const stop = vi.fn();
     runtimeMock.context = {
@@ -49,55 +98,5 @@ describe('SessionComposer', () => {
     expect(button.title).toBe('停止当前任务');
     button.click();
     expect(stop).toHaveBeenCalledOnce();
-  });
-
-  it('宽度不足时只在外层保留模型、审批与发送，并用加号收纳附件入口', async () => {
-    let resizeCallback: ResizeObserverCallback | undefined;
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        constructor(callback: ResizeObserverCallback) {
-          resizeCallback = callback;
-        }
-        disconnect() {}
-        observe() {}
-        unobserve() {}
-      },
-    );
-    runtimeMock.context = {
-      action: async () => true,
-      runtime: {},
-      state: shallowRef({
-        active: {
-          mode: 'normal',
-          modelControls: { reasoningEffort: 'auto', webSearch: false },
-          status: 'completed',
-        },
-        approvalMode: 'normal',
-        busy: false,
-        providers: [],
-        sendWithCtrlEnter: false,
-      }),
-    };
-    const root = document.createElement('div');
-    document.body.append(root);
-    const app = createApp(SessionComposer);
-    app.mount(root);
-    mounted = { root, unmount: () => app.unmount() };
-
-    resizeCallback?.([{ contentRect: { width: 420 } } as ResizeObserverEntry], {} as ResizeObserver);
-    await nextTick();
-
-    expect(root.querySelector('.dca-composer-control-strip')?.textContent).toContain('未选择模型');
-    expect(root.querySelector('.dca-composer-control-strip')?.textContent).toContain('审批：手动');
-    expect(root.querySelector('.dca-composer-footer')).toBeNull();
-    expect(root.querySelector('.dca-compact-input-row .dca-send-button')).not.toBeNull();
-
-    root.querySelector<HTMLButtonElement>('.dca-plus-wrap > button')?.click();
-    await nextTick();
-    expect(root.querySelector('.dca-plus-menu')?.textContent).toContain('添加文件');
-    expect(root.querySelector('.dca-plus-menu')?.textContent).toContain('添加图片');
-    expect(root.querySelector('.dca-plus-menu')?.textContent).toContain('模型与推理');
-    expect(root.querySelector('.dca-plus-menu')?.textContent).toContain('审批模式');
   });
 });

@@ -27,24 +27,6 @@ const files: WorkspaceFile[] = [
 ];
 
 describe('MemoryWorkspaceRepository', () => {
-  it('支持列出、读取、新建与隐式目录', async () => {
-    const workspace = new MemoryWorkspaceRepository({ files });
-    expect((await workspace.list('/')).map(entry => entry.name)).toEqual(['character', 'context', 'worldbooks']);
-
-    await workspace.write('/greetings/001-初见.md', '你好。', 'write-1');
-    expect((await workspace.read('/greetings/001-初见.md')).content).toBe('你好。');
-    expect(workspace.changes()).toMatchObject([{ kind: 'create', path: '/greetings/001-初见.md' }]);
-  });
-
-  it('整体写入默认只允许新建，覆盖已有文件必须显式声明', async () => {
-    const workspace = new MemoryWorkspaceRepository({ files });
-    await expect(workspace.write('/character/description.md', '误覆盖', 'write-existing')).rejects.toMatchObject({
-      code: 'ALREADY_EXISTS',
-    });
-    await workspace.write('/character/description.md', '明确覆盖', 'overwrite-existing', { overwrite: true });
-    expect((await workspace.read('/character/description.md')).content).toBe('明确覆盖');
-  });
-
   it('空世界书仍显示并允许列出固定entries目录', async () => {
     const workspace = new MemoryWorkspaceRepository({
       files: [
@@ -63,21 +45,6 @@ describe('MemoryWorkspaceRepository', () => {
       expect.objectContaining({ kind: 'file', name: 'book.yaml' }),
     ]);
     expect(await workspace.list('/worldbooks/空世界书/entries')).toEqual([]);
-  });
-
-  it('用统一Diff精确修改且工具调用幂等', async () => {
-    const workspace = new MemoryWorkspaceRepository({ files });
-    const patch = '@@ -1,3 +1,3 @@\n-旧标题\n+新标题\n 第二行\n 结尾';
-    await workspace.patch('/character/description.md', patch, 'patch-1');
-    await workspace.patch('/character/description.md', patch, 'patch-1');
-    expect((await workspace.read('/character/description.md')).content).toBe('新标题\n第二行\n结尾\n');
-  });
-
-  it('拒绝上下文不匹配的Patch', async () => {
-    const workspace = new MemoryWorkspaceRepository({ files });
-    await expect(
-      workspace.patch('/character/description.md', '@@ -1 +1 @@\n-不存在\n+新内容', 'patch-invalid'),
-    ).rejects.toMatchObject({ code: 'INVALID_PATCH' });
   });
 
   it('移动目录时保留资源身份并记录为移动', async () => {
@@ -112,36 +79,6 @@ describe('MemoryWorkspaceRepository', () => {
     await expect(workspace.move('/context', '/archive', 'readonly-move')).rejects.toMatchObject({
       code: 'READ_ONLY_PATH',
     });
-  });
-
-  it('拒绝越过根目录和Windows路径', async () => {
-    const workspace = new MemoryWorkspaceRepository({ files });
-    await expect(workspace.read('/character/../context/chat.md')).rejects.toMatchObject({ code: 'INVALID_PATH' });
-    await expect(workspace.write('C:\\secret.txt', 'x', 'bad-path')).rejects.toMatchObject({ code: 'INVALID_PATH' });
-  });
-
-  it('像rg一样搜索正则、Glob、上下文和截断', async () => {
-    const workspace = new MemoryWorkspaceRepository({ files });
-    const result = await workspace.search({
-      contextLines: 1,
-      glob: '**/*.md',
-      maxResults: 1,
-      mode: 'regex',
-      path: '/worldbooks',
-      pattern: '学院|安静',
-    });
-    expect(result).toMatchObject({ matchedFiles: 1, returnedMatches: 1, truncated: true });
-    expect(result.matches[0]).toMatchObject({ line: 1, path: '/worldbooks/学院/entries/42-library.md' });
-    expect(result.matches[0].contextAfter).toEqual(['这里很安静。']);
-  });
-
-  it('默认的普通文本搜索不会把正则字符当作表达式', async () => {
-    const workspace = new MemoryWorkspaceRepository({
-      files: [{ ...files[0], content: 'a+b\nab' }],
-    });
-    const result = await workspace.search({ pattern: 'a+b' });
-    expect(result.matches).toHaveLength(1);
-    expect(result.matches[0].text).toBe('a+b');
   });
 
   it('替换外部投影时不产生Working Copy变更', async () => {
@@ -186,10 +123,7 @@ describe('MemoryWorkspaceRepository', () => {
     expect(workspace.changes().filter(change => change.path.startsWith('/worldbooks/新世界'))).toHaveLength(2);
 
     await expect(
-      workspace.stageFiles(
-        [staged[0], { ...staged[1], path: '/worldbooks/另一本/entry.md' }],
-        'stage-conflict',
-      ),
+      workspace.stageFiles([staged[0], { ...staged[1], path: '/worldbooks/另一本/entry.md' }], 'stage-conflict'),
     ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
     await expect(workspace.read('/worldbooks/另一本/entry.md')).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });

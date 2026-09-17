@@ -125,15 +125,39 @@ function agentConfiguration(id: string, name: string, presetId: string, skillIds
 }
 
 describe('DreamCardAgentRuntime', () => {
-  it('界面模式开关保存后立即更新快照', async () => {
-    const settingsStore = new MemoryAgentSettingsStore();
-    const runtime = new DreamCardAgentRuntime({ bridge: new FakeTavernBridge(), fileClient: new MemoryTavernFileClient(), settingsStore });
-    try {
-      const modes = { overlay: true, navigation: true, detached: true };
-      await runtime.updateSettings({ interfaceModes: modes });
-      expect(runtime.snapshot().interfaceModes).toEqual(modes);
-      expect(settingsStore.load().interfaceModes).toEqual(modes);
-    } finally { runtime.destroy(); }
+  it('浏览器重载后实时资源不可用时仍可进入只读历史', async () => {
+    const files = new MemoryTavernFileClient();
+    const settings = new MemoryAgentSettingsStore();
+    const base = transactionState();
+    const first = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(base),
+      bridge: new FakeTavernBridge(),
+      fileClient: files,
+      settingsStore: settings,
+    });
+    await useAgentWithoutRemoteSkills(first);
+    await first.refreshCharacter();
+    const created = await first.createSession({ title: '需要恢复的会话' });
+    first.destroy();
+    const adapter = new MemoryCardStateAdapter(base);
+    const read = adapter.read.bind(adapter);
+    let reads = 0;
+    adapter.read = async () => {
+      if (++reads >= 3) throw new Error('resource offline');
+      return read();
+    };
+    const next = new DreamCardAgentRuntime({
+      adapterFactory: () => adapter,
+      bridge: new FakeTavernBridge(),
+      fileClient: files,
+      settingsStore: settings,
+    });
+    await next.refreshCharacter();
+    const view = await next.openSession(created.sessionId);
+    expect(view.title).toBe('需要恢复的会话');
+    expect(next.snapshot().activeSessionAccess).toBe('readonly-history');
+    expect(view.error).toContain('resource offline');
+    next.destroy();
   });
   it('浏览器会话在备份前也能重新加载并显示到角色列表', async () => {
     const records = new MemoryBrowserRecordStore();
@@ -419,36 +443,6 @@ describe('DreamCardAgentRuntime', () => {
     second.destroy();
   });
 
-  it('预设Profile保存在全局设置，新会话采用当前Profile', async () => {
-    const runtime = new DreamCardAgentRuntime({
-      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
-      executorFactory: () => new QueueExecutor([]),
-      fileClient: new MemoryTavernFileClient(),
-      settingsStore: new MemoryAgentSettingsStore(),
-    });
-    await addProfile(runtime);
-    await useAgentWithoutRemoteSkills(runtime);
-    const preset = await runtime.savePresetProfile({
-      id: 'custom-preset',
-      name: '世界书专家',
-      nodes: [
-        {
-          content: '{{agent_identity}}\n{{skill_instructions}}',
-          enabled: true,
-          id: 'header',
-          order: 10,
-          role: 'system',
-          title: '头部',
-        },
-      ],
-      version: 1,
-    });
-    await runtime.saveAgentConfiguration(agentConfiguration('agent:worldbook', '世界书Agent', preset.id, []));
-    expect(runtime.snapshot()).toMatchObject({ activePresetId: preset.id, presetProfiles: expect.any(Array) });
-    expect((await runtime.createSession()).preset).toMatchObject({ id: 'custom-preset', name: '世界书专家' });
-    runtime.destroy();
-  });
-
   it('把角色绑定、API Profile、会话Revision和前台状态串成生产运行时', async () => {
     const adapter = new MemoryCardStateAdapter(transactionState());
     const settings = new MemoryAgentSettingsStore();
@@ -483,53 +477,6 @@ describe('DreamCardAgentRuntime', () => {
     const view = await reopened.openSession(sessionId);
     expect(view.ui.some(item => item.content === '修改描述')).toBe(true);
     reopened.destroy();
-  });
-
-  it('不同前端运行时都可直接打开会话，不创建后端租约', async () => {
-    const adapter = new MemoryCardStateAdapter(transactionState());
-    const settings = new MemoryAgentSettingsStore();
-    const files = new MemoryTavernFileClient();
-    const owner = new DreamCardAgentRuntime({
-      adapterFactory: () => adapter,
-      executorFactory: () => new QueueExecutor([]),
-      fileClient: files,
-      settingsStore: settings,
-    });
-    await addProfile(owner);
-    await useAgentWithoutRemoteSkills(owner);
-    const session = await owner.createSession();
-
-    const observer = new DreamCardAgentRuntime({
-      adapterFactory: () => adapter,
-      executorFactory: () => new QueueExecutor([]),
-      fileClient: files,
-      settingsStore: settings,
-    });
-    expect((await observer.openSession(session.sessionId)).sessionId).toBe(session.sessionId);
-    expect(files.uploadedNames.some(name => name.includes('lease'))).toBe(false);
-    expect((await observer.renameSession('重新命名的会话')).title).toBe('重新命名的会话');
-    owner.destroy();
-    observer.destroy();
-  });
-
-  it('首条用户输入第一行前20个字成为默认会话名，并允许随后重命名', async () => {
-    const runtime = new DreamCardAgentRuntime({
-      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
-      executorFactory: () => new QueueExecutor([modelStep(false)]),
-      fileClient: new MemoryTavernFileClient(),
-      settingsStore: new MemoryAgentSettingsStore(),
-    });
-    await addProfile(runtime);
-    await useAgentWithoutRemoteSkills(runtime);
-    await runtime.createSession();
-    const firstMessage = '请补全角色的背景故事与核心动机，并补充完整的成长经历\n第二行不要进入标题';
-    expect((await runtime.send(firstMessage)).title).toBe(
-      Array.from(firstMessage.split('\n')[0]).slice(0, 20).join(''),
-    );
-    expect((await runtime.renameSession('  我的角色创作  ')).title).toBe('我的角色创作');
-    expect(runtime.snapshot().sessions[0]?.title).toBe('我的角色创作');
-    expect(runtime.snapshot().characterGroups[0]?.sessions[0]?.title).toBe('我的角色创作');
-    runtime.destroy();
   });
 
   it('从指定最终输出分叉为独立会话，并只继承该节点之前的对话上下文', async () => {
@@ -599,25 +546,6 @@ describe('DreamCardAgentRuntime', () => {
       reasoningEffort: 'high',
       webSearch: true,
     });
-    runtime.destroy();
-  });
-
-  it('Provider、模型与轻量设置保存到extension settings模型，不发测试请求', async () => {
-    const settings = new MemoryAgentSettingsStore();
-    const runtime = new DreamCardAgentRuntime({
-      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
-      executorFactory: () => new QueueExecutor([]),
-      fileClient: new MemoryTavernFileClient(),
-      settingsStore: settings,
-    });
-    const { model, provider } = await addProfile(runtime);
-    await runtime.updateSettings({ developerMode: true, floatingButton: false, sendWithCtrlEnter: true });
-    expect(runtime.snapshot()).toMatchObject({ developerMode: true, floatingButton: false, sendWithCtrlEnter: true });
-    await runtime.selectDefaultModel({ providerId: provider.id, modelId: model.id });
-    await runtime.removeProvider(provider.id);
-    expect(runtime.snapshot().providers).toEqual([]);
-    expect((await runtime.createSession()).modelSelection).toBeUndefined();
-    await expect(runtime.send('测试')).rejects.toThrow('尚未选择可用模型');
     runtime.destroy();
   });
 

@@ -6,6 +6,18 @@ import { TavernChatWorkspace } from './chat-workspace';
 const firstMessagePath = '/character/chats/c01/messages/0000-0099/000000.md';
 
 describe('TavernChatWorkspace', () => {
+  it('失效的旧聊天只显示读取提示，不阻止恢复当前聊天', async () => {
+    const bridge = new FakeTavernChatBridge();
+    const repository = new MemoryWorkspaceRepository();
+    const workspace = new TavernChatWorkspace(bridge, {
+      mounts: [{ alias: 'c09', ref: '不存在', name: '旧聊天' }],
+      nextAlias: 10,
+    });
+    await workspace.initialize(repository);
+    expect(workspace.warnings).toHaveLength(1);
+    expect((await repository.read('/character/chats/c09/error.md')).readonly).toBe(true);
+    expect(workspace.exportRuntime().mounts).toHaveLength(2);
+  });
   it('用稳定短ID投影当前聊天，并且实时投影不进入Working Diff', async () => {
     const bridge = new FakeTavernChatBridge();
     const repository = new MemoryWorkspaceRepository();
@@ -14,7 +26,10 @@ describe('TavernChatWorkspace', () => {
     await workspace.initialize(repository);
 
     expect((await repository.read('/character/chats/index.yaml')).content).toContain('active_chat: c01');
-    expect(await repository.read(firstMessagePath)).toMatchObject({ content: expect.stringContaining('你好。'), readonly: false });
+    expect(await repository.read(firstMessagePath)).toMatchObject({
+      content: expect.stringContaining('你好。'),
+      readonly: false,
+    });
     expect(workspace.exportRuntime().initialChat).toBe('c01');
     expect(repository.changes()).toEqual([]);
   });

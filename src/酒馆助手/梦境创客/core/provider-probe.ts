@@ -1,11 +1,12 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
+import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { streamText, type LanguageModel, type ModelMessage, type Tool } from 'ai';
 import { createAdvancedRequestFetch } from './provider/advanced-request';
 import { createDeepSeekResponsesFetch } from './provider/deepseek-responses-adapter';
 
-export type ProviderInterfaceType = 'anthropic' | 'openai-chat' | 'openai-responses';
+export type ProviderInterfaceType = 'anthropic' | 'openai-chat' | 'openai-responses' | 'gemini';
 export type ProviderCompatibilityMode = 'deepseek' | 'standard';
 export type LegacyProviderProtocol = ProviderInterfaceType | 'openai-compatible';
 
@@ -20,6 +21,10 @@ const ADAPTER_CAPABILITIES: Record<
   ProviderInterfaceType,
   Record<ProviderCompatibilityMode, ProviderAdapterCapabilities>
 > = {
+  gemini: {
+    deepseek: { nativeWebSearch: false, samplingIgnoredWhenReasoning: false },
+    standard: { nativeWebSearch: false, samplingIgnoredWhenReasoning: false },
+  },
   anthropic: {
     deepseek: { nativeWebSearch: true, samplingIgnoredWhenReasoning: true },
     standard: { nativeWebSearch: true, samplingIgnoredWhenReasoning: false },
@@ -76,6 +81,13 @@ export function createProviderRuntime(profile: ProviderProbeProfile, webSearchMa
   };
 
   switch (profile.interfaceType) {
+    case 'gemini': {
+      const provider = createGoogleGenerativeAI({
+        ...options,
+        baseURL: profile.baseURL.trim() || 'https://generativelanguage.googleapis.com/v1beta',
+      });
+      return { capabilities, model: provider.chat(profile.model.replace(/^models\//u, '')) };
+    }
     case 'anthropic': {
       const provider = createAnthropic(options);
       return {

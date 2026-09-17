@@ -65,16 +65,79 @@ function createService(input: {
 }
 
 describe('card agent realtime session service', () => {
+  it('恢复会话仍使用API实际用量，在下一次正常请求前先压缩', async () => {
+    let saved!: PersistedSessionRuntime;
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const first = await createService({
+      adapter,
+      executor: new QueueExecutor([{ ...step([], '旧回答'), inputTokens: 100_000, outputTokens: 8000 }]),
+      onPersist: async value => {
+        saved = structuredClone(value);
+      },
+    });
+    await first.send('第一轮');
+    const executor = new QueueExecutor([step([], '交接摘要'), step([], '继续完成')]);
+    const restored = await CardAgentSessionService.restore({ adapter, executor }, saved);
+    expect(restored.view().contextUsage.totalTokens).toBe(108_000);
+    expect((await restored.send('第二轮')).status).toBe('completed');
+    expect(executor.requests[0].tools).toEqual([]);
+    expect(executor.requests[1].tools.length).toBeGreaterThan(0);
+    expect(executor.requests[1].messages.some(message => String(message.content).includes('交接摘要'))).toBe(true);
+  });
+  it('手动压缩后回退最新消息，移除摘要并恢复此前对话', async () => {
+    let saved!: PersistedSessionRuntime;
+    const service = await createService({
+      executor: new QueueExecutor([step([], '第一轮答案'), step([], '第二轮答案'), step([], '包含第二轮的摘要')]),
+      onPersist: async value => {
+        saved = structuredClone(value);
+      },
+    });
+    await service.send('第一轮');
+    await service.send('第二轮', 'second-user');
+    await service.compactContext();
+    expect(JSON.stringify(saved.modelMessages)).toContain('包含第二轮的摘要');
+    await service.undoToUserMessage('second-user');
+    expect(JSON.stringify(saved.modelMessages)).toContain('第一轮答案');
+    expect(JSON.stringify(saved.modelMessages)).not.toContain('第二轮');
+  });
+  it('缺少助手快照的会话可以恢复记录，工具保持关闭', async () => {
+    let saved!: PersistedSessionRuntime;
+    const adapter = new MemoryCardStateAdapter(transactionState());
+    const service = await createService({
+      adapter,
+      executor: new QueueExecutor([step()]),
+      onPersist: async value => {
+        saved = structuredClone(value);
+      },
+    });
+    await service.send('保留这条记录');
+    delete saved.agentConfiguration;
+    const restored = await CardAgentSessionService.restore({ adapter, executor: new QueueExecutor([]) }, saved);
+    expect(restored.view().ui.some(item => item.content === '保留这条记录')).toBe(true);
+    expect(restored.view().agentConfiguration.toolIds).toEqual([]);
+    expect(restored.view().warnings.some(text => text.includes('助手配置快照'))).toBe(true);
+  });
   it('请求开始即保存用户消息，停止后重载仍可交付排队引导', async () => {
     let saved!: PersistedSessionRuntime;
     let started!: () => void;
-    const startedPromise = new Promise<void>(resolve => { started = resolve; });
+    const startedPromise = new Promise<void>(resolve => {
+      started = resolve;
+    });
     const adapter = new MemoryCardStateAdapter(transactionState());
-    const executor: ModelStepExecutor = { execute: request => new Promise((_resolve, reject) => {
-      request.abortSignal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
-      started();
-    }) };
-    const service = await createService({ adapter, executor, onPersist: async value => { saved = structuredClone(value); } });
+    const executor: ModelStepExecutor = {
+      execute: request =>
+        new Promise((_resolve, reject) => {
+          request.abortSignal?.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          started();
+        }),
+    };
+    const service = await createService({
+      adapter,
+      executor,
+      onPersist: async value => {
+        saved = structuredClone(value);
+      },
+    });
     const running = service.send('持久化中的请求');
     await startedPromise;
     expect(saved.status).toBe('running');
@@ -84,7 +147,15 @@ describe('card agent realtime session service', () => {
     service.stop();
     await running;
     const resumedExecutor = new QueueExecutor([step()]);
-    const restored = await CardAgentSessionService.restore({ adapter, executor: resumedExecutor, lock: new GlobalAgentTaskLock(), agentConfiguration: defaultBuiltinAgentConfiguration() }, saved);
+    const restored = await CardAgentSessionService.restore(
+      {
+        adapter,
+        executor: resumedExecutor,
+        lock: new GlobalAgentTaskLock(),
+        agentConfiguration: defaultBuiltinAgentConfiguration(),
+      },
+      saved,
+    );
     expect((await restored.resume()).status).toBe('completed');
     expect(JSON.stringify(resumedExecutor.requests[0].messages)).toContain('改为回答新的目标');
     expect(restored.view().ui.find(item => item.kind === 'guidance')?.guidanceStatus).toBe('delivered');
@@ -218,8 +289,7 @@ describe('card agent realtime session service', () => {
         { content: '{{skill_instructions}}', enabled: true, id: 'skills', order: 10, role: 'system', title: 'Skill' },
       ],
     };
-    const compactCall = { input: { summary: '保留目标' }, toolCallId: 'compact', toolName: 'compact_context' };
-    const executor = new QueueExecutor([step([], 'x'.repeat(150_000)), step([compactCall]), step([], '压缩后完成')]);
+    const executor = new QueueExecutor([step([], 'x'.repeat(150_000)), step([], '保留目标'), step([], '压缩后完成')]);
     const service = await CardAgentSessionService.create({
       adapter: new MemoryCardStateAdapter(transactionState()),
       agentConfiguration: {
@@ -238,8 +308,8 @@ describe('card agent realtime session service', () => {
     await service.send('第一轮');
     await service.setSkills([{ ...oldSkill, body: 'NEW_SKILL_BODY' }]);
     await service.send('第二轮');
-    expect(executor.requests[1].forceTool).toBe('compact_context');
-    expect(String(executor.requests[1].messages[0].content)).toContain('NEW_SKILL_BODY');
+    expect(executor.requests[1].forceTool).toBeUndefined();
+    expect(executor.requests[1].tools).toEqual([]);
     expect(String(executor.requests[2].messages[0].content)).toContain('NEW_SKILL_BODY');
   });
 

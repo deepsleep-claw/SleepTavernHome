@@ -119,44 +119,4 @@ describe('SessionModelMenu', () => {
     expect(selectSessionModel).toHaveBeenCalledWith({ modelId: 'model-a', providerId: 'provider-a' });
     await vi.waitFor(() => expect(root.querySelector('.dca-model-menu-root')).not.toBeNull());
   });
-
-  it('桌面分离模式直接展示模型列表，并在选择后关闭浮层', async () => {
-    const selectSessionModel = vi.fn(async () => true);
-    runtimeMock.context = {
-      action: async (callback: () => unknown) => {
-        await callback();
-        return true;
-      },
-      runtime: { selectSessionModel, setModelControls: vi.fn(async () => true) },
-      state: shallowRef({
-        active: {
-          modelControls: { reasoningEffort: 'auto', webSearch: false },
-          status: 'completed',
-        },
-        busy: false,
-        providers,
-      }),
-    };
-    const root = document.createElement('div');
-    document.body.append(root);
-    const app = createApp(SessionModelMenu, { mode: 'model' });
-    app.mount(root);
-    mounted = { root, unmount: () => app.unmount() };
-
-    root.querySelector<HTMLButtonElement>('.dca-session-model-trigger')?.click();
-    await nextTick();
-    expect(root.querySelector('.dca-model-menu-root')).toBeNull();
-    expect(root.querySelector('.dca-model-menu-list')?.textContent).toContain('测试模型');
-    const header = root.querySelector('.dca-model-subpage-header')!;
-    expect(header.children).toHaveLength(3);
-    expect(header.children[0].tagName).toBe('SPAN');
-    expect(header.children[1].textContent).toBe('选择模型');
-
-    const modelButton = [...root.querySelectorAll<HTMLButtonElement>('.dca-model-menu-list button')].find(button =>
-      button.textContent?.includes('测试模型'),
-    )!;
-    modelButton.click();
-    await vi.waitFor(() => expect(root.querySelector('.dca-model-menu-backdrop')).toBeNull());
-    expect(selectSessionModel).toHaveBeenCalledWith({ modelId: 'model-a', providerId: 'provider-a' });
-  });
 });

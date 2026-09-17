@@ -53,7 +53,10 @@ function normalizeGreenCacheEntry(entry: any): GreenCacheEntry | undefined {
   const message_id = entry.fixed_at.message_id;
   const swipe_id = entry.fixed_at.swipe_id;
   const message_hash = entry.fixed_at.message_hash;
-  if (!(message_id === null || typeof message_id === 'number') || !(swipe_id === null || typeof swipe_id === 'number')) {
+  if (
+    !(message_id === null || typeof message_id === 'number') ||
+    !(swipe_id === null || typeof swipe_id === 'number')
+  ) {
     return undefined;
   }
   if (!(message_hash === undefined || message_hash === null || typeof message_hash === 'string')) {
@@ -89,27 +92,21 @@ function dedupeGreenCacheEntries(entries: GreenCacheEntry[]): GreenCacheEntry[] 
 }
 
 export function normalizeGreenCache(raw: any): GreenCache {
-  if (
-    !_.isPlainObject(raw) ||
-    !SUPPORTED_GREEN_CACHE_VERSIONS.includes(raw.version) ||
-    !_.isArray(raw.entries)
-  ) {
+  if (!_.isPlainObject(raw) || !SUPPORTED_GREEN_CACHE_VERSIONS.includes(raw.version) || !_.isArray(raw.entries)) {
     return { version: GREEN_CACHE_VERSION, entries: [] };
   }
   return {
     version: GREEN_CACHE_VERSION,
     entries: dedupeGreenCacheEntries(
-      raw.entries.map(normalizeGreenCacheEntry).filter((entry): entry is GreenCacheEntry => Boolean(entry)),
+      raw.entries
+        .map(normalizeGreenCacheEntry)
+        .filter((entry: GreenCacheEntry | undefined): entry is GreenCacheEntry => Boolean(entry)),
     ),
   };
 }
 
 function shouldWriteNormalizedGreenCache(raw: any, cache: GreenCache): boolean {
-  if (
-    !_.isPlainObject(raw) ||
-    !SUPPORTED_GREEN_CACHE_VERSIONS.includes(raw.version) ||
-    !_.isArray(raw.entries)
-  ) {
+  if (!_.isPlainObject(raw) || !SUPPORTED_GREEN_CACHE_VERSIONS.includes(raw.version) || !_.isArray(raw.entries)) {
     return false;
   }
   return raw.version !== GREEN_CACHE_VERSION || raw.entries.length !== cache.entries.length;

@@ -2,36 +2,7 @@
   <div ref="root" class="preset-adapter-root" :class="`preset-adapter-root-${store.active_tab}`">
     <aside class="preset-adapter-sidebar">
       <div class="preset-adapter-brand">
-        <span class="preset-adapter-brand-mark" aria-hidden="true">
-          <svg class="preset-adapter-brand-whale" viewBox="0 0 112 96" focusable="false">
-            <path
-              class="preset-adapter-brand-star"
-              d="m76 5 2.9 6 6.6 1-4.8 4.6 1.1 6.6-5.8-3.1-5.9 3.1 1.2-6.6-4.8-4.6 6.6-1z"
-            />
-            <path
-              class="preset-adapter-brand-spout"
-              d="M70 33c.5-6.6-2-10.2-6.1-13.5M72 32c2.3-5.4 6.1-8 10.5-9.7"
-            />
-            <path
-              class="preset-adapter-brand-tail"
-              d="M31.5 50.4C21.7 47 14.2 39.1 14.7 29.5c9.7.3 17.1 4.7 21.1 12.1.1-8.4 4.7-15.2 12.5-19.5 2.3 10.5-1.9 21.3-12.2 29.1z"
-            />
-            <path
-              class="preset-adapter-brand-whale-body"
-              d="M29.6 48.4c5.7-15.2 24.5-22.5 43-16.9 15.7 4.7 23.6 15.8 19.4 27.3-5 13.9-26.4 19.5-45.2 12.1-9.3-3.7-15.3-11.2-17.2-22.5z"
-            />
-            <path
-              class="preset-adapter-brand-belly"
-              d="M39.4 61.3c11.9 7.8 33.8 6.7 49.6-2.8-3.9 12.1-23.6 18.2-41.3 12.3-3.4-1.1-6.2-3.8-8.3-9.5z"
-            />
-            <path
-              class="preset-adapter-brand-fin"
-              d="M56 68.9c-2.6 10-10.5 14.2-17.3 8.4 6.9-2.4 11.7-6.2 14.1-11.2z"
-            />
-            <circle class="preset-adapter-brand-eye" cx="76.8" cy="44.8" r="2.5" />
-            <path class="preset-adapter-brand-smile" d="M77.8 56.3c3.4 2.8 7.3 2.5 10.4-.6" />
-          </svg>
-        </span>
+        <BrandLogo />
         <strong>梦鲸思客</strong>
       </div>
 
@@ -100,15 +71,8 @@
         </div>
       </header>
 
-      <input
-        ref="import_file_input"
-        type="file"
-        accept="application/json,.json"
-        hidden
-        @change="importPresetSettings"
-      />
-
       <section v-if="store.active_tab === 'preset'" class="preset-adapter-preset-page">
+        <SelectionPresets v-if="!store.export_mode && !store.organizing" />
         <div class="preset-adapter-preset-toolbar">
           <p>
             {{ store.groups.length }} 组 · {{ option_count }} 个选项<span v-if="variable_input_count > 0">
@@ -149,13 +113,7 @@
                 ></i>
                 {{ store.all_groups_collapsed ? '全部展开' : '全部折叠' }}
               </button>
-              <button
-                type="button"
-                :disabled="store.is_applying || store.has_blocking_errors"
-                @click="openImportFilePicker()"
-              >
-                <i class="fa-solid fa-arrow-down" aria-hidden="true"></i> 导入
-              </button>
+              <SettingsImport />
               <button
                 type="button"
                 :disabled="store.is_applying || store.has_blocking_errors"
@@ -321,10 +279,22 @@
                       (!store.export_mode && option.status === 'unmatched')
                     "
                     :title="option.matched_summary"
+                    :aria-pressed="
+                      store.export_mode ? store.isExportOptionSelected(group.id, option.id) : undefined
+                    "
                     @click="handleOptionClick(group.id, option.id)"
                   >
                     <span class="preset-adapter-option-main">
-                      <i :class="option.status_icon_class" aria-hidden="true"></i>
+                      <i
+                        :class="
+                          store.export_mode
+                            ? store.isExportOptionSelected(group.id, option.id)
+                              ? 'fa-solid fa-square-check'
+                              : 'fa-regular fa-square'
+                            : option.status_icon_class
+                        "
+                        aria-hidden="true"
+                      ></i>
                       <span class="preset-adapter-option-title"
                         ><span>{{ option.label }}</span
                         ><small v-if="option.description">{{ option.description }}</small></span
@@ -1003,268 +973,44 @@
         </template>
       </section>
 
-      <section v-else-if="store.active_tab === 'debug'" class="preset-adapter-debug">
-        <div class="preset-adapter-debug-mobile-switch" aria-label="Debug 手机端视图">
-          <button
-            type="button"
-            :class="{ 'preset-adapter-debug-mobile-switch-active': mobile_debug_view === 'records' }"
-            @click="mobile_debug_view = 'records'"
-          >
-            记录
-          </button>
-          <button
-            type="button"
-            :class="{ 'preset-adapter-debug-mobile-switch-active': mobile_debug_view === 'detail' }"
-            :disabled="!selected_debug_record"
-            @click="mobile_debug_view = 'detail'"
-          >
-            详情
-          </button>
-        </div>
-
-        <div class="preset-adapter-debug-layout" :class="`preset-adapter-debug-mobile-${mobile_debug_view}`">
-          <aside class="preset-adapter-debug-records">
-            <header class="preset-adapter-debug-pane-header">
-              <div>
-                <h4>Debug 记录</h4>
-                <p class="preset-adapter-description">保留最新 {{ store.debug_records.length }} / 50 条</p>
-              </div>
-              <button
-                type="button"
-                class="menu_button"
-                :disabled="store.debug_loading || store.debug_records.length === 0"
-                @click="store.clearDebugRecords()"
-              >
-                清空
-              </button>
-            </header>
-
-            <div v-if="store.debug_loading" class="preset-adapter-empty">正在载入 Debug 信息…</div>
-            <div v-else-if="store.debug_records.length === 0" class="preset-adapter-empty">暂无 Debug 信息</div>
-            <div v-else class="preset-adapter-debug-record-list">
-              <button
-                v-for="record in store.debug_records"
-                :key="record.id"
-                type="button"
-                class="preset-adapter-debug-record"
-                :class="{ 'preset-adapter-debug-record-active': record.id === store.selected_debug_record_id }"
-                @click="selectDebugRecord(record.id)"
-                @keydown.enter.prevent="selectDebugRecord(record.id)"
-                @keydown.space.prevent="selectDebugRecord(record.id)"
-              >
-                <strong>{{ record.title }}</strong>
-                <small>{{ formatDebugTime(record.created_at) }}</small>
-                <span class="preset-adapter-debug-record-summary">
-                  总排序 {{ record.summary.total_rows }} · 触发 {{ record.summary.triggered_rows }} · 错误
-                  {{ record.summary.error_count }}
-                </span>
-              </button>
-            </div>
-          </aside>
-
-          <section class="preset-adapter-debug-detail">
-            <template v-if="selected_debug_record">
-              <header class="preset-adapter-debug-pane-header">
-                <div>
-                  <h4>{{ selected_debug_record.title }}</h4>
-                  <p class="preset-adapter-description">{{ formatDebugTime(selected_debug_record.created_at) }}</p>
-                </div>
-                <button type="button" class="menu_button" @click="openDebugRawModal()">原始数据</button>
-              </header>
-
-              <div class="preset-adapter-debug-metrics">
-                <span v-for="metric in getDebugMetrics(selected_debug_record)" :key="metric.label">
-                  {{ metric.label }} {{ metric.value }}
-                </span>
-              </div>
-
-              <section class="preset-adapter-debug-section">
-                <h4>总排序</h4>
-                <div v-if="debug_total_rows.length === 0" class="preset-adapter-empty">无总排序信息</div>
-                <details v-for="entry in debug_total_rows" :key="entry.key" class="preset-adapter-debug-row">
-                  <summary>{{ getDebugTotalSummary(entry.row) }}</summary>
-                  <dl>
-                    <template v-for="field in getDebugRowFields(entry.row)" :key="field.key">
-                      <dt>{{ field.key }}</dt>
-                      <dd>
-                        <template v-if="field.key === '详细内容'">
-                          <span>{{ field.preview }}</span>
-                          <button
-                            type="button"
-                            class="menu_button"
-                            @click="openDebugRowContentModal('总排序 - 详细内容', entry.row)"
-                          >
-                            详情
-                          </button>
-                        </template>
-                        <template v-else>{{ field.text }}</template>
-                      </dd>
-                    </template>
-                  </dl>
-                </details>
-              </section>
-
-              <section class="preset-adapter-debug-section">
-                <h4>触发蓝灯绿灯</h4>
-                <div v-if="debug_triggered_rows.length === 0" class="preset-adapter-empty">无触发信息</div>
-                <details v-for="entry in debug_triggered_rows" :key="entry.key" class="preset-adapter-debug-row">
-                  <summary>{{ getDebugTriggeredSummary(entry.row) }}</summary>
-                  <dl>
-                    <template v-for="field in getDebugRowFields(entry.row)" :key="field.key">
-                      <dt>{{ field.key }}</dt>
-                      <dd>
-                        <template v-if="field.key === '详细内容'">
-                          <span>{{ field.preview }}</span>
-                          <button
-                            type="button"
-                            class="menu_button"
-                            @click="openDebugRowContentModal('触发蓝灯绿灯 - 详细内容', entry.row)"
-                          >
-                            详情
-                          </button>
-                        </template>
-                        <template v-else>{{ field.text }}</template>
-                      </dd>
-                    </template>
-                  </dl>
-                </details>
-              </section>
-
-              <section class="preset-adapter-debug-section">
-                <h4>错误信息</h4>
-                <textarea
-                  class="preset-adapter-debug-error-text"
-                  readonly
-                  :value="debug_error_text || '无错误信息'"
-                ></textarea>
-              </section>
-            </template>
-            <div v-else class="preset-adapter-empty">请选择一条 Debug 记录</div>
-          </section>
-        </div>
-      </section>
+      <DebugPanel
+        v-else-if="store.active_tab === 'debug'"
+        :records="store.debug_records"
+        :selected-id="store.selected_debug_record_id"
+        :loading="store.debug_loading"
+        :read-content="store.getDebugContent"
+        @select="store.selectDebugRecord"
+        @clear="store.clearDebugRecords()"
+      />
     </main>
 
-    <div v-if="debug_text_modal" class="preset-adapter-review-backdrop" @click.self="closeDebugTextModal()">
-      <section class="preset-adapter-debug-text-panel" role="dialog" aria-modal="true">
-        <header class="preset-adapter-review-header">
-          <h3>{{ debug_text_modal.title }}</h3>
-          <button
-            type="button"
-            class="menu_button preset-adapter-icon-button"
-            title="关闭"
-            @click="closeDebugTextModal()"
-          >
-            <i class="fa-solid fa-xmark" aria-hidden="true"></i>
-          </button>
-        </header>
-        <textarea class="preset-adapter-debug-large-text" readonly :value="debug_text_modal.content"></textarea>
-      </section>
-    </div>
-
-    <div v-if="store.review_panel" class="preset-adapter-review-backdrop" @click.self="store.closeReviewPanel()">
-      <section class="preset-adapter-review-panel" role="dialog" aria-modal="true">
+    <div v-if="store.review_panel?.kind === 'export'" class="preset-adapter-review-backdrop" @click.self="store.closeReviewPanel()">
+      <section class="preset-adapter-review-panel" role="dialog" aria-modal="true" aria-label="确认导出">
         <header class="preset-adapter-review-header">
           <div>
             <h3>{{ store.review_panel.title }}</h3>
-            <p v-if="store.review_panel.kind === 'export'" class="preset-adapter-description">
-              文件名：{{ store.review_panel.filename }}
-            </p>
-            <p v-else class="preset-adapter-description">
-              匹配成功 {{ store.review_panel.items.length }} 项，匹配失败
-              {{ store.review_panel.failed_items.length }} 项。导入后会自动保存当前预设，所有导入项默认关闭。
-            </p>
+            <p class="preset-adapter-description">文件名：{{ store.review_panel.filename }}</p>
           </div>
-          <button
-            type="button"
-            class="menu_button preset-adapter-icon-button"
-            title="关闭"
-            :disabled="store.is_applying"
-            @click="store.closeReviewPanel()"
-          >
+          <button type="button" class="menu_button preset-adapter-icon-button" title="关闭" @click="store.closeReviewPanel()">
             <i class="fa-solid fa-xmark" aria-hidden="true"></i>
           </button>
         </header>
-
         <div class="preset-adapter-review-body">
-          <section
-            v-if="store.review_panel.kind === 'import' && store.review_panel.failed_items.length > 0"
-            class="preset-adapter-review-section"
-          >
-            <h4>匹配失败</h4>
-            <article
-              v-for="item in store.review_panel.failed_items"
-              :key="item.key"
-              class="preset-adapter-review-item preset-adapter-review-item-failed"
-            >
-              <div class="preset-adapter-review-item-main">
-                <span class="preset-adapter-review-badge preset-adapter-review-badge-failed">匹配失败</span>
-                <span class="preset-adapter-review-badge preset-adapter-review-badge-append">{{
-                  item.action_label
-                }}</span>
-                <strong>{{ item.name }}</strong>
-              </div>
-              <p>{{ item.group_id }} / {{ item.match_id }}</p>
-              <p>{{ item.issue }}</p>
-              <details>
-                <summary>内容预览</summary>
-                <pre>{{ item.preview }}</pre>
-              </details>
-            </article>
-          </section>
-
           <section class="preset-adapter-review-section">
-            <h4>{{ store.review_panel.kind === 'export' ? '将要导出' : '将要导入' }}</h4>
-            <div v-if="store.review_panel.items.length === 0" class="preset-adapter-empty">没有匹配成功的设置</div>
+            <h4>将要导出</h4>
             <article v-for="item in store.review_panel.items" :key="item.key" class="preset-adapter-review-item">
               <div class="preset-adapter-review-item-main">
-                <span class="preset-adapter-review-badge" :class="`preset-adapter-review-badge-${item.action}`">
-                  {{ item.action_label }}
-                </span>
+                <span class="preset-adapter-review-badge preset-adapter-review-badge-export">导出</span>
                 <strong>{{ item.name }}</strong>
               </div>
               <p>{{ item.group_label }} · {{ item.group_id }} / {{ item.match_id }}</p>
-              <details>
-                <summary>内容预览</summary>
-                <pre>{{ item.preview }}</pre>
-              </details>
+              <details><summary>内容预览</summary><pre>{{ item.preview }}</pre></details>
             </article>
           </section>
         </div>
-
         <footer class="preset-adapter-review-footer">
-          <template v-if="store.review_panel.kind === 'export'">
-            <button
-              type="button"
-              class="menu_button"
-              :disabled="store.is_applying"
-              @click="store.confirmExportReview()"
-            >
-              导出
-            </button>
-            <button type="button" class="menu_button" :disabled="store.is_applying" @click="store.closeReviewPanel()">
-              取消
-            </button>
-          </template>
-          <template v-else-if="store.review_panel.failed_items.length > 0">
-            <button type="button" class="menu_button" :disabled="store.is_applying" @click="confirmImport(true)">
-              导入全部
-            </button>
-            <button type="button" class="menu_button" :disabled="store.is_applying" @click="confirmImport(false)">
-              仅导入匹配成功
-            </button>
-            <button type="button" class="menu_button" :disabled="store.is_applying" @click="store.closeReviewPanel()">
-              取消
-            </button>
-          </template>
-          <template v-else>
-            <button type="button" class="menu_button" :disabled="store.is_applying" @click="confirmImport(true)">
-              导入
-            </button>
-            <button type="button" class="menu_button" :disabled="store.is_applying" @click="store.closeReviewPanel()">
-              取消
-            </button>
-          </template>
+          <button type="button" class="menu_button" @click="store.confirmExportReview()">导出</button>
+          <button type="button" class="menu_button" @click="store.closeReviewPanel()">取消</button>
         </footer>
       </section>
     </div>
@@ -1272,6 +1018,10 @@
 </template>
 
 <script setup lang="ts">
+import BrandLogo from './BrandLogo.vue';
+import DebugPanel from './DebugPanel.vue';
+import SelectionPresets from './SelectionPresets.vue';
+import SettingsImport from './SettingsImport.vue';
 import {
   type GroupView,
   type SummaryContentHandling,
@@ -1367,26 +1117,15 @@ const workspace = ref<HTMLElement>();
 const summary_detail_pane = ref<HTMLElement>();
 const selected_floor_native_host = ref<HTMLElement>();
 const selected_floor_has_native_content = ref(false);
-const import_file_input = ref<HTMLInputElement>();
-const debug_text_modal = ref<{ content: string; title: string }>();
-const mobile_debug_view = ref<'records' | 'detail'>('records');
+
 const reorder_key = ref('');
 let stop_reorder_tracking = () => {};
-let debug_content_request_serial = 0;
+
 let summary_workspace_resize_observer: ResizeObserver | undefined;
-const selected_debug_record = computed(() => store.selected_debug_record);
-const debug_total_rows = computed(() => getDebugRows(selected_debug_record.value?.state.total_rows));
-const debug_triggered_rows = computed(() => getTriggeredDebugRows(selected_debug_record.value?.state.triggered_rows));
-const debug_error_text = computed(() =>
-  getDebugArray(selected_debug_record.value?.state.error_logs).map(getDebugValueText).join('\n\n'),
-);
 
 watch(
   () => store.active_tab,
-  async active_tab => {
-    if (active_tab === 'debug') {
-      mobile_debug_view.value = 'records';
-    }
+  async () => {
     await nextTick();
     if (workspace.value) {
       workspace.value.scrollTop = 0;
@@ -1407,9 +1146,6 @@ watch(
   },
   { immediate: true },
 );
-
-type DebugRecord = NonNullable<typeof store.selected_debug_record>;
-type DebugRow = Record<string, unknown>;
 
 onMounted(() => {
   const update_summary_workspace_size = () => {
@@ -1432,20 +1168,6 @@ onBeforeUnmount(() => {
   store.stopEffectWatch();
   store.stopSummaryWatch();
 });
-
-function openImportFilePicker() {
-  import_file_input.value?.click();
-}
-
-function selectDebugRecord(record_id: string) {
-  store.selectDebugRecord(record_id);
-  mobile_debug_view.value = 'detail';
-  nextTick(() => {
-    if (workspace.value) {
-      workspace.value.scrollTop = 0;
-    }
-  });
-}
 
 function handleOptionClick(group_id: string, option_id: string) {
   if (store.export_mode) {
@@ -1626,21 +1348,6 @@ function handleVariableInput(group_id: string, input_id: string, event: Event) {
   store.updateVariableInput(group_id, input_id, (event.target as HTMLInputElement).value);
 }
 
-async function importPresetSettings(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const file = input.files?.[0];
-  if (!file) {
-    return;
-  }
-
-  await store.importPresetSettings(await file.text());
-  input.value = '';
-}
-
-function confirmImport(include_failed: boolean) {
-  void store.confirmImportReview(include_failed);
-}
-
 function isConfirmed(result: unknown): boolean {
   return result === true || result === SillyTavern.POPUP_RESULT.AFFIRMATIVE;
 }
@@ -1739,143 +1446,6 @@ async function confirmStartSummary() {
   await store.startManualSummary();
 }
 
-function isDebugObject(value: unknown): value is DebugRow {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function getDebugArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
-}
-
-function getDebugValueText(value: unknown): string {
-  if (typeof value === 'string') {
-    return value;
-  }
-  if (value === undefined) {
-    return '';
-  }
-
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
-function getDebugSummaryText(value: unknown, max_length = 96): string {
-  const text = getDebugValueText(value).replace(/\s+/g, ' ').trim();
-  if (!text) {
-    return '空';
-  }
-  return text.length > max_length ? text.slice(0, max_length) : text;
-}
-
-function getDebugPreview(value: unknown, max_length = 240): string {
-  const text = getDebugValueText(value);
-  return text.length > max_length ? `${text.slice(0, max_length)}……` : text;
-}
-
-function getDebugRows(value: unknown): { key: string; row: DebugRow }[] {
-  return getDebugArray(value).map((item, index) => ({
-    key: String(index),
-    row: isDebugObject(item) ? item : { 值: item },
-  }));
-}
-
-function getTriggeredDebugRows(value: unknown): { key: string; row: DebugRow }[] {
-  return getDebugArray(value).map((item, index) => {
-    const row = isDebugObject(item) && isDebugObject(item.row) ? item.row : item;
-    const key = isDebugObject(item) && typeof item.key === 'string' ? item.key : String(index);
-    return {
-      key,
-      row: isDebugObject(row) ? row : { 值: row },
-    };
-  });
-}
-
-const debug_content_metadata_keys = new Set(['详细内容摘要', '详细内容长度', '详细内容hash', '详细内容缓存键']);
-
-function getDebugRowFields(row: DebugRow): { key: string; preview: string; text: string }[] {
-  return Object.entries(row)
-    .filter(([key]) => !debug_content_metadata_keys.has(key))
-    .map(([key, value]) => ({
-      key,
-      preview: getDebugPreview(value),
-      text: getDebugValueText(value),
-    }));
-}
-
-function getDebugTotalSummary(row: DebugRow): string {
-  return `${getDebugSummaryText(row.类型)} - ${getDebugSummaryText(row.来源)} - ${getDebugSummaryText(row.详细内容摘要 ?? row.详细内容)}……`;
-}
-
-function getDebugTriggeredSummary(row: DebugRow): string {
-  return `${getDebugSummaryText(row.触发类型)} - ${getDebugSummaryText(row.名称)} - ${getDebugSummaryText(row.详细内容摘要 ?? row.详细内容)}……`;
-}
-
-function getDebugMetrics(record: DebugRecord): { label: string; value: number }[] {
-  return [
-    { label: '总排序', value: record.summary.total_rows },
-    { label: '触发', value: record.summary.triggered_rows },
-    { label: '错误', value: record.summary.error_count },
-    { label: '失败', value: record.summary.failed },
-    { label: '已载入', value: record.summary.loaded_total },
-    { label: '绿灯缓存', value: record.summary.green_cache_insertions },
-    { label: '残留包裹', value: record.summary.wrapper_paired + record.summary.wrapper_orphan },
-  ];
-}
-
-function formatDebugTime(value: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-}
-
-function openDebugTextModal(title: string, content: string) {
-  debug_content_request_serial += 1;
-  debug_text_modal.value = { content, title };
-}
-
-async function openDebugRowContentModal(title: string, row: DebugRow) {
-  const record_id = selected_debug_record.value?.id;
-  const content_id = typeof row.详细内容缓存键 === 'string' ? row.详细内容缓存键 : undefined;
-  const fallback_content = getDebugValueText(row.详细内容);
-  if (!record_id || !content_id) {
-    openDebugTextModal(title, fallback_content);
-    return;
-  }
-
-  const request_serial = ++debug_content_request_serial;
-  debug_text_modal.value = { content: '正在从 Debug 存储读取完整正文…', title };
-  try {
-    const content = await store.getDebugContent(record_id, content_id);
-    if (debug_content_request_serial !== request_serial) {
-      return;
-    }
-    if (content === undefined) {
-      toastr.warning('未找到完整 Debug 正文，已显示现有预览。');
-    }
-    debug_text_modal.value = { content: content ?? fallback_content, title };
-  } catch (error) {
-    if (debug_content_request_serial !== request_serial) {
-      return;
-    }
-    console.warn('[预设适配器] 读取 Debug 正文失败。', { content_id, error, record_id });
-    toastr.warning('读取完整 Debug 正文失败，已显示现有预览。');
-    debug_text_modal.value = { content: fallback_content, title };
-  }
-}
-
-function openDebugRawModal() {
-  if (!selected_debug_record.value) {
-    return;
-  }
-  openDebugTextModal('原始数据', JSON.stringify(selected_debug_record.value.state, null, 2));
-}
-
-function closeDebugTextModal() {
-  debug_content_request_serial += 1;
-  debug_text_modal.value = undefined;
-}
 </script>
 
 <style>
@@ -2520,55 +2090,19 @@ function closeDebugTextModal() {
   place-items: center;
   width: 5.6rem;
   height: 4.8rem;
+}
+
+.preset-adapter-floating-window[data-preset-adapter-theme='night-gold'] .preset-adapter-brand-mark > svg {
   color: var(--pa-gold);
 }
 
-.preset-adapter-root .preset-adapter-brand-whale {
+.preset-adapter-root .preset-adapter-brand-mark > svg {
   display: block;
   width: 100%;
   height: 100%;
+  color: var(--pa-accent-text);
   overflow: visible;
   filter: drop-shadow(0 6px 12px color-mix(in srgb, var(--pa-shadow) 54%, transparent));
-}
-
-.preset-adapter-root .preset-adapter-brand-star {
-  fill: var(--pa-gold);
-  stroke: var(--pa-highlight-text);
-  stroke-width: 1.4;
-  stroke-linejoin: round;
-}
-
-.preset-adapter-root .preset-adapter-brand-spout,
-.preset-adapter-root .preset-adapter-brand-smile {
-  fill: none;
-  stroke: var(--pa-accent-text);
-  stroke-width: 2.2;
-  stroke-linecap: round;
-}
-
-.preset-adapter-root .preset-adapter-brand-tail,
-.preset-adapter-root .preset-adapter-brand-whale-body {
-  fill: color-mix(in srgb, var(--pa-coral) 24%, var(--pa-surface-raised));
-  stroke: var(--pa-accent-text);
-  stroke-width: 2;
-  stroke-linejoin: round;
-}
-
-.preset-adapter-root .preset-adapter-brand-belly {
-  fill: color-mix(in srgb, var(--pa-gold) 18%, var(--pa-surface-raised));
-}
-
-.preset-adapter-root .preset-adapter-brand-fin {
-  fill: color-mix(in srgb, var(--pa-coral) 36%, var(--pa-surface-raised));
-  stroke: var(--pa-accent-text);
-  stroke-width: 1.8;
-  stroke-linejoin: round;
-}
-
-.preset-adapter-root .preset-adapter-brand-eye {
-  fill: var(--pa-heading);
-  stroke: var(--pa-surface-raised);
-  stroke-width: 1.2;
 }
 
 .preset-adapter-root .preset-adapter-tabs {
@@ -3133,6 +2667,29 @@ function closeDebugTextModal() {
 .preset-adapter-root .preset-adapter-option-active .preset-adapter-option-main i,
 .preset-adapter-root .preset-adapter-option-active .preset-adapter-option-title > span {
   color: var(--pa-accent-text);
+}
+
+.preset-adapter-root .preset-adapter-option-export-mode {
+  border-style: dashed;
+}
+
+.preset-adapter-root .preset-adapter-option.preset-adapter-option-export-selected {
+  border-style: solid;
+  border-color: var(--pa-gold);
+  background: color-mix(in srgb, var(--pa-gold) 18%, var(--pa-surface-soft));
+  box-shadow: inset 0 0 0 2px var(--pa-gold);
+}
+
+.preset-adapter-root .preset-adapter-option-export-mode .preset-adapter-option-main i {
+  color: var(--pa-muted);
+}
+
+.preset-adapter-root .preset-adapter-option-export-selected .preset-adapter-option-main i {
+  color: var(--pa-highlight-text);
+}
+
+.preset-adapter-root .preset-adapter-option-export-unavailable {
+  opacity: 0.58;
 }
 
 .preset-adapter-root .preset-adapter-option-main {
@@ -4012,117 +3569,6 @@ function closeDebugTextModal() {
   border-color: var(--pa-border);
 }
 
-.preset-adapter-root .preset-adapter-debug {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.preset-adapter-root .preset-adapter-debug-layout {
-  flex: 1 1 auto;
-  grid-template-columns: minmax(15.5rem, 0.32fr) minmax(0, 1fr);
-  height: auto;
-  min-height: 0;
-  gap: 0.65rem;
-}
-
-.preset-adapter-root .preset-adapter-debug-mobile-switch {
-  display: none;
-}
-
-.preset-adapter-root .preset-adapter-debug-records {
-  padding: 0.6rem;
-}
-
-.preset-adapter-root .preset-adapter-debug-record {
-  border-color: var(--pa-border);
-  border-radius: 9px;
-  background: var(--pa-surface-soft);
-  padding: 0.45rem 0.5rem;
-}
-
-.preset-adapter-root .preset-adapter-debug-record-active {
-  border-color: var(--pa-coral);
-  background: linear-gradient(90deg, var(--pa-coral-soft), var(--pa-surface-soft));
-  box-shadow: inset 3px 0 0 var(--pa-coral);
-}
-
-.preset-adapter-root .preset-adapter-debug-detail {
-  display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(14rem, 1fr);
-  grid-template-rows: auto auto minmax(0, 1fr) minmax(8rem, 0.78fr);
-  align-content: stretch;
-  min-width: 0;
-  overflow: hidden;
-  padding: 0 0.3rem 0 0;
-  gap: 0.55rem;
-}
-
-.preset-adapter-root .preset-adapter-debug-detail > .preset-adapter-debug-pane-header,
-.preset-adapter-root .preset-adapter-debug-detail > .preset-adapter-debug-metrics {
-  grid-column: 1 / -1;
-}
-
-.preset-adapter-root .preset-adapter-debug-detail > .preset-adapter-debug-section:nth-of-type(1) {
-  grid-column: 1;
-  grid-row: 3 / span 2;
-  overflow: auto;
-}
-
-.preset-adapter-root .preset-adapter-debug-detail > .preset-adapter-debug-section:nth-of-type(2) {
-  grid-column: 2;
-  grid-row: 3;
-  overflow: auto;
-}
-
-.preset-adapter-root .preset-adapter-debug-detail > .preset-adapter-debug-section:nth-of-type(3) {
-  grid-column: 2;
-  grid-row: 4;
-  overflow: hidden;
-}
-
-.preset-adapter-root .preset-adapter-debug-metrics {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(4.3rem, 1fr));
-  min-height: 2.15rem;
-  overflow-x: auto;
-  gap: 0.45rem;
-}
-
-.preset-adapter-root .preset-adapter-debug-metrics span {
-  display: inline-flex;
-  flex-direction: row;
-  align-items: center;
-  justify-content: center;
-  min-height: 2.15rem;
-  border-color: color-mix(in srgb, var(--pa-teal) 28%, transparent);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--pa-teal) 8%, transparent);
-  color: var(--pa-teal);
-  font-size: 0.78rem;
-  text-align: center;
-}
-
-.preset-adapter-root .preset-adapter-debug-section {
-  border-top: 1px solid var(--pa-border);
-  padding: 0.6rem;
-}
-
-.preset-adapter-root .preset-adapter-debug-row {
-  border-color: var(--pa-border);
-  background: var(--pa-surface-soft);
-}
-
-.preset-adapter-root .preset-adapter-debug-error-text {
-  flex: 1;
-  min-height: 8rem;
-  border-color: color-mix(in srgb, var(--pa-teal) 28%, transparent);
-  background: color-mix(in srgb, var(--pa-teal) 7%, transparent);
-  color: var(--pa-teal);
-}
-
 @container (max-width: 980px) {
   .preset-adapter-root .preset-adapter-summary-dashboard {
     grid-template-columns: 1fr;
@@ -4603,80 +4049,7 @@ function closeDebugTextModal() {
     width: 100%;
   }
 
-  .preset-adapter-root .preset-adapter-debug {
-    flex: 0 0 auto;
-    overflow: visible;
   }
-
-  .preset-adapter-root .preset-adapter-debug-layout {
-    display: block;
-    height: auto;
-    min-height: 0;
-  }
-
-  .preset-adapter-root .preset-adapter-debug-mobile-switch {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    margin-bottom: 0.55rem;
-    border: 1px solid var(--pa-border);
-    border-radius: 8px;
-    padding: 0.2rem;
-    background: var(--pa-ink-soft);
-    gap: 0.2rem;
-  }
-
-  .preset-adapter-root .preset-adapter-debug-mobile-switch button {
-    min-height: 2.25rem;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--pa-muted);
-    cursor: pointer;
-  }
-
-  .preset-adapter-root .preset-adapter-debug-mobile-switch .preset-adapter-debug-mobile-switch-active {
-    background: var(--pa-coral-soft);
-    color: var(--pa-accent-text);
-    box-shadow: inset 0 -2px 0 var(--pa-coral);
-  }
-
-  .preset-adapter-root .preset-adapter-debug-mobile-records .preset-adapter-debug-detail,
-  .preset-adapter-root .preset-adapter-debug-mobile-detail .preset-adapter-debug-records {
-    display: none;
-  }
-
-  .preset-adapter-root .preset-adapter-debug-records {
-    height: auto;
-    min-height: 0;
-  }
-
-  .preset-adapter-root .preset-adapter-debug-record-list {
-    display: flex;
-    flex-direction: column;
-    overflow: visible;
-    padding: 0;
-  }
-
-  .preset-adapter-root .preset-adapter-debug-record {
-    flex: 0 0 auto;
-  }
-
-  .preset-adapter-root .preset-adapter-debug-detail {
-    display: flex;
-    flex-direction: column;
-    overflow: visible;
-    margin-top: 0;
-    padding: 0;
-  }
-
-  .preset-adapter-root .preset-adapter-debug-metrics {
-    display: flex;
-  }
-
-  .preset-adapter-root .preset-adapter-debug-metrics span {
-    flex: 0 0 5.6rem;
-  }
-}
 
 .preset-adapter-floating-window .preset-adapter-root
   :is(
@@ -4705,7 +4078,7 @@ function closeDebugTextModal() {
 }
 
 .preset-adapter-floating-window[data-preset-adapter-theme='night-gold'] .preset-adapter-root
-  :is(.preset-adapter-group, .preset-adapter-favorites, .preset-adapter-option) {
+  :is(.preset-adapter-group, .preset-adapter-favorites, .preset-adapter-option):not(.preset-adapter-option-export-selected) {
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--pa-gold) 5%, transparent);
 }
 
@@ -5434,20 +4807,6 @@ function closeDebugTextModal() {
     background-color: var(--pa-surface-raised);
   }
 
-  .preset-adapter-option-export-mode {
-    border-style: dashed;
-  }
-
-  .preset-adapter-option-export-selected {
-    border-color: var(--pa-gold);
-    box-shadow: inset 0 0 0 2px var(--pa-gold);
-    background-color: color-mix(in srgb, var(--pa-gold) 18%, var(--pa-surface-soft) 82%);
-  }
-
-  .preset-adapter-option-export-unavailable {
-    opacity: 0.58;
-  }
-
   .preset-adapter-option-main {
     display: inline-flex;
     align-items: flex-start;
@@ -5674,239 +5033,6 @@ function closeDebugTextModal() {
     white-space: nowrap;
   }
 
-  .preset-adapter-debug {
-    flex: 1 1 auto;
-    min-height: 0;
-    min-width: 0;
-    overflow: hidden;
-  }
-
-  .preset-adapter-debug-layout {
-    display: grid;
-    grid-template-columns: minmax(13rem, 0.85fr) minmax(0, 1.65fr);
-    gap: 0.75rem;
-    align-items: stretch;
-    height: 100%;
-    min-height: 0;
-  }
-
-  .preset-adapter-debug-records,
-  .preset-adapter-debug-detail {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    min-width: 0;
-    gap: 0.55rem;
-  }
-
-  .preset-adapter-debug-section {
-    display: flex;
-    flex: 0 0 auto;
-    flex-direction: column;
-    min-width: 0;
-    gap: 0.55rem;
-  }
-
-  .preset-adapter-debug-section > h4,
-  .preset-adapter-debug-row {
-    flex: 0 0 auto;
-  }
-
-  .preset-adapter-debug-records {
-    overflow: hidden;
-  }
-
-  .preset-adapter-debug-detail {
-    overflow: auto;
-    padding-right: 0.1rem;
-    scrollbar-gutter: stable;
-  }
-
-  .preset-adapter-debug-pane-header {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: flex-start;
-    justify-content: space-between;
-    min-width: 0;
-    gap: 0.55rem;
-  }
-
-  .preset-adapter-debug-pane-header > div {
-    min-width: 0;
-  }
-
-  .preset-adapter-debug-pane-header h4,
-  .preset-adapter-debug-section h4 {
-    margin: 0;
-    line-height: 1.25;
-  }
-
-  .preset-adapter-debug-pane-header .menu_button,
-  .preset-adapter-debug-row .menu_button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: auto;
-    min-height: 1.85rem;
-    padding-inline: 0.65rem;
-    white-space: nowrap;
-  }
-
-  .preset-adapter-debug-record-list {
-    display: flex;
-    flex: 1 1 auto;
-    flex-direction: column;
-    gap: 0.45rem;
-    min-height: 0;
-    overflow: auto;
-    padding-right: 0.1rem;
-    scrollbar-gutter: stable;
-  }
-
-  .preset-adapter-debug-record {
-    display: flex;
-    flex-direction: column;
-    min-width: 0;
-    gap: 0.25rem;
-    border: 1px solid var(--pa-border);
-    border-radius: 8px;
-    padding: 0.55rem;
-    background-color: var(--pa-surface-soft);
-    color: var(--pa-text);
-    text-align: left;
-    cursor: pointer;
-  }
-
-  .preset-adapter-debug-record:hover,
-  .preset-adapter-debug-record-active {
-    border-color: var(--pa-coral);
-    background-color: var(--pa-surface-raised);
-  }
-
-  .preset-adapter-debug-record strong,
-  .preset-adapter-debug-record-summary {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .preset-adapter-debug-record small,
-  .preset-adapter-debug-record-summary {
-    color: var(--pa-muted);
-    font-size: 0.8rem;
-  }
-
-  .preset-adapter-debug-metrics {
-    display: flex;
-    flex: 0 0 auto;
-    flex-wrap: wrap;
-    gap: 0.35rem;
-  }
-
-  .preset-adapter-debug-metrics span {
-    border: 1px solid var(--pa-border);
-    border-radius: 999px;
-    padding: 0.1rem 0.45rem;
-    background-color: var(--pa-surface-soft);
-    color: var(--pa-muted);
-    font-size: 0.8rem;
-  }
-
-  .preset-adapter-debug-row {
-    border: 1px solid var(--pa-border);
-    border-radius: 8px;
-    padding: 0.55rem;
-    background-color: var(--pa-surface-soft);
-  }
-
-  .preset-adapter-debug-row summary {
-    overflow: hidden;
-    color: var(--pa-text);
-    cursor: pointer;
-    font-weight: 700;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .preset-adapter-debug-row dl {
-    display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
-    gap: 0.35rem 0.55rem;
-    margin: 0.55rem 0 0;
-    border-top: 1px solid var(--pa-border);
-    padding-top: 0.5rem;
-  }
-
-  .preset-adapter-debug-row dt {
-    color: var(--pa-muted);
-    font-size: 0.84rem;
-  }
-
-  .preset-adapter-debug-row dd {
-    min-width: 0;
-    margin: 0;
-    color: var(--pa-text);
-    font-size: 0.84rem;
-    line-height: 1.45;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  .preset-adapter-debug-row dd:has(.menu_button) {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.45rem;
-  }
-
-  .preset-adapter-debug-row dd span {
-    min-width: 0;
-    flex: 1 1 auto;
-  }
-
-  .preset-adapter-debug-error-text,
-  .preset-adapter-debug-large-text {
-    box-sizing: border-box;
-    width: 100%;
-    border: 1px solid var(--pa-border);
-    border-radius: 8px;
-    padding: 0.65rem;
-    background-color: var(--pa-surface-raised);
-    color: var(--pa-text);
-    font: inherit;
-    line-height: 1.45;
-    resize: vertical;
-  }
-
-  .preset-adapter-debug-error-text {
-    min-height: 8rem;
-  }
-
-  .preset-adapter-debug-text-panel {
-    display: flex;
-    flex-direction: column;
-    box-sizing: border-box;
-    width: min(58rem, calc(100vw - 2rem));
-    height: min(42rem, calc(100dvh - 2rem));
-    overflow: hidden;
-    border: 1px solid var(--pa-border);
-    border-radius: 8px;
-    box-shadow: 0 12px 36px var(--pa-shadow);
-    background-color: var(--pa-ink);
-    color: var(--pa-text);
-  }
-
-  .preset-adapter-debug-text-panel .preset-adapter-review-header {
-    align-items: center;
-  }
-
-  .preset-adapter-debug-large-text {
-    flex: 1 1 auto;
-    min-height: 0;
-    border-width: 0;
-    border-radius: 0;
-    resize: none;
-  }
-
   @container (max-width: 720px) {
     .preset-adapter-summary-settings > :not(summary) {
       margin-left: 0.45rem;
@@ -5916,35 +5042,7 @@ function closeDebugTextModal() {
       grid-template-columns: 1fr;
     }
 
-    .preset-adapter-debug {
-      flex: 0 0 auto;
-      overflow: visible;
-    }
-
-    .preset-adapter-debug-layout {
-      grid-template-columns: 1fr;
-      align-items: start;
-      height: auto;
-    }
-
-    .preset-adapter-debug-records {
-      height: min(16rem, 42vh);
-      min-height: 12rem;
-    }
-
-    .preset-adapter-debug-detail {
-      overflow: visible;
-      padding-right: 0;
-    }
-
-    .preset-adapter-debug-row dl {
-      grid-template-columns: 1fr;
-    }
-
-    .preset-adapter-debug-row dd:has(.menu_button) {
-      flex-direction: column;
-    }
-  }
+      }
 
   @media (max-width: 720px) {
     .preset-adapter-header {
@@ -5987,43 +5085,6 @@ function closeDebugTextModal() {
       flex: 0 1 auto;
     }
 
-    .preset-adapter-debug-layout {
-      grid-template-columns: 1fr;
-      align-items: start;
-      height: auto;
-    }
-
-    .preset-adapter-debug {
-      flex: 0 0 auto;
-      overflow: visible;
-    }
-
-    .preset-adapter-debug-records {
-      height: min(16rem, 42vh);
-      min-height: 12rem;
-    }
-
-    .preset-adapter-debug-detail {
-      overflow: visible;
-      padding-right: 0;
-    }
-
-    .preset-adapter-debug-record-list {
-      max-height: none;
-    }
-
-    .preset-adapter-debug-row dl {
-      grid-template-columns: 1fr;
-    }
-
-    .preset-adapter-debug-row dd:has(.menu_button) {
-      flex-direction: column;
-    }
-
-    .preset-adapter-debug-text-panel {
-      width: 100%;
-      height: calc(100dvh - 1.2rem);
-    }
-  }
+      }
 }
 </style>

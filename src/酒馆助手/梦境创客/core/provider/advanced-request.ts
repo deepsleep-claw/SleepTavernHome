@@ -60,13 +60,11 @@ export function parseRequestHeaders(value?: Partial<YamlRequestDocument>): Recor
   return normalizeRequestHeaders(object);
 }
 
-export function normalizeAdvancedRequestValues(
-  value?: {
-    bodyParameters?: Partial<YamlRequestDocument>;
-    excludedBodyParameters?: Partial<YamlRequestDocument>;
-    requestHeaders?: Partial<YamlRequestDocument>;
-  },
-): AdvancedRequestValues {
+export function normalizeAdvancedRequestValues(value?: {
+  bodyParameters?: Partial<YamlRequestDocument>;
+  excludedBodyParameters?: Partial<YamlRequestDocument>;
+  requestHeaders?: Partial<YamlRequestDocument>;
+}): AdvancedRequestValues {
   return {
     bodyParameters: normalizeYamlRequestDocument(value?.bodyParameters),
     excludedBodyParameters: normalizeYamlRequestDocument(value?.excludedBodyParameters),
@@ -124,6 +122,9 @@ export function mergeBodyParameterLayers(
 }
 
 export const PROTECTED_REQUEST_FIELDS = new Set([
+  'contents',
+  'systemInstruction',
+  'toolConfig',
   'input',
   'messages',
   'model',
@@ -135,10 +136,12 @@ export const PROTECTED_REQUEST_FIELDS = new Set([
 ]);
 
 export function ignoredBodyParameterFields(value: Record<string, unknown>, excluded: Iterable<string> = []): string[] {
-  return [...new Set([
-    ...Object.keys(value).filter(key => PROTECTED_REQUEST_FIELDS.has(key)),
-    ...[...excluded].filter(key => PROTECTED_REQUEST_FIELDS.has(key)),
-  ])];
+  return [
+    ...new Set([
+      ...Object.keys(value).filter(key => PROTECTED_REQUEST_FIELDS.has(key)),
+      ...[...excluded].filter(key => PROTECTED_REQUEST_FIELDS.has(key)),
+    ]),
+  ];
 }
 
 export function applyAdvancedRequestToBody(
@@ -146,9 +149,7 @@ export function applyAdvancedRequestToBody(
   bodyParameters: Record<string, unknown>,
   excludedBodyParameters: Iterable<string>,
 ): Record<string, unknown> {
-  const safe = Object.fromEntries(
-    Object.entries(bodyParameters).filter(([key]) => !PROTECTED_REQUEST_FIELDS.has(key)),
-  );
+  const safe = Object.fromEntries(Object.entries(bodyParameters).filter(([key]) => !PROTECTED_REQUEST_FIELDS.has(key)));
   const result = mergeBodyParameterLayers(body, safe);
   for (const key of excludedBodyParameters) {
     if (!PROTECTED_REQUEST_FIELDS.has(key)) delete result[key];
@@ -161,12 +162,12 @@ export function createAdvancedRequestFetch(
   excludedBodyParametersOrFetch: Iterable<string> | typeof fetch = [],
   explicitFetch?: typeof fetch,
 ): typeof fetch {
-  const excludedBodyParameters = typeof excludedBodyParametersOrFetch === 'function'
-    ? []
-    : excludedBodyParametersOrFetch;
-  const fetchImpl = typeof excludedBodyParametersOrFetch === 'function'
-    ? excludedBodyParametersOrFetch
-    : (explicitFetch ?? globalThis.fetch.bind(globalThis));
+  const excludedBodyParameters =
+    typeof excludedBodyParametersOrFetch === 'function' ? [] : excludedBodyParametersOrFetch;
+  const fetchImpl =
+    typeof excludedBodyParametersOrFetch === 'function'
+      ? excludedBodyParametersOrFetch
+      : (explicitFetch ?? globalThis.fetch.bind(globalThis));
   const excluded = [...excludedBodyParameters];
   return async (input, init) => {
     if (typeof init?.body !== 'string' || (Object.keys(bodyParameters).length === 0 && excluded.length === 0)) {

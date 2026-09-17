@@ -123,17 +123,32 @@
           <div class="dca-form-grid">
             <label class="dca-field wide">
               <span>包含主体参数</span>
-              <textarea v-model="form.bodyParameters" rows="8" spellcheck="false" placeholder="reasoning:&#10;  effort: high"></textarea>
+              <textarea
+                v-model="form.bodyParameters"
+                rows="8"
+                spellcheck="false"
+                placeholder="reasoning:&#10;  effort: high"
+              ></textarea>
               <small>null 可删除 Provider 层的同名字段；模型、消息、工具和流式字段不会被覆盖。</small>
             </label>
             <label class="dca-field wide">
               <span>排除主体参数</span>
-              <textarea v-model="form.excludedBodyParameters" rows="5" spellcheck="false" placeholder="- frequency_penalty&#10;- presence_penalty"></textarea>
+              <textarea
+                v-model="form.excludedBodyParameters"
+                rows="5"
+                spellcheck="false"
+                placeholder="- frequency_penalty&#10;- presence_penalty"
+              ></textarea>
               <small>与Provider层合并去重，只删除请求主体的顶层字段。</small>
             </label>
             <label class="dca-field wide">
               <span>包含请求标头</span>
-              <textarea v-model="form.requestHeaders" rows="6" spellcheck="false" placeholder="X-Custom-Header: value"></textarea>
+              <textarea
+                v-model="form.requestHeaders"
+                rows="6"
+                spellcheck="false"
+                placeholder="X-Custom-Header: value"
+              ></textarea>
             </label>
           </div>
         </details>
@@ -196,10 +211,10 @@ type Form = {
 };
 
 const form = reactive<Form>(emptyForm());
-const compatibilityOptions: SelectOption[] = [
+const compatibilityOptions = computed<SelectOption[]>(() => [
   { label: '标准', value: 'standard' },
-  { label: 'DeepSeek', value: 'deepseek' },
-];
+  ...(props.provider?.interfaceType === 'gemini' ? [] : [{ label: 'DeepSeek', value: 'deepseek' }]),
+]);
 const capabilityOptions: SelectOption[] = [
   { label: '自动', value: 'auto' },
   { label: '支持', value: 'enabled' },

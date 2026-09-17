@@ -9,6 +9,7 @@ import { mountCharacterManagement } from './character-management-module';
 import { mountExtensionSettings } from './extension-settings-module';
 import { getHostDocument, getHostWindow } from './host-context';
 import { initPanel } from './panel';
+import { trackHostPointerDrag } from './pointer-drag';
 import {
   DEFAULT_INPUT_BOTTOM_GAP,
   DEFAULT_LEFT_SIDEBAR_WIDTH,
@@ -2176,23 +2177,22 @@ function mountResizeHandles(store: ReturnType<typeof useModernLayoutStore>): { d
         host_window.cancelAnimationFrame(animation_frame);
         applyPendingWidth();
       }
+      body.classList.remove(BODY_CLASS_RESIZING);
+      active_drag_cleanup = undefined;
       if (kind === 'sidebar' && store.settings.leftSidebarWidth !== pending_width) {
         store.settings.leftSidebarWidth = pending_width;
       }
       if (kind === 'overlay' && store.settings.overlayPanelWidth !== pending_width) {
         store.settings.overlayPanelWidth = pending_width;
       }
-      body.classList.remove(BODY_CLASS_RESIZING);
-      host_window.removeEventListener('pointermove', handlePointerMove);
-      host_window.removeEventListener('pointerup', stopDrag);
-      host_window.removeEventListener('pointercancel', stopDrag);
-      active_drag_cleanup = undefined;
     };
 
-    active_drag_cleanup = stopDrag;
-    host_window.addEventListener('pointermove', handlePointerMove);
-    host_window.addEventListener('pointerup', stopDrag);
-    host_window.addEventListener('pointercancel', stopDrag);
+    active_drag_cleanup = trackHostPointerDrag({
+      target: kind === 'sidebar' ? $sidebar_handle[0] : $overlay_handle[0],
+      event,
+      onMove: handlePointerMove,
+      onStop: stopDrag,
+    });
   };
 
   const handleSidebarPointerDown = (event: JQuery.TriggeredEvent) => {

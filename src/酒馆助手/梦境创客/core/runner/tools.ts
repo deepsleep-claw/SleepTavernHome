@@ -23,7 +23,10 @@ export type ToolConfirmation = {
 };
 
 export type RunnerTool = {
-  confirmation?: (input: unknown, toolCallId: string) => Promise<ToolConfirmation | undefined> | ToolConfirmation | undefined;
+  confirmation?: (
+    input: unknown,
+    toolCallId: string,
+  ) => Promise<ToolConfirmation | undefined> | ToolConfirmation | undefined;
   definition: Tool;
   execute: (input: unknown, toolCallId: string, context?: { abortSignal: AbortSignal }) => Promise<unknown>;
   name: string;
@@ -50,12 +53,18 @@ async function listPath(repository: WorkspaceRepository, input: ListPathInput) {
   try {
     const file = await repository.read(input.path);
     return {
-      entries: [{
-        path: file.path,
-        readonly: file.readonly,
-        size: file.external?.size ?? file.skillResource?.size ?? file.virtualBinary?.size ?? new TextEncoder().encode(file.content).byteLength,
-        type: 'file',
-      }],
+      entries: [
+        {
+          path: file.path,
+          readonly: file.readonly,
+          size:
+            file.external?.size ??
+            file.skillResource?.size ??
+            file.virtualBinary?.size ??
+            new TextEncoder().encode(file.content).byteLength,
+          type: 'file',
+        },
+      ],
       path: file.path,
       truncated: false,
       type: 'file',
@@ -68,7 +77,13 @@ async function listPath(repository: WorkspaceRepository, input: ListPathInput) {
   const depth = Math.min(MAX_LIST_DEPTH, Math.max(1, requestedDepth));
   const maxResults = Math.min(MAX_LIST_RESULTS, Math.max(1, input.maxResults ?? DEFAULT_LIST_RESULTS));
   const pattern = input.glob ? globToRegex(input.glob.replace(/^\/+/, '')) : undefined;
-  const discovered: Array<{ depth: number; kind: 'directory' | 'file'; path: string; readonly: boolean; size?: number }> = [];
+  const discovered: Array<{
+    depth: number;
+    kind: 'directory' | 'file';
+    path: string;
+    readonly: boolean;
+    size?: number;
+  }> = [];
   const queue: Array<{ depth: number; path: string }> = [{ depth: 0, path: input.path }];
   let truncated = false;
   while (queue.length > 0) {
@@ -80,9 +95,16 @@ async function listPath(repository: WorkspaceRepository, input: ListPathInput) {
         queue.length = 0;
         break;
       }
-      const item = { depth: current.depth + 1, kind: child.kind, path: child.path, readonly: child.readonly, size: child.size };
+      const item = {
+        depth: current.depth + 1,
+        kind: child.kind,
+        path: child.path,
+        readonly: child.readonly,
+        size: child.size,
+      };
       discovered.push(item);
-      if (child.kind === 'directory' && item.depth < MAX_LIST_DEPTH) queue.push({ depth: item.depth, path: child.path });
+      if (child.kind === 'directory' && item.depth < MAX_LIST_DEPTH)
+        queue.push({ depth: item.depth, path: child.path });
     }
   }
 
@@ -243,7 +265,8 @@ function approvalMode(options: WorkspaceRunnerToolOptions): 'full' | 'manual' | 
 }
 
 function ordinaryConfirmation(operation: MutationOperation, path: string, toolCallId: string, toolName: string) {
-  const verb = operation === 'delete' ? '删除' : operation === 'move' ? '移动' : operation === 'patch' ? '修改' : '写入';
+  const verb =
+    operation === 'delete' ? '删除' : operation === 'move' ? '移动' : operation === 'patch' ? '修改' : '写入';
   return {
     description: `${verb}工作区内容：${path}`,
     risk: 'ordinary' as const,
@@ -454,10 +477,7 @@ export function createWorkspaceRunnerTools(
         description: '新建或整体写入文本文件。已有长文件优先使用apply_patch。',
         inputSchema: z.object({
           content: z.string(),
-          overwrite: z
-            .boolean()
-            .optional()
-            .describe('默认false。仅在确认需要整体替换一个已有文件时显式设为true。'),
+          overwrite: z.boolean().optional().describe('默认false。仅在确认需要整体替换一个已有文件时显式设为true。'),
           path: pathSchema,
         }),
       }),
@@ -546,12 +566,26 @@ export function createWorkspaceRunnerTools(
       confirmation: async (input, toolCallId) => {
         const value = input as { from: string; to: string };
         const source = await mutationConfirmation(
-          'move', value.from, input, repository, existingSkillIds, options, toolCallId, 'move_path',
+          'move',
+          value.from,
+          input,
+          repository,
+          existingSkillIds,
+          options,
+          toolCallId,
+          'move_path',
         );
         const target = await mutationConfirmation(
-          'move', value.to, input, repository, existingSkillIds, options, toolCallId, 'move_path',
+          'move',
+          value.to,
+          input,
+          repository,
+          existingSkillIds,
+          options,
+          toolCallId,
+          'move_path',
         );
-        return source?.risk === 'high' ? source : target?.risk === 'high' ? target : source ?? target;
+        return source?.risk === 'high' ? source : target?.risk === 'high' ? target : (source ?? target);
       },
       definition: tool({
         description: '移动或重命名文件/目录，保留稳定资源身份。',
@@ -571,7 +605,14 @@ export function createWorkspaceRunnerTools(
       confirmation: async (input, toolCallId) => {
         const value = input as { from: string; overwrite?: boolean; to: string };
         const target = await mutationConfirmation(
-          'write', value.to, input, repository, existingSkillIds, options, toolCallId, 'copy_path',
+          'write',
+          value.to,
+          input,
+          repository,
+          existingSkillIds,
+          options,
+          toolCallId,
+          'copy_path',
         );
         return target;
       },
@@ -673,7 +714,11 @@ export const COMPACT_CONTEXT_TOOL: RunnerTool = {
       '把旧助手回复和已完成工具链压缩为忠实摘要。摘要必须保留目标、用户约束、已完成修改、关键发现、失败点和待办，不得改写用户意图。',
     inputSchema: z.object({ summary: z.string().min(1) }),
   }),
-  execute: async input => ({ compacted: true, summary: (input as { summary: string }).summary }),
+  execute: async input => {
+    const summary = (input as { summary?: unknown }).summary;
+    if (typeof summary !== 'string' || !summary.trim()) throw new Error('压缩摘要不能为空。');
+    return { compacted: true, summary };
+  },
   name: 'compact_context',
   readonly: false,
 };

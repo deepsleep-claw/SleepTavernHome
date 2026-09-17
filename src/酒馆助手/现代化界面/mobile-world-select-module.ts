@@ -840,6 +840,7 @@ class MobileWorldPicker {
     this.syncLayout();
     this.controller.syncTrigger();
     this.window.requestAnimationFrame(() => {
+      this.scrollCurrentWorldIntoView();
       if (this.layout === 'wide') {
         this.searchInput?.focus({ preventScroll: true });
       } else {
@@ -921,6 +922,11 @@ class MobileWorldPicker {
       candidates = candidates.filter(option => this.enabledSnapshot.has(option.value));
     } else if (this.activeTab === 'favorites') {
       candidates = candidates.filter(option => this.favoriteSnapshot.has(option.favoriteKey));
+    }
+    if (this.controller.config.key === 'global' && this.activeTab === 'all') {
+      const enabled = candidates.filter(option => this.selectedValues.has(option.value));
+      const disabled = candidates.filter(option => !this.selectedValues.has(option.value));
+      candidates = [...enabled, ...disabled];
     }
     this.filteredOptions = normalizedQuery
       ? candidates.filter(option => option.searchText.includes(normalizedQuery))
@@ -1103,6 +1109,23 @@ class MobileWorldPicker {
       button?.focus({ preventScroll: true });
       button?.scrollIntoView({ block: 'nearest' });
     });
+  }
+
+  private scrollCurrentWorldIntoView(): void {
+    if (this.controller.config.key !== 'editor' || !this.viewport || !this.rows) {
+      return;
+    }
+    const current = this.filteredOptions.find(option => this.selectedValues.has(option.value));
+    if (!current) {
+      return;
+    }
+    const row = this.rows.querySelector<HTMLElement>(
+      `.th-modern-mobile-world-picker-row[data-source-index="${current.sourceIndex}"]`,
+    );
+    if (!row) {
+      return;
+    }
+    this.viewport.scrollTop = Math.max(0, row.offsetTop - (this.viewport.clientHeight - row.offsetHeight) / 2);
   }
 
   private readonly syncLayout = () => {

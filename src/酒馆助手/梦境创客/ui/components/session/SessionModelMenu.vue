@@ -169,7 +169,10 @@ const supportsReasoning = computed(() =>
 const isRunning = computed(() => ['running', 'waiting-approval'].includes(state.value.active?.status ?? ''));
 const reasoningOptions = computed(() => [
   { description: '由接口或模型自行决定', label: '自动', value: 'auto' },
-  { description: '本会话关闭推理', label: '关闭推理', value: 'off' },
+  ...(selectedProvider.value?.interfaceType === 'gemini' &&
+  /gemini-(?:3|2\.5-pro)/u.test(selectedModel.value?.modelId ?? '')
+    ? []
+    : [{ description: '本会话关闭推理', label: '关闭推理', value: 'off' }]),
   ...(selectedModel.value?.modelSettings.reasoningEfforts ?? []).map(item => ({
     description: item.id,
     label: item.name,

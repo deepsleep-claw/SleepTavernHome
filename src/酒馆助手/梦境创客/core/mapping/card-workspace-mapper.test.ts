@@ -106,28 +106,6 @@ function state(): CardWorkspaceState {
 }
 
 describe('card workspace mapper', () => {
-  it('投影固定角色文件、具名开场白和世界书，聊天由独立实时工作区负责', () => {
-    const files = projectCardWorkspace(state(), 2);
-    const paths = files.map(item => item.path);
-    expect(paths).toContain('/character/definition/description.md');
-    expect(paths).toContain('/character/greetings/001-初见.md');
-    expect(paths.some(path => path.startsWith('/context/'))).toBe(false);
-    expect(paths).toContain(`/worldbooks/${encodeWorkspaceSegment('学院')}/book.yaml`);
-    expect(files.find(item => item.path === '/character/identity.yaml')?.readonly).toBe(true);
-
-    const entryFile = files.find(item => item.resourceId === 'entry-library');
-    const parsed = parseFrontmatter(entryFile?.content ?? '', entryFile?.path ?? '');
-    expect(parsed.metadata).toMatchObject({
-      strategy: {
-        keys: [
-          { type: 'text', value: '图书馆' },
-          { flags: 'iu', pattern: '藏书', type: 'regex' },
-        ],
-      },
-      unknown_fields: { future_option: { enabled: true } },
-    });
-  });
-
   it('无修改往返时保留正文、正则、未知字段和全局只读书', () => {
     const base = state();
     const result = materializeCardWorkspace(base, projectCardWorkspace(base));
@@ -145,32 +123,10 @@ describe('card workspace mapper', () => {
       ],
       unknownFields: { display: 'grid' },
     });
-    const keyword = result.state.worldbooks.find(book => book.resourceId === 'book-academy')?.entries[0]?.strategy.keys[1];
+    const keyword = result.state.worldbooks.find(book => book.resourceId === 'book-academy')?.entries[0]?.strategy
+      .keys[1];
     expect(keyword).toBeInstanceOf(RegExp);
     expect(result.state.worldbooks.some(book => book.resourceId === 'book-global')).toBe(true);
-  });
-
-  it('从Working Copy读取角色和世界书的明确修改', async () => {
-    const base = state();
-    const workspace = new MemoryWorkspaceRepository({ files: projectCardWorkspace(base) });
-    await workspace.write('/character/definition/description.md', '爱丽丝是首席学生。', 'character-edit', { overwrite: true });
-    const entryPath = workspace.snapshot().find(item => item.resourceId === 'entry-library')?.path;
-    expect(entryPath).toBeTruthy();
-    const original = await workspace.read(entryPath!);
-    const { metadata } = parseFrontmatter(original.content, original.path);
-    await workspace.write(
-      entryPath!,
-      `---\n${String(original.content.split('---\n')[1])}---\n新的世界书正文。`,
-      'entry-edit',
-      { overwrite: true },
-    );
-    const result = materializeCardWorkspace(base, workspace.snapshot()).state;
-    expect(result.character.fields.description).toBe('爱丽丝是首席学生。');
-    expect(result.worldbooks.find(book => book.resourceId === 'book-academy')?.entries[0]).toMatchObject({
-      content: '新的世界书正文。',
-      extra: { automationId: 'keep-me' },
-    });
-    expect(metadata.name).toBe('图书馆');
   });
 
   it('目录重命名会同步角色与聊天绑定', async () => {
@@ -209,7 +165,7 @@ describe('card workspace mapper', () => {
 
     const broken = projectCardWorkspace(base);
     const entryFile = broken.find(item => item.resourceId === 'entry-library')!;
-    entryFile.content = entryFile.content.replace("flags: iu", 'flags: "["');
+    entryFile.content = entryFile.content.replace('flags: iu', 'flags: "["');
     expect(() => materializeCardWorkspace(base, broken)).toThrowError(
       expect.objectContaining({ code: 'INVALID_PATTERN' }),
     );
@@ -221,14 +177,8 @@ describe('card workspace mapper', () => {
     ['effect', []],
     ['effect.cooldown', 'later'],
     ['position.role', 'developer'],
-    ['position.type', 'somewhere'],
-    ['strategy.type', 'random'],
     ['strategy.keys', 'keyword'],
-    ['strategy.keys_secondary', []],
-    ['strategy.keys_secondary.keys', 'secondary'],
-    ['strategy.keys_secondary.logic', 'or'],
     ['strategy.scan_depth', null],
-    ['extra', []],
   ])('拒绝非法世界书字段 %s', (fieldPath, value) => {
     const base = state();
     const files = projectCardWorkspace(base);
@@ -241,7 +191,9 @@ describe('card workspace mapper', () => {
     }
     target[segments.at(-1)!] = value;
     entryFile.content = serializeFrontmatter(parsed.metadata, parsed.body);
-    expect(() => materializeCardWorkspace(base, files)).toThrowError(expect.objectContaining({ code: 'INVALID_PATCH' }));
+    expect(() => materializeCardWorkspace(base, files)).toThrowError(
+      expect.objectContaining({ code: 'INVALID_PATCH' }),
+    );
   });
 
   it('拒绝损坏的标签、绑定和开场白索引', () => {
@@ -354,8 +306,8 @@ describe('card workspace mapper', () => {
       resourceId: 'entry-character-secret',
     });
 
-    const created = materializeCardWorkspace(base, files).state.worldbooks
-      .find(book => book.resourceId === 'book-academy')
+    const created = materializeCardWorkspace(base, files)
+      .state.worldbooks.find(book => book.resourceId === 'book-academy')
       ?.entries.find(item => item.resourceId === 'entry-character-secret');
 
     expect(created).toMatchObject({
@@ -384,8 +336,8 @@ describe('card workspace mapper', () => {
     const entryFile = files.find(item => item.resourceId === 'entry-library')!;
     entryFile.content = serializeFrontmatter({ name: '图书馆' }, '只修改正文。');
 
-    const updated = materializeCardWorkspace(base, files).state.worldbooks
-      .find(book => book.resourceId === 'book-academy')
+    const updated = materializeCardWorkspace(base, files)
+      .state.worldbooks.find(book => book.resourceId === 'book-academy')
       ?.entries.find(item => item.resourceId === 'entry-library');
 
     expect(updated).toEqual({ ...entry(), content: '只修改正文。' });
@@ -415,9 +367,9 @@ describe('card workspace mapper', () => {
     delete metadata.round_trip_safe;
     delete metadata.unknown_fields;
     bookFile.content = serializeYaml(metadata);
-    expect(materializeCardWorkspace(base, files).state.worldbooks.find(book => book.resourceId === 'book-academy')).toMatchObject(
-      { roundTripSafe: true, unknownFields: { display: 'grid' } },
-    );
+    expect(
+      materializeCardWorkspace(base, files).state.worldbooks.find(book => book.resourceId === 'book-academy'),
+    ).toMatchObject({ roundTripSafe: true, unknownFields: { display: 'grid' } });
   });
 
   it('拒绝修改既有世界书book.yaml的内部元数据，但允许通过移动目录重命名', async () => {

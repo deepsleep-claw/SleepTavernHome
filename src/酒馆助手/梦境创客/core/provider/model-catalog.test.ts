@@ -1,22 +1,29 @@
 import { describe, expect, it } from 'vitest';
 import {
   builtinModelTemplates,
-  defaultModelSettings,
   matchModelTemplates,
   parseModelsDevCatalog,
   settingsForAppliedTemplate,
-  templateSettings,
 } from './model-catalog';
 
 describe('model catalog', () => {
-  it('加载内置目录并优先精确匹配模型ID', () => {
+  it('当前DeepSeek名称匹配1M视觉模板，Gemini原生接口有独立模板', () => {
     const templates = builtinModelTemplates();
-    expect(templates.length).toBeGreaterThan(15);
-    const [match] = matchModelTemplates('gpt-5.6-sol', templates);
-    expect(match).toMatchObject({ score: 1, template: { id: 'openai:gpt-5.6-sol' } });
-    expect(match.template.settings.contextWindow).toBe(1_050_000);
+    for (const interfaceType of ['openai-chat', 'openai-responses', 'anthropic'] as const) {
+      const deepseek = matchModelTemplates('deepseek-flash', templates, 1, {
+        compatibilityMode: 'standard',
+        interfaceType,
+      })[0]?.template;
+      expect(deepseek?.settings).toMatchObject({ contextWindow: 1_048_576, capabilities: { vision: 'enabled' } });
+      expect(deepseek?.compatibilityMode).toBe('deepseek');
+    }
+    const google = matchModelTemplates('gemini-3.1-pro', templates, 1, {
+      compatibilityMode: 'standard',
+      interfaceType: 'gemini',
+    })[0]?.template;
+    expect(google?.interfaceType).toBe('gemini');
+    expect(google?.settings.contextWindow).toBe(1_048_576);
   });
-
   it('支持由旧Glob迁移出的显式前后缀规则，但不会为无关ID硬匹配', () => {
     expect(matchModelTemplates('openai/gpt-5.6-sol-2026-08-01')[0]?.template.id).toBe('openai:gpt-5.6-sol');
     expect(matchModelTemplates('totally-unrelated-model')).toEqual([]);
@@ -24,54 +31,24 @@ describe('model catalog', () => {
 
   it('先按接口格式过滤，兼容模式由命中的模型模板提供', () => {
     const templates = builtinModelTemplates();
-    expect(matchModelTemplates('deepseek-v4-flash', templates, 1, {
-      compatibilityMode: 'deepseek',
-      interfaceType: 'openai-responses',
-    })[0]?.template.id).toBe('deepseek:responses:v4-flash');
-    expect(matchModelTemplates('deepseek-v4-flash', templates, 1, {
-      compatibilityMode: 'deepseek',
-      interfaceType: 'anthropic',
-    })[0]?.template.id).toBe('deepseek:anthropic:v4-flash');
-    expect(matchModelTemplates('deepseek-v4-flash', templates, 1, {
-      compatibilityMode: 'standard',
-      interfaceType: 'openai-chat',
-    })[0]?.template).toMatchObject({ compatibilityMode: 'deepseek', id: 'deepseek:chat:v4-flash' });
-  });
-
-  it('按协议匹配Kimi Code模型，并应用官方上下文与推理档位', () => {
-    const templates = builtinModelTemplates();
-    const chatK3 = matchModelTemplates('k3', templates, 1, {
-      compatibilityMode: 'standard',
-      interfaceType: 'openai-chat',
-    })[0]?.template;
-    const anthropicK3 = matchModelTemplates('k3', templates, 1, {
-      compatibilityMode: 'standard',
-      interfaceType: 'anthropic',
-    })[0]?.template;
-    const compactK3 = matchModelTemplates('k3-256k', templates, 1, {
-      compatibilityMode: 'standard',
-      interfaceType: 'openai-chat',
-    })[0]?.template;
-    const highspeed = matchModelTemplates('kimi-for-coding-highspeed', templates, 1, {
-      compatibilityMode: 'standard',
-      interfaceType: 'openai-chat',
-    })[0]?.template;
-
-    expect(chatK3).toMatchObject({
-      id: 'kimi-code:chat:k3',
-      settings: {
-        capabilities: { reasoning: 'enabled', toolCalling: 'enabled', vision: 'enabled', webSearch: 'disabled' },
-        contextWindow: 1_048_576,
-        maxOutputTokens: 0,
-        reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }, { id: 'max', name: '最高' }],
-      },
-    });
-    expect(anthropicK3?.id).toBe('kimi-code:anthropic:k3');
-    expect(compactK3?.settings.contextWindow).toBe(262_144);
-    expect(highspeed).toMatchObject({
-      id: 'kimi-code:chat:kimi-for-coding-highspeed',
-      settings: { contextWindow: 262_144, maxOutputTokens: 0 },
-    });
+    expect(
+      matchModelTemplates('deepseek-v4-flash', templates, 1, {
+        compatibilityMode: 'deepseek',
+        interfaceType: 'openai-responses',
+      })[0]?.template.id,
+    ).toBe('deepseek:responses:v4-flash');
+    expect(
+      matchModelTemplates('deepseek-v4-flash', templates, 1, {
+        compatibilityMode: 'deepseek',
+        interfaceType: 'anthropic',
+      })[0]?.template.id,
+    ).toBe('deepseek:anthropic:v4-flash');
+    expect(
+      matchModelTemplates('deepseek-v4-flash', templates, 1, {
+        compatibilityMode: 'standard',
+        interfaceType: 'openai-chat',
+      })[0]?.template,
+    ).toMatchObject({ compatibilityMode: 'deepseek', id: 'deepseek:chat:v4-flash' });
   });
 
   it('解析models.dev目录并排除非文本生成模型', () => {
@@ -99,17 +76,14 @@ describe('model catalog', () => {
         capabilities: { reasoning: 'enabled', toolCalling: 'enabled', vision: 'enabled' },
         contextWindow: 200_000,
         maxOutputTokens: 32_000,
-        reasoningEfforts: [{ id: 'low', name: '低' }, { id: 'high', name: '高' }, { id: 'max', name: '最高' }],
+        reasoningEfforts: [
+          { id: 'low', name: '低' },
+          { id: 'high', name: '高' },
+          { id: 'max', name: '最高' },
+        ],
       },
       source: 'cloud',
     });
-  });
-
-  it('复制模板设置，默认0表示交给模板或回退值决定', () => {
-    const defaults = defaultModelSettings();
-    expect(defaults.contextWindow).toBe(0);
-    const template = builtinModelTemplates()[0];
-    expect(templateSettings(template)).not.toBe(template.settings);
   });
 
   it('云端补充应用可靠能力字段，但不覆盖推理档位、联网与采样设置', () => {

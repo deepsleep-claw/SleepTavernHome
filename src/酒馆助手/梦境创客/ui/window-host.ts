@@ -174,7 +174,11 @@ export function configureWindowHost(
     const content = element.querySelector<HTMLElement>('.drawer-content')!;
     content.style.cssText =
       'width:min(1200px,96vw);height:calc(100dvh - 70px);padding:0;overflow:hidden;max-height:calc(100dvh - 50px)';
-    document.getElementById('top-settings-holder')?.append(element);
+    const toolbar = document.getElementById('top-settings-holder');
+    const characterEntry = [...(toolbar?.children ?? [])].find(
+      child => child.id === 'unimportantYes' || child.querySelector('#rightNavDrawerIcon'),
+    );
+    toolbar?.insertBefore(element, characterEntry ?? null);
     fullscreenObserver.observe(element, { attributes: true, subtree: true, attributeFilter: ['class'] });
     try {
       const importModule = (host as Window & typeof globalThis).Function('url', 'return import(url)') as (

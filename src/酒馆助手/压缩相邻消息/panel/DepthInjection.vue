@@ -53,42 +53,13 @@
     </template>
 
     <template v-if="store.settings.entry_processing.mode === 'worldbook'">
-      <Checkbox v-model="store.settings.entry_processing.worldbook.aggressive_green_cache.enabled">
-        <span>激进处理绿灯缓存</span>
-      </Checkbox>
+      <WorldbookRules />
 
       <div class="TR-green-cache-actions">
         <button type="button" class="menu_button TR-green-cache-clear-button" @click="clearGreenCache">
           清空绿灯缓存
         </button>
       </div>
-
-      <Checkbox v-model="store.settings.entry_processing.worldbook.constant.enabled">
-        <span>提取无动态宏的蓝灯持久条目到 {{ store.settings.entry_processing.worldbook.constant.placeholder }}</span>
-      </Checkbox>
-
-      <Checkbox v-model="store.settings.entry_processing.worldbook.keyed.enabled">
-        <span
-          >提取绿灯非持久条目和含动态宏的蓝灯条目到
-          {{ store.settings.entry_processing.worldbook.keyed.placeholder }}</span
-        >
-      </Checkbox>
-
-      <Field label="按标题自定义提取">
-        <p class="TR-custom-route-hint">
-          左侧填写标题正则，右侧填写标签名。对应的自定义占位符在提示词中存在时规则才会生效；同一标签会合并，规则按从上到下优先。
-        </p>
-        <div
-          v-for="(route, index) in store.settings.entry_processing.worldbook.custom_routes"
-          :key="index"
-          class="TR-custom-route-row"
-        >
-          <input v-model="route.title_regex" class="text_pole" placeholder="标题正则，例如 /^剧情摘要-/i" />
-          <input v-model="route.tag" class="text_pole" placeholder="标签名，例如 story_archive" />
-          <button type="button" class="menu_button" @click="removeCustomRoute(index)">删除</button>
-        </div>
-        <button type="button" class="menu_button TR-custom-route-add" @click="addCustomRoute">添加映射</button>
-      </Field>
 
       <Field label="提取条目排序">
         <div
@@ -122,6 +93,7 @@ import Field from './component/Field.vue';
 import HelpIcon from './component/HelpIcon.vue';
 import Section from './component/Section.vue';
 import Select from './component/Select.vue';
+import WorldbookRules from './WorldbookRules.vue';
 import depth_injection_help from './help/depth_injection.md';
 
 const store = useSettingsStore();
@@ -145,14 +117,6 @@ function movePosition(index: number, offset: -1 | 1) {
     return;
   }
   [order[index], order[target_index]] = [order[target_index], order[index]];
-}
-
-function addCustomRoute() {
-  store.settings.entry_processing.worldbook.custom_routes.push({ title_regex: '', tag: '' });
-}
-
-function removeCustomRoute(index: number) {
-  store.settings.entry_processing.worldbook.custom_routes.splice(index, 1);
 }
 
 async function clearGreenCache() {
@@ -185,32 +149,5 @@ async function clearGreenCache() {
   min-width: max-content;
   white-space: nowrap;
   writing-mode: horizontal-tb;
-}
-
-.TR-custom-route-hint {
-  margin: 0 0 0.35rem;
-  color: var(--SmartThemeQuoteColor);
-  font-size: 0.9em;
-}
-
-.TR-custom-route-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 0.65fr) auto;
-  gap: 0.35rem;
-  margin-bottom: 0.35rem;
-}
-
-.TR-custom-route-add {
-  width: auto;
-}
-
-@media (max-width: 600px) {
-  .TR-custom-route-row {
-    grid-template-columns: 1fr auto;
-  }
-
-  .TR-custom-route-row input:first-child {
-    grid-column: 1 / -1;
-  }
 }
 </style>

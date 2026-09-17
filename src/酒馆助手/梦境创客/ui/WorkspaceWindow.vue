@@ -10,11 +10,13 @@
       <div v-if="state.sessionBackup" class="dca-backup-state" :class="{ error: state.sessionBackup.error }">
         <span>{{
           state.sessionBackup.error ||
-          (state.sessionBackup.syncing
-            ? '本机已保存 · 正在备份'
-            : state.sessionBackup.pending
-              ? `本机已保存 · ${state.sessionBackup.pending} 项等待备份`
-              : '本机已保存 · 后端备份已同步')
+          (state.sessionBackup.localPending
+            ? '等待自动保存'
+            : state.sessionBackup.syncing
+              ? '本机已保存 · 正在备份'
+              : state.sessionBackup.pending
+                ? `本机已保存 · ${state.sessionBackup.pending} 项等待备份`
+                : '本机已保存 · 后端备份已同步')
         }}</span>
         <button
           v-if="state.sessionBackup.pending"
@@ -111,9 +113,13 @@ watch(
   id => void applyActiveTheme(id),
 );
 
-watch(() => state.value.active?.title, title => {
-  if (clientEnvironment()?.mode === 'detached') document.title = title ? `${title} — 梦境创客` : '梦境创客';
-}, { immediate: true });
+watch(
+  () => state.value.active?.title,
+  title => {
+    if (clientEnvironment()?.mode === 'detached') document.title = title ? `${title} — 梦境创客` : '梦境创客';
+  },
+  { immediate: true },
+);
 
 watch([sidebarCollapsed, isMobile], publishWindowLayout, { immediate: true });
 

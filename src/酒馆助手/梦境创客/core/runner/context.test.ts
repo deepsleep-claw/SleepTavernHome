@@ -3,13 +3,84 @@ import type { ModelMessage } from 'ai';
 import { compactModelMessages, decideContext, estimateTokens, measureContext } from './context';
 
 describe('runner context', () => {
+  it('保留最新完整批次的签名和调用配对，较早的完整步骤交给摘要', () => {
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'old' },
+      { role: 'assistant', content: '旧答案' },
+      { role: 'user', content: 'new' },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolName: 'read_file',
+            toolCallId: 'read-1',
+            input: {},
+            providerOptions: { google: { thoughtSignature: 'sig-1' } },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolName: 'read_file',
+            toolCallId: 'read-1',
+            output: { type: 'text', value: 'content' },
+          },
+        ],
+      },
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolName: 'compact_context',
+            toolCallId: 'compact-1',
+            input: { summary: 'summary' },
+            providerOptions: { google: { thoughtSignature: 'sig-2' } },
+          },
+          { type: 'tool-call', toolName: 'read_file', toolCallId: 'read-2', input: {} },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolName: 'compact_context',
+            toolCallId: 'compact-1',
+            output: { type: 'text', value: 'ok' },
+          },
+          {
+            type: 'tool-result',
+            toolName: 'read_file',
+            toolCallId: 'read-2',
+            output: { type: 'text', value: 'content-2' },
+          },
+        ],
+      },
+    ];
+    const result = compactModelMessages(messages, 'summary');
+    expect(result.slice(-2)).toEqual(messages.slice(5));
+    expect(JSON.stringify(result)).not.toContain('read-1');
+    expect(JSON.stringify(result)).not.toContain('旧答案');
+  });
   it('按角色估算组成、阈值与剩余空间', () => {
     const messages: ModelMessage[] = [
       { content: 'system', role: 'system' },
       { content: 'user', role: 'user' },
       { content: 'assistant', role: 'assistant' },
       {
-        content: [{ output: { type: 'json', value: { ok: true } }, toolCallId: '1', toolName: 'read_file', type: 'tool-result' }],
+        content: [
+          {
+            output: { type: 'json', value: { ok: true } },
+            toolCallId: '1',
+            toolName: 'read_file',
+            type: 'tool-result',
+          },
+        ],
         role: 'tool',
       },
     ];
@@ -32,37 +103,46 @@ describe('runner context', () => {
       measurement: 'api',
       totalTokens: 150,
     });
-    const after = measureContext([
-      ...before,
-      {
-        content: [{
-          output: { type: 'text', value: 'new local tool result' },
-          toolCallId: 'local-1',
-          toolName: 'read_file',
-          type: 'tool-result',
-        }],
-        role: 'tool',
-      },
-    ], 100_000, baseline);
+    const after = measureContext(
+      [
+        ...before,
+        {
+          content: [
+            {
+              output: { type: 'text', value: 'new local tool result' },
+              toolCallId: 'local-1',
+              toolName: 'read_file',
+              type: 'tool-result',
+            },
+          ],
+          role: 'tool',
+        },
+      ],
+      100_000,
+      baseline,
+    );
     expect(after.totalTokens).toBeGreaterThan(150);
     expect(after.toolTokens).toBeGreaterThan(0);
   });
 
   it('附件按媒体语义估算，不把图片Base64字符数直接当作上下文', () => {
-    const usage = measureContext([
-      {
-        content: [
-          { text: '查看图片', type: 'text' },
-          {
-            data: { data: 'A'.repeat(4_000_000), type: 'data' },
-            filename: 'image.png',
-            mediaType: 'image/png',
-            type: 'file',
-          },
-        ],
-        role: 'user',
-      },
-    ], 128_000);
+    const usage = measureContext(
+      [
+        {
+          content: [
+            { text: '查看图片', type: 'text' },
+            {
+              data: { data: 'A'.repeat(4_000_000), type: 'data' },
+              filename: 'image.png',
+              mediaType: 'image/png',
+              type: 'file',
+            },
+          ],
+          role: 'user',
+        },
+      ],
+      128_000,
+    );
     expect(usage.userTokens).toBeLessThan(2_000);
   });
 
@@ -81,30 +161,36 @@ describe('runner context', () => {
       }),
     ).toBe('users-exhausted');
     expect(
-      decideContext({
-        assistantTokens: 71,
-        contextWindow: 100,
-        ratio: 0.71,
-        remainingTokens: 29,
-        systemTokens: 0,
-        thresholdTokens: 70,
-        toolTokens: 0,
-        totalTokens: 71,
-        userTokens: 0,
-      }, 10),
+      decideContext(
+        {
+          assistantTokens: 71,
+          contextWindow: 100,
+          ratio: 0.71,
+          remainingTokens: 29,
+          systemTokens: 0,
+          thresholdTokens: 70,
+          toolTokens: 0,
+          totalTokens: 71,
+          userTokens: 0,
+        },
+        10,
+      ),
     ).toBe('compact');
     expect(
-      decideContext({
-        assistantTokens: 1,
-        contextWindow: 100,
-        ratio: 0.01,
-        remainingTokens: 99,
-        systemTokens: 0,
-        thresholdTokens: 70,
-        toolTokens: 0,
-        totalTokens: 1,
-        userTokens: 0,
-      }, 10),
+      decideContext(
+        {
+          assistantTokens: 1,
+          contextWindow: 100,
+          ratio: 0.01,
+          remainingTokens: 99,
+          systemTokens: 0,
+          thresholdTokens: 70,
+          toolTokens: 0,
+          totalTokens: 1,
+          userTokens: 0,
+        },
+        10,
+      ),
     ).toBe('continue');
   });
 
@@ -120,7 +206,14 @@ describe('runner context', () => {
         role: 'assistant',
       },
       {
-        content: [{ output: { type: 'json', value: { compacted: true } }, toolCallId: 'c', toolName: 'compact_context', type: 'tool-result' }],
+        content: [
+          {
+            output: { type: 'json', value: { compacted: true } },
+            toolCallId: 'c',
+            toolName: 'compact_context',
+            type: 'tool-result',
+          },
+        ],
         role: 'tool',
       },
     ];

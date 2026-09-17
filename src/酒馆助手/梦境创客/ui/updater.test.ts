@@ -2,12 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PluginActivationContext, UpdaterSnapshot } from '../../../公共模块/脚本更新器/contracts';
-import {
-  configureDreamCardAgentUpdater,
-  createStandaloneActivationContext,
-  setCheckUpdatesOnLoad,
-  useDreamCardAgentUpdater,
-} from './updater';
+import { configureDreamCardAgentUpdater, setCheckUpdatesOnLoad, useDreamCardAgentUpdater } from './updater';
 
 function context(
   initial: UpdaterSnapshot,
@@ -38,18 +33,6 @@ function context(
 describe('梦境创客更新状态桥', () => {
   afterEach(() => {
     localStorage.clear();
-  });
-
-  it('为旧的直接导入方式提供本地调试上下文', async () => {
-    const standalone = createStandaloneActivationContext();
-
-    expect(standalone.release.version).toBe('0.2.0');
-    expect(standalone.updater.getSnapshot()).toMatchObject({
-      status: 'up-to-date',
-      currentVersion: '0.2.0',
-      updateAvailable: false,
-    });
-    await expect(standalone.updater.check()).resolves.toMatchObject({ status: 'up-to-date' });
   });
 
   it('把控制器快照提供给顶栏，并只在尚未检查时补一次静默检查', async () => {

@@ -71,7 +71,9 @@
                   <i class="fa-regular fa-address-card" aria-hidden="true"></i><span>角色头像</span>
                 </button>
                 <select v-if="personaNames.length" v-model="avatarUserName" aria-label="选择User头像目标">
-                  <option v-for="name in personaNames" :key="name" :value="name">{{ name }}</option>
+                  <option v-for="persona in personaNames" :key="persona.id" :value="persona.id">
+                    {{ persona.name }}
+                  </option>
                 </select>
                 <button v-if="personaNames.length" type="button" title="把所选图片设为User头像" @click="setUserAvatar">
                   <i class="fa-regular fa-user" aria-hidden="true"></i><span>User头像</span>
@@ -453,8 +455,11 @@ const canUseAsAvatar = computed(() =>
 const personaNames = computed(() =>
   files.value
     .filter(file => /^\/users\/[^/]+\.md$/u.test(file.path))
-    .map(file => decodeWorkspaceSegment(file.path.slice('/users/'.length, -'.md'.length)))
-    .sort((left, right) => left.localeCompare(right, 'zh-CN')),
+    .map(file => ({
+      id: file.resourceId.slice('persona:'.length),
+      name: decodeWorkspaceSegment(file.path.slice('/users/'.length, -'.md'.length)),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN')),
 );
 const isRunning = computed(() => ['running', 'waiting-approval'].includes(state.value.active?.status ?? ''));
 const canEditFile = computed(() =>
@@ -536,7 +541,7 @@ watch([() => selectedFile.value?.content, fileReady], ([content, ready]) => {
 watch(
   personaNames,
   names => {
-    if (!names.includes(avatarUserName.value)) avatarUserName.value = names[0] ?? '';
+    if (!names.some(persona => persona.id === avatarUserName.value)) avatarUserName.value = names[0]?.id ?? '';
   },
   { immediate: true },
 );

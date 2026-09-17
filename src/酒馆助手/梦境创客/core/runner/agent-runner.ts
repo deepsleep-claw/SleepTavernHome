@@ -1,4 +1,5 @@
 import type { ModelMessage, UserContent } from 'ai';
+import { boundedWait } from '../async';
 import {
   decideContext,
   compactModelMessages,
@@ -27,6 +28,7 @@ export type RunnerEvent =
   | { at: number; call: RunnerToolCall; error: string; type: 'tool-failed' }
   | { at: number; message: string; ids?: string[]; type: 'guidance-injected' }
   | { at: number; summary: string; type: 'context-compacted' }
+  | { at: number; type: 'context-compaction-started' }
   | { at: number; failure?: string; status: RunnerStatus; type: 'status' };
 
 export interface RunnerJournal {
@@ -56,6 +58,7 @@ export type AgentRunnerState = {
 };
 
 export type AgentRunnerOptions = {
+  initialApiUsageBaseline?: ApiUsageBaseline;
   initialGuidance?: Array<{ id: string; message: string }>;
   compactionEnabled?: boolean;
   contextWindow?: number;
@@ -121,8 +124,10 @@ export class AgentRunner {
   private apiUsageBaseline?: ApiUsageBaseline;
   private readonly contextWindow: number;
   private controller?: AbortController;
+  private runController?: AbortController;
   private toolController?: AbortController;
   private compactionFresh = false;
+  private manualCompaction = false;
   private readonly compactionEnabled: boolean;
   private readonly executor: ModelStepExecutor;
   private headerMessageCount: number;
@@ -144,11 +149,24 @@ export class AgentRunner {
   readonly state: AgentRunnerState;
 
   constructor(options: AgentRunnerOptions) {
+    this.apiUsageBaseline = options.initialApiUsageBaseline
+      ? structuredClone(options.initialApiUsageBaseline)
+      : undefined;
     this.contextWindow = options.contextWindow ?? 128_000;
     this.compactionEnabled = options.compactionEnabled ?? true;
     this.executor = options.executor;
     this.headerMessageCount = options.headerMessageCount ?? 0;
-    this.journal = options.journal;
+    this.journal = {
+      append: event =>
+        boundedWait(
+          options.journal.append(event),
+          '保存任务进度',
+          event.type === 'status' && !['running', 'waiting-approval'].includes(event.status) ? 1000 : 15_000,
+          event.type === 'status' && !['running', 'waiting-approval'].includes(event.status)
+            ? undefined
+            : this.runController?.signal,
+        ),
+    };
     this.modelControls = options.modelControls ?? { reasoningEffort: 'auto', webSearch: false };
     this.now = options.now ?? Date.now;
     this.onReasoningDelta = options.onReasoningDelta;
@@ -164,7 +182,7 @@ export class AgentRunner {
     const messages = structuredClone(options.initialMessages ?? []);
     this.state = {
       guidance: structuredClone(options.initialGuidance ?? []),
-      contextUsage: measureContext(messages, this.contextWindow),
+      contextUsage: measureContext(messages, this.contextWindow, this.apiUsageBaseline),
       messages,
       pending: options.initialPending ? structuredClone(options.initialPending) : undefined,
       status: options.initialStatus ?? 'idle',
@@ -177,8 +195,18 @@ export class AgentRunner {
     return id;
   }
 
+  usageBaseline(): ApiUsageBaseline | undefined {
+    return this.apiUsageBaseline ? structuredClone(this.apiUsageBaseline) : undefined;
+  }
+
+  resetUsageBaseline(): void {
+    this.apiUsageBaseline = undefined;
+    this.state.contextUsage = this.measureContext();
+  }
+
   stop(): void {
     this.stopRequested = true;
+    this.runController?.abort();
     this.controller?.abort();
     this.toolController?.abort();
   }
@@ -188,6 +216,7 @@ export class AgentRunner {
       throw new Error('Agent已经在运行。');
     }
     this.state.messages.push({ content: userMessage, role: 'user' });
+    this.compactionFresh = false;
     return this.runLoop();
   }
 
@@ -198,7 +227,17 @@ export class AgentRunner {
     return this.runLoop();
   }
 
-  private async runLoop(): Promise<AgentRunnerState> {
+  async compact(): Promise<AgentRunnerState> {
+    if (!this.compactionEnabled) throw new Error('当前助手未启用上下文压缩工具。');
+    if (['running', 'waiting-approval'].includes(this.state.status) || this.state.pending)
+      throw new Error('请先停止或完成当前任务再压缩。');
+    this.compactionFresh = false;
+    return this.runLoop(true);
+  }
+
+  private async runLoop(manualCompaction = false): Promise<AgentRunnerState> {
+    this.manualCompaction = manualCompaction;
+    this.runController = new AbortController();
     try {
       return await this.runLoopUnsafe();
     } catch (error) {
@@ -206,12 +245,16 @@ export class AgentRunner {
       this.state.failure = this.stopRequested ? '用户已停止当前任务。' : message;
       this.state.status = this.stopRequested ? 'stopped' : 'failed';
       try {
-        await this.journal.append({
-          at: this.now(),
-          failure: this.state.failure,
-          status: this.state.status,
-          type: 'status',
-        });
+        await boundedWait(
+          this.journal.append({
+            at: this.now(),
+            failure: this.state.failure,
+            status: this.state.status,
+            type: 'status',
+          }),
+          '保存任务结束状态',
+          1000,
+        );
       } catch {
         // 日志或UI订阅本身失败时也必须收束状态，不能留下没有执行协程的running僵尸。
       }
@@ -219,6 +262,8 @@ export class AgentRunner {
     } finally {
       this.controller = undefined;
       this.toolController = undefined;
+      this.runController = undefined;
+      this.manualCompaction = false;
     }
   }
 
@@ -232,11 +277,16 @@ export class AgentRunner {
       if (this.state.pending) {
         const completed = await this.executePending();
         if (!completed) return this.state;
+        if (this.manualCompaction && this.compactionFresh) {
+          await this.setStatus('completed');
+          return this.state;
+        }
         await this.injectGuidance();
         continue;
       }
       await this.injectGuidance();
-      const decision = decideContext(this.measureContext());
+      const reserve = Math.min(4096, Math.floor(this.contextWindow * 0.1));
+      const decision = decideContext(this.measureContext(), reserve);
       this.state.contextUsage = this.measureContext();
       if (decision === 'users-exhausted') {
         this.state.failure = '全部用户消息已超过上下文窗口的80%，请新建会话、编辑历史或更换更大上下文模型。';
@@ -248,7 +298,19 @@ export class AgentRunner {
         await this.setStatus('context-exhausted');
         return this.state;
       }
-      const compacting = decision === 'compact' && !this.compactionFresh;
+      if (this.manualCompaction || (decision === 'compact' && !this.compactionFresh)) {
+        await this.compactBeforeRequest();
+        if (this.manualCompaction) {
+          await this.setStatus('completed');
+          return this.state;
+        }
+        continue;
+      }
+      if (this.compactionFresh && this.measureContext().remainingTokens < reserve) {
+        this.state.failure = '压缩后仍没有足够的上下文空间，请减少本轮输入或更换更大上下文模型。';
+        await this.setStatus('context-exhausted');
+        return this.state;
+      }
       this.controller = new AbortController();
       let result;
       const liveProviderStarted = new Set<string>();
@@ -256,11 +318,15 @@ export class AgentRunner {
       try {
         const persistedMessages = structuredClone(this.state.messages);
         const requestMessages = this.prepareMessages
-          ? await this.prepareMessages(persistedMessages)
+          ? await boundedWait(
+              this.prepareMessages(persistedMessages),
+              '读取消息附件',
+              15_000,
+              this.runController?.signal,
+            )
           : persistedMessages;
         result = await this.executor.execute({
           abortSignal: this.controller.signal,
-          forceTool: compacting ? 'compact_context' : undefined,
           messages: requestMessages,
           modelSettings: {
             ...this.modelControls,
@@ -295,7 +361,7 @@ export class AgentRunner {
         return this.state;
       }
       modelSteps += 1;
-      if (!compacting) this.compactionFresh = false;
+      this.compactionFresh = false;
       this.state.messages.push(...structuredClone(result.assistantMessages));
       if (typeof result.inputTokens === 'number' && typeof result.outputTokens === 'number') {
         this.apiUsageBaseline = {
@@ -324,14 +390,8 @@ export class AgentRunner {
           });
         }
       }
-      const attemptedCalls = [...result.toolCalls, ...(result.invalidToolCalls ?? [])];
-      if (compacting && !attemptedCalls.some(call => call.toolName === 'compact_context')) {
-        this.state.failure = '模型没有按要求调用compact_context。';
-        await this.setStatus('failed');
-        return this.state;
-      }
       if (result.toolCalls.length > 0) {
-        this.state.pending = { calls: result.toolCalls, compacting, nextCall: 0 };
+        this.state.pending = { calls: result.toolCalls, compacting: false, nextCall: 0 };
         continue;
       }
       if ((result.invalidToolCalls?.length ?? 0) > 0) {
@@ -354,6 +414,7 @@ export class AgentRunner {
 
   private async executePending(): Promise<boolean> {
     const pending = this.state.pending!;
+    let completedCompaction: RunnerToolCall | undefined;
     const remaining = pending.calls.slice(pending.nextCall);
     const allReadonly = remaining.every(call => this.toolMap.get(call.toolName)?.readonly);
     if (allReadonly) {
@@ -380,6 +441,7 @@ export class AgentRunner {
         try {
           const output = await this.executeOne(call);
           await this.completeTool(call, output);
+          if (call.toolName === 'compact_context') completedCompaction = call;
           pending.nextCall += 1;
         } catch (error) {
           await this.failTool(call, error);
@@ -388,8 +450,8 @@ export class AgentRunner {
         }
       }
     }
-    if (pending.compacting) {
-      const compactCall = pending.calls.find(call => call.toolName === 'compact_context');
+    if (pending.compacting || completedCompaction) {
+      const compactCall = completedCompaction;
       const summary = (compactCall?.input as { summary?: unknown } | undefined)?.summary;
       if (typeof summary !== 'string' || !summary.trim()) {
         this.state.failure = 'compact_context没有返回有效摘要。';
@@ -416,6 +478,43 @@ export class AgentRunner {
     return true;
   }
 
+  /** 独立的摘要请求不进入对话工具链；成功后才替换下一次调用所用的上下文。 */
+  private async compactBeforeRequest(): Promise<void> {
+    this.controller = new AbortController();
+    const signal = this.controller.signal;
+    const original = structuredClone(this.state.messages);
+    await this.journal.append({ at: this.now(), type: 'context-compaction-started' });
+    const messages = this.prepareMessages
+      ? await boundedWait(this.prepareMessages(original), '准备压缩上下文', 15_000, signal)
+      : original;
+    const result = await this.executor.execute({
+      abortSignal: signal,
+      messages: [
+        ...messages,
+        {
+          role: 'user',
+          content:
+            '请只输出一份简明的上下文交接摘要，保留用户目标与约束、已完成的真实修改、关键发现、失败点、最新请求和待办。不要继续执行任务，不要调用工具，不要声称完成未经证实的操作。',
+        },
+      ],
+      modelSettings: { ...this.modelControls, webSearch: false, maxOutputTokens: 4096 },
+      tools: [],
+    });
+    if (this.stopRequested) throw new Error('压缩已取消。');
+    const summary = result.text.trim();
+    if (!summary || result.toolCalls.length) throw new Error('压缩请求没有返回有效的文本摘要，原上下文已保留。');
+    const oldHeaderCount = this.headerMessageCount;
+    const header = this.refreshCompactionHeader
+      ? await this.refreshCompactionHeader()
+      : original.slice(0, oldHeaderCount);
+    this.state.messages = compactModelMessages(original, summary, oldHeaderCount, header);
+    this.headerMessageCount = header.length;
+    this.apiUsageBaseline = undefined;
+    this.compactionFresh = true;
+    this.state.contextUsage = this.measureContext();
+    await this.journal.append({ at: this.now(), summary, type: 'context-compacted' });
+  }
+
   private async executeOne(call: RunnerToolCall): Promise<unknown> {
     const target = this.toolMap.get(call.toolName);
     if (!target) throw new Error(`模型调用了未知工具：${call.toolName}`);
@@ -423,7 +522,14 @@ export class AgentRunner {
     const confirmation = await target.confirmation?.(call.input, call.toolCallId);
     if (confirmation) {
       await this.setStatus('waiting-approval');
-      const approved = (await this.requestApproval?.(confirmation)) ?? false;
+      const approved = this.requestApproval
+        ? await boundedWait(
+            this.requestApproval(confirmation),
+            '等待工具确认',
+            24 * 60 * 60 * 1000,
+            this.runController?.signal,
+          )
+        : false;
       await this.setStatus('running');
       if (!approved) return { approved: false, message: '用户拒绝了这次高危操作。' };
     }
@@ -476,7 +582,12 @@ export class AgentRunner {
 
   private async setStatus(status: RunnerStatus): Promise<void> {
     this.state.status = status;
-    await this.journal.append({ at: this.now(), failure: this.state.failure, status, type: 'status' });
+    await boundedWait(
+      this.journal.append({ at: this.now(), failure: this.state.failure, status, type: 'status' }),
+      '保存任务状态',
+      15_000,
+      status === 'running' || status === 'waiting-approval' ? this.runController?.signal : undefined,
+    );
   }
 
   private measureContext(): ContextUsage {

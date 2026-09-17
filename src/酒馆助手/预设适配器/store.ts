@@ -1,9 +1,26 @@
+import _ from 'lodash';
+import { defineStore } from 'pinia';
+import { computed, ref } from 'vue';
+import { z } from 'zod';
 import {
   getKimiPartialModeApi,
   KIMI_PARTIAL_EFFECT_ID,
   type KimiPartialModeApi,
 } from '../../公共模块/kimi_partial_mode';
 import default_config_raw from './default_config.json?raw';
+import {
+  buildSelectionPlan,
+  captureSelections,
+  isSelectionModified,
+  resolveSelections,
+  SELECTION_PRESETS_KEY,
+  SelectionLibrarySchema,
+  SelectionPresetFileSchema,
+  selectionPresetFile,
+  type SelectionContent,
+  type SelectionLibrary,
+  type SelectionReference,
+} from './selection-presets';
 import { DEFAULT_PRESET_ADAPTER_THEME, PRESET_ADAPTER_THEME_IDS, type PresetAdapterThemeId } from './theme';
 
 export const SCRIPT_NAME = '梦鲸思客设置';
@@ -214,7 +231,19 @@ const ExportFileSchema = z.object({
       group_id: z.string().min(1),
       match_id: z.string().min(1),
       name: z.string().min(1),
-      prompt: z.object({ name: z.string().min(1) }).passthrough(),
+      prompt: z.looseObject({
+        id: z.string().min(1),
+        name: z.string().min(1),
+        role: z.enum(['system', 'user', 'assistant']),
+        enabled: z.boolean(),
+        content: z.string().optional(),
+        position: z
+          .union([
+            z.object({ type: z.literal('relative') }),
+            z.object({ type: z.literal('in_chat'), depth: z.number(), order: z.number() }),
+          ])
+          .optional(),
+      }),
     }),
   ),
 });
@@ -255,6 +284,8 @@ export type OptionStatus = 'active' | 'inactive' | 'unmatched';
 
 export type OptionView = {
   id: string;
+  selection: SelectionReference;
+  selection_available: boolean;
   label: string;
   description: string;
   export_source?: ExportSource;
@@ -397,22 +428,7 @@ export type SummaryGenerationStatus = {
   errors: string[];
 };
 
-type SquashDebugRecord = {
-  id: string;
-  created_at: string;
-  title: string;
-  summary: {
-    error_count: number;
-    failed: number;
-    green_cache_insertions: number;
-    loaded_total: number;
-    total_rows: number;
-    triggered_rows: number;
-    wrapper_orphan: number;
-    wrapper_paired: number;
-  };
-  state: Record<string, any>;
-};
+type SquashDebugRecord = import('../压缩相邻消息/debug_types').SquashDebugRecord;
 
 type SquashDebugApiCommon = {
   getRecords: () => SquashDebugRecord[];
@@ -458,6 +474,7 @@ type ReviewFailedItem = {
   name: string;
   action_label: string;
   issue: string;
+  can_append: boolean;
   preview: string;
   source: ExportFile['items'][number];
 };
@@ -476,6 +493,11 @@ type ReviewPanel =
       file: ExportFile;
       items: ReviewPromptItem[];
       failed_items: ReviewFailedItem[];
+      source_name: string;
+      source_warnings: string[];
+      target_name: string;
+      target_context: string;
+      selected_keys: string[];
     };
 
 type ImportPlan =
@@ -1740,6 +1762,14 @@ function buildOptionView(
   return {
     view: {
       id: option.id,
+      selection: {
+        group_id: group.id,
+        group_label: group.label,
+        option_id: option.source_option_id,
+        label: option.label,
+        ...(option.export_source ? { prompt_name: preset.prompts[option.export_source.prompt_index].name } : {}),
+      },
+      selection_available: status !== 'unmatched' && option.effect.every(effect => readEffectState(effect).available),
       label: option.label,
       description: option.description,
       export_source: option.export_source,
@@ -1788,7 +1818,7 @@ function buildGroupViews(config: AdapterConfig, preset: Preset): BuildGroupsResu
       return result.view;
     });
     const variable_inputs = group.options.filter(isVariableInputOption).map(option => {
-      const scope = option.type === 'global_var_input' ? 'global' : 'chat';
+      const scope: VariableInputView['scope'] = option.type === 'global_var_input' ? 'global' : 'chat';
       const available = scope === 'global' || chat_variable_context.has_chat;
       const variables = scope === 'global' ? global_variables : chat_variable_context.variables;
       return {
@@ -2090,9 +2120,11 @@ function getImportPlan(preset: Preset, match: NonNullable<PresetAdapterOption['m
     return { error: `未在起始标记之后找到导入位置标记“${match.above}”。` };
   }
 
-  const existing_index = preset.prompts.findIndex(
-    (prompt, index) => index >= start_index && index < above_result.index && prompt.name === name,
+  const existing_indexes = preset.prompts.flatMap((prompt, index) =>
+    index >= start_index && index < above_result.index && prompt.name === name ? [index] : [],
   );
+  if (existing_indexes.length > 1) return { error: '目标区间内存在多个同名条目' };
+  const existing_index = existing_indexes[0] ?? -1;
   if (existing_index >= 0) {
     return {
       action: 'overwrite',
@@ -2112,12 +2144,29 @@ function buildImportReview(
 ): Pick<Extract<ReviewPanel, { kind: 'import' }>, 'items' | 'failed_items'> {
   const items: ReviewPromptItem[] = [];
   const failed_items: ReviewFailedItem[] = [];
+  const source_counts = new Map<string, number>();
+  const sourceKey = (item: ExportFile['items'][number]) => JSON.stringify([item.group_id, item.match_id, item.name]);
+  file.items.forEach(item => source_counts.set(sourceKey(item), (source_counts.get(sourceKey(item)) ?? 0) + 1));
 
   file.items.forEach((item, index) => {
     const key = getReviewItemKey(item.group_id, item.match_id, item.name, index);
     const preview = getPromptPreview(item.prompt);
     const group = config.groups.find(candidate => candidate.id === item.group_id);
     const match_option = findImportMatchOption(config, item.group_id, item.match_id);
+    if (source_counts.get(sourceKey(item))! > 1) {
+      failed_items.push({
+        key,
+        group_id: item.group_id,
+        match_id: item.match_id,
+        name: item.name,
+        action_label: '重复条目',
+        issue: '来源分组存在多个同名条目',
+        can_append: false,
+        preview,
+        source: item,
+      });
+      return;
+    }
     if (!group || !match_option?.match) {
       failed_items.push({
         key,
@@ -2126,6 +2175,7 @@ function buildImportReview(
         name: item.name,
         action_label: '追加到底部',
         issue: '未找到对应的动态匹配配置',
+        can_append: true,
         preview,
         source: item,
       });
@@ -2139,8 +2189,9 @@ function buildImportReview(
         group_id: item.group_id,
         match_id: item.match_id,
         name: item.name,
-        action_label: '追加到底部',
+        action_label: plan.error === '目标区间内存在多个同名条目' ? '无法匹配' : '追加到底部',
         issue: plan.error,
+        can_append: plan.error !== '目标区间内存在多个同名条目',
         preview,
         source: item,
       });
@@ -2183,6 +2234,8 @@ function applyImportItem(preset: Preset, config: AdapterConfig, item: ExportFile
 
   const prompt = cloneImportedPrompt(item);
   if (plan.action === 'overwrite') {
+    prompt.id = preset.prompts[plan.index].id;
+    prompt.enabled = preset.prompts[plan.index].enabled;
     preset.prompts.splice(plan.index, 1, prompt);
   } else {
     preset.prompts.splice(plan.index, 0, prompt);
@@ -2194,8 +2247,8 @@ function appendImportItem(preset: Preset, item: ExportFile['items'][number]) {
   preset.prompts.push(cloneImportedPrompt(item));
 }
 
-function formatZodIssues(error: z.ZodError): string {
-  return error.issues.map(issue => `${issue.path.join('.') || '文件'}: ${issue.message}`).join('\n');
+function importTargetContext(config: AdapterConfig, preset: Preset): string {
+  return JSON.stringify([getScriptId(), config.groups, preset.prompts, preset.prompts_unused]);
 }
 
 function getSquashDebugApi(): SquashDebugApi | undefined {
@@ -2458,12 +2511,46 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   const organizing = ref(false);
   const review_panel = ref<ReviewPanel>();
   const selected_export_keys = ref<Set<string>>(new Set());
+  const selected_import_count = computed(() =>
+    review_panel.value?.kind === 'import' ? review_panel.value.selected_keys.length : 0,
+  );
+  const import_review_groups = computed(() => {
+    const panel = review_panel.value;
+    if (panel?.kind !== 'import') return [];
+    const items = [
+      ...panel.items.map(item => ({ ...item, issue: '', disabled: false })),
+      ...panel.failed_items.map(item => ({
+        ...item,
+        group_label: config.value.groups.find(group => group.id === item.group_id)?.label ?? item.group_id,
+        action: item.can_append ? 'append' : 'blocked',
+        disabled: !item.can_append,
+      })),
+    ];
+    const group_ids = [...new Set([...groups.value.map(group => group.id), ...items.map(item => item.group_id)])];
+    return group_ids.flatMap(id => {
+      const group_items = items.filter(item => item.group_id === id);
+      return group_items.length > 0 ? [{ id, label: group_items[0].group_label, items: group_items }] : [];
+    });
+  });
   const loaded_preset_name = ref('');
   const groups = ref<GroupView[]>([]);
   const ui_preferences = ref<AdapterUiPreferences>(cloneJson(EMPTY_CONFIG.ui));
   const errors = ref<string[]>([]);
   const blocking_errors = ref<string[]>([]);
   const is_applying = ref(false);
+  const selection_library = ref<SelectionLibrary>(SelectionLibrarySchema.parse({}));
+  const selection_library_error = ref('');
+  const active_selection_preset = computed(() =>
+    selection_library.value.presets.find(preset => preset.id === selection_library.value.active_id),
+  );
+  const selection_modified = computed(() =>
+    active_selection_preset.value ? isSelectionModified(active_selection_preset.value.selections, groups.value) : false,
+  );
+  const selection_missing = computed(() =>
+    active_selection_preset.value
+      ? resolveSelections(active_selection_preset.value.selections, groups.value).missing
+      : [],
+  );
   const is_summary_running = manual_summary_running;
   const has_blocking_errors = computed(() => blocking_errors.value.length > 0);
   const selected_export_count = computed(() =>
@@ -2552,6 +2639,159 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   let summary_event_stops: EventOnReturn[] = [];
   let variable_write_error_notified = false;
   let reasoner_format_unsupported_notified = false;
+
+  function refreshSelectionLibrary() {
+    try {
+      const variables = getVariables({ type: 'global' });
+      selection_library.value = SelectionLibrarySchema.parse(variables[SELECTION_PRESETS_KEY] ?? {});
+      selection_library_error.value = '';
+    } catch (error) {
+      selection_library_error.value = `读取选项组预设失败：${normalizeError(error)}`;
+    }
+  }
+
+  function editSelectionLibrary(updater: (library: SelectionLibrary) => void): boolean {
+    try {
+      const variables = getVariables({ type: 'global' });
+      const library = SelectionLibrarySchema.parse(variables[SELECTION_PRESETS_KEY] ?? {});
+      updater(library);
+      const normalized = SelectionLibrarySchema.parse(library);
+      replaceVariables({ ...variables, [SELECTION_PRESETS_KEY]: normalized }, { type: 'global' });
+      selection_library.value = cloneJson(normalized);
+      selection_library_error.value = '';
+      return true;
+    } catch (error) {
+      toastr.error(`保存选项组预设失败：${normalizeError(error)}`, SCRIPT_NAME);
+      return false;
+    }
+  }
+
+  function captureCurrentSelections(): SelectionReference[] {
+    const state = loadState();
+    if (!state.preset || state.errors.length > 0) throw new Error('当前页面配置不可用');
+    return captureSelections(state.groups);
+  }
+
+  function createSelectionPreset(name: string, imported?: SelectionContent): boolean {
+    try {
+      const selections = imported ? cloneJson(imported.selections) : captureCurrentSelections();
+      return editSelectionLibrary(library => {
+        const id = SillyTavern.uuidv4();
+        library.presets.push({ id, name: name.trim(), selections });
+        if (!imported) library.active_id = id;
+      });
+    } catch (error) {
+      toastr.error(`新建选项组预设失败：${normalizeError(error)}`, SCRIPT_NAME);
+      return false;
+    }
+  }
+
+  function saveSelectionPreset(): boolean {
+    const id = active_selection_preset.value?.id;
+    if (!id || is_applying.value) return false;
+    try {
+      const selections = captureCurrentSelections();
+      const saved = editSelectionLibrary(library => {
+        const preset = library.presets.find(item => item.id === id);
+        if (!preset) throw new Error('选项组预设已不存在');
+        preset.selections = selections;
+      });
+      if (saved) toastr.success('已保存当前按钮组合。', SCRIPT_NAME);
+      return saved;
+    } catch (error) {
+      toastr.error(`保存选项组预设失败：${normalizeError(error)}`, SCRIPT_NAME);
+      return false;
+    }
+  }
+
+  function renameSelectionPreset(id: string, name: string): boolean {
+    return editSelectionLibrary(library => {
+      const preset = library.presets.find(item => item.id === id);
+      if (!preset) throw new Error('选项组预设已不存在');
+      preset.name = name.trim();
+    });
+  }
+
+  function deleteSelectionPreset(id: string): boolean {
+    return editSelectionLibrary(library => {
+      library.presets = library.presets.filter(preset => preset.id !== id);
+      if (library.active_id === id) library.active_id = '';
+    });
+  }
+
+  function readSelectionPresetFile(text: string): SelectionContent | undefined {
+    try {
+      return SelectionPresetFileSchema.parse(JSON.parse(text)).preset;
+    } catch (error) {
+      toastr.error(`选项组预设文件无效：${normalizeError(error)}`, SCRIPT_NAME);
+      return undefined;
+    }
+  }
+
+  function exportSelectionPreset() {
+    refreshSelectionLibrary();
+    const preset = active_selection_preset.value;
+    if (!preset || selection_library_error.value) return;
+    downloadJson(
+      getExportFilename(`${preset.name.replace(/[\\/:*?"<>|]/g, '_')}-选项组预设`),
+      selectionPresetFile(preset),
+    );
+  }
+
+  async function applySelectionPreset(id: string): Promise<{ title: string; messages: string[] } | undefined> {
+    if (is_applying.value) return;
+    is_applying.value = true;
+    const preset_name = getLoadedPresetName();
+    let prompt_snapshot: Map<number, boolean> | undefined;
+    const effect_snapshot = new Map<string, boolean>();
+    try {
+      const state = loadState();
+      const saved = selection_library.value.presets.find(preset => preset.id === id);
+      if (!saved || selection_library_error.value || !state.preset || state.errors.length > 0) {
+        throw new Error('当前选项组预设或页面配置不可用');
+      }
+      const plan = buildSelectionPlan(saved.selections, state.groups);
+      if (plan.errors.length > 0) return { title: '选项组合存在冲突', messages: plan.errors };
+      for (const [effect, enabled] of plan.effect_states) {
+        const api = getEffectApi(effect);
+        if (!api && enabled) throw new Error('对应的功能脚本未启用，无法应用选项组合');
+        if (api) effect_snapshot.set(effect, api.getEnabled());
+      }
+      prompt_snapshot = new Map(
+        [...plan.prompt_states.keys()].map(index => [index, state.preset!.prompts[index].enabled]),
+      );
+      if (applyPromptTargetStates(state.preset, plan.prompt_states)) {
+        await replacePreset('in_use', state.preset, { render: 'immediate' });
+      }
+      if (getLoadedPresetName() !== preset_name) throw new Error('酒馆预设已切换，请重新选择选项组预设');
+      const effects = applyEffectTargetStates(plan.effect_states);
+      if (effects.errors.length > 0) throw new Error(effects.errors.join('\n'));
+      // 当前选择是界面元数据，已保存的按钮快照保持独立。
+      if (
+        !editSelectionLibrary(library => {
+          library.active_id = id;
+        })
+      ) {
+        throw new Error('无法记录当前选项组预设');
+      }
+      if (plan.missing.length > 0) return { title: '部分选项未能应用', messages: plan.missing };
+      toastr.success(`已应用“${saved.name}”。`, SCRIPT_NAME);
+      return undefined;
+    } catch (error) {
+      if (getLoadedPresetName() === preset_name) {
+        try {
+          if (prompt_snapshot) await restorePromptStateSnapshot(prompt_snapshot);
+          restoreEffectStateSnapshot(effect_snapshot);
+        } catch (restore_error) {
+          console.error(`[${SCRIPT_NAME}] 恢复按钮状态失败。`, restore_error);
+        }
+      }
+      return { title: '应用选项组预设失败', messages: [normalizeError(error)] };
+    } finally {
+      is_applying.value = false;
+      refresh();
+    }
+  }
 
   function saveUiPreferences(preferences: AdapterUiPreferences) {
     const normalized = AdapterUiPreferencesSchema.parse(preferences);
@@ -3451,6 +3691,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   }
 
   function loadState(): LoadedState {
+    refreshSelectionLibrary();
     const config_result = readAdapterConfig();
     config.value = config_result.config;
     title.value = config_result.config.title;
@@ -3512,6 +3753,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   }
 
   function closeReviewPanel() {
+    if (is_applying.value) return;
     review_panel.value = undefined;
   }
 
@@ -3613,120 +3855,162 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     cancelExportMode();
   }
 
-  async function importPresetSettings(text: string): Promise<void> {
-    if (is_applying.value) {
-      return;
-    }
+  function stageSettingsImport(file: ExportFile, source_name: string, source_warnings: string[] = []) {
+    const state = loadState();
+    if (state.errors.length > 0 || !state.preset) throw new Error('当前预设配置不可用');
+    const review = buildImportReview(file, state.config, state.preset);
+    if (file.items.length === 0 && source_warnings.length === 0) throw new Error('没有可导入的设置项');
+    organizing.value = false;
+    export_mode.value = false;
+    selected_export_keys.value = new Set();
+    review_panel.value = {
+      kind: 'import',
+      title: '选择要导入的内容',
+      file,
+      ...review,
+      source_name,
+      source_warnings,
+      target_name: getLoadedPresetName(),
+      target_context: importTargetContext(state.config, state.preset),
+      selected_keys: review.items.filter(item => item.action === 'create').map(item => item.key),
+    };
+  }
 
+  async function importPresetSettings(text: string, filename = '设置文件'): Promise<void> {
+    if (is_applying.value) return;
     try {
-      let parsed_json: unknown;
-      try {
-        parsed_json = JSON.parse(text);
-      } catch (error) {
-        toastr.error(`导入文件不是有效 JSON：${normalizeError(error)}`, SCRIPT_NAME);
-        return;
-      }
-
-      const parsed = ExportFileSchema.safeParse(parsed_json);
-      if (!parsed.success) {
-        console.warn(`[${SCRIPT_NAME}] 导入文件校验失败。`, parsed.error);
-        toastr.error(`只能导入预设适配器导出的设置文件：\n${formatZodIssues(parsed.error)}`, SCRIPT_NAME);
-        return;
-      }
-
-      const state = loadState();
-      if (state.errors.length > 0 || !state.preset) {
-        toastr.error('配置存在错误，无法导入。', SCRIPT_NAME);
-        return;
-      }
-
-      const review = buildImportReview(parsed.data, state.config, state.preset);
-      if (review.items.length === 0 && review.failed_items.length === 0) {
-        toastr.error('导入文件没有设置项。', SCRIPT_NAME);
-        return;
-      }
-
-      review_panel.value = {
-        kind: 'import',
-        title: `确认导入 ${parsed.data.items.length} 项设置`,
-        file: parsed.data,
-        items: review.items,
-        failed_items: review.failed_items,
-      };
-    } finally {
-      is_applying.value = false;
+      const parsed = ExportFileSchema.parse(JSON.parse(text));
+      stageSettingsImport(parsed, filename);
+    } catch (error) {
+      toastr.error('导入文件无效：' + normalizeError(error), SCRIPT_NAME);
     }
   }
 
-  async function confirmImportReview(include_failed: boolean): Promise<void> {
-    const panel = review_panel.value;
-    if (panel?.kind !== 'import' || is_applying.value) {
-      return;
+  function getImportPresetNames(): string[] {
+    try {
+      return getPresetNames().filter(name => name !== 'in_use');
+    } catch (error) {
+      toastr.error('读取预设列表失败：' + normalizeError(error), SCRIPT_NAME);
+      return [];
     }
+  }
 
+  function importFromPreset(preset_name: string): boolean {
+    if (is_applying.value) return false;
+    try {
+      if (!getImportPresetNames().includes(preset_name)) throw new Error('来源预设已不存在');
+      const current = readAdapterConfig();
+      if (current.errors.length > 0) throw new Error('当前解析配置不可用');
+      const source = getPreset(preset_name);
+      const items: ExportFile['items'] = [];
+      const warnings: string[] = [];
+      for (const group of current.config.groups) {
+        const resolved = resolveGroupOptions(group, source);
+        warnings.push(...resolved.errors.map(error => group.label + '：' + error));
+        for (const option of resolved.options) {
+          if (!option.export_source) {
+            if (option.id.endsWith(':between-unmatched')) warnings.push(group.label + '：' + option.description);
+            continue;
+          }
+          const prompt = source.prompts[option.export_source.prompt_index];
+          if (prompt)
+            items.push({
+              group_id: group.id,
+              match_id: option.export_source.match_id,
+              name: prompt.name,
+              prompt: cloneJson(prompt),
+            });
+        }
+      }
+      stageSettingsImport(
+        { type: EXPORT_FILE_TYPE, version: EXPORT_FILE_VERSION, title: preset_name, items },
+        preset_name,
+        [...new Set(warnings)],
+      );
+      return true;
+    } catch (error) {
+      toastr.error('解析预设失败：' + normalizeError(error), SCRIPT_NAME);
+      return false;
+    }
+  }
+
+  function setImportSelection(keys: string[], checked: boolean) {
+    const panel = review_panel.value;
+    if (panel?.kind !== 'import' || is_applying.value) return;
+    const valid = new Set(
+      [...panel.items, ...panel.failed_items.filter(item => item.can_append)].map(item => item.key),
+    );
+    const selected = new Set(panel.selected_keys);
+    keys.filter(key => valid.has(key)).forEach(key => (checked ? selected.add(key) : selected.delete(key)));
+    panel.selected_keys = [...selected];
+  }
+
+  async function confirmImportReview(): Promise<void> {
+    const panel = review_panel.value;
+    if (panel?.kind !== 'import' || is_applying.value || panel.selected_keys.length === 0) return;
     is_applying.value = true;
     try {
       const state = loadState();
-      if (state.errors.length > 0 || !state.preset) {
-        toastr.error('配置存在错误，无法导入。', SCRIPT_NAME);
+      if (state.errors.length > 0 || !state.preset) throw new Error('当前预设配置不可用');
+      if (getLoadedPresetName() !== panel.target_name) {
+        review_panel.value = undefined;
+        throw new Error('目标酒馆预设已切换，请重新选择导入来源');
+      }
+      const context = importTargetContext(state.config, state.preset);
+      const review = buildImportReview(panel.file, state.config, state.preset);
+      if (context !== panel.target_context) {
+        const previous_actions = new Map([
+          ...panel.items.map(item => [item.key, item.action] as const),
+          ...panel.failed_items.filter(item => item.can_append).map(item => [item.key, 'append'] as const),
+        ]);
+        const selected = new Set(panel.selected_keys);
+        const candidates = [
+          ...review.items.map(item => ({ key: item.key, action: item.action })),
+          ...review.failed_items.filter(item => item.can_append).map(item => ({ key: item.key, action: 'append' })),
+        ];
+        review_panel.value = {
+          ...panel,
+          ...review,
+          target_context: context,
+          selected_keys: candidates
+            .filter(item => selected.has(item.key) && previous_actions.get(item.key) === item.action)
+            .map(item => item.key),
+        };
+        toastr.warning('目标内容或解析规则已变化，已更新预览，请重新确认。', SCRIPT_NAME);
         return;
       }
-
-      const review = buildImportReview(panel.file, state.config, state.preset);
-      review_panel.value = {
-        ...panel,
-        items: review.items,
-        failed_items: review.failed_items,
-      };
-
-      const skipped: string[] = [];
+      const selected = new Set(panel.selected_keys);
       let created_count = 0;
       let overwritten_count = 0;
       let appended_count = 0;
-      for (const item of review.items.map(review_item => review_item.source)) {
-        const result = applyImportItem(state.preset, state.config, item);
-        if ('error' in result) {
-          skipped.push(`${item.group_id}/${item.match_id}/${item.name}: ${result.error}`);
-          continue;
-        }
-        if (result.action === 'overwrite') {
-          overwritten_count += 1;
-        } else {
-          created_count += 1;
-        }
+      for (const item of review.items.filter(item => selected.has(item.key))) {
+        const result = applyImportItem(state.preset, state.config, item.source);
+        if ('error' in result) throw new Error(result.error);
+        if (result.action === 'create') created_count += 1;
+        else overwritten_count += 1;
       }
-      if (include_failed) {
-        for (const item of review.failed_items.map(review_item => review_item.source)) {
-          appendImportItem(state.preset, item);
-          appended_count += 1;
-        }
+      for (const item of review.failed_items.filter(item => item.can_append && selected.has(item.key))) {
+        appendImportItem(state.preset, item.source);
+        appended_count += 1;
       }
-
-      const imported_count = created_count + overwritten_count + appended_count;
-      if (imported_count === 0) {
-        toastr.error(
-          skipped.length > 0 ? `没有可导入的匹配项：\n${skipped.slice(0, 4).join('\n')}` : '导入文件没有设置项。',
-          SCRIPT_NAME,
-        );
-        return;
-      }
-
-      const preset_name_to_save = getLoadedPresetName();
+      if (created_count + overwritten_count + appended_count === 0) throw new Error('请勾选要导入的内容');
       await replacePreset('in_use', state.preset, { render: 'immediate' });
-      if (preset_name_to_save && preset_name_to_save !== 'in_use') {
-        await replacePreset(preset_name_to_save, state.preset, { render: 'none' });
-      }
+      if (getLoadedPresetName() !== panel.target_name) throw new Error('目标预设已切换，未保存到命名预设');
+      await replacePreset(panel.target_name, state.preset, { render: 'none' });
       review_panel.value = undefined;
       refresh();
       toastr.success(
-        `已导入并保存 ${imported_count} 项设置：新增 ${created_count} 项，覆盖 ${overwritten_count} 项，追加 ${appended_count} 项。`,
+        '已导入并保存：新增 ' +
+          created_count +
+          ' 项，覆盖 ' +
+          overwritten_count +
+          ' 项，追加 ' +
+          appended_count +
+          ' 项。',
         SCRIPT_NAME,
       );
-      const skipped_count = (include_failed ? 0 : review.failed_items.length) + skipped.length;
-      if (skipped_count > 0) {
-        toastr.warning(`有 ${skipped_count} 项未导入，请检查 group id、match id 或区间标记。`, SCRIPT_NAME);
-        console.warn(`[${SCRIPT_NAME}] 部分导入项未匹配。`, [...review.failed_items, ...skipped]);
-      }
+    } catch (error) {
+      toastr.error('导入失败：' + normalizeError(error), SCRIPT_NAME);
     } finally {
       is_applying.value = false;
     }
@@ -3832,6 +4116,18 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   }
 
   return {
+    active_selection_preset,
+    selection_library,
+    selection_library_error,
+    selection_modified,
+    selection_missing,
+    applySelectionPreset,
+    createSelectionPreset,
+    saveSelectionPreset,
+    renameSelectionPreset,
+    deleteSelectionPreset,
+    readSelectionPresetFile,
+    exportSelectionPreset,
     active_tab,
     addSummaryMessageIdFromInput,
     all_groups_collapsed,
@@ -3856,6 +4152,11 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     groups,
     has_blocking_errors,
     importPresetSettings,
+    getImportPresetNames,
+    importFromPreset,
+    import_review_groups,
+    selected_import_count,
+    setImportSelection,
     isExportOptionSelected,
     isFavoriteOption,
     isGroupCollapsed,

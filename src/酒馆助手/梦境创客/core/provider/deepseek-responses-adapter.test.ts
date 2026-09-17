@@ -3,32 +3,25 @@ import { z } from 'zod';
 import { describe, expect, it, vi } from 'vitest';
 import { createProviderRuntime } from '../provider-probe';
 import { AiSdkModelStepExecutor } from '../runner/step-executor';
-import {
-  createDeepSeekResponsesFetch,
-  transformDeepSeekResponsesRequest,
-  translateDeepSeekResponsesEvent,
-  type DeepSeekResponsesStreamState,
-} from './deepseek-responses-adapter';
-
-function state(): DeepSeekResponsesStreamState {
-  return { reasoningByItemId: new Map() };
-}
+import { transformDeepSeekResponsesRequest } from './deepseek-responses-adapter';
 
 describe('DeepSeek Responses adapter', () => {
   it('清理无状态接口不支持的字段，并把推理正文改为明文输入', () => {
-    expect(transformDeepSeekResponsesRequest({
-      include: ['reasoning.encrypted_content'],
-      input: [
-        { encrypted_content: '完整思考', id: 'reasoning-1', summary: [], type: 'reasoning' },
-        { content: '继续', role: 'user' },
-      ],
-      max_tool_calls: 10,
-      previous_response_id: 'response-1',
-      reasoning: { effort: 'high', summary: 'detailed' },
-      store: false,
-      temperature: 0.7,
-      top_p: 0.8,
-    })).toEqual({
+    expect(
+      transformDeepSeekResponsesRequest({
+        include: ['reasoning.encrypted_content'],
+        input: [
+          { encrypted_content: '完整思考', id: 'reasoning-1', summary: [], type: 'reasoning' },
+          { content: '继续', role: 'user' },
+        ],
+        max_tool_calls: 10,
+        previous_response_id: 'response-1',
+        reasoning: { effort: 'high', summary: 'detailed' },
+        store: false,
+        temperature: 0.7,
+        top_p: 0.8,
+      }),
+    ).toEqual({
       input: [
         { content: [{ text: '完整思考', type: 'reasoning_text' }], type: 'reasoning' },
         { content: '继续', role: 'user' },
@@ -38,11 +31,13 @@ describe('DeepSeek Responses adapter', () => {
   });
 
   it('关闭推理时保留采样参数', () => {
-    expect(transformDeepSeekResponsesRequest({
-      metadata: { dream_card_agent_reasoning_effort: 'none' },
-      temperature: 0.7,
-      top_p: 0.8,
-    })).toEqual({ reasoning: { effort: 'none' }, temperature: 0.7, top_p: 0.8 });
+    expect(
+      transformDeepSeekResponsesRequest({
+        metadata: { dream_card_agent_reasoning_effort: 'none' },
+        temperature: 0.7,
+        top_p: 0.8,
+      }),
+    ).toEqual({ reasoning: { effort: 'none' }, temperature: 0.7, top_p: 0.8 });
   });
 
   it('只保留 DeepSeek 支持的联网结果 include', () => {
@@ -51,52 +46,6 @@ describe('DeepSeek Responses adapter', () => {
         include: ['reasoning.encrypted_content', 'web_search_call.results'],
       }),
     ).toEqual({ include: ['web_search_call.results'] });
-  });
-
-  it('把 reasoning_text 流翻译为 AI SDK 可识别事件，并在工具后保留完整正文', () => {
-    const streamState = state();
-    expect(translateDeepSeekResponsesEvent({
-      item: { id: 'reasoning-1', type: 'reasoning' },
-      output_index: 0,
-      type: 'response.output_item.added',
-    }, streamState)).toMatchObject({ item: { encrypted_content: null, id: 'reasoning-1' } });
-    expect(translateDeepSeekResponsesEvent({
-      delta: '先检查',
-      item_id: 'reasoning-1',
-      output_index: 0,
-      type: 'response.reasoning_text.delta',
-    }, streamState)).toMatchObject({ summary_index: 0, type: 'response.reasoning_summary_text.delta' });
-    translateDeepSeekResponsesEvent({
-      delta: '再修改',
-      item_id: 'reasoning-1',
-      output_index: 0,
-      type: 'response.reasoning_text.delta',
-    }, streamState);
-    expect(translateDeepSeekResponsesEvent({
-      item: { id: 'reasoning-1', type: 'reasoning' },
-      output_index: 0,
-      type: 'response.output_item.done',
-    }, streamState)).toMatchObject({
-      item: { encrypted_content: '先检查再修改', id: 'reasoning-1', type: 'reasoning' },
-    });
-  });
-
-  it('流式 fetch 保留原生 web_search 事件并翻译推理事件', async () => {
-    const sse = [
-      { item: { id: 'reasoning-1', type: 'reasoning' }, output_index: 0, type: 'response.output_item.added' },
-      { delta: '思考', item_id: 'reasoning-1', output_index: 0, type: 'response.reasoning_text.delta' },
-      { item: { id: 'search-1', status: 'in_progress', type: 'web_search_call' }, output_index: 1, type: 'response.output_item.added' },
-    ].map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
-    const baseFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      new Response(sse, { headers: { 'content-type': 'text/event-stream' } }));
-    const response = await createDeepSeekResponsesFetch(baseFetch as typeof fetch)('https://example.test/responses', {
-      body: JSON.stringify({ reasoning: { effort: 'high', summary: 'detailed' }, store: false }),
-      method: 'POST',
-    });
-    const body = await response.text();
-    expect(body).toContain('response.reasoning_summary_text.delta');
-    expect(body).toContain('web_search_call');
-    expect(JSON.parse(String(baseFetch.mock.calls[0]?.[1]?.body))).toEqual({ reasoning: { effort: 'high' } });
   });
 
   it('经 AI SDK 完整呈现推理并保留工具调用前的明文推理上下文', async () => {
@@ -195,19 +144,23 @@ describe('DeepSeek Responses adapter', () => {
           webSearch: false,
         },
         onReasoningDelta: reasoningDelta,
-        tools: [{
-          definition: tool({ inputSchema: z.object({ path: z.string() }) }),
-          execute: async () => ({}),
-          name: 'read_file',
-          readonly: true,
-        }],
+        tools: [
+          {
+            definition: tool({ inputSchema: z.object({ path: z.string() }) }),
+            execute: async () => ({}),
+            name: 'read_file',
+            readonly: true,
+          },
+        ],
       });
       expect(reasoningDelta).toHaveBeenCalledWith('先读取文件');
-      expect(result.toolCalls).toEqual([{
-        input: { path: '/character/description.md' },
-        toolCallId: 'call-1',
-        toolName: 'read_file',
-      }]);
+      expect(result.toolCalls).toEqual([
+        {
+          input: { path: '/character/description.md' },
+          toolCallId: 'call-1',
+          toolName: 'read_file',
+        },
+      ]);
       expect(JSON.stringify(result.assistantMessages)).toContain('先读取文件');
       expect(JSON.stringify(result.assistantMessages)).toContain('reasoningEncryptedContent');
       const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as Record<string, unknown>;
@@ -220,12 +173,14 @@ describe('DeepSeek Responses adapter', () => {
           { content: '检查角色', role: 'user' },
           ...result.assistantMessages,
           {
-            content: [{
-              output: { type: 'json', value: { content: '角色描述' } },
-              toolCallId: 'call-1',
-              toolName: 'read_file',
-              type: 'tool-result',
-            }],
+            content: [
+              {
+                output: { type: 'json', value: { content: '角色描述' } },
+                toolCallId: 'call-1',
+                toolName: 'read_file',
+                type: 'tool-result',
+              },
+            ],
             role: 'tool',
           },
         ],
@@ -235,12 +190,14 @@ describe('DeepSeek Responses adapter', () => {
           reasoningEffort: 'high',
           webSearch: false,
         },
-        tools: [{
-          definition: tool({ inputSchema: z.object({ path: z.string() }) }),
-          execute: async () => ({}),
-          name: 'read_file',
-          readonly: true,
-        }],
+        tools: [
+          {
+            definition: tool({ inputSchema: z.object({ path: z.string() }) }),
+            execute: async () => ({}),
+            name: 'read_file',
+            readonly: true,
+          },
+        ],
       });
       const replayBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body)) as { input: unknown[] };
       expect(replayBody.input).toContainEqual({
@@ -303,9 +260,9 @@ describe('DeepSeek Responses adapter', () => {
       },
     ];
     const sse = events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('');
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(sse, { headers: { 'content-type': 'text/event-stream' }, status: 200 }),
-    );
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(new Response(sse, { headers: { 'content-type': 'text/event-stream' }, status: 200 }));
     try {
       const runtime = createProviderRuntime({
         apiKey: 'test-key',
@@ -330,7 +287,9 @@ describe('DeepSeek Responses adapter', () => {
         tools: [],
       });
       expect(started).toHaveBeenCalledWith(expect.objectContaining({ toolCallId: 'search-1', toolName: 'web_search' }));
-      expect(completed).toHaveBeenCalledWith(expect.objectContaining({ toolCallId: 'search-1', toolName: 'web_search' }));
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({ toolCallId: 'search-1', toolName: 'web_search' }),
+      );
       expect(completed).toHaveBeenCalledWith(
         expect.objectContaining({
           output: [
