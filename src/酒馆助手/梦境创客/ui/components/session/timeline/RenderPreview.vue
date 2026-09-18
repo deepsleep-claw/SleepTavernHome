@@ -26,6 +26,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { parse } from 'yaml';
+import { unwrapHtmlReplacement } from '../../../../core/projects/html-output';
 import { useDreamCardAgent } from '../../../composables/runtime';
 
 const props = defineProps<{ renderId: string }>();
@@ -114,6 +115,7 @@ async function open() {
       }
       html = value.inputText.replace(literalRegex(regex.find_regex), regex.replace_string);
     }
+    html = unwrapHtmlReplacement(html, value.renderer);
     frameHeight.value = 96;
     documentSource.value = `<!doctype html><html><head><meta charset="utf-8">${environmentScript()}${backgroundStyle()}${autoHeightScript()}</head><body>${html}</body></html>`;
     opened.value = true;

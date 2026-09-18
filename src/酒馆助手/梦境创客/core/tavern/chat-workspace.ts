@@ -1,4 +1,4 @@
-import { applyUnifiedPatch } from '../workspace/unified-patch';
+import { applyContextPatch } from '../workspace/context-patch';
 import { boundedWait } from '../async';
 import { parseFrontmatter, serializeFrontmatter, serializeYaml } from '../mapping/serde';
 import { sha256 } from '../transaction/canonical';
@@ -304,7 +304,7 @@ export class TavernChatWorkspace {
     const current = chat.messages[target.messageId];
     if (!current) throw new Error(`聊天楼层不存在：${target.messageId}`);
     const [latest] = await projectChat(mount, { ...chat, messages: [current] }, true);
-    const patched = applyUnifiedPatch(latest.content, patch);
+    const patched = applyContextPatch(latest.content, patch, path);
     await this.writeFile(path, patched, repository);
   }
 

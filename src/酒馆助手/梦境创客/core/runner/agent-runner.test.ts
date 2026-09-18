@@ -281,6 +281,28 @@ describe('AgentRunner', () => {
     ]);
   });
 
+  it('文件操作失败只跳过路径重叠的依赖，独立文件继续执行', async () => {
+    const invoked: string[] = [];
+    const calls = [
+      { input: { path: '/files/a.md' }, toolCallId: 'failed', toolName: 'delete_path' },
+      { input: { path: '/files/b.md' }, toolCallId: 'independent', toolName: 'delete_path' },
+      { input: { from: '/files/a.md', to: '/files/c.md' }, toolCallId: 'dependent', toolName: 'copy_path' },
+      { input: { path: '/files/c.md' }, toolCallId: 'transitive', toolName: 'read_file' },
+      { input: { path: '/worldbooks/book/entries/0002-2-entry.md' }, toolCallId: 'other', toolName: 'delete_path' },
+    ];
+    const tools = ['delete_path', 'copy_path', 'read_file'].map(name => runnerTool(name, name === 'read_file', async (_input, id) => {
+      invoked.push(id);
+      if (id === 'failed') throw new Error('missing');
+      return { ok: true };
+    }));
+    const journal = new MemoryRunnerJournal();
+    const runner = new AgentRunner({ executor: new QueueExecutor([modelStep(calls), modelStep()]), journal, tools });
+    expect((await runner.start('batch')).status).toBe('completed');
+    expect(invoked).toEqual(['failed', 'independent', 'other']);
+    expect(journal.events.filter(event => event.type === 'tool-failed').map(event => event.call.toolCallId))
+      .toEqual(['failed', 'dependent', 'transitive']);
+  });
+
   it('Schema校验失败只返回一次工具错误，不执行无效调用并允许模型继续', async () => {
     const invalidCall = { input: { value: 8 }, toolCallId: 'invalid-search', toolName: 'search_files' };
     const invalidStep: ModelStepResult = {

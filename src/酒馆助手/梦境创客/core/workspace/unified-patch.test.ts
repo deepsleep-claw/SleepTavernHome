@@ -22,6 +22,23 @@ describe('applyUnifiedPatch', () => {
     expect(applyUnifiedPatch('one\n', '@@ -1 +1,0 @@\n-one')).toBe('');
   });
 
+  it('单文件多Hunk允许空白分隔和未带前缀的空上下文', () => {
+    const patch = [
+      '--- a/file.md', '+++ b/file.md',
+      '@@ -1,3 +1,3 @@', '-one', '+ONE', '', ' three', '',
+      '@@ -5 +5 @@', '-five', '+FIVE', '',
+    ].join('\r\n');
+    expect(applyUnifiedPatch('one\n\nthree\nfour\nfive\n', patch, '/file.md')).toBe('ONE\n\nthree\nfour\nFIVE\n');
+    expect(summarizeUnifiedPatch(patch)).toEqual({ addedLines: 2, hunkCount: 2, removedLines: 2 });
+  });
+
+  it('依据正文重算Hunk行数，仍严格检查上下文和删除内容', () => {
+    const patch = '@@ -1,20 +1,30 @@\n one\n-two\n+TWO\n+extra\n';
+    expect(applyUnifiedPatch('one\ntwo\n', patch)).toBe('one\nTWO\nextra\n');
+    expect(() => applyUnifiedPatch('one\nchanged\n', patch)).toThrow(/第2行.*two.*changed/u);
+    expect(() => applyUnifiedPatch('one\ntwo\n', '@@ -1 +1 @@\n?wrong')).toThrow(/补丁第2行.*wrong/u);
+  });
+
   it('接受末尾换行，并在行号漂移时按精确上下文重新定位', () => {
     const patch = '@@ -2,2 +2,2 @@\n alpha\n-beta\n+BETA\n';
     expect(applyUnifiedPatch('preface\nalpha\nbeta\nomega\n', patch)).toBe('preface\nalpha\nBETA\nomega\n');

@@ -7,6 +7,7 @@ import type { CardWorkspaceState, WorldbookData } from '../mapping/types';
 import type { TavernBridge } from '../tavern/bridge';
 import { readStandaloneWorldbook } from '../tavern/state-reader';
 import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
+import { LiveWorkspaceRepository } from '../workspace/live-repository';
 import type { RunnerTool, ToolConfirmation } from './tools';
 
 export type WorldbookRunnerToolOptions = {
@@ -39,6 +40,7 @@ function normalizedName(value: string, label = '世界书名称'): string {
 }
 
 function workingBooks(repository: MemoryWorkspaceRepository, base: CardWorkspaceState): WorldbookData[] {
+  if (repository instanceof LiveWorkspaceRepository) return base.worldbooks;
   return materializeCardWorkspace(base, repository.snapshot()).state.worldbooks;
 }
 
@@ -72,7 +74,9 @@ async function ensureEditableBook(
   bridge: TavernBridge,
   base: CardWorkspaceState,
   name: string,
+  onMount?: (name: string) => void,
 ): Promise<void> {
+  onMount?.(name);
   if (await hasFile(repository, editableBookPath(name))) return;
   const book = await loadBook(repository, bridge, base, name);
   if (!book.roundTripSafe) throw new Error(`世界书“${name}”无法无损读取，不能绑定为可编辑资源。`);
@@ -186,9 +190,12 @@ export function createWorldbookRunnerTools(
       execute: async input => {
         const name = normalizedName((input as { name: string }).name);
         if (!bridge.getWorldbookNames().includes(name)) throw new Error(`世界书不存在：${name}`);
-        const book = await readStandaloneWorldbook(bridge, name, { writable: true });
-        if (!book.roundTripSafe) throw new Error(`世界书“${name}”读取失败，无法挂载。`);
         const base = await options.getBaseState();
+        const book = await readStandaloneWorldbook(bridge, name, {
+          resourceId: base.worldbooks.find(item => item.name === name)?.resourceId,
+          writable: true,
+        });
+        if (!book.roundTripSafe) throw new Error(`世界书“${name}”读取失败，无法挂载。`);
         if (!base.worldbooks.some(item => item.name === name)) base.worldbooks.push(klona(book));
         const root = `/worldbooks/${encodeWorkspaceSegment(name)}`;
         repository.replaceProjection(root, projectWorldbookFiles(book));
@@ -311,7 +318,7 @@ export function createWorldbookRunnerTools(
         ].map(name => normalizedName(name));
         for (const name of new Set(names)) {
           if (!knownNames(repository, bridge, base).has(name)) throw new Error(`世界书不存在：${name}`);
-          await ensureEditableBook(repository, bridge, base, name);
+          await ensureEditableBook(repository, bridge, base, name, options.onMount);
         }
 
         const bindingFile = await repository.read('/worldbooks/bindings.yaml');

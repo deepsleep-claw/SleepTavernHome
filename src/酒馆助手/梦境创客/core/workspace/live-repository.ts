@@ -1,5 +1,5 @@
 import { klona } from 'klona';
-import { normalizeWorkspacePath } from './path';
+import { normalizeWorkspacePath, parentWorkspacePath } from './path';
 import { MemoryWorkspaceRepository } from './memory-repository';
 import { isBinaryWorkspaceFile } from './types';
 import type {
@@ -50,6 +50,7 @@ export class LiveWorkspaceRepository extends MemoryWorkspaceRepository implement
   private readonly outcomes = new Map<string, WorkspaceMutationResult>();
   private readonly source: LiveWorkspaceSource;
   private readonly transientProjections = new Map<string, WorkspaceFile[]>();
+  private readonly entryAliases = new Map<string, string>();
 
   constructor(options: LiveWorkspaceRepositoryOptions) {
     super({ readonlyRoots: options.readonlyRoots });
@@ -73,7 +74,7 @@ export class LiveWorkspaceRepository extends MemoryWorkspaceRepository implement
 
   async read(path: string): Promise<WorkspaceFile> {
     await this.refresh();
-    return super.read(path);
+    return super.read(this.resolveEntryPath(path));
   }
 
   async write(
@@ -82,19 +83,19 @@ export class LiveWorkspaceRepository extends MemoryWorkspaceRepository implement
     toolCallId: string,
     options: WorkspaceWriteOptions = {},
   ): Promise<void> {
-    await this.mutate(toolCallId, localToolCallId => super.write(path, content, localToolCallId, options));
+    await this.mutate(toolCallId, localToolCallId => super.write(this.resolveEntryPath(path), content, localToolCallId, options));
   }
 
   async patch(path: string, patch: string, toolCallId: string): Promise<void> {
-    await this.mutate(toolCallId, localToolCallId => super.patch(path, patch, localToolCallId));
+    await this.mutate(toolCallId, localToolCallId => super.patch(this.resolveEntryPath(path), patch, localToolCallId));
   }
 
   async move(from: string, to: string, toolCallId: string): Promise<void> {
-    await this.mutate(toolCallId, localToolCallId => super.move(from, to, localToolCallId));
+    await this.mutate(toolCallId, localToolCallId => super.move(this.resolveEntryPath(from), to, localToolCallId));
   }
 
   async copy(from: string, to: string, toolCallId: string, options: WorkspaceWriteOptions = {}): Promise<void> {
-    await this.mutate(toolCallId, localToolCallId => super.copy(from, to, localToolCallId, options));
+    await this.mutate(toolCallId, localToolCallId => super.copy(this.resolveEntryPath(from), to, localToolCallId, options));
   }
 
   /** 玩家上传二进制文件专用；文件正文通过external惰性引用，写入仍走实时Source与操作日志。 */
@@ -136,7 +137,7 @@ export class LiveWorkspaceRepository extends MemoryWorkspaceRepository implement
   }
 
   async remove(path: string, toolCallId: string): Promise<void> {
-    await this.mutate(toolCallId, localToolCallId => super.remove(path, localToolCallId));
+    await this.mutate(toolCallId, localToolCallId => super.remove(this.resolveEntryPath(path), localToolCallId));
   }
 
   async stageFiles(inputs: WorkspaceFile[], toolCallId: string): Promise<void> {
@@ -145,8 +146,31 @@ export class LiveWorkspaceRepository extends MemoryWorkspaceRepository implement
 
   override replaceProjection(root: string, inputs: WorkspaceFile[]): void {
     const normalized = normalizeWorkspacePath(root);
-    this.transientProjections.set(normalized, klona(inputs));
+    // 可编辑世界书由实时Source回读；静态覆盖只用于卸载遮罩及聊天等外部投影。
+    if (/^\/worldbooks\/[^/]+$/u.test(normalized) && inputs.length > 0) this.transientProjections.delete(normalized);
+    else this.transientProjections.set(normalized, klona(inputs));
     super.replaceProjection(normalized, inputs);
+  }
+
+  override rebase(inputs: WorkspaceFile[]): void {
+    const resourceKey = (file: WorkspaceFile) => `${parentWorkspacePath(file.path)}\0${file.resourceId}`;
+    const byResource = new Map(inputs.map(file => [resourceKey(file), file]));
+    for (const previous of this.snapshot()) {
+      if (!/^\/worldbooks\/[^/]+\/entries\/[^/]+\.md$/u.test(previous.path)) continue;
+      const current = byResource.get(resourceKey(previous));
+      if (current && current.path !== previous.path) {
+        this.entryAliases.set(previous.path, previous.resourceId);
+      }
+    }
+    super.rebase(inputs);
+  }
+
+  private resolveEntryPath(input: string): string {
+    const path = normalizeWorkspacePath(input);
+    const files = this.snapshot();
+    if (files.some(file => file.path === path)) return path;
+    const resourceId = this.entryAliases.get(path);
+    return files.find(file => file.resourceId === resourceId && parentWorkspacePath(file.path) === parentWorkspacePath(path))?.path ?? path;
   }
 
   async search(query: SearchQuery): Promise<SearchResult> {
@@ -200,13 +224,20 @@ export class LiveWorkspaceRepository extends MemoryWorkspaceRepository implement
   private async mutate(toolCallId: string, mutation: LocalMutation): Promise<void> {
     if (!toolCallId) throw new Error('工具调用必须包含稳定的toolCallId。');
     if (this.committedToolCalls.has(toolCallId)) {
-      this.outcomes.set(toolCallId, { changes: [], idempotent: true, status: 'success' });
+      this.outcomes.set(toolCallId, { changes: [], status: 'success', ...this.outcomes.get(toolCallId), idempotent: true });
       return;
     }
     await this.refresh();
-    await mutation(`${toolCallId}:intent`);
-    const requested = this.changes();
-    const applied = await this.source.apply({ changes: requested, toolCallId });
+    let applied: LiveWorkspaceApplyResult;
+    try {
+      await mutation(`${toolCallId}:intent:${crypto.randomUUID()}`);
+      applied = await this.source.apply({ changes: this.changes(), toolCallId });
+    } catch (error) {
+      // 丢弃失败意图；即使宿主回读失败，也不能让未提交的文件污染后续查询。
+      this.rebase([]);
+      await this.refresh().catch(() => undefined);
+      throw error;
+    }
     this.rebase(applied.files);
     this.restoreTransientProjections();
     const outcome: WorkspaceMutationResult = {

@@ -24,8 +24,8 @@
       "id": "html-project",
       "loading": "on-demand",
       "name": "HTML工程",
-      "sha256": "f2a8cae72b4d16d69021a9cbc98e833dbeff7d4f4f29e686d9f7969e577ea3dc",
-      "size": 3772,
+      "sha256": "ba9e36c71d28b5fcd35878fe83809adb28481cb75d2af573ac9df35279f8c1f2",
+      "size": 4380,
       "version": 1
     },
     {
@@ -44,8 +44,8 @@
       "id": "tavern-helper-regex",
       "loading": "on-demand",
       "name": "酒馆助手正则界面",
-      "sha256": "c777f15a8f6b63cc53dad864e06e71d6cee3fe4fa9f22146fca9dfbc391e68ba",
-      "size": 1152,
+      "sha256": "6de03d3d628db9952547970fc4d3c87cf4af855b62e93ec83fe04277e0b3c5a4",
+      "size": 1242,
       "version": 1
     },
     {

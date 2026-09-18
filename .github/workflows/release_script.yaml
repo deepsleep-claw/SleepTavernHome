@@ -58,8 +58,13 @@ jobs:
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" "$RELEASE_ASSET" --clobber
           else
+            notes_file="release/$RELEASE_NAME/$RELEASE_VERSION.md"
+            notes_args=(--generate-notes)
+            if [ -f "$notes_file" ]; then
+              notes_args=(--notes-file "$notes_file")
+            fi
             gh release create "$RELEASE_TAG" "$RELEASE_ASSET" \
               --verify-tag \
               --title "$RELEASE_NAME v$RELEASE_VERSION" \
-              --generate-notes
+              "${notes_args[@]}"
           fi

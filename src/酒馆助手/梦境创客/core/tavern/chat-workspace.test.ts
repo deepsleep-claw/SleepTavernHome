@@ -72,6 +72,21 @@ describe('TavernChatWorkspace', () => {
     ).rejects.toThrow('CHAT_APPEND_ONLY');
   });
 
+  it('聊天楼层应用上下文补丁，任一片段失败都不写入酒馆', async () => {
+    const bridge = new FakeTavernChatBridge();
+    const repository = new MemoryWorkspaceRepository();
+    const workspace = new TavernChatWorkspace(bridge);
+    await workspace.initialize(repository);
+    const start = `*** Begin Patch\n*** Update File: ${firstMessagePath}\n@@\n-你好。\n+新的问候。\n`;
+    await expect(
+      workspace.patchFile(firstMessagePath, `${start}@@\n-missing\n+extra\n*** End Patch`, repository),
+    ).rejects.toThrow(/第2个片段/u);
+    expect((await bridge.readChat('初始聊天')).messages[0].swipes[0]).toBe('你好。');
+    await workspace.patchFile(firstMessagePath, `${start}*** End Patch`, repository);
+    expect((await bridge.readChat('初始聊天')).messages[0].swipes[0]).toBe('新的问候。');
+    expect((await repository.read(firstMessagePath)).content).toContain('新的问候。');
+  });
+
   it('新聊天获得不复用的短ID，且只有活动聊天可以通过文件改写', async () => {
     const bridge = new FakeTavernChatBridge();
     const repository = new MemoryWorkspaceRepository();

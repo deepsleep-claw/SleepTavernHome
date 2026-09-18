@@ -1,5 +1,5 @@
 import { klona } from 'klona';
-import { decodeWorkspaceSegment, parseYamlObject, serializeYaml } from '../mapping/serde';
+import { decodeWorkspaceSegment, parseFrontmatter, parseYamlObject, serializeFrontmatter, serializeYaml } from '../mapping/serde';
 import { applyUnifiedPatch } from './unified-patch';
 import { isSameOrDescendant, normalizeWorkspacePath, parentWorkspacePath } from './path';
 import { searchWorkspaceFiles } from './search';
@@ -222,15 +222,32 @@ export class MemoryWorkspaceRepository implements WorkspaceRepository {
           throw new WorkspaceError('ALREADY_EXISTS', `目标路径已经存在：${candidate.path}`, candidate.path);
         }
       }
-      for (const candidate of candidates) {
+      const copies = candidates.map(candidate => {
         const existing = this.current.get(candidate.path);
-        this.current.set(candidate.path, {
+        const copied: WorkspaceFile = {
           ...cloneFile(candidate.source),
           path: candidate.path,
           readonly: existing?.readonly ?? false,
           resourceId: existing?.resourceId ?? crypto.randomUUID(),
-        });
-      }
+        };
+        if (/^\/worldbooks\/[^/]+\/book\.yaml$/u.test(candidate.path)) {
+          const metadata = parseYamlObject((existing ?? candidate.source).content, candidate.path);
+          const resourceId = existing ? String(metadata.resource_id) : `worldbook:${crypto.randomUUID()}`;
+          copied.resourceId = `worldbook:${resourceId}:metadata`;
+          copied.content = serializeYaml({
+            ...metadata,
+            name: decodeWorkspaceSegment(parentWorkspacePath(candidate.path).slice('/worldbooks/'.length)),
+            resource_id: resourceId,
+          });
+        } else if (/^\/worldbooks\/[^/]+\/entries\/[^/]+\.md$/u.test(candidate.path)) {
+          const { body, metadata } = parseFrontmatter(copied.content, copied.path);
+          if (existing) metadata.uid = parseFrontmatter(existing.content, existing.path).metadata.uid;
+          else delete metadata.uid;
+          copied.content = serializeFrontmatter(metadata, body);
+        }
+        return copied;
+      });
+      for (const copied of copies) this.current.set(copied.path, copied);
     });
   }
 

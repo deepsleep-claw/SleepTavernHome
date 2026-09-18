@@ -226,21 +226,13 @@ export class ProductionCardStateAdapter implements CardStateAdapter {
       if (beforeBook.entries.length > 0) {
         await this.bridge.createWorldbookEntries(afterBook.name, beforeBook.entries.map(withResourceId));
       }
-      await this.bridge.deleteWorldbook(beforeBook.name);
       const normalizedBook = await readStandaloneWorldbook(this.bridge, afterBook.name, {
         resourceId: afterBook.resourceId,
         writable: afterBook.writable,
       });
       if (!normalizedBook.roundTripSafe) throw new Error(`重命名世界书后无法重新读取：${afterBook.name}`);
-      for (const beforeEntry of beforeBook.entries) {
-        const copiedEntry = normalizedBook.entries.find(entry => entry.resourceId === beforeEntry.resourceId);
-        if (
-          !copiedEntry ||
-          !canonicalEqual({ ...beforeEntry, uid: undefined }, { ...copiedEntry, uid: undefined })
-        ) {
-          throw new Error(`重命名世界书后条目复制不完整：${afterBook.name}/${beforeEntry.name}`);
-        }
-      }
+      acceptHostNormalizedBook({ ...beforeBook, name: afterBook.name }, normalizedBook, '重命名世界书');
+      await this.bridge.deleteWorldbook(beforeBook.name);
       afterBook.entries = normalizedBook.entries;
       afterBook.unknownFields = normalizedBook.unknownFields;
       return undefined;

@@ -15,17 +15,33 @@
 
 ```yaml
 name: 梦境状态栏
-renderer: plain-html # 或 tavern-helper
+renderer: plain-html # 编译目标；酒馆助手iframe界面使用tavern-helper
 regex:
   find: /<dream-status>([\s\S]*?)<\/dream-status>/g
   placement: [2] # AI输出；1是用户输入
   disabled: false
+  destination:
+    display: true
+    prompt: false
 build:
   entry: template.html
   styles:
     - styles/main.css
   scripts: [] # plain-html不能包含脚本
 ```
+
+`renderer` 同时指定编译目标与检查规则：
+
+| renderer | 正则替换产物 | 脚本 |
+| --- | --- | --- |
+| `plain-html` | 直接嵌入消息的HTML片段 | 不包含脚本 |
+| `tavern-helper` | 以 `html` 标记的Markdown代码块，内部包含 `<body>...</body>`，由酒馆助手渲染为iframe | 支持 `build.scripts` |
+
+模板写HTML片段，编译器负责包装。酒馆助手工程设置 `renderer: tavern-helper`，即使只有HTML和CSS也可使用；交互工程再将JS文件列入 `build.scripts`。`compile` 返回所用的 `renderer`，调用 `prepare_render` 时使用相同值。
+
+`regex.destination` 控制正则作用模式，省略时默认为仅显示（`display: true`、`prompt: false`）。
+设置 `display: false`、`prompt: true` 为仅提示词，两项都为 `true` 时同时作用于显示和提示词。
+再次编译时沿用工程中的配置。至少启用一项；停用整个正则使用 `regex.disabled: true`。
 
 HTML片段使用 `<!--#include file="components/status.html" -->`。路径必须位于同一工程；禁止绝对路径、`..`、缺失文件和循环引用。
 

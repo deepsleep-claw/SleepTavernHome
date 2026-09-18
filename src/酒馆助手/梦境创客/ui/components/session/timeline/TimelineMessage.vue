@@ -104,7 +104,7 @@ const canFork = computed(() =>
     state.value.activeSessionAccess === 'live' &&
     state.value.active &&
     !state.value.busy &&
-    !['running', 'waiting-approval'].includes(state.value.active.status),
+    !(props.item.status === 'running' && ['running', 'waiting-approval'].includes(state.value.active.status)),
   ),
 );
 

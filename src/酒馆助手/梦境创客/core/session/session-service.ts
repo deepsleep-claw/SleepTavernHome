@@ -1060,17 +1060,17 @@ export class CardAgentSessionService {
   }
 
   /**
-   * 从一轮最终回复建立独立会话数据。分支继承可见对话和会话配置，但不继承操作日志：
+   * 从已固定的回复节点建立独立会话数据。分支继承可见对话和会话配置，但不继承操作日志：
    * 文件工作区始终是实时状态，复制旧操作记录会让新会话误撤销原会话的修改。
    */
   forkRuntime(messageId: string, sessionId: string): PersistedSessionRuntime {
-    if (this.activeCheckpointId || ['running', 'waiting-approval'].includes(this.status)) {
-      throw new Error('当前轮次结束前不能分叉会话。');
-    }
     const visibleUi = this.ui.filter(item => !item.hidden);
     const targetIndex = visibleUi.findIndex(item => item.id === messageId);
     const target = visibleUi[targetIndex];
-    if (!target || target.kind !== 'assistant') throw new Error('只能从一轮最终输出处分叉会话。');
+    if (!target || target.kind !== 'assistant') throw new Error('只能从助手输出处分叉会话。');
+    if (target.status === 'running' && ['running', 'waiting-approval'].includes(this.status)) {
+      throw new Error('所选输出仍在生成，请选择已完成的输出。');
+    }
 
     const inheritedUi = klona(visibleUi.slice(0, targetIndex + 1));
     const finalAssistantByCheckpoint = new Map<string, string>();
@@ -1161,6 +1161,7 @@ export class CardAgentSessionService {
     const source = new SessionWorkspaceLiveSource({
       bindingId: this.bindingId,
       cardSource: new CardWorkspaceLiveSource(this.adapter, {
+        mountWorldbook: name => this.mountedWorldbooks.add(name),
         synchronizeMetadata: this.scope !== 'global',
       }),
       decorate: files => this.decorateWorkspace(files),

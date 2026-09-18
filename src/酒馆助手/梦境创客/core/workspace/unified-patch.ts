@@ -71,10 +71,52 @@ function rejectUnsupportedPatch(index: StructuredPatch, expectedPath?: string): 
   }
 }
 
+/** Hunk正文决定行数；空白上下文统一补前缀，内容匹配仍由严格应用阶段校验。 */
+function normalizeHunks(patch: string, expectedPath?: string): string {
+  const lines = patch.replace(/\r\n/gu, '\n').split('\n');
+  const output: string[] = [];
+  const isBoundary = (index: number) =>
+    /^@@|^diff |^Index: |^={3,}/u.test(lines[index]) ||
+    (/^--- /u.test(lines[index]) && /^\+\+\+ /u.test(lines[index + 1] ?? ''));
+  for (let index = 0; index < lines.length;) {
+    const header = lines[index].match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(.*)$/u);
+    if (!header) {
+      output.push(lines[index++]);
+      continue;
+    }
+    const headerLine = ++index;
+    const body: string[] = [];
+    let oldLines = 0;
+    let newLines = 0;
+    while (index < lines.length && !isBoundary(index)) {
+      let line = lines[index];
+      if (line === '') {
+        if (index === lines.length - 1) { index += 1; break; }
+        // 已满足声明行数时，Hunk之间的裸空行是分隔符。
+        if (oldLines === Number(header[2] ?? 1) && newLines === Number(header[4] ?? 1)) {
+          let next = index + 1;
+          while (lines[next] === '') next += 1;
+          if (next === lines.length || isBoundary(next)) { index = next; break; }
+        }
+        line = ' ';
+      }
+      if (!/^[ +-]/u.test(line) && line !== '\\ No newline at end of file') {
+        throw new WorkspaceError('INVALID_PATCH', `第${headerLine}行的Hunk在补丁第${index + 1}行包含非法差异行：${line}`, expectedPath);
+      }
+      body.push(line);
+      if (line[0] === ' ' || line[0] === '-') oldLines += 1;
+      if (line[0] === ' ' || line[0] === '+') newLines += 1;
+      index += 1;
+    }
+    output.push(`@@ -${header[1]},${oldLines} +${header[3]},${newLines} @@${header[5]}`, ...body);
+  }
+  return output.join('\n');
+}
+
 export function parseUnifiedPatch(patch: string, expectedPath?: string): StructuredPatch {
   let parsed: StructuredPatch[];
   try {
-    parsed = parsePatch(patch);
+    parsed = parsePatch(normalizeHunks(patch, expectedPath));
   } catch (error) {
     throw new WorkspaceError(
       'INVALID_PATCH',
@@ -101,11 +143,20 @@ export function applyUnifiedPatch(content: string, patch: string, expectedPath?:
   if (index.hunks.some(hunk => hunk.oldStart > sourceLineCount + (hunk.oldLines > 0 ? 0 : 1))) {
     throw new WorkspaceError('INVALID_PATCH', 'Patch定位超出当前文件范围。', expectedPath);
   }
-  const result = applyPatch(content, index, { autoConvertLineEndings: true, fuzzFactor: 0 });
+  let mismatch: { actual: string; expected: string; line: number } | undefined;
+  const result = applyPatch(content, index, {
+    autoConvertLineEndings: true,
+    compareLine: (lineNumber, actual, _operation, expected) => {
+      if (actual === expected) return true;
+      mismatch ??= { actual, expected, line: lineNumber };
+      return false;
+    },
+    fuzzFactor: 0,
+  });
   if (result === false) {
     throw new WorkspaceError(
       'INVALID_PATCH',
-      'Patch无法应用：文件内容已变化，或Hunk上下文与当前文件不匹配。请重新读取文件后生成新Patch。',
+      `Patch无法应用：Hunk上下文与当前文件不匹配。${mismatch ? `首次不匹配在文件第${mismatch.line}行，期望${JSON.stringify(mismatch.expected?.slice(0, 160))}，实际${JSON.stringify(mismatch.actual?.slice(0, 160))}。` : ''}请重新读取文件后生成新Patch。`,
       expectedPath,
     );
   }

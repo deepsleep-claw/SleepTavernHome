@@ -515,6 +515,36 @@ describe('DreamCardAgentRuntime', () => {
     runtime.destroy();
   });
 
+  it('后台运行期间分叉历史输出，原会话继续完成且不会覆盖新会话', async () => {
+    const deferred = new DeferredExecutor();
+    let stepIndex = 0;
+    const executor: ModelStepExecutor = { execute: request => stepIndex++ === 0
+      ? Promise.resolve(modelStep(false))
+      : deferred.execute(request) };
+    const runtime = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+      executorFactory: () => executor,
+      fileClient: new MemoryTavernFileClient(),
+      settingsStore: new MemoryAgentSettingsStore(),
+    });
+    await addProfile(runtime);
+    await useAgentWithoutRemoteSkills(runtime);
+    const original = await runtime.createSession();
+    const first = await runtime.send('已完成的第一轮');
+    const target = first.ui.find(item => item.kind === 'assistant')!;
+    const running = runtime.send('原会话继续执行');
+    await deferred.startedPromise;
+    const fork = await runtime.forkSession(target.id);
+    expect(runtime.snapshot().active?.sessionId).toBe(fork.sessionId);
+    expect(runtime.snapshot().sessionStatuses[original.sessionId]).toBe('running');
+    expect(fork.ui.some(item => item.content === '原会话继续执行')).toBe(false);
+    deferred.finish(modelStep(false));
+    await running;
+    expect(runtime.snapshot().active?.sessionId).toBe(fork.sessionId);
+    expect(runtime.snapshot().sessionStatuses[original.sessionId]).toBe('completed');
+    runtime.destroy();
+  });
+
   it('会话模型选项即时生效且不进入全局忙碌，关闭前合并保存', async () => {
     const files = new MemoryTavernFileClient();
     const runtime = new DreamCardAgentRuntime({

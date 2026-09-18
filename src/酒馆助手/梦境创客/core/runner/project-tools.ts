@@ -100,6 +100,7 @@ export function createProjectRunnerTools(
           path: compiled.path,
           project: value.project,
           replaced: compiled.replace,
+          renderer: checked.renderer,
           scope,
         };
       },
@@ -118,7 +119,7 @@ export function createProjectRunnerTools(
         return result ? { ...result, toolName: 'manage_html_project' } : undefined;
       },
       definition: tool({
-        description: '检查或编译/files、/character/files中的HTML工程。check只检查；compile写入目标正则作用域。',
+        description: '检查或编译/files、/character/files中的HTML工程。check只检查；compile按project.yaml的renderer生成普通HTML或酒馆助手HTML代码块正则；regex.destination控制作用模式，默认仅显示。',
         inputSchema: z.object({
           action: z.enum(['check', 'compile']),
           overwrite: z.boolean().optional().describe('compile时是否覆盖目标作用域中最后一个同名正则'),

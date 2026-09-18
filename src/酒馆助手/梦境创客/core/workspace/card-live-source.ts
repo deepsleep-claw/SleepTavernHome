@@ -22,7 +22,7 @@ async function applyFileIntent(repository: MemoryWorkspaceRepository, change: Wo
 export class CardWorkspaceLiveSource implements LiveWorkspaceSource {
   constructor(
     private readonly adapter: CardStateAdapter,
-    private readonly options: { synchronizeMetadata?: boolean } = {},
+    private readonly options: { mountWorldbook?: (name: string) => void; synchronizeMetadata?: boolean } = {},
   ) {}
 
   async load(): Promise<WorkspaceFile[]> {
@@ -42,6 +42,9 @@ export class CardWorkspaceLiveSource implements LiveWorkspaceSource {
     const desired = materializeCardWorkspace(beforeState, intent.snapshot(), this.options).state;
     if (this.options.synchronizeMetadata !== false) synchronizeCardAgentMetadata(desired);
     const operations = diffCardStates(beforeState, desired);
+    for (const book of desired.worldbooks) {
+      if (!beforeState.worldbooks.some(previous => previous.name === book.name)) this.options.mountWorldbook?.(book.name);
+    }
     const result = await applyRealtimeStateOperations(this.adapter, operations);
     let afterFiles: WorkspaceFile[];
     try {

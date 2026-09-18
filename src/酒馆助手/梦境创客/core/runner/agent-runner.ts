@@ -16,6 +16,7 @@ import type {
 } from './step-executor';
 import { COMPACT_CONTEXT_TOOL, type RunnerTool, type ToolConfirmation } from './tools';
 import { isRichToolOutput, type ToolResultOutput } from './tool-output';
+import { isSameOrDescendant, normalizeWorkspacePath } from '../workspace/path';
 
 export type RunnerStatus =
   'completed' | 'context-exhausted' | 'failed' | 'idle' | 'running' | 'stopped' | 'waiting-approval';
@@ -118,6 +119,28 @@ function toolFailureOutput(error: unknown, skipped = false): Record<string, unkn
 
 function guidanceMessage(messages: string[]): string {
   return `<mid_turn_guidance>\n用户在运行期间发来的新指示；根据其意图补充、纠正或替换当前目标。\n${messages.join('\n')}\n</mid_turn_guidance>`;
+}
+
+function fileToolPaths(call: RunnerToolCall): string[] | undefined {
+  const input = call.input as Record<string, unknown> | undefined;
+  const keys = ['copy_path', 'move_path'].includes(call.toolName)
+    ? ['from', 'to']
+    : ['read_file', 'list_path', 'search_files', 'write_file', 'apply_patch', 'delete_path'].includes(call.toolName)
+      ? ['path']
+      : undefined;
+  if (!input || !keys) return undefined;
+  try {
+    return keys.map(key => normalizeWorkspacePath(typeof input[key] === 'string' ? input[key] : '/'));
+  } catch {
+    return undefined;
+  }
+}
+
+function mayDependOn(call: RunnerToolCall, failed: RunnerToolCall): boolean {
+  const paths = fileToolPaths(call);
+  const failedPaths = fileToolPaths(failed);
+  if (!paths || !failedPaths) return true;
+  return paths.some(path => failedPaths.some(previous => isSameOrDescendant(path, previous) || isSameOrDescendant(previous, path)));
 }
 
 export class AgentRunner {
@@ -430,11 +453,12 @@ export class AgentRunner {
         pending.nextCall += 1;
       }
     } else {
-      let dependencyFailed = false;
+      const failedCalls: RunnerToolCall[] = [];
       for (const call of remaining) {
         if (this.stopRequested) return this.finishStopped().then(() => false);
-        if (dependencyFailed) {
+        if (failedCalls.some(failed => mayDependOn(call, failed))) {
           await this.skipTool(call);
+          failedCalls.push(call);
           pending.nextCall += 1;
           continue;
         }
@@ -446,7 +470,7 @@ export class AgentRunner {
         } catch (error) {
           await this.failTool(call, error);
           pending.nextCall += 1;
-          dependencyFailed = true;
+          failedCalls.push(call);
         }
       }
     }

@@ -210,6 +210,47 @@ describe('card agent realtime session service', () => {
     expect(JSON.stringify(fork.modelMessages)).not.toContain('第二轮完成');
   });
 
+  it('中断轮次保留恢复点，仍可从已完成输出分叉', async () => {
+    const service = await createService({ executor: new QueueExecutor([step([], '第一轮完成')]) });
+    const first = await service.send('第一轮要求');
+    const target = first.ui.find(item => item.kind === 'assistant')!;
+    expect((await service.send('第二轮要求')).status).toBe('failed');
+    const before = service.view();
+    const fork = service.forkRuntime(target.id, 'fork:failed');
+    expect(fork).toMatchObject({ activeCheckpointId: undefined, status: 'completed' });
+    expect(JSON.stringify(fork.modelMessages)).not.toContain('第二轮要求');
+    expect(service.view()).toEqual(before);
+  });
+
+  it('生成期间可以分叉历史输出，正在流式增长的输出须等到固定后', async () => {
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    let calls = 0;
+    const service = await createService({ executor: {
+      execute: request => {
+        if (calls++ === 0) return Promise.resolve(step([], '已完成的回答'));
+        request.onTextDelta?.('正在生成的回答');
+        started();
+        return new Promise((_resolve, reject) => {
+          request.abortSignal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+        });
+      },
+    } });
+    const first = await service.send('第一轮');
+    const target = first.ui.find(item => item.kind === 'assistant')!;
+    const running = service.send('第二轮');
+    await ready;
+    const streaming = service.view().ui.find(item => item.kind === 'assistant' && item.status === 'running')!;
+    expect(() => service.forkRuntime(streaming.id, 'fork:streaming')).toThrow('仍在生成');
+    const fork = service.forkRuntime(target.id, 'fork:running');
+    expect(fork.ui.filter(item => item.kind === 'assistant').map(item => item.content)).toEqual(['已完成的回答']);
+    expect(service.view().status).toBe('running');
+    service.stop();
+    await running;
+    expect(service.forkRuntime(streaming.id, 'fork:stopped').modelMessages.at(-1)).toMatchObject({ content: '正在生成的回答' });
+    expect(fork.ui.filter(item => item.kind === 'assistant')).toHaveLength(1);
+  });
+
   it('按toolCallId流式建立工具卡并在正式执行时原地更新', async () => {
     const call = writeDescription('第一行\n第二行', 'stream-write');
     let stepIndex = 0;

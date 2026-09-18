@@ -1,6 +1,7 @@
 import { parse, stringify } from 'yaml';
 import { normalizeWorkspacePath, parentWorkspacePath } from '../workspace/path';
 import type { WorkspaceFile } from '../workspace/types';
+import { compileHtmlReplacement } from './html-output';
 
 export type ProjectDiagnostic = {
   column?: number;
@@ -34,6 +35,7 @@ type ProjectConfig = {
   build: { entry: string; scripts: string[]; styles: string[] };
   name: string;
   regex: {
+    destination: { display: boolean; prompt: boolean };
     disabled: boolean;
     find: string;
     placement: number[];
@@ -96,13 +98,30 @@ function parseConfig(file: WorkspaceFile): ProjectConfig {
   if (!renderer) throw new Error('project.yaml的renderer必须是plain-html或tavern-helper。');
   if (typeof build.entry !== 'string' || !build.entry.trim()) throw new Error('project.yaml缺少build.entry。');
   if (typeof regex.find !== 'string' || !regex.find.trim()) throw new Error('project.yaml缺少regex.find。');
+  if (regex.destination !== undefined && (!regex.destination || typeof regex.destination !== 'object' || Array.isArray(regex.destination))) {
+    throw new Error('project.yaml的regex.destination必须是包含display、prompt的对象。');
+  }
+  const destination = object(regex.destination);
+  for (const key of ['display', 'prompt']) {
+    if (destination[key] !== undefined && typeof destination[key] !== 'boolean') {
+      throw new Error(`project.yaml的regex.destination.${key}必须是布尔值。`);
+    }
+  }
+  if (destination.display === false && destination.prompt !== true) {
+    throw new Error('project.yaml的regex.destination必须至少启用display或prompt；停用正则请设置regex.disabled。');
+  }
   const placement = Array.isArray(regex.placement)
     ? regex.placement.filter((item): item is number => Number.isInteger(item))
     : Number.isInteger(regex.placement) ? [Number(regex.placement)] : [2];
   return {
     build: { entry: build.entry, scripts: stringList(build.scripts), styles: stringList(build.styles) },
     name: value.name.trim(),
-    regex: { disabled: regex.disabled === true, find: regex.find, placement },
+    regex: {
+      destination: { display: destination.display !== false, prompt: destination.prompt === true },
+      disabled: regex.disabled === true,
+      find: regex.find,
+      placement,
+    },
     renderer,
   };
 }
@@ -153,7 +172,7 @@ export class HtmlProjectCompiler {
       else script = await this.bundleScripts(root, config.build.scripts, fileMap, diagnostics);
     }
     const output = `${styles.length ? `<style>\n${styles.join('\n')}\n</style>\n` : ''}${html}${script ? `\n<script type="module">\n${script}\n</script>` : ''}`;
-    const outputBytes = new TextEncoder().encode(output).byteLength;
+    const outputBytes = new TextEncoder().encode(compileHtmlReplacement(output, config.renderer)).byteLength;
     if (outputBytes > MAX_OUTPUT_BYTES) diagnostics.push({ file: projectPath, message: '编译产物超过5MB，已阻止编译。', severity: 'error' });
     else if (outputBytes > WARN_OUTPUT_BYTES) diagnostics.push({ file: projectPath, message: '编译产物超过1MB，可能影响酒馆性能。', severity: 'warning' });
     if (!output.trim()) diagnostics.push({ file: entryPath, message: '编译产物为空。', severity: 'error' });
@@ -183,10 +202,13 @@ export class HtmlProjectCompiler {
     if (overwrite && !target) throw new Error(`所选作用域没有名为“${check.projectName}”的正则，无法覆盖。`);
     const id = overwrite ? String(target!.value.id) : crypto.randomUUID();
     const maxOrder = parsed.reduce((max, item) => Math.max(max, Number(item.value.order ?? 0)), 0);
-    const source = object(object(parse(existing.find(file => file.path === projectYamlPath)?.content ?? '')).regex);
-    const placements = Array.isArray(source.placement) ? source.placement : [source.placement ?? 2];
+    const project = existing.find(file => file.path === normalizeWorkspacePath(projectYamlPath));
+    if (!project) throw new Error(`工程文件不存在：${projectYamlPath}`);
+    const config = parseConfig(project);
+    const source = config.regex;
+    const placements = source.placement;
     const content = stringify({
-      destination: { display: true, prompt: true },
+      destination: source.destination,
       enabled: source.disabled !== true,
       find_regex: source.find,
       id,
@@ -195,7 +217,7 @@ export class HtmlProjectCompiler {
       min_depth: null,
       name: check.projectName,
       order: overwrite ? Number(target!.value.order ?? maxOrder + 100) : maxOrder + 100,
-      replace_string: check.output,
+      replace_string: compileHtmlReplacement(check.output, config.renderer),
       run_on_edit: false,
       source: {
         ai_output: placements.includes(2),

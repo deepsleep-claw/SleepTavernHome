@@ -98,8 +98,9 @@ export async function readGlobalTavernState(
     };
   }
   const existing = new Set(state.worldbooks.map(book => book.name));
+  const available = new Set(bridge.getWorldbookNames());
   for (const name of mountedWorldbooks) {
-    if (existing.has(name)) continue;
+    if (existing.has(name) || !available.has(name)) continue;
     const book = await readStandaloneWorldbook(bridge, name, {
       resourceId: mountedWorldbookResourceId(state, name),
       writable: true,
@@ -118,8 +119,9 @@ export async function readCharacterTavernState(
 ): Promise<TavernStateReadResult> {
   const result = await readTavernState(bridge);
   const existing = new Set(result.state.worldbooks.map(book => book.name));
+  const available = new Set(bridge.getWorldbookNames());
   for (const name of mountedWorldbooks) {
-    if (existing.has(name)) continue;
+    if (existing.has(name) || !available.has(name)) continue;
     const book = await readStandaloneWorldbook(bridge, name, {
       resourceId: mountedWorldbookResourceId(result.state, name),
       writable: true,

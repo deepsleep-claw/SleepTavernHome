@@ -62,7 +62,7 @@ describe('tool presentation', () => {
       tool({
         content: '',
         status: 'running',
-        toolInput: '{"path":"/character/live.md","patch":"@@ -1,2 +1,3 @@\\n-old\\n+new\\n+extra',
+        toolInput: '{"path":"/character/live.md","patch":"*** Begin Patch\\n*** Update File: /character/live.md\\n@@\\n-old\\n+new\\n+extra',
         toolName: 'apply_patch',
         toolPhase: 'generating',
       }),
@@ -84,7 +84,7 @@ describe('tool presentation', () => {
     ]);
     expect(patching).toMatchObject({ path: '/character/live.md', summary: '正在生成补丁…' });
     expect(patching.metrics).toEqual([
-      { label: '补丁', value: '4 行' },
+      { label: '补丁', value: '6 行' },
       { label: '新增', tone: 'success', value: '+2' },
       { label: '删除', tone: 'danger', value: '-1' },
     ]);

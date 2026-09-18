@@ -20,7 +20,9 @@ describe('workspace runner tools', () => {
     expect(await tools.get('list_path')!.execute({ path: '/character/definition' }, 'list')).toMatchObject({
       entries: [expect.objectContaining({ path: '/character/definition/description.md', type: 'file' })],
     });
-    expect(await tools.get('read_file')!.execute({ path: '/character/definition/description.md' }, 'read')).toMatchObject({
+    expect(
+      await tools.get('read_file')!.execute({ path: '/character/definition/description.md' }, 'read'),
+    ).toMatchObject({
       endLine: 2,
       lineNumbering: { prefixesAreFileContent: false },
       startLine: 1,
@@ -28,15 +30,23 @@ describe('workspace runner tools', () => {
       view: '1 | hello\n2 | world',
     });
     expect(
-      await tools.get('read_file')!.execute({ limit: 1, offset: 2, path: '/character/definition/description.md' }, 'read-page'),
+      await tools
+        .get('read_file')!
+        .execute({ limit: 1, offset: 2, path: '/character/definition/description.md' }, 'read-page'),
     ).toMatchObject({ endLine: 2, startLine: 2, totalLines: 2, truncated: false, view: '2 | world' });
     await tools.get('apply_patch')!.execute(
-      { patch: '@@ -1,2 +1,2 @@\n-hello\n+HELLO\n world', path: '/character/definition/description.md' },
+      {
+        patch:
+          '*** Begin Patch\n*** Update File: /character/definition/description.md\n@@\n-hello\n+HELLO\n world\n*** End Patch',
+        path: '/character/definition/description.md',
+      },
       'patch',
     );
     await tools.get('write_file')!.execute({ content: 'new', path: '/character/new.md' }, 'write');
     await tools.get('move_path')!.execute({ from: '/character/new.md', to: '/character/moved.md' }, 'move');
-    expect(await tools.get('search_files')!.execute({ pattern: 'HELLO' }, 'search')).toMatchObject({ returnedMatches: 1 });
+    expect(await tools.get('search_files')!.execute({ pattern: 'HELLO' }, 'search')).toMatchObject({
+      returnedMatches: 1,
+    });
     await tools.get('delete_path')!.execute({ path: '/character/moved.md' }, 'delete');
     await expect(repository.read('/character/moved.md')).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
@@ -55,7 +65,9 @@ describe('workspace runner tools', () => {
     });
     const tools = new Map(createWorkspaceRunnerTools(repository).map(item => [item.name, item]));
     await expect(
-      tools.get('write_file')!.execute({ content: '误覆盖', path: '/character/definition/description.md' }, 'write-default'),
+      tools
+        .get('write_file')!
+        .execute({ content: '误覆盖', path: '/character/definition/description.md' }, 'write-default'),
     ).rejects.toMatchObject({ code: 'ALREADY_EXISTS' });
     await tools
       .get('write_file')!
@@ -69,9 +81,11 @@ describe('workspace runner tools', () => {
     await expect(
       tools.get('write_file')!.confirmation?.({ path: '/skills/builtin/card-workspace-io/SKILL.md' }, 'call'),
     ).rejects.toThrow('不可修改');
-    expect(await tools.get('apply_patch')!.confirmation?.({ path: '/skills/user/old/SKILL.md' }, 'call')).toMatchObject({
-      toolName: 'apply_patch',
-    });
+    expect(await tools.get('apply_patch')!.confirmation?.({ path: '/skills/user/old/SKILL.md' }, 'call')).toMatchObject(
+      {
+        toolName: 'apply_patch',
+      },
+    );
     expect(await tools.get('write_file')!.confirmation?.({ path: '/skills/user/new/SKILL.md' }, 'call')).toMatchObject({
       risk: 'ordinary',
     });
@@ -81,7 +95,9 @@ describe('workspace runner tools', () => {
     expect(
       await tools.get('move_path')!.confirmation?.({ from: '/skills/user/new', to: '/skills/user/old' }, 'call'),
     ).toBeDefined();
-    expect(await tools.get('delete_path')!.confirmation?.({ path: '/character/definition/description.md' }, 'call')).toMatchObject({
+    expect(
+      await tools.get('delete_path')!.confirmation?.({ path: '/character/definition/description.md' }, 'call'),
+    ).toMatchObject({
       risk: 'ordinary',
     });
   });
@@ -109,7 +125,12 @@ describe('workspace runner tools', () => {
     const result = await read.execute({ path: '/character/files/card.png' }, 'read-binary');
     expect(isRichToolOutput(result)).toBe(true);
     if (!isRichToolOutput(result)) throw new Error('expected rich output');
-    expect(result.display).toEqual({ binary: true, mediaType: 'image/png', path: '/character/files/card.png', size: 123 });
+    expect(result.display).toEqual({
+      binary: true,
+      mediaType: 'image/png',
+      path: '/character/files/card.png',
+      size: 123,
+    });
     expect(result.modelOutput).toMatchObject({
       type: 'content',
       value: [
@@ -123,7 +144,9 @@ describe('workspace runner tools', () => {
     const key = `sk_test_${'A'.repeat(24)}`;
     const path = '/scripts/character/scripts/s1/data.yaml';
     const repository = new MemoryWorkspaceRepository({
-      files: [{ content: `key: ${key}\nname: old\n`, mediaType: 'text/yaml', path, readonly: false, resourceId: 'data' }],
+      files: [
+        { content: `key: ${key}\nname: old\n`, mediaType: 'text/yaml', path, readonly: false, resourceId: 'data' },
+      ],
     });
     const tools = new Map(createWorkspaceRunnerTools(repository).map(item => [item.name, item]));
     const read = (await tools.get('read_file')!.execute({ path }, 'read-secret')) as {
@@ -138,10 +161,15 @@ describe('workspace runner tools', () => {
       matches: Array<{ text: string }>;
     };
     expect(search.matches[0].text).not.toContain(key);
-    await tools.get('apply_patch')!.execute(
-      { patch: `@@ -1,2 +1,2 @@\n key: ${token}\n-name: old\n+name: new`, path },
-      'patch-secret',
-    );
+    await tools
+      .get('apply_patch')!
+      .execute(
+        {
+          patch: `*** Begin Patch\n*** Update File: ${path}\n@@\n key: ${token}\n-name: old\n+name: new\n*** End Patch`,
+          path,
+        },
+        'patch-secret',
+      );
     expect((await repository.read(path)).content).toBe(`key: ${key}\nname: new\n`);
   });
 
@@ -159,7 +187,26 @@ describe('workspace runner tools', () => {
       'NON_CHARACTER_RESOURCE_WRITE_DISABLED',
     );
     allowed = true;
-    expect(await tools.get('write_file')!.confirmation?.(input, 'global-write')).toMatchObject({ toolName: 'write_file' });
+    expect(await tools.get('write_file')!.confirmation?.(input, 'global-write')).toMatchObject({
+      toolName: 'write_file',
+    });
+  });
+
+  it('后续片段失败时整次不写入，可用同一调用ID修正后重试', async () => {
+    const path = '/files/code.js';
+    const repository = new MemoryWorkspaceRepository({
+      files: [{ content: 'one\nkeep\ntwo\n', mediaType: 'text/plain', path, readonly: false, resourceId: 'code' }],
+    });
+    const tool = createWorkspaceRunnerTools(repository).find(item => item.name === 'apply_patch')!;
+    const patch = `*** Begin Patch\n*** Update File: ${path}\n@@\n-one\n+ONE\n@@\n-missing\n+TWO\n*** End Patch`;
+    await expect(tool.execute({ path, patch }, 'patch')).rejects.toThrow(/第2个片段/u);
+    expect((await repository.read(path)).content).toBe('one\nkeep\ntwo\n');
+    expect(repository.changes()).toEqual([]);
+    expect(await tool.execute({ path, patch: patch.replace('-missing', '-two') }, 'patch')).toMatchObject({
+      patched: true,
+      path,
+    });
+    expect((await repository.read(path)).content).toBe('ONE\nkeep\nTWO\n');
   });
 
   it('YOLO只在启用脚本或修改已启用脚本代码时要求角色脚本确认', async () => {
@@ -184,6 +231,15 @@ describe('workspace runner tools', () => {
         .get('write_file')!
         .confirmation?.({ content: 'enabled: true\nname: test\n', path: `${root}/info.yaml` }, 'enable'),
     ).toBeDefined();
+    expect(
+      await tools.get('apply_patch')!.confirmation?.(
+        {
+          path: `${root}/info.yaml`,
+          patch: `*** Begin Patch\n*** Update File: ${root}/info.yaml\n@@\n-enabled: false\n+enabled: true\n*** End Patch`,
+        },
+        'enable-patch',
+      ),
+    ).toMatchObject({ risk: 'high' });
     expect(
       await tools.get('write_file')!.confirmation?.({ content: 'return 1;', path: `${root}/script.js` }, 'edit-off'),
     ).toBeUndefined();

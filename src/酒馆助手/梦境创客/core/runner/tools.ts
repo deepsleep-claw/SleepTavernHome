@@ -7,7 +7,8 @@ import { base64ForBytes } from '../persistence/workspace-file-store';
 import type { TavernChatWorkspace } from '../tavern/chat-workspace';
 import { parentWorkspacePath } from '../workspace/path';
 import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
-import { applyUnifiedPatch, createUnifiedPatch } from '../workspace/unified-patch';
+import { createUnifiedPatch } from '../workspace/unified-patch';
+import { applyContextPatch } from '../workspace/context-patch';
 import { maskSecretsForModel, restoreSecretsFromModel } from '../workspace/secret-protection';
 import { isBinaryWorkspaceFile, WorkspaceError, type WorkspaceRepository } from '../workspace/types';
 import { richToolOutput } from './tool-output';
@@ -151,11 +152,21 @@ function mutationSummary(repository: WorkspaceRepository, toolCallId: string) {
   return result
     ? {
         changedFiles: result.changes.length,
+        paths: result.changes.map(change => ({
+          kind: change.kind,
+          path: change.path,
+          ...(change.kind === 'move' ? { from: change.from } : {}),
+        })),
         idempotent: result.idempotent ?? false,
         status: result.status,
         warning: result.warning,
       }
     : undefined;
+}
+
+function mutationPath(repository: WorkspaceRepository, toolCallId: string, fallback: string): string {
+  const changed = repository.mutationResult?.(toolCallId)?.changes.filter(change => change.kind !== 'delete');
+  return changed?.length === 1 ? changed[0].path : fallback;
 }
 
 function lineNumberedView(
@@ -355,7 +366,7 @@ async function resourceConfirmation(
     if (operation === 'write') candidate = (input as { content: string }).content;
     else {
       const current = await repository.read(path);
-      candidate = applyUnifiedPatch(current.content, (input as { patch: string }).patch);
+      candidate = applyContextPatch(current.content, (input as { patch: string }).patch, path);
     }
     const nextEnabled = parseYamlObject(candidate, path).enabled === true;
     const previousEnabled = await currentScriptEnabled(repository, path);
@@ -510,7 +521,7 @@ export function createWorkspaceRunnerTools(
         return {
           mutation: mutationSummary(repository, toolCallId),
           overwritten: exists,
-          path: value.path,
+          path: mutationPath(repository, toolCallId, value.path),
           secretProtectionWarning: restored.warning,
           written: true,
         };
@@ -533,8 +544,12 @@ export function createWorkspaceRunnerTools(
         );
       },
       definition: tool({
-        description: '用精确的统一Diff修改已有文本文件；上下文不匹配时失败，不做模糊套用。',
-        inputSchema: z.object({ patch: z.string().min(1), path: pathSchema }),
+        description:
+          '用上下文补丁修改一个已有文本文件，可包含多个片段。格式为*** Begin Patch、*** Update File: 路径、@@、带空格/+/-前缀的上下文/新增/删除行、*** End Patch。@@后可加完整原文行作为定位锚点，无需行号或行数；支持*** End of File定位文件末尾。片段按文件顺序编写，所有片段验证成功后才写入。',
+        inputSchema: z.object({
+          patch: z.string().min(1).describe('完整上下文补丁；每个片段保留少量上下文，重复内容用@@原文锚点定位'),
+          path: pathSchema,
+        }),
       }),
       execute: async (input, toolCallId) => {
         const value = input as { patch: string; path: string };
@@ -548,14 +563,14 @@ export function createWorkspaceRunnerTools(
         const current = await repository.read(value.path);
         if (isBinaryWorkspaceFile(current)) throw new Error(`二进制文件不能使用apply_patch：${current.path}`);
         const masked = await maskSecretsForModel(current.content, current.path);
-        const patched = applyUnifiedPatch(masked.maskedContent, value.patch, current.path);
+        const patched = applyContextPatch(masked.maskedContent, value.patch, value.path);
         const restored = await restoreSecretsFromModel(current.content, patched, current.path);
         const realPatch = createUnifiedPatch(current.path, current.content, restored.content);
         await repository.patch(current.path, realPatch, toolCallId);
         return {
           mutation: mutationSummary(repository, toolCallId),
           patched: true,
-          path: value.path,
+          path: mutationPath(repository, toolCallId, current.path),
           secretProtectionWarning: restored.warning,
         };
       },
