@@ -1,0 +1,11 @@
+{
+  "display_name": "基米工具",
+  "loading_order": 100,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "css": "style.css",
+  "author": "SleepTavernHome",
+  "version": "0.1.0",
+  "auto_update": false
+}

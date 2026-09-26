@@ -1,0 +1,14 @@
+.tob-panel .inline-drawer-content { padding: .5rem 0; }
+.tob-panel .tob-checkbox { justify-content: flex-start; margin: .35rem 0; }
+.tob-panel .tob-field { display: grid; grid-template-columns: minmax(7em, 1fr) minmax(7em, 14em); align-items: center; gap: .5rem; margin: .5rem 0; }
+.tob-panel .tob-field-wide { grid-template-columns: 1fr; }
+.tob-panel .tob-field .text_pole { width: 100%; min-width: 0; box-sizing: border-box; }
+.tob-panel textarea { min-height: 4rem; resize: vertical; font-family: inherit; }
+.tob-panel .tob-hint { display: block; margin: .25rem 0 .55rem; opacity: .75; line-height: 1.5; }
+.tob-panel .tob-status { margin: .5rem 0; opacity: .8; overflow-wrap: anywhere; }
+.tob-panel .tob-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
+.tob-panel .tob-actions .menu_button { width: auto; }
+.tob-panel .tob-section { margin: .5rem 0; }
+.tob-panel .tob-tool { min-width: 0; border: 1px solid var(--SmartThemeBorderColor); border-radius: 5px; padding: .5rem; margin: .5rem 0; }
+.tob-panel .tob-error { color: var(--warning, #ef8d8d); overflow-wrap: anywhere; }
+@media (max-width: 480px) { .tob-panel .tob-field { grid-template-columns: 1fr; } }

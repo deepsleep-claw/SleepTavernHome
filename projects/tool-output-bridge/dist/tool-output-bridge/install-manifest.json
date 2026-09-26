@@ -1,0 +1,43 @@
+{
+  "format": 1,
+  "id": "tool-output-bridge",
+  "version": "0.1.0",
+  "files": [
+    {
+      "path": "payload/backend/index.mjs",
+      "bytes": 50838
+    },
+    {
+      "path": "payload/backend/LICENSE",
+      "bytes": 34523
+    },
+    {
+      "path": "payload/backend/package.json",
+      "bytes": 138
+    },
+    {
+      "path": "payload/backend/THIRD-PARTY-LICENSES.txt",
+      "bytes": 1855
+    },
+    {
+      "path": "payload/frontend/index.js",
+      "bytes": 86239
+    },
+    {
+      "path": "payload/frontend/LICENSE",
+      "bytes": 34523
+    },
+    {
+      "path": "payload/frontend/manifest.json",
+      "bytes": 215
+    },
+    {
+      "path": "payload/frontend/style.css",
+      "bytes": 1216
+    },
+    {
+      "path": "payload/frontend/THIRD-PARTY-LICENSES.txt",
+      "bytes": 1855
+    }
+  ]
+}

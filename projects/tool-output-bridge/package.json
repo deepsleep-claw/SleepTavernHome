@@ -1,0 +1,22 @@
+{
+  "name": "tavern-tool-output-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-or-later",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "tsc --noEmit && node scripts/test.mjs",
+    "test": "node scripts/test.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.27.4",
+    "fflate": "^0.8.2",
+    "happy-dom": "^20.11.2",
+    "typescript": "^5.9.3",
+    "vue": "^3.5.0",
+    "yaml": "^2.9.0"
+  }
+}
