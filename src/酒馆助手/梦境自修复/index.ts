@@ -17,6 +17,10 @@ import {
 
 const SCRIPT_NAME = '梦境自修复';
 
+function isV2Active(): boolean {
+  return (window.parent as unknown as { DreamRepairV2?: { enabled: boolean } }).DreamRepairV2?.enabled === true;
+}
+
 type UiAction = Exclude<RepairAction, 'auto'>;
 
 type UiActionDetail = {
@@ -262,6 +266,7 @@ async function handleReceivedMessage(message_id: number): Promise<void> {
 }
 
 function handleStateRequest(event: Event): void {
+  if (isV2Active()) return;
   const detail = parseStateRequestDetail(event);
   if (!detail) {
     return;
@@ -287,6 +292,7 @@ $(() => {
 
   const host_document = getHostDocument();
   const received_event = eventMakeLast(tavern_events.MESSAGE_RECEIVED, (message_id: number) => {
+    if (isV2Active()) return;
     void enqueueMessageOperation(message_id, () => handleReceivedMessage(message_id)).catch(error => {
       console.error(`[${SCRIPT_NAME}] 自动 Patch 失败：`, error);
       toastr.error(error instanceof Error ? error.message : String(error), SCRIPT_NAME);
@@ -294,6 +300,7 @@ $(() => {
   });
 
   const action_listener = (event: Event) => {
+    if (isV2Active()) return;
     const detail = parseActionDetail(event);
     if (!detail) {
       return;

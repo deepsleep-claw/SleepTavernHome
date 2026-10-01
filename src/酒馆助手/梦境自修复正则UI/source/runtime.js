@@ -101,13 +101,34 @@
       return [];
     }
 
-    return normalized
-      .split(/\n[ \t]*\n(?=FIND:[ \t]*)/)
-      .map(function (block, index) {
-        const matched = block.match(/^FIND:[ \t]*([\s\S]*?)\nREPLACE:[ \t]?([\s\S]*)$/);
-        return matched ? { find: matched[1], replace: matched[2], index: index } : null;
-      })
-      .filter(Boolean);
+    const lines = normalized.split('\n');
+    const patches = [];
+    let cursor = 0;
+    while (cursor < lines.length) {
+      const first = lines[cursor++].match(/^\s*(FIND|HEAD):[ \t]*(.*)$/i);
+      if (!first) continue;
+      let find = first[2];
+      if (first[1].toUpperCase() === 'HEAD') {
+        const tail = (lines[cursor] || '').match(/^\s*TAIL:[ \t]*(.*)$/i);
+        if (!tail) continue;
+        cursor++;
+        find = '段首：' + find + '\n段尾：' + tail[1];
+      }
+      let replacement = '';
+      if (/^\s*<REPLACE_BLOCK>\s*$/i.test(lines[cursor] || '')) {
+        const start = ++cursor;
+        while (cursor < lines.length && !/^\s*<\/REPLACE_BLOCK>\s*$/i.test(lines[cursor])) cursor++;
+        if (cursor === lines.length) break;
+        replacement = lines.slice(start, cursor++).join('\n');
+      } else {
+        const replace = (lines[cursor] || '').match(/^\s*REPLACE:[ \t]?(.*)$/i);
+        if (!replace) continue;
+        replacement = replace[1];
+        cursor++;
+      }
+      patches.push({ find: find, replace: replacement, index: patches.length });
+    }
+    return patches;
   };
 
   const makePatchRow = function (kind, label, text) {
@@ -205,7 +226,7 @@
     if (last.action === 'reverse') {
       setResult('已还原 ' + last.success_count + ' 项' + skipped, last.success_count ? 'info' : 'error');
     } else {
-      setResult('已应用 ' + last.success_count + ' 项' + skipped, last.success_count ? 'info' : 'error');
+      setResult('已应用 ' + last.success_count + ' 项' + skipped, last.skipped_count ? 'error' : 'info');
     }
   };
 
@@ -271,7 +292,7 @@
     actionTimer = setTimeout(function () {
       setBusy(false);
       setResult('脚本未返回操作结果，请确认梦境自修复脚本已启用', 'error');
-    }, 6000);
+    }, 1805000);
   };
 
   syncThemeVariables();

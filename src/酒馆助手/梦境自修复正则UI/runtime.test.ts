@@ -1,10 +1,8 @@
 /* eslint-disable import-x/no-nodejs-modules */
 import { Window } from 'happy-dom';
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-
-const template = readFileSync(new URL('./source/template.html', import.meta.url), 'utf8');
-const runtime = readFileSync(new URL('./source/runtime.js', import.meta.url), 'utf8');
+import template from './source/template.html?raw';
+import runtime from './source/runtime.js?raw';
 
 const STATE_REQUEST_EVENT = 'dream-self-repair:state-request';
 const STATE_EVENT = 'dream-self-repair:state';
@@ -53,6 +51,22 @@ function renderUi(source: string, state: UiState) {
 }
 
 describe('梦境自修复正则 UI', () => {
+  it('展示首尾定位及多行块替换', () => {
+    const { root } = renderUi(
+      '<review>修复变量</review><patch>HEAD: 开始\nTAIL: 结束\n<REPLACE_BLOCK>\n第一行\n  第二行\n</REPLACE_BLOCK></patch>',
+      {
+        status: 'applied',
+        record_count: 1,
+        active_count: 1,
+        reverted_count: 0,
+        last_result: { action: 'auto', success_count: 1, skipped_count: 0, errors: [] },
+      },
+    );
+    expect(root.querySelector('.dream-self-repair-ui__patch-row--find')?.textContent).toContain(
+      '段首：开始\n段尾：结束',
+    );
+    expect(root.querySelector('.dream-self-repair-ui__patch-row--replace')?.textContent).toContain('第一行\n  第二行');
+  });
   it('有 Patch 时默认折叠并渲染紧凑修订行', () => {
     const source = [
       '<review>发现两处需要修正的内容。</review>',

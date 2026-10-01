@@ -367,6 +367,11 @@ async function generateFormatContent(
 }
 
 async function completeFormat(): Promise<void> {
+  const repair = (window.parent as unknown as { DreamRepairV2?: { enabled: boolean; open: () => void } }).DreamRepairV2;
+  if (repair?.enabled) {
+    repair.open();
+    return;
+  }
   const store = useFormatCompletionStore();
   if (!store.should_enable) {
     return;

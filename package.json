@@ -1,7 +1,9 @@
 {
   "scripts": {
     "build:dev": "webpack --mode development",
-    "build": "pnpm run check:agent && pnpm run check:modern && pnpm run check:updater && pnpm run check:preset-adapter && pnpm run check:squash && pnpm run build:regex && webpack --mode production && pnpm run validate:updates",
+    "build": "pnpm run check:agent && pnpm run check:modern && pnpm run check:updater && pnpm run check:preset-adapter && pnpm run check:squash && pnpm run check:dream-repair && pnpm run build:regex && webpack --mode production && node util/build_dream_repair_bundle.mjs && pnpm run validate:updates",
+    "test:dream-repair": "vitest run --config vitest.dream-repair.config.mts",
+    "check:dream-repair": "pnpm run test:dream-repair && tsc --project tsconfig.dream-repair.json --noEmit --pretty false && eslint \"src/酒馆助手/梦境自修复V2/**/*.{ts,vue}\" \"vitest.dream-repair.config.mts\" --max-warnings 0",
     "test:squash": "vitest run --config vitest.squash.config.mts",
     "check:squash": "pnpm run test:squash && tsc --project tsconfig.squash.json --noEmit --pretty false && eslint \"src/酒馆助手/压缩相邻消息/**/*.{ts,vue}\" \"vitest.squash.config.mts\" --max-warnings 0",
     "test:preset-adapter": "vitest run --config vitest.preset-adapter.config.mts",
