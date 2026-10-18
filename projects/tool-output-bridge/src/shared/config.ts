@@ -117,6 +117,7 @@ export function injectPrompt(messages: any[], config: BridgeConfig): string | un
   } else {
     return `${role} 深度 ${config.promptDepth} 的消息内容无法追加文本。提示词未注入。`;
   }
+  return;
 }
 
 export function validateConfig(input: unknown): BridgeConfig {
