@@ -378,13 +378,15 @@ function encodeEvent(data) {
 
 // src/shared/transform.ts
 var OutputTransformer = class {
-  constructor(config, source) {
+  constructor(config, source, diagnostics) {
     this.config = config;
     this.source = source;
+    this.diagnostics = diagnostics;
     this.tools = new Map(config.tools.filter((tool) => tool.enabled).map((tool) => [tool.name, tool]));
   }
   config;
   source;
+  diagnostics;
   tools;
   calls = /* @__PURE__ */ new Map();
   queues = /* @__PURE__ */ new Map();
@@ -608,6 +610,7 @@ var OutputTransformer = class {
   event(event) {
     if (event.data === "[DONE]") return this.finish();
     const frame = JSON.parse(event.data);
+    this.diagnostics?.input(frame);
     if (frame.error) {
       this.ended = true;
       return [frame];
@@ -692,40 +695,85 @@ var OutputTransformer = class {
     return result;
   }
 };
-function transformResponse(response, config, source, streaming) {
-  if (!response.ok) return response;
-  const transformer = new OutputTransformer(config, source);
+function observeCompletion(body, diagnostics) {
+  if (!diagnostics) return body;
+  const reader = body.getReader();
+  return new ReadableStream({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) {
+          diagnostics.finish("completed");
+          reader.releaseLock();
+          controller.close();
+        } else controller.enqueue(next.value);
+      } catch (error) {
+        diagnostics.finish("failed");
+        reader.releaseLock();
+        controller.error(error);
+      }
+    },
+    async cancel(reason) {
+      diagnostics.finish("cancelled");
+      try {
+        await reader.cancel(reason);
+      } finally {
+        reader.releaseLock();
+      }
+    }
+  });
+}
+function transformResponse(response, config, source, streaming, diagnostics) {
+  diagnostics?.response(response);
+  if (!response.ok) {
+    diagnostics?.finish("failed");
+    return response;
+  }
+  const transformer = new OutputTransformer(config, source, diagnostics);
   const headers = new Headers(response.headers);
   headers.delete("content-length");
   headers.delete("content-encoding");
   if (!streaming) return response.json().then((value) => new Response(JSON.stringify(transformer.json(value)), { status: response.status, headers }));
   headers.set("cache-control", streamCacheControl(headers.get("cache-control")));
   if (headers.get("content-type")?.includes("application/json")) return response.json().then((value) => {
+    diagnostics?.input(value);
     const frame = transformer.json(value);
     if (!frame.candidates) for (const choice of frame.choices ?? []) {
       choice.delta = choice.message;
       delete choice.message;
     }
     headers.set("content-type", "text/event-stream; charset=utf-8");
-    return new Response(new ReadableStream({ start(controller) {
+    diagnostics?.output(frame);
+    const body = new ReadableStream({ start(controller) {
       controller.enqueue(encodeEvent(frame));
       controller.enqueue(encodeEvent("[DONE]"));
       controller.close();
-    } }), { status: response.status, headers });
+    } });
+    return new Response(observeCompletion(body, diagnostics), { status: response.status, headers });
   });
   if (!response.body) throw new Error("\u751F\u6210\u54CD\u5E94\u6CA1\u6709\u6570\u636E\u6D41\u3002");
   const decoder = new SseDecoder();
   headers.set("content-type", "text/event-stream; charset=utf-8");
   const transformed = response.body.pipeThrough(new TransformStream({
     transform(chunk, controller) {
-      for (const event of decoder.push(chunk)) for (const data of transformer.event(event)) controller.enqueue(encodeEvent(data));
+      diagnostics?.chunk();
+      for (const event of decoder.push(chunk)) for (const data of transformer.event(event)) {
+        diagnostics?.output(data);
+        controller.enqueue(encodeEvent(data));
+      }
     },
     flush(controller) {
-      for (const event of decoder.push(new Uint8Array(), true)) for (const data of transformer.event(event)) controller.enqueue(encodeEvent(data));
-      for (const data of transformer.finish()) controller.enqueue(encodeEvent(data));
+      for (const event of decoder.push(new Uint8Array(), true)) for (const data of transformer.event(event)) {
+        diagnostics?.output(data);
+        controller.enqueue(encodeEvent(data));
+      }
+      for (const data of transformer.finish()) {
+        diagnostics?.output(data);
+        controller.enqueue(encodeEvent(data));
+      }
     }
   }));
-  return new Response(transformed, { status: response.status, headers });
+  return new Response(observeCompletion(transformed, diagnostics), { status: response.status, headers });
 }
 
 // src/server/transport.ts
@@ -1047,13 +1095,96 @@ async function legacyGoogleRequest(request, modules, config, signal) {
   return fetch(prepared.url, prepared.options);
 }
 
+// src/shared/stream-diagnostics.ts
+var StreamDiagnostics = class {
+  constructor(report, now = () => performance.now()) {
+    this.report = report;
+    this.now = now;
+    this.started = now();
+  }
+  report;
+  now;
+  started;
+  ended = false;
+  values = {
+    responseMs: null,
+    firstChunkMs: null,
+    chunks: 0,
+    argumentEvents: 0,
+    firstArgumentMs: null,
+    lastArgumentMs: null,
+    textEvents: 0,
+    firstTextMs: null,
+    format: "sse"
+  };
+  elapsed() {
+    return Math.max(0, Math.round(this.now() - this.started));
+  }
+  response(response) {
+    this.values.responseMs ??= this.elapsed();
+    this.values.format = response.headers.get("content-type")?.includes("application/json") ? "json" : "sse";
+  }
+  chunk() {
+    this.values.firstChunkMs ??= this.elapsed();
+    this.values.chunks++;
+  }
+  input(frame) {
+    const hasArguments = (value) => typeof value === "string" ? value.length > 0 : value != null && typeof value === "object" && Object.keys(value).length > 0;
+    const list = (value) => Array.isArray(value) ? value : [];
+    const openai = list(frame.choices).some((choice) => list((choice.delta ?? choice.message)?.tool_calls).some((call) => hasArguments(call.function?.arguments)));
+    const candidates = frame.candidates ?? (frame.responseContent ? [{ content: frame.responseContent }] : []);
+    const google = list(candidates).some((candidate) => list(candidate.content?.parts).some((part) => hasArguments(part.functionCall?.args) || part.functionCall?.partialArgs?.length));
+    const initial = list(frame.steps ?? (frame.step ? [frame.step] : [])).some((step) => step.type === "function_call" && hasArguments(step.arguments));
+    const delta = ["arguments", "arguments_delta"].includes(frame.delta?.type) && hasArguments(frame.delta.arguments ?? frame.delta.partial_arguments);
+    if (openai || google || initial || delta) {
+      const elapsed = this.elapsed();
+      this.values.firstArgumentMs ??= elapsed;
+      this.values.lastArgumentMs = elapsed;
+      this.values.argumentEvents++;
+    }
+  }
+  output(frame) {
+    if (typeof frame === "string") return;
+    if (frame.error) {
+      this.finish("failed");
+      return;
+    }
+    const list = (value) => Array.isArray(value) ? value : [];
+    const openai = list(frame.choices).some((choice) => {
+      const content = (choice.delta ?? choice.message)?.content;
+      return typeof content === "string" ? content.length > 0 : list(content).some((part) => part.text?.length);
+    });
+    const google = list(frame.candidates).some((candidate) => list(candidate.content?.parts).some((part) => !part.thought && part.text?.length));
+    if (openai || google) {
+      this.values.firstTextMs ??= this.elapsed();
+      this.values.textEvents++;
+    }
+  }
+  finish(result) {
+    if (this.ended) return;
+    this.ended = true;
+    this.report({ ...this.values, result, elapsedMs: this.elapsed() });
+  }
+};
+function logStreamReport(source, report) {
+  const ms = (value) => value === null ? "\u65E0" : `${value}ms`;
+  console.info(`[\u57FA\u7C73\u5DE5\u5177] \u6D41\u5F0F\u8BCA\u65AD\uFF1A\u6765\u6E90=${source}\uFF1B\u7ED3\u679C=${report.result}\uFF1B\u683C\u5F0F=${report.format}\uFF1B\u54CD\u5E94\u53EF\u8BFB=${ms(report.responseMs)}\uFF1B\u9996\u6279\u6570\u636E=${ms(report.firstChunkMs)}\uFF1B\u6570\u636E\u5757=${report.chunks}\uFF1B\u53C2\u6570\u4E8B\u4EF6=${report.argumentEvents}\uFF08${ms(report.firstArgumentMs)} \u2192 ${ms(report.lastArgumentMs)}\uFF09\uFF1B\u9996\u4E2A\u6B63\u6587=${ms(report.firstTextMs)}\uFF1B\u6B63\u6587\u4E8B\u4EF6=${report.textEvents}\uFF1B\u603B\u8017\u65F6=${report.elapsedMs}ms`);
+}
+
 // src/server/index.ts
 var info = { id: PLUGIN_ID, name: "\u57FA\u7C73\u5DE5\u5177", description: "\u5C06\u6A21\u578B\u5DE5\u5177\u53C2\u6570\u8F6C\u6362\u4E3A\u804A\u5929\u6B63\u6587\u3002" };
 function wrapDispatch(dispatch, config) {
   return (context) => dispatch({ ...context, fetch: async (url, options) => {
-    const prepared = prepareGoogleOutbound(url, options, context.body, config);
-    const upstream = await context.fetch(prepared.url, prepared.options);
-    return transformResponse(webResponse(upstream), config, context.body.chat_completion_source, Boolean(context.body.stream));
+    const source = context.body.chat_completion_source;
+    const diagnostics = context.body.stream ? new StreamDiagnostics((report) => logStreamReport(source, report)) : void 0;
+    try {
+      const prepared = prepareGoogleOutbound(url, options, context.body, config);
+      const upstream = await context.fetch(prepared.url, prepared.options);
+      return await transformResponse(webResponse(upstream), config, source, Boolean(context.body.stream), diagnostics);
+    } catch (error) {
+      diagnostics?.finish(options?.signal?.aborted ? "cancelled" : "failed");
+      throw error;
+    }
   } });
 }
 async function initialize(router, modules, host) {
@@ -1062,6 +1193,7 @@ async function initialize(router, modules, host) {
   router.post("/generate", async (request, response) => {
     const controller = new AbortController();
     const cancel = () => controller.abort();
+    let diagnostics;
     try {
       const config = validateConfig(request.body?.[REQUEST_KEY]);
       if (!shouldActivate(request.body, config)) throw new Error("\u5F53\u524D\u8BF7\u6C42\u672A\u6EE1\u8DB3\u57FA\u7C73\u5DE5\u5177\u7684\u5168\u5C40\u5F00\u5173\u3001\u6A21\u578B\u540D\u79F0\u6216\u63A5\u53E3\u6761\u4EF6\u3002");
@@ -1075,9 +1207,11 @@ async function initialize(router, modules, host) {
       }
       response.once("close", cancel);
       const source = request.body.chat_completion_source;
+      if (request.body.stream) diagnostics = new StreamDiagnostics((report) => logStreamReport(source, report));
       const upstream = resolveProtocol(source, config.googleMode) !== "openai" ? webResponse(await legacyGoogleRequest(request, modules, config, controller.signal)) : await captureRoute(modules.chat.router, request, controller.signal);
-      await forwardResponse(await transformResponse(upstream, config, source, Boolean(request.body.stream)), response);
+      await forwardResponse(await transformResponse(upstream, config, source, Boolean(request.body.stream), diagnostics), response);
     } catch (error) {
+      diagnostics?.finish(controller.signal.aborted ? "cancelled" : "failed");
       if (!response.headersSent && !response.destroyed) response.status(400).json({ error: { message: error instanceof Error ? error.message : "\u5DE5\u5177\u6B63\u6587\u8BF7\u6C42\u5931\u8D25\u3002" } });
       else if (!response.destroyed && !response.writableEnded) response.end();
     } finally {

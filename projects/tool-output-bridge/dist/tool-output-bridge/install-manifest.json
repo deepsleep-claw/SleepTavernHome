@@ -5,7 +5,7 @@
   "files": [
     {
       "path": "payload/backend/index.mjs",
-      "bytes": 56614
+      "bytes": 62042
     },
     {
       "path": "payload/backend/LICENSE",
@@ -21,7 +21,7 @@
     },
     {
       "path": "payload/frontend/index.js",
-      "bytes": 91826
+      "bytes": 94875
     },
     {
       "path": "payload/frontend/LICENSE",

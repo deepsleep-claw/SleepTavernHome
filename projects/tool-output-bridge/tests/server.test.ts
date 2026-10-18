@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createServer, type ServerResponse } from 'node:http';
+import { createServer, get, type ServerResponse } from 'node:http';
 import { once } from 'node:events';
 import compression from 'compression';
 import { initialize } from '../src/server/index';
@@ -39,6 +39,83 @@ test('HTTP plugin route streams converted text before upstream completion and fo
     assert.match(final, /"error"/); assert.equal(cancelled, true);
     reader.releaseLock();
   } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+});
+
+for (const delivery of ['incremental', 'buffered'] as const) test(`real HTTP upstream ${delivery} delivery passes through the host pipe and compression`, async t => {
+  const logs: string[] = [];
+  t.mock.method(console, 'info', (message: string) => { logs.push(message); });
+  const config = validateConfig({ ...DEFAULT_CONFIG, enabled: true });
+  const firstFrame = encodeEvent({ choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'publish_story', arguments: '{"text":"首段' } }] } }] });
+  const lastFrame = encodeEvent({ choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '末段"}' } }] }, finish_reason: 'tool_calls' }] });
+  let advance = () => {};
+  let accepted = () => {};
+  const upstreamReady = new Promise<void>(resolve => { accepted = resolve; });
+  let upstreamFinished = false;
+  let hostFinished = false;
+  const upstream = createServer((_req, res) => {
+    res.setHeader('content-type', 'text/event-stream');
+    if (delivery === 'incremental') res.write(firstFrame);
+    advance = () => {
+      upstreamFinished = true;
+      res.end(delivery === 'incremental' ? lastFrame : Buffer.concat([firstFrame, lastFrame]));
+    };
+    accepted();
+  });
+  upstream.listen(0, '127.0.0.1'); await once(upstream, 'listening');
+  const upstreamPort = (upstream.address() as { port: number }).port;
+  const handlers = new Map<string, Function>();
+  const router = { get: (path: string, cb: Function) => handlers.set(path, cb), post: (path: string, cb: Function) => handlers.set(path, cb) };
+  await initialize(router, { chat: { router: { handle(req: any, res: any) {
+    // Match the host's Node readable pipe, including its completion and socket handlers.
+    const remote = get(`http://127.0.0.1:${upstreamPort}`, from => {
+      res.statusCode = from.statusCode;
+      from.pipe(res);
+      res.socket.on('close', () => { from.destroy(); res.end(); });
+      from.on('end', () => { hostFinished = true; res.end(); });
+      from.on('error', error => res.destroy(error));
+    });
+    remote.on('error', error => res.destroy(error));
+    req.socket.on('close', () => remote.destroy());
+  } } } }, { name: 'SillyTavern', version: '1.18.0' });
+  const compress = compression({ threshold: 0 });
+  const server = createServer((req: any, res: ServerResponse & any) => {
+    compress(req, res, () => { void (async () => {
+      const chunks = []; for await (const chunk of req) chunks.push(chunk); req.body = JSON.parse(Buffer.concat(chunks).toString());
+      res.status = (status: number) => { res.statusCode = status; return res; };
+      res.json = (body: any) => { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(body)); };
+      await handlers.get('/generate')!(req, res);
+    })(); });
+  });
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  try {
+    const port = (server.address() as { port: number }).port;
+    const pending = fetch(`http://127.0.0.1:${port}/generate`, { method: 'POST', headers: { 'accept-encoding': 'gzip' }, signal: AbortSignal.timeout(5000), body: JSON.stringify({ [REQUEST_KEY]: config, model: 'gemini-test', chat_completion_source: 'custom', messages: [], stream: true }) });
+    await upstreamReady;
+    if (delivery === 'buffered') advance();
+    const response = await pending;
+    const reader = response.body!.getReader();
+    const initial = new TextDecoder().decode((await reader.read()).value);
+    assert.match(initial, /首段/);
+    if (delivery === 'incremental') {
+      assert.equal(upstreamFinished, false);
+      assert.equal(hostFinished, false);
+      assert.doesNotMatch(initial, /末段/);
+      advance();
+    }
+    let output = initial;
+    while (true) { const next = await reader.read(); if (next.done) break; output += new TextDecoder().decode(next.value); }
+    assert.equal(hostFinished, true);
+    const frames = new SseDecoder().push(output, true).filter(event => event.data !== '[DONE]').map(event => JSON.parse(event.data));
+    assert.equal(frames.flatMap(frame => frame.choices ?? []).map(choice => choice.delta?.content ?? '').join(''), '首段末段');
+    assert.equal(response.headers.get('content-encoding'), null);
+    const diagnostic = logs.find(message => message.includes('流式诊断'));
+    assert.ok(diagnostic); assert.match(diagnostic, /结果=completed/); assert.match(diagnostic, /参数事件=2/);
+    assert.doesNotMatch(diagnostic, /首段|末段|publish_story/);
+    reader.releaseLock();
+  } finally {
+    advance(); server.closeAllConnections(); upstream.closeAllConnections();
+    await Promise.all([new Promise<void>(resolve => server.close(() => resolve())), new Promise<void>(resolve => upstream.close(() => resolve()))]);
+  }
 });
 
 for (const mode of ['openai', 'interactions', 'native'] as const) test(`HTTP ${mode} output reaches clients before completion under response compression`, async () => {

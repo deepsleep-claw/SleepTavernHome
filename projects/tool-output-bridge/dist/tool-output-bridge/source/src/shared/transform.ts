@@ -1,6 +1,7 @@
 import { type BridgeConfig, type OutputTool, collectOutput, isRecord } from './config';
 import { OutputCollector } from './output-collector';
 import { SseDecoder, encodeEvent, streamCacheControl, type SseEvent } from './sse';
+import type { StreamDiagnostics } from './stream-diagnostics';
 
 type Call = {
   key: string; choice: number; name: string; raw: string;
@@ -21,7 +22,7 @@ export class OutputTransformer {
   private suppressedText = false;
   private thoughtSignatures = new Map<number, string>();
 
-  constructor(readonly config: BridgeConfig, readonly source: string) {
+  constructor(readonly config: BridgeConfig, readonly source: string, private diagnostics?: StreamDiagnostics) {
     this.tools = new Map(config.tools.filter(tool => tool.enabled).map(tool => [tool.name, tool]));
   }
 
@@ -221,6 +222,7 @@ export class OutputTransformer {
   event(event: SseEvent): any[] {
     if (event.data === '[DONE]') return this.finish();
     const frame = JSON.parse(event.data);
+    this.diagnostics?.input(frame);
     if (frame.error) { this.ended = true; return [frame]; }
     if (frame.promptFeedback?.blockReason) throw new Error(`Gemini 未生成正文：${frame.promptFeedback.blockReason}`);
     if (Array.isArray(frame.choices)) return [this.openai(frame)];
@@ -300,30 +302,53 @@ export class OutputTransformer {
   }
 }
 
-export function transformResponse(response: Response, config: BridgeConfig, source: string, streaming: boolean): Response | Promise<Response> {
-  if (!response.ok) return response;
-  const transformer = new OutputTransformer(config, source);
+function observeCompletion(body: ReadableStream<Uint8Array>, diagnostics?: StreamDiagnostics): ReadableStream<Uint8Array> {
+  if (!diagnostics) return body;
+  const reader = body.getReader();
+  return new ReadableStream({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) { diagnostics.finish('completed'); reader.releaseLock(); controller.close(); }
+        else controller.enqueue(next.value);
+      } catch (error) { diagnostics.finish('failed'); reader.releaseLock(); controller.error(error); }
+    },
+    async cancel(reason) {
+      diagnostics.finish('cancelled');
+      try { await reader.cancel(reason); } finally { reader.releaseLock(); }
+    },
+  });
+}
+
+export function transformResponse(response: Response, config: BridgeConfig, source: string, streaming: boolean, diagnostics?: StreamDiagnostics): Response | Promise<Response> {
+  diagnostics?.response(response);
+  if (!response.ok) { diagnostics?.finish('failed'); return response; }
+  const transformer = new OutputTransformer(config, source, diagnostics);
   const headers = new Headers(response.headers);
   headers.delete('content-length'); headers.delete('content-encoding');
   if (!streaming) return response.json().then(value => new Response(JSON.stringify(transformer.json(value)), { status: response.status, headers }));
   headers.set('cache-control', streamCacheControl(headers.get('cache-control')));
   if (headers.get('content-type')?.includes('application/json')) return response.json().then(value => {
+    diagnostics?.input(value);
     const frame = transformer.json(value);
     if (!frame.candidates) for (const choice of frame.choices ?? []) { choice.delta = choice.message; delete choice.message; }
     headers.set('content-type', 'text/event-stream; charset=utf-8');
-    return new Response(new ReadableStream({ start(controller) { controller.enqueue(encodeEvent(frame)); controller.enqueue(encodeEvent('[DONE]')); controller.close(); } }), { status: response.status, headers });
+    diagnostics?.output(frame);
+    const body = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(encodeEvent(frame)); controller.enqueue(encodeEvent('[DONE]')); controller.close(); } });
+    return new Response(observeCompletion(body, diagnostics), { status: response.status, headers });
   });
   if (!response.body) throw new Error('生成响应没有数据流。');
   const decoder = new SseDecoder();
   headers.set('content-type', 'text/event-stream; charset=utf-8');
   const transformed = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
-      for (const event of decoder.push(chunk)) for (const data of transformer.event(event)) controller.enqueue(encodeEvent(data));
+      diagnostics?.chunk();
+      for (const event of decoder.push(chunk)) for (const data of transformer.event(event)) { diagnostics?.output(data); controller.enqueue(encodeEvent(data)); }
     },
     flush(controller) {
-      for (const event of decoder.push(new Uint8Array(), true)) for (const data of transformer.event(event)) controller.enqueue(encodeEvent(data));
-      for (const data of transformer.finish()) controller.enqueue(encodeEvent(data));
+      for (const event of decoder.push(new Uint8Array(), true)) for (const data of transformer.event(event)) { diagnostics?.output(data); controller.enqueue(encodeEvent(data)); }
+      for (const data of transformer.finish()) { diagnostics?.output(data); controller.enqueue(encodeEvent(data)); }
     },
   }));
-  return new Response(transformed, { status: response.status, headers });
+  return new Response(observeCompletion(transformed, diagnostics), { status: response.status, headers });
 }

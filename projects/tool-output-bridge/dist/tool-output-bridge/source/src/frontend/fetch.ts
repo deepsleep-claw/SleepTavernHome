@@ -1,5 +1,6 @@
 import { PLUGIN_ID, REQUEST_KEY, injectRequest, resolveProtocol, shouldActivate, validateConfig } from '../shared/config';
 import { transformResponse } from '../shared/transform';
+import { StreamDiagnostics, logStreamReport } from '../shared/stream-diagnostics';
 
 export interface BackendStatus { id: string; version: string; transport: string; host: { name: string; version: string } }
 
@@ -28,7 +29,10 @@ export function bridgeFetch(delegate: typeof fetch, baseUrl: string, backend: ()
       ? { method: input.method, headers: input.headers, signal: input.signal, credentials: input.credentials, cache: input.cache, redirect: input.redirect, ...init, body: JSON.stringify(nextBody) }
       : { ...init, body: JSON.stringify(nextBody) };
     // Delegating preserves the native bridge installed by desktop hosts.
-    const response = await delegate(target, options);
-    return useBackend || !active ? response : transformResponse(response, config, body.chat_completion_source, Boolean(body.stream));
+    const diagnostics = active && !useBackend && body.stream ? new StreamDiagnostics(report => logStreamReport(body.chat_completion_source, report)) : undefined;
+    try {
+      const response = await delegate(target, options);
+      return useBackend || !active ? response : await transformResponse(response, config, body.chat_completion_source, Boolean(body.stream), diagnostics);
+    } catch (error) { diagnostics?.finish(options.signal?.aborted ? 'cancelled' : 'failed'); throw error; }
   };
 }

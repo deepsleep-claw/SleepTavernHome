@@ -6,14 +6,19 @@ import { PLUGIN_ID, VERSION, REQUEST_KEY, injectRequest, shouldActivate, resolve
 import { transformResponse } from '../shared/transform';
 import { captureRoute, forwardResponse, webResponse } from './transport';
 import { legacyGoogleRequest, prepareGoogleOutbound } from './google';
+import { StreamDiagnostics, logStreamReport } from '../shared/stream-diagnostics';
 
 export const info = { id: PLUGIN_ID, name: '基米工具', description: '将模型工具参数转换为聊天正文。' };
 
 export function wrapDispatch(dispatch: (context: any) => Promise<void>, config: BridgeConfig): (context: any) => Promise<void> {
   return context => dispatch({ ...context, fetch: async (url: string, options: any) => {
-    const prepared = prepareGoogleOutbound(url, options, context.body, config);
-    const upstream = await context.fetch(prepared.url, prepared.options);
-    return transformResponse(webResponse(upstream), config, context.body.chat_completion_source, Boolean(context.body.stream));
+    const source = context.body.chat_completion_source;
+    const diagnostics = context.body.stream ? new StreamDiagnostics(report => logStreamReport(source, report)) : undefined;
+    try {
+      const prepared = prepareGoogleOutbound(url, options, context.body, config);
+      const upstream = await context.fetch(prepared.url, prepared.options);
+      return await transformResponse(webResponse(upstream), config, source, Boolean(context.body.stream), diagnostics);
+    } catch (error) { diagnostics?.finish(options?.signal?.aborted ? 'cancelled' : 'failed'); throw error; }
   } });
 }
 
@@ -23,6 +28,7 @@ export async function initialize(router: any, modules: any, host: { name: string
   router.post('/generate', async (request: any, response: any) => {
     const controller = new AbortController();
     const cancel = () => controller.abort();
+    let diagnostics: StreamDiagnostics | undefined;
     try {
       const config = validateConfig(request.body?.[REQUEST_KEY]);
       if (!shouldActivate(request.body, config)) throw new Error('当前请求未满足基米工具的全局开关、模型名称或接口条件。');
@@ -37,11 +43,13 @@ export async function initialize(router: any, modules: any, host: { name: string
       }
       response.once('close', cancel);
       const source = request.body.chat_completion_source;
+      if (request.body.stream) diagnostics = new StreamDiagnostics(report => logStreamReport(source, report));
       const upstream = resolveProtocol(source, config.googleMode) !== 'openai'
         ? webResponse(await legacyGoogleRequest(request, modules, config, controller.signal))
         : await captureRoute(modules.chat.router, request, controller.signal);
-      await forwardResponse(await transformResponse(upstream, config, source, Boolean(request.body.stream)), response);
+      await forwardResponse(await transformResponse(upstream, config, source, Boolean(request.body.stream), diagnostics), response);
     } catch (error) {
+      diagnostics?.finish(controller.signal.aborted ? 'cancelled' : 'failed');
       if (!response.headersSent && !response.destroyed) response.status(400).json({ error: { message: error instanceof Error ? error.message : '工具正文请求失败。' } });
       else if (!response.destroyed && !response.writableEnded) response.end();
     } finally { response.off('close', cancel); }
