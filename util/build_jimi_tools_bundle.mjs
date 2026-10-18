@@ -11,7 +11,7 @@ const script = {
   name: '基米工具',
   id: '5c271b09-44ad-4d96-90ae-811813f4de23',
   content,
-  info: '将工具参数收集为聊天正文。从扩展工具菜单的“基米工具”或脚本按钮“基米工具设置”打开设置，配置保存在脚本变量中。',
+  info: '将工具参数收集为聊天正文。在扩展设置页中展开“基米工具”进行配置，设置保存在脚本变量中。',
   button: { enabled: true, buttons: [{ name: '基米工具设置', visible: true }] },
   data: {},
   export_with: { data: true, button: true },

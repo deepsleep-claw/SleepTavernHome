@@ -24,7 +24,6 @@ export function saveSettings(value: unknown): Settings {
 
 export const useJimiStore = defineStore('jimi-tools-helper', () => {
   const settings = ref(readSettings());
-  const open = ref(false);
   const warning = ref('');
   const error = ref('');
 
@@ -37,5 +36,5 @@ export const useJimiStore = defineStore('jimi-tools-helper', () => {
     settings.value = readSettings();
   }
 
-  return { settings, open, warning, error, save, refresh };
+  return { settings, warning, error, save, refresh };
 });

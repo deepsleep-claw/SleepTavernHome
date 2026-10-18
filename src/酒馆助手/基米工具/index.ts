@@ -1,9 +1,7 @@
-import { createScriptIdDiv, teleportStyle } from '@util/script';
 import { createPinia } from 'pinia';
-import { createApp } from 'vue';
-import Panel from './Panel.vue';
 import { describeError, SCRIPT_NAME, SCRIPT_VERSION, SETTINGS_BUTTON } from './config';
 import { mountToolsMenu } from './menu';
+import { initPanel } from './panel';
 import { createJimiRuntime } from './runtime';
 import { initializeSettings, readSettings, useJimiStore } from './settings';
 
@@ -22,10 +20,7 @@ $(() => {
   }
   const pinia = createPinia();
   const store = useJimiStore(pinia);
-  const app = createApp(Panel).use(pinia);
-  const mount = createScriptIdDiv().appendTo('body');
-  app.mount(mount[0]);
-  const styles = teleportStyle();
+  const panel = initPanel(pinia);
   owner.__toolOutputBridge?.destroy();
   const runtime = createJimiRuntime({
     host: owner,
@@ -47,7 +42,7 @@ $(() => {
     } catch (error) {
       store.error = describeError(error);
     }
-    store.open = true;
+    panel.open();
   };
   const button = eventOn(getButtonEvent(SETTINGS_BUTTON), openSettings);
   const menu = mountToolsMenu(openSettings);
@@ -59,9 +54,7 @@ $(() => {
       runtime.destroy();
       button.stop();
       menu.destroy();
-      app.unmount();
-      mount.remove();
-      styles.destroy();
+      panel.destroy();
       if (owner.__jimiToolsHelper === api) delete owner.__jimiToolsHelper;
     },
   };
