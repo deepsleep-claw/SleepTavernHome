@@ -33,31 +33,21 @@ it('persists the switch and complete configuration only in this script variable 
   expect(variables.get()).toEqual(before);
 });
 
-it('imports extension settings on first use and keeps existing script variables on subsequent loads', () => {
+it('initializes default settings and preserves saved script variables on subsequent loads', () => {
   const variables = installVariables({ unrelated: 9 });
-  const readPreset = vi.fn(() => ({
-    prompt: '现有提示词',
-    promptMode: 'assistant',
-    promptDepth: -1,
-    outputPath: 'text',
-  }));
-  const context = {
-    getPresetManager: () => ({ readPresetExtensionField: readPreset }),
-    extensionSettings: { [SETTINGS_KEY]: { version: 1, enabled: true, modelNameIncludes: 'gemini-pro' } },
-  };
-  const imported = initializeSettings(context);
-  expect(imported).toMatchObject({
-    enabled: true,
-    prompt: '现有提示词',
-    promptMode: 'assistant',
-    promptDepth: -1,
-    modelNameIncludes: 'gemini-pro',
-  });
+  const initial = initializeSettings();
+  expect(initial).toEqual(SettingsSchema.parse({}));
+  expect(variables.get()[SETTINGS_KEY]).toEqual(initial);
   expect(variables.get().unrelated).toBe(9);
-  expect(readPreset).toHaveBeenCalledTimes(1);
-  saveSettings({ ...imported, prompt: '脚本提示词' });
-  expect(initializeSettings(context).prompt).toBe('脚本提示词');
-  expect(readPreset).toHaveBeenCalledTimes(1);
+  const saved = saveSettings({
+    ...initial,
+    enabled: true,
+    prompt: '脚本提示词',
+    promptMode: 'assistant',
+    promptDepth: -1,
+  });
+  expect(initializeSettings()).toEqual(saved);
+  expect(variables.get()[SETTINGS_KEY]).toEqual(saved);
 });
 
 describe.each(['custom', 'makersuite'])('%s native host requests', source => {

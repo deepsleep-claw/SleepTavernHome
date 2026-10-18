@@ -3,8 +3,9 @@ import { createPinia } from 'pinia';
 import { createApp } from 'vue';
 import Panel from './Panel.vue';
 import { describeError, SCRIPT_NAME, SCRIPT_VERSION, SETTINGS_BUTTON } from './config';
+import { mountToolsMenu } from './menu';
 import { createJimiRuntime } from './runtime';
-import { initializeSettings, readSettings, useJimiStore, type ExtensionSettingsContext } from './settings';
+import { initializeSettings, readSettings, useJimiStore } from './settings';
 
 $(() => {
   const owner = window.parent as unknown as Window & {
@@ -13,7 +14,7 @@ $(() => {
   };
   owner.__jimiToolsHelper?.destroy();
   try {
-    initializeSettings(SillyTavern as unknown as ExtensionSettingsContext);
+    initializeSettings();
   } catch (error) {
     toastr.error(describeError(error), SCRIPT_NAME);
     console.error(`[${SCRIPT_NAME}]`, error);
@@ -39,7 +40,7 @@ $(() => {
     },
   });
   appendInexistentScriptButtons([{ name: SETTINGS_BUTTON, visible: true }]);
-  const button = eventOn(getButtonEvent(SETTINGS_BUTTON), () => {
+  const openSettings = () => {
     try {
       store.refresh();
       store.error = '';
@@ -47,7 +48,9 @@ $(() => {
       store.error = describeError(error);
     }
     store.open = true;
-  });
+  };
+  const button = eventOn(getButtonEvent(SETTINGS_BUTTON), openSettings);
+  const menu = mountToolsMenu(openSettings);
   let destroyed = false;
   const api = {
     destroy() {
@@ -55,6 +58,7 @@ $(() => {
       destroyed = true;
       runtime.destroy();
       button.stop();
+      menu.destroy();
       app.unmount();
       mount.remove();
       styles.destroy();

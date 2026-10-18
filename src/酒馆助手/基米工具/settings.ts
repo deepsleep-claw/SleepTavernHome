@@ -1,21 +1,11 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
-import { configFromPreset, globalConfigFromSettings } from '../../../projects/tool-output-bridge/src/shared/config';
 import { SettingsSchema, SETTINGS_KEY, type Settings } from './config';
 
-export interface ExtensionSettingsContext {
-  getPresetManager?: (api: string) => { readPresetExtensionField?: (option: { path: string }) => unknown };
-  extensionSettings?: Record<string, unknown>;
-}
-
-export function initializeSettings(context: ExtensionSettingsContext): Settings {
+export function initializeSettings(): Settings {
   const variables = getVariables({ type: 'script', script_id: getScriptId() });
   if (variables[SETTINGS_KEY] !== undefined) return readSettings();
-  const preset = context.getPresetManager?.('openai')?.readPresetExtensionField?.({ path: SETTINGS_KEY });
-  const global = context.extensionSettings?.[SETTINGS_KEY];
-  return saveSettings(
-    preset == null && global == null ? undefined : { ...configFromPreset(preset), ...globalConfigFromSettings(global) },
-  );
+  return saveSettings(undefined);
 }
 
 export function readSettings(): Settings {
