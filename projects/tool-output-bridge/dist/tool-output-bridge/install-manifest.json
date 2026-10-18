@@ -1,11 +1,11 @@
 {
   "format": 1,
   "id": "tool-output-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "files": [
     {
       "path": "payload/backend/index.mjs",
-      "bytes": 50838
+      "bytes": 56614
     },
     {
       "path": "payload/backend/LICENSE",
@@ -21,7 +21,7 @@
     },
     {
       "path": "payload/frontend/index.js",
-      "bytes": 86239
+      "bytes": 91826
     },
     {
       "path": "payload/frontend/LICENSE",
@@ -33,7 +33,7 @@
     },
     {
       "path": "payload/frontend/style.css",
-      "bytes": 1216
+      "bytes": 1241
     },
     {
       "path": "payload/frontend/THIRD-PARTY-LICENSES.txt",

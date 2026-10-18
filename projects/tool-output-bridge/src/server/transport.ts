@@ -1,6 +1,6 @@
 import { PassThrough, Readable } from 'node:stream';
 import { EventEmitter } from 'node:events';
-import { encodeEvent } from '../shared/sse';
+import { encodeEvent, streamCacheControl } from '../shared/sse';
 
 export function webResponse(response: any): Response {
   if (response instanceof Response) return response;
@@ -69,6 +69,10 @@ export async function forwardResponse(upstream: Response, response: any): Promis
     const value = upstream.headers.get(key); if (value) response.setHeader(key, value);
   }
   response.setHeader('x-accel-buffering', 'no');
+  if (upstream.headers.get('content-type')?.includes('text/event-stream')) {
+    response.setHeader('cache-control', streamCacheControl(upstream.headers.get('cache-control')));
+    response.flushHeaders?.();
+  }
   if (!upstream.body) { response.end(); return; }
   const reader = upstream.body.getReader();
   const cancel = () => { void reader.cancel().catch(() => {}); };
@@ -77,7 +81,9 @@ export async function forwardResponse(upstream: Response, response: any): Promis
     while (!response.destroyed) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (!response.write(Buffer.from(value))) {
+      const writable = response.write(Buffer.from(value));
+      response.flush?.();
+      if (!writable) {
         await new Promise<void>((resolve, reject) => {
           const clean = () => { response.off('drain', drained); response.off('close', drained); response.off('error', failed); };
           const drained = () => { clean(); resolve(); };

@@ -1,6 +1,6 @@
 {
   "name": "tavern-tool-output-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "license": "AGPL-3.0-or-later",
@@ -11,7 +11,9 @@
     "test": "node scripts/test.mjs"
   },
   "devDependencies": {
+    "@types/compression": "^1.8.1",
     "@types/node": "^22.0.0",
+    "compression": "^1.8.2",
     "esbuild": "^0.27.4",
     "fflate": "^0.8.2",
     "happy-dom": "^20.11.2",

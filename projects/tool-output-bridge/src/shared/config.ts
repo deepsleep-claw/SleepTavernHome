@@ -1,5 +1,5 @@
 export const PLUGIN_ID = 'tool-output-bridge';
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 export const CONFIG_KEY = 'tool_output_bridge';
 export const REQUEST_KEY = '__tool_output_bridge';
 
@@ -8,15 +8,19 @@ export interface OutputTool {
   description: string;
   parameters: Record<string, unknown>;
   outputPath: string;
+  outputPaths?: string[];
   enabled: boolean;
 }
+
+export type PromptInjectionMode = 'none' | 'system_prompt' | 'user' | 'assistant' | 'system';
 
 export interface BridgeConfig {
   version: 1;
   enabled: boolean;
   modelNameIncludes: string;
   keepOriginalText: boolean;
-  promptEnabled: boolean;
+  promptMode: PromptInjectionMode;
+  promptDepth: number;
   prompt: string;
   forceMode: 'auto' | 'required' | 'named';
   forcedTool: string;
@@ -34,8 +38,9 @@ export const DEFAULT_CONFIG: BridgeConfig = {
   enabled: false,
   modelNameIncludes: 'Gemini',
   keepOriginalText: false,
-  promptEnabled: true,
-  prompt: '请通过以下工具提交本轮回复：{{tool_names}}。将需要展示给读者的正文写入对应字段（{{tool_outputs}}），保留正文原有的 Markdown、标签与换行。正文提交完成后结束本轮回复。',
+  promptMode: 'system_prompt',
+  promptDepth: 0,
+  prompt: '请通过以下工具提交本轮回复：{{tool_names}}。将本轮需要展示的全部内容按用途写入对应字段（{{tool_outputs}}），按所列字段顺序填写，保留原有的 Markdown、标签与换行。全部字段提交完成后结束本轮回复。',
   forceMode: 'named',
   forcedTool: 'publish_story',
   googleMode: 'auto',
@@ -72,13 +77,60 @@ export function outputValue(args: unknown, path: string): string {
   return value;
 }
 
+export function toolOutputPaths(tool: OutputTool): string[] {
+  return tool.outputPaths ?? [tool.outputPath];
+}
+
+export function collectOutput(args: unknown, tool: OutputTool, separator: string): string {
+  return toolOutputPaths(tool).map(path => outputValue(args, path)).filter(Boolean).join(separator);
+}
+
+export function renderPrompt(config: BridgeConfig): string {
+  if (config.promptMode === 'none' || !config.prompt.trim()) return '';
+  const active = config.tools.filter(tool => tool.enabled);
+  return config.prompt.replaceAll('{{tool_names}}', active.map(tool => tool.name).join('、'))
+    .replaceAll('{{tool_outputs}}', active.flatMap(tool => toolOutputPaths(tool).map(path => `${tool.name}.${path}`)).join('、'));
+}
+
+function containsPrompt(message: any, content: string): boolean {
+  return typeof message.content === 'string' ? message.content.includes(content)
+    : Array.isArray(message.content) && message.content.some((part: any) => part?.type === 'text' && typeof part.text === 'string' && part.text.includes(content));
+}
+
+export function injectPrompt(messages: any[], config: BridgeConfig): string | undefined {
+  const content = renderPrompt(config);
+  if (!content) return;
+  if (config.promptMode === 'system_prompt') {
+    if (!messages.some(message => message.role === 'system' && containsPrompt(message, content))) messages.unshift({ role: 'system', content });
+    return;
+  }
+  const matches = messages.filter(message => message.role === config.promptMode);
+  const index = config.promptDepth < 0 ? matches.length + config.promptDepth : config.promptDepth;
+  const target = matches[index];
+  const role = { user: 'User', assistant: 'Assistant', system: 'System', none: '' }[config.promptMode];
+  if (!target) return `找不到 ${role} 深度 ${config.promptDepth} 的消息，当前共有 ${matches.length} 条 ${role} 消息。提示词未注入。`;
+  if (containsPrompt(target, content)) return;
+  if (typeof target.content === 'string' || target.content == null) {
+    target.content = target.content ? `${target.content}\n\n${content}` : content;
+  } else if (Array.isArray(target.content)) {
+    target.content.push({ type: 'text', text: content });
+  } else {
+    return `${role} 深度 ${config.promptDepth} 的消息内容无法追加文本。提示词未注入。`;
+  }
+}
+
 export function validateConfig(input: unknown): BridgeConfig {
   if (!isRecord(input)) throw new Error('插件配置必须是对象。');
   if (input.version !== undefined && input.version !== 1) throw new Error('请更新基米工具以读取此配置版本。');
-  const config = { ...structuredClone(DEFAULT_CONFIG), ...input } as BridgeConfig;
-  for (const key of ['enabled', 'keepOriginalText', 'promptEnabled', 'streamArguments'] as const) {
+  const { promptEnabled, ...settings } = input;
+  if (promptEnabled !== undefined && typeof promptEnabled !== 'boolean') throw new Error('配置 promptEnabled 必须为布尔值。');
+  const config = { ...structuredClone(DEFAULT_CONFIG), ...settings } as BridgeConfig;
+  if (input.promptMode === undefined) config.promptMode = promptEnabled === false ? 'none' : 'system_prompt';
+  for (const key of ['enabled', 'keepOriginalText', 'streamArguments'] as const) {
     if (typeof config[key] !== 'boolean') throw new Error(`配置 ${key} 必须为布尔值。`);
   }
+  if (!['none', 'system_prompt', 'user', 'assistant', 'system'].includes(config.promptMode)) throw new Error('提示词注入方式无效。');
+  if (!Number.isSafeInteger(config.promptDepth)) throw new Error('提示词注入深度必须是整数。');
   if (!['auto', 'required', 'named'].includes(config.forceMode)) throw new Error('工具选择模式无效。');
   if (!['auto', 'native', 'interactions'].includes(config.googleMode)) throw new Error('接口模式无效。');
   config.modelNameIncludes = globalConfigFromSettings(config).modelNameIncludes;
@@ -95,9 +147,16 @@ export function validateConfig(input: unknown): BridgeConfig {
     if (typeof tool.enabled !== 'boolean') throw new Error(`工具 ${tool.name} 的启用状态无效。`);
     if (!isRecord(tool.parameters) || tool.parameters.type !== 'object') throw new Error(`工具 ${tool.name} 的参数须为 object 类型的 JSON Schema。`);
     if (JSON.stringify(tool.parameters).length > 65536) throw new Error(`工具 ${tool.name} 的参数定义过长。`);
-    if (typeof tool.outputPath !== 'string') throw new Error(`工具 ${tool.name} 缺少正文字段路径。`);
-    pathSegments(tool.outputPath);
-    return structuredClone(tool) as OutputTool;
+    const paths = tool.outputPaths ?? [tool.outputPath];
+    if (!Array.isArray(paths) || !paths.length || paths.length > 32) throw new Error(`工具 ${tool.name} 须配置 1 至 32 个正文字段路径。`);
+    const targets = new Set<string>();
+    for (const path of paths) {
+      if (typeof path !== 'string') throw new Error(`工具 ${tool.name} 的正文字段路径必须是字符串。`);
+      const target = JSON.stringify(pathSegments(path));
+      if (targets.has(target)) throw new Error(`工具 ${tool.name} 的正文字段路径重复。`);
+      targets.add(target);
+    }
+    return { ...structuredClone(tool), outputPath: paths[0] } as OutputTool;
   });
   const active = config.tools.filter(tool => tool.enabled);
   if (config.enabled && !active.length) throw new Error('请至少启用一个正文工具。');
@@ -136,7 +195,7 @@ export function supportedSource(source: unknown): boolean {
   return ['openai', 'custom', 'openrouter', 'makersuite', 'vertexai', 'deepseek', 'groq', 'moonshot', 'mistralai', 'siliconflow', 'nanogpt', 'zai', 'chutes', 'cometapi'].includes(String(source));
 }
 
-export function injectRequest(request: Record<string, any>, config: BridgeConfig): Record<string, any> {
+export function injectRequest(request: Record<string, any>, config: BridgeConfig, warn?: (message: string) => void): Record<string, any> {
   const body = structuredClone(request);
   delete body[REQUEST_KEY];
   const active = config.tools.filter(tool => tool.enabled);
@@ -148,10 +207,8 @@ export function injectRequest(request: Record<string, any>, config: BridgeConfig
   body.tool_choice = config.forceMode === 'named'
     ? { type: 'function', function: { name: config.forcedTool } }
     : config.forceMode === 'required' ? 'required' : 'auto';
-  if (config.promptEnabled && config.prompt.trim()) {
-    const content = config.prompt.replaceAll('{{tool_names}}', active.map(tool => tool.name).join('、'))
-      .replaceAll('{{tool_outputs}}', active.map(tool => `${tool.name}.${tool.outputPath}`).join('、'));
-    body.messages = [{ role: 'system', content }, ...(body.messages ?? [])];
-  }
+  body.messages ??= [];
+  const warning = injectPrompt(body.messages, config);
+  if (warning) warn?.(warning);
   return body;
 }

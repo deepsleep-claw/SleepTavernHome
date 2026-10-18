@@ -3,7 +3,7 @@ import { transformResponse } from '../shared/transform';
 
 export interface BackendStatus { id: string; version: string; transport: string; host: { name: string; version: string } }
 
-export function bridgeFetch(delegate: typeof fetch, baseUrl: string, backend: () => BackendStatus | null): typeof fetch {
+export function bridgeFetch(delegate: typeof fetch, baseUrl: string, backend: () => BackendStatus | null, warn?: (message: string) => void): typeof fetch {
   return async (input, init) => {
     const originalUrl = input instanceof Request ? input.url : String(input);
     const url = new URL(originalUrl, baseUrl);
@@ -21,7 +21,7 @@ export function bridgeFetch(delegate: typeof fetch, baseUrl: string, backend: ()
     if (active && !useBackend && resolveProtocol(body.chat_completion_source, config.googleMode) === 'interactions') {
       throw new Error('Interactions 模式需要基米工具后端。请启动后端并重新检测，或选择 Google 原生模式。');
     }
-    const nextBody = useBackend ? body : active ? injectRequest(body, config) : { ...body };
+    const nextBody = useBackend ? body : active ? injectRequest(body, config, warn) : { ...body };
     if (!active) delete nextBody[REQUEST_KEY];
     const target = useBackend ? `/api/plugins/${PLUGIN_ID}/generate` : originalUrl;
     const options: RequestInit = input instanceof Request

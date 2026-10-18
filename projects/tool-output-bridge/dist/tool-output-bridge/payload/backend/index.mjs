@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 
 // src/shared/config.ts
 var PLUGIN_ID = "tool-output-bridge";
-var VERSION = "0.1.0";
+var VERSION = "0.2.0";
 var REQUEST_KEY = "__tool_output_bridge";
 var DEFAULT_GLOBAL_CONFIG = { version: 1, enabled: false, modelNameIncludes: "Gemini" };
 var DEFAULT_CONFIG = {
@@ -14,8 +14,9 @@ var DEFAULT_CONFIG = {
   enabled: false,
   modelNameIncludes: "Gemini",
   keepOriginalText: false,
-  promptEnabled: true,
-  prompt: "\u8BF7\u901A\u8FC7\u4EE5\u4E0B\u5DE5\u5177\u63D0\u4EA4\u672C\u8F6E\u56DE\u590D\uFF1A{{tool_names}}\u3002\u5C06\u9700\u8981\u5C55\u793A\u7ED9\u8BFB\u8005\u7684\u6B63\u6587\u5199\u5165\u5BF9\u5E94\u5B57\u6BB5\uFF08{{tool_outputs}}\uFF09\uFF0C\u4FDD\u7559\u6B63\u6587\u539F\u6709\u7684 Markdown\u3001\u6807\u7B7E\u4E0E\u6362\u884C\u3002\u6B63\u6587\u63D0\u4EA4\u5B8C\u6210\u540E\u7ED3\u675F\u672C\u8F6E\u56DE\u590D\u3002",
+  promptMode: "system_prompt",
+  promptDepth: 0,
+  prompt: "\u8BF7\u901A\u8FC7\u4EE5\u4E0B\u5DE5\u5177\u63D0\u4EA4\u672C\u8F6E\u56DE\u590D\uFF1A{{tool_names}}\u3002\u5C06\u672C\u8F6E\u9700\u8981\u5C55\u793A\u7684\u5168\u90E8\u5185\u5BB9\u6309\u7528\u9014\u5199\u5165\u5BF9\u5E94\u5B57\u6BB5\uFF08{{tool_outputs}}\uFF09\uFF0C\u6309\u6240\u5217\u5B57\u6BB5\u987A\u5E8F\u586B\u5199\uFF0C\u4FDD\u7559\u539F\u6709\u7684 Markdown\u3001\u6807\u7B7E\u4E0E\u6362\u884C\u3002\u5168\u90E8\u5B57\u6BB5\u63D0\u4EA4\u5B8C\u6210\u540E\u7ED3\u675F\u672C\u8F6E\u56DE\u590D\u3002",
   forceMode: "named",
   forcedTool: "publish_story",
   googleMode: "auto",
@@ -46,13 +47,55 @@ function outputValue(args, path) {
   if (typeof value !== "string") throw new Error(`\u5DE5\u5177\u6B63\u6587 ${path} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002`);
   return value;
 }
+function toolOutputPaths(tool) {
+  return tool.outputPaths ?? [tool.outputPath];
+}
+function collectOutput(args, tool, separator) {
+  return toolOutputPaths(tool).map((path) => outputValue(args, path)).filter(Boolean).join(separator);
+}
+function renderPrompt(config) {
+  if (config.promptMode === "none" || !config.prompt.trim()) return "";
+  const active = config.tools.filter((tool) => tool.enabled);
+  return config.prompt.replaceAll("{{tool_names}}", active.map((tool) => tool.name).join("\u3001")).replaceAll("{{tool_outputs}}", active.flatMap((tool) => toolOutputPaths(tool).map((path) => `${tool.name}.${path}`)).join("\u3001"));
+}
+function containsPrompt(message, content) {
+  return typeof message.content === "string" ? message.content.includes(content) : Array.isArray(message.content) && message.content.some((part) => part?.type === "text" && typeof part.text === "string" && part.text.includes(content));
+}
+function injectPrompt(messages, config) {
+  const content = renderPrompt(config);
+  if (!content) return;
+  if (config.promptMode === "system_prompt") {
+    if (!messages.some((message) => message.role === "system" && containsPrompt(message, content))) messages.unshift({ role: "system", content });
+    return;
+  }
+  const matches = messages.filter((message) => message.role === config.promptMode);
+  const index = config.promptDepth < 0 ? matches.length + config.promptDepth : config.promptDepth;
+  const target = matches[index];
+  const role = { user: "User", assistant: "Assistant", system: "System", none: "" }[config.promptMode];
+  if (!target) return `\u627E\u4E0D\u5230 ${role} \u6DF1\u5EA6 ${config.promptDepth} \u7684\u6D88\u606F\uFF0C\u5F53\u524D\u5171\u6709 ${matches.length} \u6761 ${role} \u6D88\u606F\u3002\u63D0\u793A\u8BCD\u672A\u6CE8\u5165\u3002`;
+  if (containsPrompt(target, content)) return;
+  if (typeof target.content === "string" || target.content == null) {
+    target.content = target.content ? `${target.content}
+
+${content}` : content;
+  } else if (Array.isArray(target.content)) {
+    target.content.push({ type: "text", text: content });
+  } else {
+    return `${role} \u6DF1\u5EA6 ${config.promptDepth} \u7684\u6D88\u606F\u5185\u5BB9\u65E0\u6CD5\u8FFD\u52A0\u6587\u672C\u3002\u63D0\u793A\u8BCD\u672A\u6CE8\u5165\u3002`;
+  }
+}
 function validateConfig(input) {
   if (!isRecord(input)) throw new Error("\u63D2\u4EF6\u914D\u7F6E\u5FC5\u987B\u662F\u5BF9\u8C61\u3002");
   if (input.version !== void 0 && input.version !== 1) throw new Error("\u8BF7\u66F4\u65B0\u57FA\u7C73\u5DE5\u5177\u4EE5\u8BFB\u53D6\u6B64\u914D\u7F6E\u7248\u672C\u3002");
-  const config = { ...structuredClone(DEFAULT_CONFIG), ...input };
-  for (const key of ["enabled", "keepOriginalText", "promptEnabled", "streamArguments"]) {
+  const { promptEnabled, ...settings } = input;
+  if (promptEnabled !== void 0 && typeof promptEnabled !== "boolean") throw new Error("\u914D\u7F6E promptEnabled \u5FC5\u987B\u4E3A\u5E03\u5C14\u503C\u3002");
+  const config = { ...structuredClone(DEFAULT_CONFIG), ...settings };
+  if (input.promptMode === void 0) config.promptMode = promptEnabled === false ? "none" : "system_prompt";
+  for (const key of ["enabled", "keepOriginalText", "streamArguments"]) {
     if (typeof config[key] !== "boolean") throw new Error(`\u914D\u7F6E ${key} \u5FC5\u987B\u4E3A\u5E03\u5C14\u503C\u3002`);
   }
+  if (!["none", "system_prompt", "user", "assistant", "system"].includes(config.promptMode)) throw new Error("\u63D0\u793A\u8BCD\u6CE8\u5165\u65B9\u5F0F\u65E0\u6548\u3002");
+  if (!Number.isSafeInteger(config.promptDepth)) throw new Error("\u63D0\u793A\u8BCD\u6CE8\u5165\u6DF1\u5EA6\u5FC5\u987B\u662F\u6574\u6570\u3002");
   if (!["auto", "required", "named"].includes(config.forceMode)) throw new Error("\u5DE5\u5177\u9009\u62E9\u6A21\u5F0F\u65E0\u6548\u3002");
   if (!["auto", "native", "interactions"].includes(config.googleMode)) throw new Error("\u63A5\u53E3\u6A21\u5F0F\u65E0\u6548\u3002");
   config.modelNameIncludes = globalConfigFromSettings(config).modelNameIncludes;
@@ -69,9 +112,16 @@ function validateConfig(input) {
     if (typeof tool.enabled !== "boolean") throw new Error(`\u5DE5\u5177 ${tool.name} \u7684\u542F\u7528\u72B6\u6001\u65E0\u6548\u3002`);
     if (!isRecord(tool.parameters) || tool.parameters.type !== "object") throw new Error(`\u5DE5\u5177 ${tool.name} \u7684\u53C2\u6570\u987B\u4E3A object \u7C7B\u578B\u7684 JSON Schema\u3002`);
     if (JSON.stringify(tool.parameters).length > 65536) throw new Error(`\u5DE5\u5177 ${tool.name} \u7684\u53C2\u6570\u5B9A\u4E49\u8FC7\u957F\u3002`);
-    if (typeof tool.outputPath !== "string") throw new Error(`\u5DE5\u5177 ${tool.name} \u7F3A\u5C11\u6B63\u6587\u5B57\u6BB5\u8DEF\u5F84\u3002`);
-    pathSegments(tool.outputPath);
-    return structuredClone(tool);
+    const paths = tool.outputPaths ?? [tool.outputPath];
+    if (!Array.isArray(paths) || !paths.length || paths.length > 32) throw new Error(`\u5DE5\u5177 ${tool.name} \u987B\u914D\u7F6E 1 \u81F3 32 \u4E2A\u6B63\u6587\u5B57\u6BB5\u8DEF\u5F84\u3002`);
+    const targets = /* @__PURE__ */ new Set();
+    for (const path of paths) {
+      if (typeof path !== "string") throw new Error(`\u5DE5\u5177 ${tool.name} \u7684\u6B63\u6587\u5B57\u6BB5\u8DEF\u5F84\u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002`);
+      const target = JSON.stringify(pathSegments(path));
+      if (targets.has(target)) throw new Error(`\u5DE5\u5177 ${tool.name} \u7684\u6B63\u6587\u5B57\u6BB5\u8DEF\u5F84\u91CD\u590D\u3002`);
+      targets.add(target);
+    }
+    return { ...structuredClone(tool), outputPath: paths[0] };
   });
   const active = config.tools.filter((tool) => tool.enabled);
   if (config.enabled && !active.length) throw new Error("\u8BF7\u81F3\u5C11\u542F\u7528\u4E00\u4E2A\u6B63\u6587\u5DE5\u5177\u3002");
@@ -98,7 +148,7 @@ function resolveProtocol(source, mode = "auto") {
 function supportedSource(source) {
   return ["openai", "custom", "openrouter", "makersuite", "vertexai", "deepseek", "groq", "moonshot", "mistralai", "siliconflow", "nanogpt", "zai", "chutes", "cometapi"].includes(String(source));
 }
-function injectRequest(request, config) {
+function injectRequest(request, config, warn) {
   const body = structuredClone(request);
   delete body[REQUEST_KEY];
   const active = config.tools.filter((tool) => tool.enabled);
@@ -108,47 +158,43 @@ function injectRequest(request, config) {
     ...active.map((tool) => ({ type: "function", function: { name: tool.name, description: tool.description, parameters: tool.parameters } }))
   ];
   body.tool_choice = config.forceMode === "named" ? { type: "function", function: { name: config.forcedTool } } : config.forceMode === "required" ? "required" : "auto";
-  if (config.promptEnabled && config.prompt.trim()) {
-    const content = config.prompt.replaceAll("{{tool_names}}", active.map((tool) => tool.name).join("\u3001")).replaceAll("{{tool_outputs}}", active.map((tool) => `${tool.name}.${tool.outputPath}`).join("\u3001"));
-    body.messages = [{ role: "system", content }, ...body.messages ?? []];
-  }
+  body.messages ??= [];
+  const warning = injectPrompt(body.messages, config);
+  if (warning) warn?.(warning);
   return body;
 }
 
 // src/shared/partial-json.ts
-var PartialJsonText = class {
-  constructor(path) {
-    this.path = path;
-    this.target = pathSegments(path);
-  }
-  path;
+var PartialJsonFields = class {
   raw = "";
   stack = [];
   inString = false;
   isKey = false;
-  targetString = false;
+  target;
   stringValue = "";
   escaped = false;
   unicode = null;
   pendingSurrogate = "";
-  seenTarget = false;
-  target;
-  text = "";
+  targets;
+  fields;
+  constructor(paths) {
+    this.fields = paths.map((path) => ({ path, text: "", seen: false, complete: false }));
+    this.targets = new Map(this.fields.map((field) => [JSON.stringify(pathSegments(field.path)), field]));
+  }
   valuePath() {
     const parent = this.stack.at(-1);
     return !parent ? [] : [...parent.path, parent.type === "object" ? parent.key : String(parent.index)];
   }
   decoded(char) {
-    this.stringValue += char;
-    if (!this.targetString) return;
+    if (this.isKey) this.stringValue += char;
+    if (!this.target) return;
     if (this.pendingSurrogate) {
-      this.text += this.pendingSurrogate + char;
+      this.target.text += this.pendingSurrogate + char;
       this.pendingSurrogate = "";
     } else if (char.length === 1 && /[\uD800-\uDBFF]/.test(char)) this.pendingSurrogate = char;
-    else this.text += char;
+    else this.target.text += char;
   }
   push(fragment) {
-    const before = this.text.length;
     this.raw += fragment;
     if (this.raw.length > 8 * 1024 * 1024) throw new Error("\u5DE5\u5177\u53C2\u6570\u8D85\u8FC7 8 MiB\u3002");
     for (const char of fragment) {
@@ -176,9 +222,10 @@ var PartialJsonText = class {
             parent2.key = this.stringValue;
             parent2.expectsKey = false;
           }
-          if (this.targetString && this.pendingSurrogate) {
-            this.text += this.pendingSurrogate;
+          if (this.target) {
+            this.target.text += this.pendingSurrogate;
             this.pendingSurrogate = "";
+            this.target.complete = true;
           }
         } else {
           if (char.charCodeAt(0) < 32) throw new Error("\u5DE5\u5177\u53C2\u6570\u5B57\u7B26\u4E32\u5305\u542B\u672A\u8F6C\u4E49\u7684\u63A7\u5236\u5B57\u7B26\u3002");
@@ -191,11 +238,10 @@ var PartialJsonText = class {
         this.inString = true;
         this.isKey = parent?.type === "object" && parent.expectsKey;
         this.stringValue = "";
-        const path = this.valuePath();
-        this.targetString = !this.isKey && path.length === this.target.length && path.every((part, index) => part === this.target[index]);
-        if (this.targetString) {
-          if (this.seenTarget) throw new Error("\u5DE5\u5177\u53C2\u6570\u91CD\u590D\u5B9A\u4E49\u4E86\u6B63\u6587\u5B57\u6BB5\u3002");
-          this.seenTarget = true;
+        this.target = this.isKey ? void 0 : this.targets.get(JSON.stringify(this.valuePath()));
+        if (this.target) {
+          if (this.target.seen) throw new Error("\u5DE5\u5177\u53C2\u6570\u91CD\u590D\u5B9A\u4E49\u4E86\u6B63\u6587\u5B57\u6BB5\u3002");
+          this.target.seen = true;
         }
       } else if (char === "{" || char === "[") this.stack.push({ type: char === "{" ? "object" : "array", path: this.valuePath(), key: "", index: 0, expectsKey: char === "{" });
       else if (char === "}" || char === "]") this.stack.pop();
@@ -204,16 +250,88 @@ var PartialJsonText = class {
         else parent.expectsKey = true;
       }
     }
-    return this.text.slice(before);
   }
   finish() {
-    const value = outputValue(JSON.parse(this.raw), this.path);
-    if (value !== this.text) throw new Error("\u5DE5\u5177\u6B63\u6587\u4E0E\u5B8C\u6574\u53C2\u6570\u4E0D\u4E00\u81F4\u3002");
-    return value;
+    const args = JSON.parse(this.raw);
+    for (const field of this.fields) {
+      if (outputValue(args, field.path) !== field.text) throw new Error("\u5DE5\u5177\u6B63\u6587\u4E0E\u5B8C\u6574\u53C2\u6570\u4E0D\u4E00\u81F4\u3002");
+    }
+  }
+};
+
+// src/shared/output-collector.ts
+var OutputCollector = class {
+  constructor(tool, separator) {
+    this.separator = separator;
+    this.parser = new PartialJsonFields(toolOutputPaths(tool));
+  }
+  separator;
+  parser;
+  hasJson = false;
+  current = 0;
+  emitted = 0;
+  started = false;
+  push(fragment) {
+    if (fragment) this.hasJson = true;
+    this.parser.push(fragment);
+  }
+  snapshot(args, final) {
+    for (const field of this.parser.fields) {
+      let value = args;
+      for (const key of pathSegments(field.path)) value = value != null && Object.hasOwn(value, key) ? value[key] : void 0;
+      if (value === void 0 && !final) continue;
+      if (typeof value !== "string") throw new Error(`\u5DE5\u5177\u6B63\u6587 ${field.path} \u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002`);
+      if (!value.startsWith(field.text)) throw new Error(`\u5DE5\u5177\u6B63\u6587 ${field.path} \u7684\u5206\u7247\u4E0E\u5B8C\u6574\u6B63\u6587\u4E0D\u4E00\u81F4\u3002`);
+      field.text = value;
+      field.seen = true;
+      if (final) field.complete = true;
+    }
+  }
+  append(path, value, continuing) {
+    const target = JSON.stringify(pathSegments(path));
+    const field = this.parser.fields.find((field2) => JSON.stringify(pathSegments(field2.path)) === target);
+    if (!field) return;
+    if (typeof value !== "string") throw new Error("\u6B63\u6587\u53C2\u6570\u7247\u6BB5\u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002");
+    field.text += value;
+    field.seen = true;
+    field.complete = !continuing;
+  }
+  finish(validate = true) {
+    if (validate) {
+      if (this.hasJson) this.parser.finish();
+      else for (const field of this.parser.fields) {
+        if (!field.seen) outputValue({}, field.path);
+      }
+    }
+    for (const field of this.parser.fields) field.complete = true;
+  }
+  drain() {
+    let text = "";
+    while (this.current < this.parser.fields.length) {
+      const field = this.parser.fields[this.current];
+      const delta = field.text.slice(this.emitted);
+      if (delta) {
+        if (!this.emitted && this.started) text += this.separator;
+        text += delta;
+        this.emitted = field.text.length;
+        this.started = true;
+      }
+      if (!field.complete) break;
+      this.current++;
+      this.emitted = 0;
+    }
+    return text;
   }
 };
 
 // src/shared/sse.ts
+function streamCacheControl(value) {
+  const directives = (value ?? "").split(",").map((part) => part.trim()).filter(Boolean);
+  for (const required of ["no-cache", "no-transform"]) {
+    if (!directives.some((part) => part.toLowerCase() === required)) directives.push(required);
+  }
+  return directives.join(", ");
+}
 var SseDecoder = class {
   decoder = new TextDecoder();
   buffer = "";
@@ -280,7 +398,7 @@ var OutputTransformer = class {
   call(key, choice = 0) {
     let call = this.calls.get(key);
     if (!call) {
-      call = { key, choice, name: "", raw: "", text: "", emitted: 0, done: false, started: false, decision: "pending", pending: [], sawText: false };
+      call = { key, choice, name: "", raw: "", done: false, started: false, decision: "pending", pending: [] };
       this.calls.set(key, call);
       const queue = this.queues.get(choice) ?? [];
       queue.push(call);
@@ -293,9 +411,8 @@ var OutputTransformer = class {
     const tool = this.tools.get(call.name);
     if (tool) {
       call.decision = "own";
-      call.tool = tool;
-      call.parser = new PartialJsonText(tool.outputPath);
-      if (call.raw) call.text += call.parser.push(call.raw);
+      call.collector = new OutputCollector(tool, this.config.separator);
+      if (call.raw) call.collector.push(call.raw);
       call.pending = [];
     } else if (final || call.name && ![...this.tools.keys()].some((name) => name.startsWith(call.name))) {
       call.decision = "other";
@@ -306,15 +423,12 @@ var OutputTransformer = class {
     if (call.raw.length + fragment.length > 8 * 1024 * 1024) throw new Error("\u5DE5\u5177\u53C2\u6570\u8D85\u8FC7 8 MiB\u3002");
     this.decide(call);
     call.raw += fragment;
-    if (call.decision === "own") call.text += call.parser.push(fragment);
+    if (call.decision === "own") call.collector.push(fragment);
   }
   complete(call, validate = true) {
     if (call.done) return;
     this.decide(call, true);
-    if (call.decision === "own" && validate) {
-      if (call.raw) call.parser.finish();
-      else if (!call.sawText) throw new Error(`\u5DE5\u5177 ${call.name} \u6CA1\u6709\u8FD4\u56DE\u5B57\u7B26\u4E32\u6B63\u6587\u3002`);
-    }
+    if (call.decision === "own") call.collector.finish(validate);
     call.done = true;
   }
   drain(choice) {
@@ -327,13 +441,12 @@ var OutputTransformer = class {
         queue.shift();
         continue;
       }
-      const delta = call.text.slice(call.emitted);
+      const delta = call.collector.drain();
       if (delta) {
         if (!call.started && this.outputStarted.has(choice)) text += this.config.separator;
         call.started = true;
         this.outputStarted.add(choice);
         text += delta;
-        call.emitted = call.text.length;
       }
       if (!call.done) break;
       queue.shift();
@@ -423,24 +536,12 @@ var OutputTransformer = class {
           if (!fc.willContinue) call.done = true;
           continue;
         }
-        if (isRecord(fc.args) && Object.keys(fc.args).length) {
-          const whole = outputValue(fc.args, call.tool.outputPath);
-          if (!whole.startsWith(call.text)) throw new Error(`\u5DE5\u5177 ${call.name} \u7684\u6B63\u6587\u5206\u7247\u4E0E\u5B8C\u6574\u6B63\u6587\u4E0D\u4E00\u81F4\u3002`);
-          call.text = whole;
-          call.sawText = true;
-        }
         for (const arg of fc.partialArgs ?? []) {
-          if (typeof arg.jsonPath !== "string") continue;
-          const path = pathSegments(arg.jsonPath);
-          const target = pathSegments(call.tool.outputPath);
-          if (path.length === target.length && path.every((value, i) => value === target[i])) {
-            if (arg.stringValue !== void 0) {
-              if (typeof arg.stringValue !== "string") throw new Error("\u6B63\u6587\u53C2\u6570\u7247\u6BB5\u5FC5\u987B\u662F\u5B57\u7B26\u4E32\u3002");
-              call.text += arg.stringValue;
-              call.sawText = true;
-            }
+          if (typeof arg.jsonPath === "string" && arg.stringValue !== void 0) {
+            call.collector.append(arg.jsonPath, arg.stringValue, Boolean(arg.willContinue ?? fc.willContinue));
           }
         }
+        if (isRecord(fc.args) && Object.keys(fc.args).length) call.collector.snapshot(fc.args, !fc.willContinue);
         if (!fc.willContinue) this.complete(call);
         text += this.drain(index);
       }
@@ -461,6 +562,11 @@ var OutputTransformer = class {
       call.name = frame.step.name ?? "";
       call.id = frame.step.id;
       this.decide(call, true);
+      const args = frame.step.arguments;
+      if (typeof args === "string") this.arguments(call, args);
+      else if (isRecord(args) && Object.keys(args).length) this.arguments(call, JSON.stringify(args));
+      const text = this.drain(0);
+      if (text) result.push(this.textFrame(text));
     } else if (type === "step.start" && frame.step?.type === "thought" && frame.step.signature) {
       this.thoughtSignatures.set(frame.index, frame.step.signature);
     } else if (type === "step.delta") {
@@ -574,7 +680,7 @@ var OutputTransformer = class {
         const tool = this.tools.get(call.function?.name);
         if (tool) {
           owned = true;
-          text.push(outputValue(typeof call.function.arguments === "string" ? JSON.parse(call.function.arguments) : call.function.arguments, tool.outputPath));
+          text.push(collectOutput(typeof call.function.arguments === "string" ? JSON.parse(call.function.arguments) : call.function.arguments, tool, this.config.separator));
         } else remaining.push(call);
       }
       if (!this.config.keepOriginalText && message.content && !owned && !remaining.length) throw new Error("\u6A21\u578B\u4EC5\u8FD4\u56DE\u4E86\u666E\u901A\u6B63\u6587\uFF0C\u6CA1\u6709\u8C03\u7528\u6B63\u6587\u5DE5\u5177\u3002\u8BF7\u5F00\u542F\u5F3A\u5236\u5DE5\u5177\u9009\u62E9\uFF0C\u6216\u542F\u7528\u4FDD\u7559\u666E\u901A\u6B63\u6587\u3002");
@@ -593,6 +699,7 @@ function transformResponse(response, config, source, streaming) {
   headers.delete("content-length");
   headers.delete("content-encoding");
   if (!streaming) return response.json().then((value) => new Response(JSON.stringify(transformer.json(value)), { status: response.status, headers }));
+  headers.set("cache-control", streamCacheControl(headers.get("cache-control")));
   if (headers.get("content-type")?.includes("application/json")) return response.json().then((value) => {
     const frame = transformer.json(value);
     if (!frame.candidates) for (const choice of frame.choices ?? []) {
@@ -727,6 +834,10 @@ async function forwardResponse(upstream, response) {
     if (value) response.setHeader(key, value);
   }
   response.setHeader("x-accel-buffering", "no");
+  if (upstream.headers.get("content-type")?.includes("text/event-stream")) {
+    response.setHeader("cache-control", streamCacheControl(upstream.headers.get("cache-control")));
+    response.flushHeaders?.();
+  }
   if (!upstream.body) {
     response.end();
     return;
@@ -741,7 +852,9 @@ async function forwardResponse(upstream, response) {
     while (!response.destroyed) {
       const { done, value } = await reader.read();
       if (done) break;
-      if (!response.write(Buffer.from(value))) {
+      const writable = response.write(Buffer.from(value));
+      response.flush?.();
+      if (!writable) {
         await new Promise((resolve2, reject) => {
           const clean = () => {
             response.off("drain", drained);
@@ -953,7 +1066,7 @@ async function initialize(router, modules, host) {
       const config = validateConfig(request.body?.[REQUEST_KEY]);
       if (!shouldActivate(request.body, config)) throw new Error("\u5F53\u524D\u8BF7\u6C42\u672A\u6EE1\u8DB3\u57FA\u7C73\u5DE5\u5177\u7684\u5168\u5C40\u5F00\u5173\u3001\u6A21\u578B\u540D\u79F0\u6216\u63A5\u53E3\u6761\u4EF6\u3002");
       if (!Array.isArray(request.body.messages)) throw new Error("\u804A\u5929\u8BF7\u6C42\u7F3A\u5C11\u6D88\u606F\u5217\u8868\u3002");
-      request.body = injectRequest(request.body, config);
+      request.body = injectRequest(request.body, config, (message) => console.warn("[\u57FA\u7C73\u5DE5\u5177]", message));
       if (luker) {
         if (request.body.custom_prompt_post_processing) request.body.messages = modules.converters.postProcessPrompt(request.body.messages, request.body.custom_prompt_post_processing, modules.converters.getPromptNames(request));
         if (request.body.json_schema?.value) request.body.json_schema.value = modules.util.flattenSchema(request.body.json_schema.value, request.body.chat_completion_source);

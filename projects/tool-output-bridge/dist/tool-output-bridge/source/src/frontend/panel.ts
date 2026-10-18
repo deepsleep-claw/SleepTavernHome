@@ -1,8 +1,8 @@
 import { createApp, h, reactive, type VNode } from 'vue';
-import { type BridgeConfig, type GlobalConfig, DEFAULT_CONFIG, DEFAULT_GLOBAL_CONFIG, VERSION, validateConfig, modelMatches, resolveProtocol } from '../shared/config';
+import { type BridgeConfig, type GlobalConfig, DEFAULT_CONFIG, DEFAULT_GLOBAL_CONFIG, VERSION, validateConfig, modelMatches, resolveProtocol, toolOutputPaths } from '../shared/config';
 import type { BackendStatus } from './fetch';
 
-type Draft = Omit<BridgeConfig, 'tools'> & { tools: (BridgeConfig['tools'][number] & { schemaText: string })[] };
+type Draft = Omit<BridgeConfig, 'tools'> & { tools: (BridgeConfig['tools'][number] & { schemaText: string; outputPathsText: string })[] };
 interface Actions {
   save: (value: BridgeConfig, name: string) => Promise<void>;
   saveGlobal: (value: GlobalConfig) => GlobalConfig;
@@ -10,8 +10,8 @@ interface Actions {
 }
 
 export function mountPanel(element: HTMLElement, actions: Actions) {
-  const draft = (config: BridgeConfig): Draft => ({ ...structuredClone(config), tools: config.tools.map(tool => ({ ...structuredClone(tool), schemaText: JSON.stringify(tool.parameters, null, 2) })) });
-  const state = reactive({ config: draft(DEFAULT_CONFIG), global: { ...DEFAULT_GLOBAL_CONFIG }, model: '', source: '', preset: '', status: '正在检测后端…', backend: null as BackendStatus | null, error: '', message: '', busy: false, dirty: false });
+  const draft = (config: BridgeConfig): Draft => ({ ...structuredClone(config), tools: config.tools.map(tool => ({ ...structuredClone(tool), schemaText: JSON.stringify(tool.parameters, null, 2), outputPathsText: toolOutputPaths(tool).join('\n') })) });
+  const state = reactive({ config: draft(DEFAULT_CONFIG), global: { ...DEFAULT_GLOBAL_CONFIG }, model: '', source: '', preset: '', status: '正在检测后端…', backend: null as BackendStatus | null, error: '', warning: '', message: '', busy: false, dirty: false });
   const changed = () => { state.dirty = true; state.message = ''; };
   const field = (label: string, value: string, update: (value: string) => void, multi = false): VNode => h('label', { class: ['tob-field', multi && 'tob-field-wide'] }, [
     h('span', label), h(multi ? 'textarea' : 'input', { class: 'text_pole', type: multi ? undefined : 'text', value, rows: multi ? 5 : undefined, onInput: (event: Event) => { update((event.target as HTMLInputElement).value); changed(); } }),
@@ -59,11 +59,18 @@ export function mountPanel(element: HTMLElement, actions: Actions) {
       check('同时保留模型原来的正文', c.keepOriginalText, value => { c.keepOriginalText = value; }),
       select('工具选择', c.forceMode, [['auto', '自动选择'], ['required', '必须调用工具'], ['named', '必须调用指定正文工具']], value => { c.forceMode = value as BridgeConfig['forceMode']; }),
       c.forceMode === 'named' ? select('指定正文工具', c.forcedTool, c.tools.filter(tool => tool.enabled).map(tool => [tool.name, tool.name]), value => { c.forcedTool = value; }) : null,
-      field('工具正文分隔符', c.separator, value => { c.separator = value; }, true),
+      field('正文分隔符', c.separator, value => { c.separator = value; }, true),
       drawer('提示词', [
-        check('注入提示词', c.promptEnabled, value => { c.promptEnabled = value; }),
+        select('提示词注入方式', c.promptMode, [['none', '不注入'], ['system_prompt', '注入系统提示词'], ['user', '注入User'], ['assistant', '注入Assistant'], ['system', '注入System']], value => { c.promptMode = value as BridgeConfig['promptMode']; }),
+        ['user', 'assistant', 'system'].includes(c.promptMode) ? h('label', { class: 'tob-field' }, [
+          h('span', '注入深度'), h('input', { class: 'text_pole', type: 'number', step: 1, value: c.promptDepth, onChange: (event: Event) => {
+            const value = (event.target as HTMLInputElement).value;
+            c.promptDepth = value.trim() ? Number(value) : NaN; changed();
+          } }),
+        ]) : null,
+        ['user', 'assistant', 'system'].includes(c.promptMode) ? hint('按所选角色的消息计数，0 是第一条，1 是第二条；-1 是最后一条，-2 是倒数第二条。提示词追加到目标消息末尾，目标不存在时显示警告。') : null,
         field('提示词内容', c.prompt, value => { c.prompt = value; }, true),
-        hint('支持 {{tool_names}} 和 {{tool_outputs}} 占位符。提示词作为系统消息加入当前请求。'),
+        hint('支持 {{tool_names}} 和 {{tool_outputs}} 占位符。「注入系统提示词」会在请求开头新增系统消息。'),
       ]),
       drawer(`正文工具 (${c.tools.length})`, [
         ...c.tools.map((tool, index) => h('fieldset', { key: index, class: 'tob-tool' }, [
@@ -71,8 +78,8 @@ export function mountPanel(element: HTMLElement, actions: Actions) {
           field('名称', tool.name, value => { const previous = tool.name; tool.name = value; if (c.forcedTool === previous) c.forcedTool = value; }),
           field('说明', tool.description, value => { tool.description = value; }, true),
           field('参数 JSON Schema', tool.schemaText, value => { tool.schemaText = value; }, true),
-          field('正文字段路径', tool.outputPath, value => { tool.outputPath = value; }),
-          hint('例如 text、story.text、chapters[0].text 或 /story/text。目标字段须为字符串。'),
+          field('正文字段路径（每行一个）', tool.outputPathsText, value => { tool.outputPathsText = value; }, true),
+          hint('按行顺序收集到同一条消息，并使用正文分隔符连接。例如分别填写 thinking 和 text；每个字段须为字符串，也支持 story.text、chapters[0].text 或 /story/text。'),
           h('div', { class: 'tob-actions' }, [button('删除工具', () => { c.tools.splice(index, 1); changed(); })]),
         ])),
         h('div', { class: 'tob-actions' }, [button('添加工具', () => {
@@ -89,13 +96,14 @@ export function mountPanel(element: HTMLElement, actions: Actions) {
         c.googleMode === 'interactions' ? hint('Interactions 使用完整历史和 store=false；该接口的采样配置与 generateContent 不同，温度、top-p、top-k 与数值思考预算不会传入。') : null,
       ]),
       h('p', { role: 'alert', class: 'tob-error' }, state.error),
+      h('p', { role: 'status', class: 'tob-warning' }, state.warning),
       h('p', { role: 'status' }, state.message || (state.dirty ? '有未保存的预设修改' : '')),
       h('div', { class: 'tob-actions' }, [button(state.busy ? '正在保存…' : '保存到当前预设', async () => {
         state.busy = true; state.error = ''; state.message = '';
         const name = state.preset;
         try {
           const snapshot: Draft = JSON.parse(JSON.stringify(c));
-          const config = validateConfig({ ...snapshot, enabled: true, tools: snapshot.tools.map(({ schemaText, ...tool }) => ({ ...tool, parameters: JSON.parse(schemaText) })) });
+          const config = validateConfig({ ...snapshot, enabled: true, tools: snapshot.tools.map(({ schemaText, outputPathsText, ...tool }) => ({ ...tool, outputPaths: outputPathsText.split(/\r?\n/).map(path => path.trim()).filter(Boolean), parameters: JSON.parse(schemaText) })) });
           await actions.save(config, name);
           if (state.preset === name) { state.dirty = false; state.message = '已保存。'; }
         } catch (error) { state.error = error instanceof Error ? error.message : String(error); }
@@ -106,7 +114,7 @@ export function mountPanel(element: HTMLElement, actions: Actions) {
   app.mount(element);
   return {
     state, probe,
-    load(config: BridgeConfig, preset: string) { state.config = draft(config); state.preset = preset; state.dirty = false; state.error = ''; state.message = ''; },
+    load(config: BridgeConfig, preset: string) { state.config = draft(config); state.preset = preset; state.dirty = false; state.error = ''; state.warning = ''; state.message = ''; },
     loadGlobal(config: GlobalConfig, model: string, source: string) { state.global = { ...config }; state.model = model; state.source = source; },
     destroy: () => app.unmount(),
   };

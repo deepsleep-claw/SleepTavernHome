@@ -1,11 +1,11 @@
-import { type BridgeConfig, type OutputTool, isRecord, outputValue, pathSegments } from './config';
-import { PartialJsonText } from './partial-json';
-import { SseDecoder, encodeEvent, type SseEvent } from './sse';
+import { type BridgeConfig, type OutputTool, collectOutput, isRecord } from './config';
+import { OutputCollector } from './output-collector';
+import { SseDecoder, encodeEvent, streamCacheControl, type SseEvent } from './sse';
 
 type Call = {
-  key: string; choice: number; name: string; raw: string; text: string; emitted: number;
-  done: boolean; started: boolean; tool?: OutputTool; parser?: PartialJsonText;
-  decision: 'pending' | 'own' | 'other'; pending: any[]; sawText: boolean;
+  key: string; choice: number; name: string; raw: string;
+  done: boolean; started: boolean; collector?: OutputCollector;
+  decision: 'pending' | 'own' | 'other'; pending: any[];
   id?: string;
 };
 
@@ -28,7 +28,7 @@ export class OutputTransformer {
   private call(key: string, choice = 0): Call {
     let call = this.calls.get(key);
     if (!call) {
-      call = { key, choice, name: '', raw: '', text: '', emitted: 0, done: false, started: false, decision: 'pending', pending: [], sawText: false };
+      call = { key, choice, name: '', raw: '', done: false, started: false, decision: 'pending', pending: [] };
       this.calls.set(key, call);
       const queue = this.queues.get(choice) ?? []; queue.push(call); this.queues.set(choice, queue);
     }
@@ -39,8 +39,8 @@ export class OutputTransformer {
     if (call.decision !== 'pending') return;
     const tool = this.tools.get(call.name);
     if (tool) {
-      call.decision = 'own'; call.tool = tool; call.parser = new PartialJsonText(tool.outputPath);
-      if (call.raw) call.text += call.parser.push(call.raw);
+      call.decision = 'own'; call.collector = new OutputCollector(tool, this.config.separator);
+      if (call.raw) call.collector.push(call.raw);
       call.pending = [];
     } else if (final || (call.name && ![...this.tools.keys()].some(name => name.startsWith(call.name)))) {
       call.decision = 'other'; this.otherCalls.add(call.choice);
@@ -51,16 +51,13 @@ export class OutputTransformer {
     if (call.raw.length + fragment.length > 8 * 1024 * 1024) throw new Error('工具参数超过 8 MiB。');
     this.decide(call);
     call.raw += fragment;
-    if (call.decision === 'own') call.text += call.parser!.push(fragment);
+    if (call.decision === 'own') call.collector!.push(fragment);
   }
 
   private complete(call: Call, validate = true): void {
     if (call.done) return;
     this.decide(call, true);
-    if (call.decision === 'own' && validate) {
-      if (call.raw) call.parser!.finish();
-      else if (!call.sawText) throw new Error(`工具 ${call.name} 没有返回字符串正文。`);
-    }
+    if (call.decision === 'own') call.collector!.finish(validate);
     call.done = true;
   }
 
@@ -71,11 +68,11 @@ export class OutputTransformer {
       const call = queue[0];
       if (call.decision === 'pending') break;
       if (call.decision === 'other') { queue.shift(); continue; }
-      const delta = call.text.slice(call.emitted);
+      const delta = call.collector!.drain();
       if (delta) {
         if (!call.started && this.outputStarted.has(choice)) text += this.config.separator;
         call.started = true; this.outputStarted.add(choice);
-        text += delta; call.emitted = call.text.length;
+        text += delta;
       }
       if (!call.done) break;
       queue.shift();
@@ -155,22 +152,12 @@ export class OutputTransformer {
         this.decide(call, true);
         this.nativeActive.set(index, key);
         if (call.decision === 'other') { parts.push(part); if (!fc.willContinue) call.done = true; continue; }
-        if (isRecord(fc.args) && Object.keys(fc.args).length) {
-          const whole = outputValue(fc.args, call.tool!.outputPath);
-          if (!whole.startsWith(call.text)) throw new Error(`工具 ${call.name} 的正文分片与完整正文不一致。`);
-          call.text = whole; call.sawText = true;
-        }
         for (const arg of fc.partialArgs ?? []) {
-          if (typeof arg.jsonPath !== 'string') continue;
-          const path = pathSegments(arg.jsonPath);
-          const target = pathSegments(call.tool!.outputPath);
-          if (path.length === target.length && path.every((value, i) => value === target[i])) {
-            if (arg.stringValue !== undefined) {
-              if (typeof arg.stringValue !== 'string') throw new Error('正文参数片段必须是字符串。');
-              call.text += arg.stringValue; call.sawText = true;
-            }
+          if (typeof arg.jsonPath === 'string' && arg.stringValue !== undefined) {
+            call.collector!.append(arg.jsonPath, arg.stringValue, Boolean(arg.willContinue ?? fc.willContinue));
           }
         }
+        if (isRecord(fc.args) && Object.keys(fc.args).length) call.collector!.snapshot(fc.args, !fc.willContinue);
         if (!fc.willContinue) this.complete(call);
         text += this.drain(index);
       }
@@ -191,6 +178,10 @@ export class OutputTransformer {
     if (type === 'step.start' && frame.step?.type === 'function_call') {
       const call = this.call(`interaction:${frame.index}`);
       call.name = frame.step.name ?? ''; call.id = frame.step.id; this.decide(call, true);
+      const args = frame.step.arguments;
+      if (typeof args === 'string') this.arguments(call, args);
+      else if (isRecord(args) && Object.keys(args).length) this.arguments(call, JSON.stringify(args));
+      const text = this.drain(0); if (text) result.push(this.textFrame(text));
     } else if (type === 'step.start' && frame.step?.type === 'thought' && frame.step.signature) {
       this.thoughtSignatures.set(frame.index, frame.step.signature);
     } else if (type === 'step.delta') {
@@ -297,7 +288,7 @@ export class OutputTransformer {
       let owned = false;
       for (const call of message.tool_calls ?? []) {
         const tool = this.tools.get(call.function?.name);
-        if (tool) { owned = true; text.push(outputValue(typeof call.function.arguments === 'string' ? JSON.parse(call.function.arguments) : call.function.arguments, tool.outputPath)); }
+        if (tool) { owned = true; text.push(collectOutput(typeof call.function.arguments === 'string' ? JSON.parse(call.function.arguments) : call.function.arguments, tool, this.config.separator)); }
         else remaining.push(call);
       }
       if (!this.config.keepOriginalText && message.content && !owned && !remaining.length) throw new Error('模型仅返回了普通正文，没有调用正文工具。请开启强制工具选择，或启用保留普通正文。');
@@ -315,6 +306,7 @@ export function transformResponse(response: Response, config: BridgeConfig, sour
   const headers = new Headers(response.headers);
   headers.delete('content-length'); headers.delete('content-encoding');
   if (!streaming) return response.json().then(value => new Response(JSON.stringify(transformer.json(value)), { status: response.status, headers }));
+  headers.set('cache-control', streamCacheControl(headers.get('cache-control')));
   if (headers.get('content-type')?.includes('application/json')) return response.json().then(value => {
     const frame = transformer.json(value);
     if (!frame.candidates) for (const choice of frame.choices ?? []) { choice.delta = choice.message; delete choice.message; }

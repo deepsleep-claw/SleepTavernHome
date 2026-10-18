@@ -27,7 +27,7 @@ export async function initialize(router: any, modules: any, host: { name: string
       const config = validateConfig(request.body?.[REQUEST_KEY]);
       if (!shouldActivate(request.body, config)) throw new Error('当前请求未满足基米工具的全局开关、模型名称或接口条件。');
       if (!Array.isArray(request.body.messages)) throw new Error('聊天请求缺少消息列表。');
-      request.body = injectRequest(request.body, config);
+      request.body = injectRequest(request.body, config, message => console.warn('[基米工具]', message));
       if (luker) {
         if (request.body.custom_prompt_post_processing) request.body.messages = modules.converters.postProcessPrompt(request.body.messages, request.body.custom_prompt_post_processing, modules.converters.getPromptNames(request));
         if (request.body.json_schema?.value) request.body.json_schema.value = modules.util.flattenSchema(request.body.json_schema.value, request.body.chat_completion_source);

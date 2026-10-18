@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, readFile, rm, access, symlink } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { operate } from '../src/installer/installer';
+import { VERSION } from '../src/shared/config';
 
 async function fixture(kind = 'node') {
   const base = await mkdtemp(resolve('.test-build/fixture-'));
@@ -23,7 +24,7 @@ test('installer supports install, upgrade and uninstall while preserving unrelat
     await writeFile(join(env.packageDir, 'payload/backend/index.js'), 'export const version = 2;');
     await operate('install', env);
     assert.match(await readFile(join(env.root, 'plugins/tool-output-bridge/index.js'), 'utf8'), /version = 2/);
-    assert.match((await operate('status', env)).join('\n'), /已安装 0.1.0/);
+    assert.ok((await operate('status', env)).join('\n').includes(`已安装 ${VERSION}`));
     await operate('uninstall', env);
     await assert.rejects(access(join(env.root, 'plugins/tool-output-bridge')));
     const config = await readFile(join(env.root, 'config.yaml'), 'utf8');

@@ -1,4 +1,4 @@
-import { CONFIG_KEY, REQUEST_KEY, PLUGIN_ID, DEFAULT_CONFIG, configFromPreset, globalConfigFromSettings, shouldActivate, validateConfig, type BridgeConfig, type GlobalConfig } from '../shared/config';
+import { CONFIG_KEY, REQUEST_KEY, PLUGIN_ID, DEFAULT_CONFIG, configFromPreset, globalConfigFromSettings, shouldActivate, validateConfig, injectPrompt, injectRequest, type BridgeConfig, type GlobalConfig } from '../shared/config';
 import { bridgeFetch, type BackendStatus } from './fetch';
 import { mountPanel } from './panel';
 
@@ -37,11 +37,18 @@ async function start(): Promise<void> {
       try {
         const response = await delegate(`/api/plugins/${PLUGIN_ID}/status`, { signal: AbortSignal.timeout(5000), cache: 'no-store' });
         const status = response.ok ? await response.json() : null;
-        backend = status?.id === PLUGIN_ID && status?.host && status?.version?.split('.')[0] === '0' ? status : null;
+        const version = typeof status?.version === 'string' ? status.version.split('.').map(Number) : [];
+        backend = status?.id === PLUGIN_ID && status?.host && version[0] === 0 && version[1] >= 2 ? status : null;
       } catch { backend = null; }
       return backend;
     },
   });
+  const warnings = new Set<string>();
+  const warn = (message: string) => {
+    panel.state.warning = message;
+    if (warnings.has(message)) return;
+    warnings.add(message); console.warn('[基米工具]', message); scope.toastr?.warning(message, '基米工具');
+  };
   const refresh = () => {
     try {
       const ctx = getContext();
@@ -57,13 +64,28 @@ async function start(): Promise<void> {
     if (!name) return; context.eventSource.on(name, listener); subscriptions.push([name, listener]);
   };
   const events = context.eventTypes ?? context.event_types ?? {};
-  listen(events.CHAT_COMPLETION_SETTINGS_READY, body => {
+  let generationType: string | null = null;
+  listen(events.GENERATION_STARTED, type => { generationType = type; warnings.clear(); panel.state.warning = ''; });
+  for (const event of new Set([events.GENERATION_ENDED, events.GENERATION_STOPPED])) listen(event, () => { generationType = null; });
+  listen(events.CHAT_COMPLETION_PROMPT_READY, ({ chat, dryRun }) => {
+    if (!Array.isArray(chat) || (!dryRun && generationType === null)) return;
+    const ctx = getContext();
     const global = globals();
-    if (shouldActivate(body, global)) body[REQUEST_KEY] = validateConfig({ ...current(), ...global });
+    const body = { model: ctx.getChatCompletionModel?.(ctx.chatCompletionSettings), chat_completion_source: ctx.chatCompletionSettings?.chat_completion_source, type: generationType ?? 'normal' };
+    if (shouldActivate(body, global)) injectPrompt(chat, validateConfig({ ...current(), ...global }));
+  });
+  listen(events.CHAT_COMPLETION_SETTINGS_READY, body => {
+    warnings.clear(); panel.state.warning = '';
+    const global = globals();
+    if (shouldActivate(body, global)) {
+      const config = validateConfig({ ...current(), ...global });
+      Object.assign(body, injectRequest(body, config, warn));
+      body[REQUEST_KEY] = config;
+    }
   });
   for (const event of new Set([events.OAI_PRESET_CHANGED_AFTER, events.PRESET_CHANGED, events.PRESET_RENAMED, events.APP_READY])) listen(event, load);
   for (const event of new Set([events.CHATCOMPLETION_SOURCE_CHANGED, events.CHATCOMPLETION_MODEL_CHANGED, events.SETTINGS_UPDATED, events.EXTENSION_SETTINGS_LOADED, events.SETTINGS_LOADED_AFTER])) listen(event, refresh);
-  const wrapped = bridgeFetch(delegate, document.baseURI, () => backend);
+  const wrapped = bridgeFetch(delegate, document.baseURI, () => backend, warn);
   window.fetch = wrapped;
   scope.__toolOutputBridge = { destroy() {
     if (window.fetch === wrapped) window.fetch = delegate;

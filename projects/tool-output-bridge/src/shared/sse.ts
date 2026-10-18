@@ -1,5 +1,13 @@
 export interface SseEvent { event: string; data: string; id?: string }
 
+export function streamCacheControl(value: string | null): string {
+  const directives = (value ?? '').split(',').map(part => part.trim()).filter(Boolean);
+  for (const required of ['no-cache', 'no-transform']) {
+    if (!directives.some(part => part.toLowerCase() === required)) directives.push(required);
+  }
+  return directives.join(', ');
+}
+
 export class SseDecoder {
   private decoder = new TextDecoder();
   private buffer = '';

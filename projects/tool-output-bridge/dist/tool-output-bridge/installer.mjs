@@ -7374,7 +7374,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 // src/shared/config.ts
 var PLUGIN_ID = "tool-output-bridge";
-var VERSION = "0.1.0";
+var VERSION = "0.2.0";
 function isRecord(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }

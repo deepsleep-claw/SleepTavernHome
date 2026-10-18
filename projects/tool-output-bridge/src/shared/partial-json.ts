@@ -1,23 +1,26 @@
 import { outputValue, pathSegments } from './config';
 
 type Container = { type: 'object' | 'array'; path: string[]; key: string; index: number; expectsKey: boolean };
+export interface JsonTextField { path: string; text: string; seen: boolean; complete: boolean }
 
-/** Incrementally decodes a single string field without repairing incomplete JSON. */
-export class PartialJsonText {
+/** Decodes selected string fields in one pass, including unfinished JSON strings. */
+export class PartialJsonFields {
   private raw = '';
   private stack: Container[] = [];
   private inString = false;
   private isKey = false;
-  private targetString = false;
+  private target?: JsonTextField;
   private stringValue = '';
   private escaped = false;
   private unicode: string | null = null;
   private pendingSurrogate = '';
-  private seenTarget = false;
-  private readonly target: string[];
-  text = '';
+  private targets: Map<string, JsonTextField>;
+  readonly fields: JsonTextField[];
 
-  constructor(readonly path: string) { this.target = pathSegments(path); }
+  constructor(paths: string[]) {
+    this.fields = paths.map(path => ({ path, text: '', seen: false, complete: false }));
+    this.targets = new Map(this.fields.map(field => [JSON.stringify(pathSegments(field.path)), field]));
+  }
 
   private valuePath(): string[] {
     const parent = this.stack.at(-1);
@@ -25,17 +28,16 @@ export class PartialJsonText {
   }
 
   private decoded(char: string): void {
-    this.stringValue += char;
-    if (!this.targetString) return;
+    if (this.isKey) this.stringValue += char;
+    if (!this.target) return;
     if (this.pendingSurrogate) {
-      this.text += this.pendingSurrogate + char;
+      this.target.text += this.pendingSurrogate + char;
       this.pendingSurrogate = '';
     } else if (char.length === 1 && /[\uD800-\uDBFF]/.test(char)) this.pendingSurrogate = char;
-    else this.text += char;
+    else this.target.text += char;
   }
 
-  push(fragment: string): string {
-    const before = this.text.length;
+  push(fragment: string): void {
     this.raw += fragment;
     if (this.raw.length > 8 * 1024 * 1024) throw new Error('工具参数超过 8 MiB。');
     for (const char of fragment) {
@@ -56,7 +58,10 @@ export class PartialJsonText {
         else if (char === '"') {
           this.inString = false;
           if (this.isKey) { const parent = this.stack.at(-1)!; parent.key = this.stringValue; parent.expectsKey = false; }
-          if (this.targetString && this.pendingSurrogate) { this.text += this.pendingSurrogate; this.pendingSurrogate = ''; }
+          if (this.target) {
+            this.target.text += this.pendingSurrogate; this.pendingSurrogate = '';
+            this.target.complete = true;
+          }
         } else {
           if (char.charCodeAt(0) < 32) throw new Error('工具参数字符串包含未转义的控制字符。');
           this.decoded(char);
@@ -68,22 +73,33 @@ export class PartialJsonText {
         this.inString = true;
         this.isKey = parent?.type === 'object' && parent.expectsKey;
         this.stringValue = '';
-        const path = this.valuePath();
-        this.targetString = !this.isKey && path.length === this.target.length && path.every((part, index) => part === this.target[index]);
-        if (this.targetString) {
-          if (this.seenTarget) throw new Error('工具参数重复定义了正文字段。');
-          this.seenTarget = true;
+        this.target = this.isKey ? undefined : this.targets.get(JSON.stringify(this.valuePath()));
+        if (this.target) {
+          if (this.target.seen) throw new Error('工具参数重复定义了正文字段。');
+          this.target.seen = true;
         }
       } else if (char === '{' || char === '[') this.stack.push({ type: char === '{' ? 'object' : 'array', path: this.valuePath(), key: '', index: 0, expectsKey: char === '{' });
       else if (char === '}' || char === ']') this.stack.pop();
       else if (char === ',' && parent) { if (parent.type === 'array') parent.index++; else parent.expectsKey = true; }
     }
-    return this.text.slice(before);
   }
 
-  finish(): string {
-    const value = outputValue(JSON.parse(this.raw), this.path);
-    if (value !== this.text) throw new Error('工具正文与完整参数不一致。');
-    return value;
+  finish(): void {
+    const args = JSON.parse(this.raw);
+    for (const field of this.fields) {
+      if (outputValue(args, field.path) !== field.text) throw new Error('工具正文与完整参数不一致。');
+    }
   }
+}
+
+export class PartialJsonText {
+  private parser: PartialJsonFields;
+  constructor(readonly path: string) { this.parser = new PartialJsonFields([path]); }
+  get text(): string { return this.parser.fields[0].text; }
+  push(fragment: string): string {
+    const before = this.text.length;
+    this.parser.push(fragment);
+    return this.text.slice(before);
+  }
+  finish(): string { this.parser.finish(); return this.text; }
 }
