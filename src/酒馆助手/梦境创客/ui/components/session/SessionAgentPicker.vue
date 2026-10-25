@@ -23,28 +23,32 @@
       ><span>{{ agent.label }}</span>
     </button>
   </template>
-  <Teleport v-if="pendingAgentId" to=".dca-app">
-    <div class="dca-modal-backdrop" role="presentation">
-      <section class="dca-modal dca-agent-change-dialog" role="dialog" aria-modal="true">
-        <header>
-          <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
-          <div>
-            <strong>切换当前会话的 Agent？</strong
-            ><span>新的预设、Skill 与工具会立即生效，并可能失去已有请求的缓存命中。</span>
-          </div>
-        </header>
-        <footer>
-          <button type="button" @click="pendingAgentId = ''">取消</button
-          ><button class="dca-btn-primary" type="button" @click="applyAgent(pendingAgentId)">仍然切换</button>
-        </footer>
-      </section>
-    </div>
-  </Teleport>
+  <WorkspaceMenu
+    :open="Boolean(pendingAgentId)"
+    title="切换当前会话的 Agent？"
+    panel-class="dca-modal dca-agent-change-dialog"
+    backdrop-class="dca-modal-backdrop"
+    @close="pendingAgentId = ''"
+  >
+    <header>
+      <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
+      <div>
+        <strong>切换当前会话的 Agent？</strong
+        ><span>新的预设、Skill 与工具会立即生效，并可能失去已有请求的缓存命中。</span>
+      </div>
+    </header>
+    <footer>
+      <button type="button" @click="pendingAgentId = ''">取消</button
+      ><button class="dca-btn-primary" type="button" @click="applyAgent(pendingAgentId)">仍然切换</button>
+    </footer>
+  </WorkspaceMenu>
 </template>
 <script setup lang="ts">
+import { notify } from '../../composables/notifications';
 import { computed, ref, watch } from 'vue';
 import { useDreamCardAgent } from '../../composables/runtime';
 import DcaSelect from '../DcaSelect.vue';
+import WorkspaceMenu from '../WorkspaceMenu.vue';
 withDefaults(defineProps<{ mode?: 'select' | 'menu' }>(), { mode: 'select' });
 const emit = defineEmits<{ picked: [] }>();
 const { action, runtime, state } = useDreamCardAgent();
@@ -76,7 +80,7 @@ async function applyAgent(id: string) {
   if (await action(() => runtime.applyAgentConfiguration(id))) {
     pendingAgentId.value = '';
     emit('picked');
-    toastr.success('当前会话的 Agent 已切换。', '梦境创客');
+    notify.success('当前会话的 Agent 已切换。', '梦境创客');
   }
 }
 </script>

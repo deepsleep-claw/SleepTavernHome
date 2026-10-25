@@ -1,12 +1,112 @@
-revision: "2026-08-10"
+revision: '2026-10-25'
 interfaceType: openai-chat
 compatibilityMode: standard
 models:
+  - id: xai:chat:grok-4.7
+    name: Grok 4.7（Chat）
+    provider: xai
+    interfaceType: openai-chat
+    aliases: [grok-4.7, grok-4.7-latest]
+    patterns: ['grok-4.7-*', '*/grok-4.7', '*/grok-4.7-*']
+    sourceUrl: https://docs.x.ai/developers/models/grok-4.7
+    confidence: high
+    settings:
+      contextWindow: 500000
+      maxOutputTokens: 0
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: disabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 中, id: medium }
+        - { name: 高, id: high }
+        - { name: 极高, id: xhigh }
+  - id: xai:responses:grok-4.7
+    name: Grok 4.7（Responses）
+    provider: xai
+    interfaceType: openai-responses
+    aliases: [grok-4.7, grok-4.7-latest]
+    patterns: ['grok-4.7-*', '*/grok-4.7', '*/grok-4.7-*']
+    sourceUrl: https://docs.x.ai/developers/models/grok-4.7
+    confidence: high
+    settings:
+      contextWindow: 500000
+      maxOutputTokens: 0
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: enabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 中, id: medium }
+        - { name: 高, id: high }
+        - { name: 极高, id: xhigh }
+  - id: xai:chat:grok-4.6
+    name: Grok 4.6（Chat）
+    provider: xai
+    interfaceType: openai-chat
+    aliases: [grok-4.6, grok-4.6-latest]
+    patterns: ['grok-4.6-*', '*/grok-4.6', '*/grok-4.6-*']
+    sourceUrl: https://docs.x.ai/developers/models/grok-4.6
+    confidence: high
+    settings:
+      contextWindow: 500000
+      maxOutputTokens: 0
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: disabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 中, id: medium }
+        - { name: 高, id: high }
+        - { name: 极高, id: xhigh }
+  - id: xai:responses:grok-4.6
+    name: Grok 4.6（Responses）
+    provider: xai
+    interfaceType: openai-responses
+    aliases: [grok-4.6, grok-4.6-latest]
+    patterns: ['grok-4.6-*', '*/grok-4.6', '*/grok-4.6-*']
+    sourceUrl: https://docs.x.ai/developers/models/grok-4.6
+    confidence: high
+    settings:
+      contextWindow: 500000
+      maxOutputTokens: 0
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: enabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 中, id: medium }
+        - { name: 高, id: high }
+        - { name: 极高, id: xhigh }
+  - id: xai:chat:grok-4.5
+    name: Grok 4.5（Chat）
+    provider: xai
+    interfaceType: openai-chat
+    aliases: [grok-4.5, grok-4.5-latest]
+    patterns: ['grok-4.5-*', '*/grok-4.5', '*/grok-4.5-*']
+    sourceUrl: https://docs.x.ai/developers/models/grok-4.5
+    confidence: high
+    settings:
+      contextWindow: 500000
+      maxOutputTokens: 0
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: disabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 中, id: medium }
+        - { name: 高, id: high }
+  - id: xai:responses:grok-4.5
+    name: Grok 4.5（Responses）
+    provider: xai
+    interfaceType: openai-responses
+    aliases: [grok-4.5, grok-4.5-latest]
+    patterns: ['grok-4.5-*', '*/grok-4.5', '*/grok-4.5-*']
+    sourceUrl: https://docs.x.ai/developers/models/grok-4.5
+    confidence: high
+    settings:
+      contextWindow: 500000
+      maxOutputTokens: 0
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: enabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 中, id: medium }
+        - { name: 高, id: high }
   - id: xai:grok-4
     name: Grok 4 系列
     provider: xai
     aliases: [grok-4, grok-4-fast, grok-4-1-fast, grok-4.20]
-    patterns: ["grok-4*", "*/grok-4*"]
+    patterns: ['grok-4*', '*/grok-4*']
     sourceUrl: https://docs.x.ai/docs/models
     confidence: medium
     settings:
@@ -17,7 +117,7 @@ models:
     name: Grok 3 系列
     provider: xai
     aliases: [grok-3, grok-3-mini]
-    patterns: ["grok-3*", "*/grok-3*"]
+    patterns: ['grok-3*', '*/grok-3*']
     sourceUrl: https://docs.x.ai/docs/models
     confidence: high
     settings:

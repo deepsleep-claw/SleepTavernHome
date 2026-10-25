@@ -2,6 +2,7 @@ import type { PluginActivationContext } from '../../../公共模块/脚本更新
 import type { DreamCardAgentRuntime } from '../runtime/dream-card-agent-runtime';
 import { destroyDreamCardAgentWindow, openDreamCardAgentWindow } from './popup';
 import { CLIENT_ENV_KEY, CLIENT_HOST_KEY, createRuntimeClient, type ClientHost } from './runtime-client';
+import { bindMobileHistory } from './composables/workspace-navigation';
 
 const DRAWER_ID = 'dream-creator-drawer';
 let openDefault = () => openDreamCardAgentWindow();
@@ -103,6 +104,22 @@ export function configureWindowHost(
     }
   };
   const registry: ClientHost = {
+    registerMobileNavigation(view, client) {
+      const navigation = bindMobileHistory(host, client, () => {
+        const element = view.frameElement;
+        return Boolean(!view.closed && element?.isConnected && element.getBoundingClientRect().height > 0);
+      });
+      const observer = new (host as Window & typeof globalThis).MutationObserver(navigation.sync);
+      observer.observe(document.body, {
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['class', 'style', 'hidden'],
+      });
+      return () => {
+        observer.disconnect();
+        navigation.destroy();
+      };
+    },
     owner,
     globals,
     client: createRuntimeClient(runtime),

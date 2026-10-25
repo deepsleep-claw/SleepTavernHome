@@ -72,7 +72,8 @@ import SessionAgentPicker from './SessionAgentPicker.vue';
 defineProps<{ sidebarCollapsed: boolean }>();
 const emit = defineEmits<{ 'toggle-sidebar': [] }>();
 
-const { action, deleteCharacterSession, deleteSession, isMobile, isSessionTabRunning, runtime, state } = useDreamCardAgent();
+const { action, deleteCharacterSession, deleteSession, isMobile, isSessionTabRunning, runtime, state } =
+  useDreamCardAgent();
 
 const renaming = ref(false);
 const toolbarRoot = ref<HTMLElement>();
@@ -123,7 +124,7 @@ async function confirmDelete() {
   justify-content: space-between;
   gap: 0.65rem;
   border-bottom: 1px solid var(--dca-border);
-  padding: 0.45rem 0.75rem;
+  padding: 0.25rem 0.65rem;
   background: var(--dca-surface);
 }
 

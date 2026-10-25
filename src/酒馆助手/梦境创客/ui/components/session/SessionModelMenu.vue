@@ -18,15 +18,15 @@
       <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
     </button>
     <template v-if="visibleOpen">
-      <div class="dca-model-menu-backdrop" role="presentation" @pointerdown.stop="close"></div>
-      <section
-        class="dca-model-menu-panel"
-        :class="[`mode-${mode}`, `level-${activeLevel}`]"
-        role="dialog"
-        aria-modal="false"
-        :aria-label="levelTitle"
-        @pointerdown.stop
-        @click.stop
+      <WorkspaceMenu
+        :open="visibleOpen"
+        :title="levelTitle"
+        :can-back="mode === 'combined' && activeLevel !== 'root'"
+        :panel-class="`dca-model-menu-panel mode-${mode} level-${activeLevel}`"
+        :panel-style="panelStyle"
+        backdrop-class="dca-model-menu-backdrop"
+        @close="close"
+        @back="navigateBack"
       >
         <Transition :name="pageTransitionName" mode="out-in">
           <div v-if="activeLevel === 'root'" key="root" class="dca-model-menu-page dca-model-menu-root">
@@ -116,7 +116,7 @@
             </div>
           </div>
         </Transition>
-      </section>
+      </WorkspaceMenu>
       <span v-if="!hideTrigger" class="dca-model-menu-anchor" aria-hidden="true"></span>
     </template>
   </div>
@@ -125,7 +125,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { findSelectedModel } from '../../../core/provider/provider-config';
+import { reasoningOptions as modelReasoningOptions } from '../../../core/provider/session-model-options';
 import { useDreamCardAgent } from '../../composables/runtime';
+import WorkspaceMenu from '../WorkspaceMenu.vue';
 
 export type SessionModelMenuMode = 'combined' | 'model' | 'reasoning';
 
@@ -167,18 +169,7 @@ const supportsReasoning = computed(() =>
   Boolean(selectedModel.value && selectedModel.value.modelSettings.capabilities.reasoning !== 'disabled'),
 );
 const isRunning = computed(() => ['running', 'waiting-approval'].includes(state.value.active?.status ?? ''));
-const reasoningOptions = computed(() => [
-  { description: '由接口或模型自行决定', label: '自动', value: 'auto' },
-  ...(selectedProvider.value?.interfaceType === 'gemini' &&
-  /gemini-(?:3|2\.5-pro)/u.test(selectedModel.value?.modelId ?? '')
-    ? []
-    : [{ description: '本会话关闭推理', label: '关闭推理', value: 'off' }]),
-  ...(selectedModel.value?.modelSettings.reasoningEfforts ?? []).map(item => ({
-    description: item.id,
-    label: item.name,
-    value: item.id,
-  })),
-]);
+const reasoningOptions = computed(() => modelReasoningOptions(selectedProvider.value, selectedModel.value));
 const reasoningLabel = computed(
   () => reasoningOptions.value.find(item => item.value === activeEffort.value)?.label ?? '自动',
 );

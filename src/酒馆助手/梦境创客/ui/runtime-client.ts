@@ -1,5 +1,6 @@
 import { getDreamCardAgentRuntime, type DreamCardAgentRuntime } from '../runtime/dream-card-agent-runtime';
 import type { PluginActivationContext } from '../../../公共模块/脚本更新器/contracts';
+import type { MobileNavigationClient } from './composables/workspace-navigation';
 
 const CLIENT_METHODS = [
   'applyAgentConfiguration',
@@ -45,6 +46,7 @@ const CLIENT_METHODS = [
   'resetAllData',
   'resetCharacterData',
   'resolveToolConfirmation',
+  'resolveSessionBackupConflict',
   'resume',
   'revealModel',
   'revealProvider',
@@ -67,6 +69,7 @@ const CLIENT_METHODS = [
   'stop',
   'stopSession',
   'subscribe',
+  'submitInput',
   'switchCharacterAndCreateSession',
   'switchCharacterAndOpenSession',
   'undo',
@@ -82,6 +85,7 @@ const CLIENT_METHODS = [
 ] as const satisfies readonly (keyof DreamCardAgentRuntime)[];
 export type DreamCardAgentClient = Pick<DreamCardAgentRuntime, (typeof CLIENT_METHODS)[number]>;
 export type ClientHost = {
+  registerMobileNavigation?: (view: Window, client: MobileNavigationClient) => () => void;
   registerView: (mode: 'embedded' | 'detached', dispose: () => void, view?: Window) => () => void;
   toggleNativeFullscreen: () => void;
   subscribeNativeFullscreen: (listener: (fullscreen: boolean) => void) => () => void;

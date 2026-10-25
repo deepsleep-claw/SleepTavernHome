@@ -1,10 +1,35 @@
 // Runtime 订阅与跨组件上下文。
 // 根组件调用 provideDreamCardAgent() 建立唯一订阅；
 // 叶子组件用 useDreamCardAgent() 读取状态并调用动作，不各自订阅 Runtime。
-import { inject, onBeforeUnmount, onMounted, provide, ref, shallowRef, watch, type InjectionKey, type Ref } from 'vue';
+import {
+  computed,
+  inject,
+  onBeforeUnmount,
+  onMounted,
+  provide,
+  ref,
+  shallowRef,
+  watch,
+  type InjectionKey,
+  type Ref,
+} from 'vue';
 import type { AgentSkill } from '../../core/skills/types';
 import { type DreamCardAgentRuntimeState } from '../../runtime/dream-card-agent-runtime';
-import { getDreamCardAgentClient, type DreamCardAgentClient } from '../runtime-client';
+import {
+  clientEnvironment,
+  readClientHost,
+  getDreamCardAgentClient,
+  type DreamCardAgentClient,
+} from '../runtime-client';
+import {
+  bindMobileHistory,
+  createWorkspaceNavigation,
+  provideWorkspaceNavigation,
+  useBackLayer,
+} from './workspace-navigation';
+import { connectNotifications, createNotificationCenter, notify, type NotificationCenter } from './notifications';
+import { useRuntimeNotifications } from './notification-sources';
+import { createResourceDrafts, type ResourceDrafts } from './resource-drafts';
 
 export type WorkspaceView = 'home' | 'session' | 'settings';
 export type SettingsSection =
@@ -21,6 +46,10 @@ export type CharacterSwitchRequest = {
 };
 
 export type DreamCardAgentContext = {
+  resourceDrafts: ResourceDrafts;
+  navigation: ReturnType<typeof createWorkspaceNavigation>;
+  notifications: NotificationCenter;
+  backupConflictsOpen: Ref<boolean>;
   action: (work: () => Promise<unknown>) => Promise<boolean>;
   closeSessionTab: (id: string) => Promise<void>;
   confirmCharacterSwitch: (confirmed: boolean) => void;
@@ -54,6 +83,10 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
   const runtime = getDreamCardAgentClient();
   // Runtime每次发布的都是完整新快照；浅响应避免Vue反复代理庞大的文件树、事件和历史正文。
   const state = shallowRef<DreamCardAgentRuntimeState>(runtime.snapshot());
+  const notifications = createNotificationCenter();
+  const resourceDrafts = createResourceDrafts();
+  const backupConflictsOpen = ref(false);
+  const disconnectNotifications = connectNotifications(notifications);
   const workspaceView = ref<WorkspaceView>('home');
   const settingsSection = ref<SettingsSection>('general');
   const openedSessionIds = ref<string[]>([]);
@@ -63,6 +96,51 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
   const isMobile = ref(false);
   const mobileSurface = ref<MobileSurface>('workspace');
   const sidebarCollapsed = ref(localStorage.getItem('dream-card-agent:sidebar-collapsed') === 'true');
+  let settingsReturn: WorkspaceView = 'home';
+  const navigation = createWorkspaceNavigation(
+    isMobile,
+    () => {
+      if (workspaceView.value === 'settings')
+        workspaceView.value = settingsReturn === 'session' && state.value.active ? 'session' : 'home';
+      else workspaceView.value = 'home';
+    },
+    () => workspaceView.value !== 'home',
+  );
+  provideWorkspaceNavigation(navigation);
+  watch(
+    workspaceView,
+    (next, previous) => {
+      if (next === 'settings' && previous !== 'settings') settingsReturn = previous;
+    },
+    { flush: 'sync' },
+  );
+  useBackLayer(
+    computed(() => mobileSurface.value === 'navigation'),
+    () => {
+      mobileSurface.value = 'workspace';
+    },
+    navigation,
+  );
+  useBackLayer(notifications.open, notifications.close, navigation);
+  useBackLayer(
+    backupConflictsOpen,
+    () => {
+      backupConflictsOpen.value = false;
+    },
+    navigation,
+  );
+  useBackLayer(
+    computed(() => Boolean(characterSwitchRequest.value)),
+    () => confirmCharacterSwitch(false),
+    navigation,
+  );
+  let releaseHistory = () => {};
+  const escapeLayer = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' || !navigation.layers.value.length || event.defaultPrevented) return;
+    event.preventDefault();
+    event.stopPropagation();
+    navigation.back();
+  };
   let initialStateReceived = false;
   let unsubscribe = () => {};
 
@@ -71,7 +149,8 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
       await work();
       return true;
     } catch (error) {
-      toastr.error(error instanceof Error ? error.message : String(error), '梦境创客');
+      const message = error instanceof Error ? error.message : String(error);
+      if (state.value.error !== message) notify.error(message, '梦境创客');
       return false;
     }
   }
@@ -80,7 +159,7 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
     try {
       await runtime.refreshCharacter();
     } catch {
-      // 刷新错误已经进入运行时状态并显示在窗口顶端，不再重复弹出全局Toast。
+      // 刷新错误由运行时状态进入通知中心。
     }
   }
 
@@ -110,7 +189,7 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
   async function createSessionForAvatar(avatarId: string) {
     const character = state.value.availableCharacters.find(item => item.avatarId === avatarId);
     if (!character) {
-      toastr.error('角色卡已经不可用。', '梦境创客');
+      notify.error('角色卡已经不可用。', '梦境创客');
       return;
     }
     if (
@@ -145,7 +224,7 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
   async function createSessionForCharacter(bindingId: string) {
     const group = state.value.characterGroups?.find(item => item.bindingId === bindingId);
     if (!group?.available) {
-      toastr.error('角色卡已不可用，不能新建会话。', '梦境创客');
+      notify.error('角色卡已不可用，不能新建会话。', '梦境创客');
       return;
     }
     if (group.current) {
@@ -210,7 +289,7 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
     ensureSessionTab(sessionId);
     workspaceView.value = 'session';
     if (isMobile.value) mobileSurface.value = 'workspace';
-    toastr.success('已从该轮输出创建分叉会话。', '梦境创客');
+    notify.success('已从该轮输出创建分叉会话。', '梦境创客');
   }
 
   function isSessionTabRunning(id: string): boolean {
@@ -234,7 +313,7 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
     if (!(await action(() => runtime.deleteSession(id)))) return false;
     openedSessionIds.value = openedSessionIds.value.filter(item => item !== id);
     if (workspaceView.value === 'session' && wasActive) workspaceView.value = 'home';
-    toastr.success('会话及其操作记录已删除。', '梦境创客');
+    notify.success('会话及其操作记录已删除。', '梦境创客');
     return true;
   }
 
@@ -243,7 +322,7 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
     if (!(await action(() => runtime.deleteCharacterSession(bindingId, id)))) return false;
     openedSessionIds.value = openedSessionIds.value.filter(item => item !== id);
     if (workspaceView.value === 'session' && wasActive) workspaceView.value = 'home';
-    toastr.success('会话及其操作记录已删除。', '梦境创客');
+    notify.success('会话及其操作记录已删除。', '梦境创客');
     return true;
   }
 
@@ -262,6 +341,18 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
 
   onMounted(() => {
     updateViewport();
+    document.addEventListener('keydown', escapeLayer);
+    const historyClient = {
+      canGoBack: () => isMobile.value && navigation.canGoBack.value,
+      back: navigation.back,
+      subscribe: (update: () => void) => watch([isMobile, navigation.canGoBack], update, { flush: 'post' }),
+    };
+    const environment = clientEnvironment();
+    const host = readClientHost(environment?.host ?? window.parent);
+    releaseHistory =
+      environment?.mode !== 'detached' && host?.registerMobileNavigation
+        ? host.registerMobileNavigation(window, historyClient)
+        : bindMobileHistory(window, historyClient).destroy;
     window.addEventListener('resize', updateViewport);
     unsubscribe = runtime.subscribe(next => {
       state.value = next;
@@ -275,12 +366,21 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
     void refresh();
   });
   onBeforeUnmount(() => {
+    resourceDrafts.dispose();
+    releaseHistory();
+    document.removeEventListener('keydown', escapeLayer);
+    disconnectNotifications();
+    notifications.dispose();
     window.removeEventListener('resize', updateViewport);
     unsubscribe();
   });
   watch(sidebarCollapsed, value => localStorage.setItem('dream-card-agent:sidebar-collapsed', String(value)));
 
   const context: DreamCardAgentContext = {
+    resourceDrafts,
+    navigation,
+    notifications,
+    backupConflictsOpen,
     action,
     closeSessionTab,
     confirmCharacterSwitch,
@@ -308,6 +408,7 @@ export function provideDreamCardAgent(): DreamCardAgentContext {
     workspaceView,
   };
   provide(key, context);
+  useRuntimeNotifications(context);
   return context;
 }
 

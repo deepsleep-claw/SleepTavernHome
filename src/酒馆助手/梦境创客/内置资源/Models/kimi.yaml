@@ -1,12 +1,132 @@
-revision: "2026-08-14"
+revision: '2026-10-25'
 interfaceType: openai-chat
 compatibilityMode: standard
 models:
+  - id: kimi-code:chat:k3.1-pro
+    name: Kimi K3.1 Pro（Chat）
+    provider: kimi-code
+    interfaceType: openai-chat
+    aliases: [k3.1-pro, kimi-k3.1-pro]
+    patterns: ['k3.1-pro-*', '*/k3.1-pro', '*/k3.1-pro-*', 'kimi-k3.1-pro-*', '*/kimi-k3.1-pro', '*/kimi-k3.1-pro-*']
+    sourceUrl: https://www.kimi.com/code/docs/en/kimi-code/models.html
+    confidence: high
+    settings:
+      contextWindow: 1048576
+      maxOutputTokens: 0
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: disabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 高, id: high }
+        - { name: 最高, id: max }
+  - id: kimi-code:responses:k3.1-pro
+    name: Kimi K3.1 Pro（Responses）
+    provider: kimi-code
+    interfaceType: openai-responses
+    aliases: [k3.1-pro, kimi-k3.1-pro]
+    patterns: ['k3.1-pro-*', '*/k3.1-pro', '*/k3.1-pro-*', 'kimi-k3.1-pro-*', '*/kimi-k3.1-pro', '*/kimi-k3.1-pro-*']
+    sourceUrl: https://www.kimi.com/code/docs/en/kimi-code/models.html
+    confidence: high
+    settings:
+      contextWindow: 1048576
+      maxOutputTokens: 0
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: disabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 高, id: high }
+        - { name: 最高, id: max }
+  - id: kimi-code:anthropic:k3.1-pro
+    name: Kimi K3.1 Pro（Anthropic）
+    provider: kimi-code
+    interfaceType: anthropic
+    aliases: [k3.1-pro, kimi-k3.1-pro]
+    patterns: ['k3.1-pro-*', '*/k3.1-pro', '*/k3.1-pro-*', 'kimi-k3.1-pro-*', '*/kimi-k3.1-pro', '*/kimi-k3.1-pro-*']
+    sourceUrl: https://www.kimi.com/code/docs/en/kimi-code/models.html
+    confidence: high
+    settings:
+      contextWindow: 1048576
+      maxOutputTokens: 0
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: disabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 高, id: high }
+        - { name: 最高, id: max }
+  - id: kimi-code:chat:k3.1-pro-highspeed
+    name: Kimi K3.1 Pro Highspeed（Chat）
+    provider: kimi-code
+    interfaceType: openai-chat
+    aliases: [k3.1-pro-highspeed, kimi-k3.1-pro-highspeed]
+    patterns:
+      [
+        'k3.1-pro-highspeed-*',
+        '*/k3.1-pro-highspeed',
+        '*/k3.1-pro-highspeed-*',
+        'kimi-k3.1-pro-highspeed-*',
+        '*/kimi-k3.1-pro-highspeed',
+        '*/kimi-k3.1-pro-highspeed-*',
+      ]
+    sourceUrl: https://www.kimi.com/code/docs/en/kimi-code/models.html
+    confidence: high
+    settings:
+      contextWindow: 1048576
+      maxOutputTokens: 0
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: disabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 高, id: high }
+        - { name: 最高, id: max }
+  - id: kimi-code:responses:k3.1-pro-highspeed
+    name: Kimi K3.1 Pro Highspeed（Responses）
+    provider: kimi-code
+    interfaceType: openai-responses
+    aliases: [k3.1-pro-highspeed, kimi-k3.1-pro-highspeed]
+    patterns:
+      [
+        'k3.1-pro-highspeed-*',
+        '*/k3.1-pro-highspeed',
+        '*/k3.1-pro-highspeed-*',
+        'kimi-k3.1-pro-highspeed-*',
+        '*/kimi-k3.1-pro-highspeed',
+        '*/kimi-k3.1-pro-highspeed-*',
+      ]
+    sourceUrl: https://www.kimi.com/code/docs/en/kimi-code/models.html
+    confidence: high
+    settings:
+      contextWindow: 1048576
+      maxOutputTokens: 0
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: disabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 高, id: high }
+        - { name: 最高, id: max }
+  - id: kimi-code:anthropic:k3.1-pro-highspeed
+    name: Kimi K3.1 Pro Highspeed（Anthropic）
+    provider: kimi-code
+    interfaceType: anthropic
+    aliases: [k3.1-pro-highspeed, kimi-k3.1-pro-highspeed]
+    patterns:
+      [
+        'k3.1-pro-highspeed-*',
+        '*/k3.1-pro-highspeed',
+        '*/k3.1-pro-highspeed-*',
+        'kimi-k3.1-pro-highspeed-*',
+        '*/kimi-k3.1-pro-highspeed',
+        '*/kimi-k3.1-pro-highspeed-*',
+      ]
+    sourceUrl: https://www.kimi.com/code/docs/en/kimi-code/models.html
+    confidence: high
+    settings:
+      contextWindow: 1048576
+      maxOutputTokens: 0
+      capabilities: { vision: enabled, reasoning: enabled, toolCalling: enabled, webSearch: disabled }
+      reasoningEfforts:
+        - { name: 低, id: low }
+        - { name: 高, id: high }
+        - { name: 最高, id: max }
   - id: kimi-code:chat:k3
     name: Kimi Code K3（OpenAI 兼容）
     provider: kimi-code
     aliases: [k3, kimi-code/k3]
-    patterns: ["*/k3"]
+    patterns: ['*/k3']
     sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
     confidence: high
     settings: &kimi-code-k3
@@ -21,7 +141,7 @@ models:
     name: Kimi Code K3 256K（OpenAI 兼容）
     provider: kimi-code
     aliases: [k3-256k, kimi-code/k3-256k]
-    patterns: ["*/k3-256k"]
+    patterns: ['*/k3-256k']
     sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
     confidence: high
     settings: &kimi-code-k3-256k
@@ -31,7 +151,7 @@ models:
     name: Kimi Code K2.7 Code（OpenAI 兼容）
     provider: kimi-code
     aliases: [kimi-for-coding, kimi-code/kimi-for-coding]
-    patterns: ["*/kimi-for-coding"]
+    patterns: ['*/kimi-for-coding']
     sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
     confidence: high
     settings: &kimi-code-k27
@@ -42,7 +162,7 @@ models:
     name: Kimi Code K2.7 Code HighSpeed（OpenAI 兼容）
     provider: kimi-code
     aliases: [kimi-for-coding-highspeed, kimi-code/kimi-for-coding-highspeed]
-    patterns: ["*/kimi-for-coding-highspeed"]
+    patterns: ['*/kimi-for-coding-highspeed']
     sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
     confidence: high
     settings: *kimi-code-k27
@@ -52,7 +172,7 @@ models:
     provider: kimi-code
     interfaceType: anthropic
     aliases: [k3, kimi-code/k3]
-    patterns: ["*/k3"]
+    patterns: ['*/k3']
     sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
     confidence: high
     settings: *kimi-code-k3
@@ -61,7 +181,7 @@ models:
     provider: kimi-code
     interfaceType: anthropic
     aliases: [k3-256k, kimi-code/k3-256k]
-    patterns: ["*/k3-256k"]
+    patterns: ['*/k3-256k']
     sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
     confidence: high
     settings: *kimi-code-k3-256k
@@ -70,7 +190,7 @@ models:
     provider: kimi-code
     interfaceType: anthropic
     aliases: [kimi-for-coding, kimi-code/kimi-for-coding]
-    patterns: ["*/kimi-for-coding"]
+    patterns: ['*/kimi-for-coding']
     sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
     confidence: high
     settings: *kimi-code-k27
@@ -79,7 +199,7 @@ models:
     provider: kimi-code
     interfaceType: anthropic
     aliases: [kimi-for-coding-highspeed, kimi-code/kimi-for-coding-highspeed]
-    patterns: ["*/kimi-for-coding-highspeed"]
+    patterns: ['*/kimi-for-coding-highspeed']
     sourceUrl: https://www.kimi.com/code/docs/kimi-code/models.html
     confidence: high
     settings: *kimi-code-k27
@@ -88,7 +208,7 @@ models:
     name: Kimi K3
     provider: moonshot
     aliases: [kimi-k3]
-    patterns: ["kimi-k3*", "*/kimi-k3*"]
+    patterns: ['kimi-k3*', '*/kimi-k3*']
     sourceUrl: https://platform.moonshot.cn/docs/intro
     confidence: medium
     settings:
@@ -103,7 +223,7 @@ models:
     name: Kimi K2 / K2.5
     provider: moonshot
     aliases: [kimi-k2, kimi-k2.5, kimi-k2-thinking]
-    patterns: ["kimi-k2*", "*/kimi-k2*"]
+    patterns: ['kimi-k2*', '*/kimi-k2*']
     sourceUrl: https://platform.moonshot.cn/docs/intro
     confidence: high
     settings:

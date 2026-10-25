@@ -63,7 +63,12 @@
             >
               删除
             </button>
-            <button class="dca-btn-primary" type="button" @click="saveProvider">保存 Provider</button>
+            <span class="dca-provider-save-status" role="status" aria-live="polite">{{
+              providerFeedback || (providerDraft.dirty.size ? '有未保存的修改' : '')
+            }}</span>
+            <button class="dca-btn-primary" type="button" :disabled="providerSaving" @click="saveProvider">
+              {{ providerSaving ? '正在保存' : '保存 Provider' }}
+            </button>
           </div>
         </div>
 
@@ -200,7 +205,7 @@
       @saved="modelSaved"
     />
 
-    <div v-if="remoteModelsOpen" class="dca-modal-backdrop" role="presentation">
+    <div v-if="remoteModelsOpen" class="dca-modal-backdrop dca-remote-models-backdrop" role="presentation">
       <section
         class="dca-modal dca-remote-models"
         role="dialog"
@@ -276,6 +281,7 @@
 </template>
 
 <script setup lang="ts">
+import { notify } from '../../composables/notifications';
 import { computed, reactive, ref, watch } from 'vue';
 import {
   builtinModelTemplates,
@@ -283,13 +289,22 @@ import {
   matchModelTemplates,
   settingsForAppliedTemplate,
 } from '../../../core/provider/model-catalog';
-import type { ApiModel, ApiProvider, ApiProviderInput } from '../../../core/provider/provider-config';
+import type {
+  ApiModel,
+  ApiProvider,
+  ApiProviderInput,
+  ApiProviderEditableField,
+} from '../../../core/provider/provider-config';
 import { useDreamCardAgent } from '../../composables/runtime';
+import { useSettingsDraft } from '../../composables/settings-draft';
 import DcaSelect, { type SelectOption } from '../DcaSelect.vue';
 import ModelEditorDialog from './ModelEditorDialog.vue';
 
 const { action, runtime, state } = useDreamCardAgent();
 const selectedProviderId = ref('');
+const creatingProvider = ref(false);
+const pendingProviderSaves = reactive(new Set<string>());
+const providerFeedback = ref('');
 const importInput = ref<HTMLInputElement>();
 const modelEditorOpen = ref(false);
 const editingModel = ref<ApiModel>();
@@ -315,7 +330,16 @@ type ProviderForm = {
   name: string;
   requestHeaders: string;
 };
-const providerForm = reactive<ProviderForm>(emptyProviderForm());
+const providerDraft = useSettingsDraft<ProviderForm>(emptyProviderForm());
+const providerForm = providerDraft.form;
+const providerSaving = computed(() => pendingProviderSaves.has(providerForm.id || 'new-provider'));
+watch(
+  providerForm,
+  () => {
+    providerFeedback.value = '';
+  },
+  { flush: 'sync' },
+);
 const selectedProvider = computed(() => state.value.providers.find(item => item.id === selectedProviderId.value));
 const interfaceOptions: SelectOption[] = [
   { label: 'OpenAI Responses', value: 'openai-responses' },
@@ -331,6 +355,7 @@ const filteredRemoteModels = computed(() => {
 watch(
   () => state.value.providers.map(item => item.id).join('|'),
   () => {
+    if (creatingProvider.value) return;
     if (selectedProviderId.value && state.value.providers.some(item => item.id === selectedProviderId.value)) return;
     selectedProviderId.value = state.value.providers[0]?.id ?? '';
   },
@@ -340,12 +365,15 @@ watch(
 watch(
   selectedProviderId,
   async id => {
+    if (id && providerForm.id === id) return;
+    modelEditorOpen.value = false;
+    remoteModelsOpen.value = false;
     const provider = state.value.providers.find(item => item.id === id);
     if (!provider) {
-      Object.assign(providerForm, emptyProviderForm());
+      providerDraft.reset(emptyProviderForm());
       return;
     }
-    Object.assign(providerForm, {
+    const reading = providerDraft.reset({
       apiKey: '',
       baseURL: provider.baseURL,
       bodyParameters: '',
@@ -358,15 +386,20 @@ watch(
     });
     try {
       const values = await runtime.revealProvider(provider.id);
-      if (selectedProviderId.value !== id) return;
-      providerForm.bodyParameters = values.bodyParameters.text;
-      providerForm.excludedBodyParameters = values.excludedBodyParameters.text;
-      providerForm.requestHeaders = values.requestHeaders.text;
+      // 读取只填充尚未编辑的字段；切换目标或用户继续输入后，旧结果不再拥有这些字段。
+      providerDraft.apply(
+        {
+          bodyParameters: values.bodyParameters.text,
+          excludedBodyParameters: values.excludedBodyParameters.text,
+          requestHeaders: values.requestHeaders.text,
+        },
+        reading,
+      );
     } catch (error) {
-      toastr.error(error instanceof Error ? error.message : String(error), '梦境创客');
+      if (reading.isCurrent()) notify.error(error instanceof Error ? error.message : String(error), '梦境创客');
     }
   },
-  { immediate: true },
+  { immediate: true, flush: 'sync' },
 );
 
 function emptyProviderForm(): ProviderForm {
@@ -383,11 +416,13 @@ function emptyProviderForm(): ProviderForm {
   };
 }
 function selectProvider(id: string) {
+  creatingProvider.value = false;
   selectedProviderId.value = id;
 }
 function newProvider() {
+  creatingProvider.value = true;
+  if (!selectedProviderId.value) providerDraft.reset(emptyProviderForm());
   selectedProviderId.value = '';
-  Object.assign(providerForm, emptyProviderForm());
 }
 function setInterfaceType(value: string) {
   if (value === 'anthropic' || value === 'openai-chat' || value === 'openai-responses' || value === 'gemini') {
@@ -412,38 +447,69 @@ function providerInput(): ApiProviderInput {
 }
 
 async function saveProvider() {
+  const key = providerForm.id || 'new-provider';
+  if (pendingProviderSaves.has(key)) return;
+  const receipt = providerDraft.capture();
+  const input = providerInput();
+  const edited = receipt.editedKeys.filter((field): field is ApiProviderEditableField => field !== 'id');
+  pendingProviderSaves.add(key);
   let saved: ApiProvider | undefined;
-  const succeeded = await action(async () => {
-    saved = await runtime.saveProvider(providerInput());
-  });
-  if (succeeded && saved) {
-    selectedProviderId.value = saved.id;
-    providerForm.id = saved.id;
-    providerForm.apiKey = '';
-    toastr.success(`Provider“${saved.name}”已保存。`, '梦境创客');
+  try {
+    const succeeded = await action(async () => {
+      saved = await runtime.saveProvider(input, input.id ? edited : undefined);
+    });
+    if (succeeded && saved) {
+      if (receipt.isCurrent()) {
+        providerDraft.apply(
+          {
+            id: saved.id,
+            name: saved.name,
+            baseURL: saved.baseURL,
+            interfaceType: saved.interfaceType,
+            enabled: saved.enabled,
+            apiKey: '',
+          },
+          receipt,
+        );
+        providerDraft.acknowledge(receipt);
+        creatingProvider.value = false;
+        selectedProviderId.value = saved.id;
+        providerFeedback.value = providerDraft.dirty.size ? '已保存提交的内容，仍有新修改待保存' : '已保存';
+      }
+      notify.success(`Provider“${saved.name}”已保存。`, '梦境创客');
+    } else if (receipt.isCurrent()) {
+      providerFeedback.value = '保存失败，修改已保留，可重试';
+    }
+  } finally {
+    pendingProviderSaves.delete(key);
   }
 }
 async function copyProvider() {
   if (!providerForm.id) return;
+  const receipt = providerDraft.capture();
   let copied: ApiProvider | undefined;
   if (
     await action(async () => {
       copied = await runtime.copyProvider(providerForm.id);
     })
   ) {
-    selectedProviderId.value = copied!.id;
-    toastr.success(`已复制为 Provider“${copied!.name}”。`, '梦境创客');
+    if (receipt.isCurrent()) selectProvider(copied!.id);
+    notify.success(`已复制为 Provider“${copied!.name}”。`, '梦境创客');
   }
 }
 async function fetchModels() {
+  if (modelsLoading.value) return;
+  const receipt = providerDraft.capture();
   modelsLoading.value = true;
   try {
-    remoteModels.value = await runtime.listModels(providerInput());
+    const models = await runtime.listModels(providerInput());
+    if (!receipt.isCurrent()) return;
+    remoteModels.value = models;
     remoteFilter.value = '';
     remoteModelsOpen.value = true;
-    if (!remoteModels.value.length) toastr.warning('接口返回了空模型列表。', '梦境创客');
+    if (!remoteModels.value.length) notify.warning('接口返回了空模型列表。', '梦境创客');
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '梦境创客');
+    notify.error(error instanceof Error ? error.message : String(error), '梦境创客');
   } finally {
     modelsLoading.value = false;
   }
@@ -460,7 +526,7 @@ function uniqueModelName(base: string) {
 }
 async function addRemoteModel(modelId: string) {
   if (!selectedProvider.value) {
-    toastr.error('请先保存 Provider。', '梦境创客');
+    notify.error('请先保存 Provider。', '梦境创客');
     return;
   }
   remoteAdding.value = modelId;
@@ -481,9 +547,9 @@ async function addRemoteModel(modelId: string) {
       modelSettings: settings,
       name: uniqueModelName(modelId),
     });
-    toastr.success(`模型“${modelId}”已添加。`, '梦境创客');
+    notify.success(`模型“${modelId}”已添加。`, '梦境创客');
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '梦境创客');
+    notify.error(error instanceof Error ? error.message : String(error), '梦境创客');
   } finally {
     remoteAdding.value = '';
   }
@@ -499,7 +565,7 @@ function modelSaved(model: ApiModel) {
   modelEditorOpen.value = false;
   editingModel.value = undefined;
   copyingModel.value = false;
-  toastr.success(`模型“${model.name}”${verb}。`, '梦境创客');
+  notify.success(`模型“${model.name}”${verb}。`, '梦境创客');
 }
 function requestProviderDelete(provider: ApiProvider) {
   deletingProvider.value = provider;
@@ -520,12 +586,12 @@ async function confirmDelete() {
     const provider = deletingProvider.value;
     if (await action(() => runtime.removeProvider(provider.id))) {
       if (selectedProviderId.value === provider.id) newProvider();
-      toastr.success(`Provider“${provider.name}”已删除。`, '梦境创客');
+      notify.success(`Provider“${provider.name}”已删除。`, '梦境创客');
     }
   } else if (target === 'model' && providerForm.id && deletingModel.value) {
     const model = deletingModel.value;
     if (await action(() => runtime.removeModel(providerForm.id, model.id))) {
-      toastr.success(`模型“${model.name}”已删除。`, '梦境创客');
+      notify.success(`模型“${model.name}”已删除。`, '梦境创客');
     }
   }
   cancelDelete();
@@ -537,7 +603,7 @@ async function setDefault(modelId: string) {
     selectedProvider.value &&
     (await action(() => runtime.selectDefaultModel({ providerId: selectedProvider.value!.id, modelId })))
   ) {
-    toastr.success(`“${model?.name ?? '模型'}”已设为新会话默认。`, '梦境创客');
+    notify.success(`“${model?.name ?? '模型'}”已设为新会话默认。`, '梦境创客');
   }
 }
 function isDefaultModel(modelId: string) {
@@ -559,9 +625,9 @@ async function exportProvider(includeSecrets: boolean) {
     anchor.download = `${providerForm.name || 'provider'}.dream-provider.json`;
     anchor.click();
     queueMicrotask(() => URL.revokeObjectURL(url));
-    toastr.success(`Provider“${providerForm.name}”已导出。`, '梦境创客');
+    notify.success(`Provider“${providerForm.name}”已导出。`, '梦境创客');
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '梦境创客');
+    notify.error(error instanceof Error ? error.message : String(error), '梦境创客');
   }
 }
 async function importProvider(event: Event) {
@@ -569,14 +635,15 @@ async function importProvider(event: Event) {
   const file = input.files?.[0];
   input.value = '';
   if (!file) return;
+  const receipt = providerDraft.capture();
   let imported: ApiProvider | undefined;
   if (
     await action(async () => {
       imported = await runtime.importProviderBundle(await file.text());
     })
   ) {
-    selectedProviderId.value = imported!.id;
-    toastr.success(`Provider“${imported!.name}”已导入。`, '梦境创客');
+    if (receipt.isCurrent()) selectProvider(imported!.id);
+    notify.success(`Provider“${imported!.name}”已导入。`, '梦境创客');
   }
 }
 
@@ -592,6 +659,10 @@ function formatTokens(value: number) {
 </script>
 
 <style lang="scss">
+.dca-provider-save-status {
+  color: var(--dca-text-muted);
+  font-size: 0.75rem;
+}
 .dca-provider-layout {
   display: grid;
   min-height: 32rem;
@@ -809,9 +880,26 @@ function formatTokens(value: number) {
   color: var(--dca-text-muted);
   font-size: 0.78rem;
 }
-.dca-remote-models {
+.dca-modal.dca-remote-models {
+  display: flex;
   width: min(42rem, calc(100vw - 2rem));
-  max-height: min(80vh, 44rem);
+  min-height: 0;
+  max-height: min(80dvh, 44rem);
+  flex-direction: column;
+  gap: 0.65rem;
+  overflow: hidden;
+}
+.dca-remote-models > header,
+.dca-remote-models > footer,
+.dca-remote-models > .dca-search-field {
+  flex: 0 0 auto;
+}
+.dca-remote-models > header,
+.dca-remote-models > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
 }
 .dca-search-field {
   display: flex;
@@ -829,13 +917,16 @@ function formatTokens(value: number) {
 }
 .dca-remote-model-list {
   display: flex;
-  min-height: 10rem;
+  min-height: 0;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 0.25rem;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .dca-remote-model-list > div {
   display: grid;
+  flex: 0 0 auto;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 0.5rem;
@@ -844,6 +935,10 @@ function formatTokens(value: number) {
 }
 .dca-remote-model-list small {
   color: var(--dca-text-muted);
+}
+.dca-remote-model-list code {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .dca-provider-confirm {
   width: min(34rem, calc(100vw - 2rem));
@@ -909,10 +1004,13 @@ function formatTokens(value: number) {
   .dca-model-disabled {
     grid-column: 2 / -1;
   }
-  .dca-remote-models {
+  .dca-modal-backdrop.dca-remote-models-backdrop {
+    padding: 0;
+  }
+  .dca-modal.dca-remote-models {
     width: 100%;
     height: 100%;
-    max-height: none;
+    max-height: 100%;
     border-radius: 0;
   }
 }

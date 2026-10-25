@@ -1,12 +1,27 @@
 import type { FilePart, ModelMessage } from 'ai';
 import { canonicalStringify } from '../transaction/canonical';
 
+export type ModelTokenUsage = {
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+};
+
 export type ContextUsage = {
   apiInputTokens?: number;
   apiOutputTokens?: number;
+  apiCacheReadTokens?: number;
+  apiCacheWriteTokens?: number;
+  apiReasoningTokens?: number;
+  apiTotalTokens?: number;
   assistantTokens: number;
   contextWindow: number;
+  estimatedTokens?: number;
   estimatedDeltaTokens?: number;
+  toolSchemaTokens?: number;
   measurement?: 'api' | 'estimated';
   ratio: number;
   remainingTokens: number;
@@ -17,62 +32,105 @@ export type ContextUsage = {
   userTokens: number;
 };
 
-export type ApiUsageBaseline = {
+export type ApiUsageBaseline = ModelTokenUsage & {
+  /** 版本 2 的锚点是请求发出时的输入，输出用量只用于展示。 */
+  version?: 2;
   estimatedTokens: number;
   inputTokens: number;
-  outputTokens: number;
+  toolSchemaTokens?: number;
 };
 
-export type ContextDecision = 'compact' | 'continue' | 'users-exhausted';
+function tokenNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
+}
+
+export function normalizeTokenUsage(usage: ModelTokenUsage): ModelTokenUsage {
+  const result: ModelTokenUsage = {};
+  for (const key of [
+    'inputTokens',
+    'outputTokens',
+    'totalTokens',
+    'cacheReadTokens',
+    'cacheWriteTokens',
+    'reasoningTokens',
+  ] as const) {
+    const value = tokenNumber(usage[key]);
+    if (value !== undefined) result[key] = value;
+  }
+  if (
+    result.inputTokens === undefined &&
+    result.totalTokens !== undefined &&
+    result.outputTokens !== undefined &&
+    result.totalTokens >= result.outputTokens
+  )
+    result.inputTokens = result.totalTokens - result.outputTokens;
+  return result;
+}
 
 export function estimateTokens(value: unknown): number {
-  return Math.max(1, Math.ceil(canonicalStringify(value).length / 4));
+  const text = typeof value === 'string' ? value : canonicalStringify(value);
+  const chinese = (text.match(/[\u3400-\u9fff\uf900-\ufaff]/gu) ?? []).length;
+  return Math.max(1, Math.ceil((text.length + chinese) / 3));
 }
 
 function filePartTokens(part: FilePart): number {
   if (part.mediaType.toLocaleLowerCase().startsWith('image/')) return 1_200;
-  if (typeof part.data === 'object' && 'type' in part.data && part.data.type === 'text') {
+  if (typeof part.data === 'object' && 'type' in part.data && part.data.type === 'text')
     return estimateTokens(part.data.text);
-  }
   const data =
     typeof part.data === 'object' && 'type' in part.data && part.data.type === 'data' ? part.data.data : part.data;
   const encodedLength =
     typeof data === 'string' ? data.length : data instanceof Uint8Array ? (data.byteLength * 4) / 3 : 0;
   const bytes = Math.ceil(encodedLength * 0.75);
   return part.mediaType.toLocaleLowerCase().startsWith('text/')
-    ? Math.max(1, Math.ceil(bytes / 4))
+    ? Math.max(1, Math.ceil(bytes / 3))
     : 1_000 + Math.ceil(bytes / 1_024);
 }
 
 function messageTokens(message: ModelMessage): number {
-  if (message.role !== 'user' || typeof message.content === 'string') return estimateTokens(message);
+  if (typeof message.content === 'string') return 4 + estimateTokens(message.content);
   return message.content.reduce((total, part) => {
-    if (part.type === 'text') return total + estimateTokens(part.text);
+    if (part.type === 'text' || part.type === 'reasoning') return total + estimateTokens(part.text);
     if (part.type === 'file') return total + filePartTokens(part);
     if (part.type === 'image') return total + 1_200;
+    if (part.type === 'tool-call') return total + estimateTokens({ name: part.toolName, input: part.input });
+    if (part.type === 'tool-result') return total + estimateTokens({ name: part.toolName, output: part.output });
     return total;
-  }, 1);
+  }, 4);
 }
 
 export function measureContext(
   messages: ModelMessage[],
   contextWindow: number,
   apiBaseline?: ApiUsageBaseline,
+  toolSchemaTokens = 0,
 ): ContextUsage {
   const totals = { assistant: 0, system: 0, tool: 0, user: 0 };
   for (const message of messages) totals[message.role] += messageTokens(message);
-  const estimatedTokens = totals.assistant + totals.system + totals.tool + totals.user;
-  const estimatedDeltaTokens = apiBaseline ? estimatedTokens - apiBaseline.estimatedTokens : 0;
-  const totalTokens = apiBaseline
-    ? Math.max(0, apiBaseline.inputTokens + apiBaseline.outputTokens + estimatedDeltaTokens)
-    : estimatedTokens;
+  const schemas = tokenNumber(toolSchemaTokens) ?? 0;
+  const estimatedTokens = totals.assistant + totals.system + totals.tool + totals.user + schemas;
+  const baseline =
+    apiBaseline?.version === 2 &&
+    tokenNumber(apiBaseline.estimatedTokens) !== undefined &&
+    (tokenNumber(apiBaseline.inputTokens) ?? 0) > 0
+      ? apiBaseline
+      : undefined;
+  const estimatedDeltaTokens = baseline ? estimatedTokens - baseline.estimatedTokens : 0;
+  // API 输入包含服务端格式与工具定义；仅增量估算该请求之后的内容，避免重复叠加缓存和隐藏推理用量。
+  const totalTokens = baseline ? Math.max(0, baseline.inputTokens + estimatedDeltaTokens) : estimatedTokens;
   return {
-    apiInputTokens: apiBaseline?.inputTokens,
-    apiOutputTokens: apiBaseline?.outputTokens,
+    apiInputTokens: baseline?.inputTokens,
+    apiOutputTokens: baseline?.outputTokens,
+    apiCacheReadTokens: baseline?.cacheReadTokens,
+    apiCacheWriteTokens: baseline?.cacheWriteTokens,
+    apiReasoningTokens: baseline?.reasoningTokens,
+    apiTotalTokens: baseline?.totalTokens,
     assistantTokens: totals.assistant,
     contextWindow,
+    estimatedTokens,
     estimatedDeltaTokens,
-    measurement: apiBaseline ? 'api' : 'estimated',
+    toolSchemaTokens: schemas,
+    measurement: baseline ? 'api' : 'estimated',
     ratio: totalTokens / contextWindow,
     remainingTokens: Math.max(0, contextWindow - totalTokens),
     systemTokens: totals.system,
@@ -83,68 +141,13 @@ export function measureContext(
   };
 }
 
-export function decideContext(usage: ContextUsage, outputReserve = 4096): ContextDecision {
-  if (usage.userTokens >= usage.contextWindow * 0.8) return 'users-exhausted';
-  if (usage.totalTokens >= usage.thresholdTokens || usage.remainingTokens < outputReserve) return 'compact';
-  return 'continue';
+export function decideContext(usage: ContextUsage, outputReserve = 4096): 'compact' | 'continue' {
+  return usage.totalTokens >= usage.thresholdTokens || usage.remainingTokens < outputReserve ? 'compact' : 'continue';
 }
 
-function isCompactCall(message: ModelMessage): boolean {
-  return (
-    message.role === 'assistant' &&
-    Array.isArray(message.content) &&
-    message.content.some(part => part.type === 'tool-call') &&
-    message.content.filter(part => part.type === 'tool-call').every(part => part.toolName === 'compact_context')
-  );
+export function outputTokenBudget(contextWindow: number, inputTokens: number, maximum = 32_000): number {
+  const margin = Math.min(1_000, Math.floor(contextWindow * 0.05));
+  return Math.max(0, Math.min(maximum, Math.floor(contextWindow - inputTokens - margin)));
 }
 
-export function compactModelMessages(
-  messages: ModelMessage[],
-  summary: string,
-  headerMessageCount = 0,
-  replacementHeader: ModelMessage[] = messages.slice(0, headerMessageCount),
-): ModelMessage[] {
-  const conversation = messages.slice(headerMessageCount);
-  const systems = conversation.filter(
-    message =>
-      message.role === 'system' &&
-      !(typeof message.content === 'string' && message.content.startsWith('【上下文压缩摘要】')),
-  );
-  let latestUser = -1;
-  for (let index = conversation.length - 1; index >= 0; index -= 1) {
-    if (conversation[index].role === 'user') {
-      latestUser = index;
-      break;
-    }
-  }
-  const users = conversation.filter(message => message.role === 'user');
-  let latestAssistant = -1;
-  for (let index = conversation.length - 1; index > latestUser; index--) {
-    if (conversation[index].role === 'assistant' && !isCompactCall(conversation[index])) {
-      latestAssistant = index;
-      break;
-    }
-  }
-  const currentTurn = latestAssistant < 0 ? [] : conversation.slice(latestAssistant);
-  const removedCalls = new Set(
-    currentTurn.flatMap(message =>
-      isCompactCall(message) && Array.isArray(message.content)
-        ? message.content.flatMap(part => (part.type === 'tool-call' ? [part.toolCallId] : []))
-        : [],
-    ),
-  );
-  // 保留最近一次模型步骤的完整调用/结果配对；混合批次及其签名不能拆散。
-  const latestChain = currentTurn.flatMap((message): ModelMessage[] => {
-    if (message.role === 'system' || isCompactCall(message)) return [];
-    if (message.role !== 'tool') return [message];
-    const content = message.content.filter(part => part.type !== 'tool-result' || !removedCalls.has(part.toolCallId));
-    return content.length ? [{ ...message, content }] : [];
-  });
-  return [
-    ...replacementHeader,
-    ...systems,
-    { content: `【上下文压缩摘要】\n${summary}`, role: 'system' as const },
-    ...users,
-    ...latestChain,
-  ];
-}
+export { compactModelMessages } from './context-compaction';

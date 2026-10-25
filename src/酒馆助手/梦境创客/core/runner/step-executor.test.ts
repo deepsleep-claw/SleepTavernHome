@@ -63,6 +63,11 @@ describe('AiSdkModelStepExecutor', () => {
       finishReason: 'tool-calls',
       inputTokens: 6,
       outputTokens: 2,
+      totalTokens: 8,
+      cacheReadTokens: 2,
+      cacheWriteTokens: 1,
+      reasoningTokens: 0,
+      rawFinishReason: 'tool_calls',
       text: 'hello',
       toolCalls: [{ input: { value: 'x' }, toolCallId: 'call-1', toolName: 'read_file' }],
     });
@@ -151,27 +156,35 @@ describe('AiSdkModelStepExecutor', () => {
   });
 
   it('按六种适配组合映射推理参数，自动档不额外指定强度', () => {
-    expect(requestProviderOptions({ interfaceType: 'openai-responses', reasoningEffort: 'xhigh', webSearch: true }))
-      .toMatchObject({ openai: { maxToolCalls: 10, reasoningEffort: 'xhigh' } });
-    expect(requestProviderOptions({ interfaceType: 'openai-chat', reasoningEffort: 'off', webSearch: false }))
-      .toEqual({ dreamCardAgentChat: { reasoningEffort: 'none' } });
-    expect(requestProviderOptions({ interfaceType: 'anthropic', reasoningEffort: 'auto', webSearch: false }))
-      .toMatchObject({ anthropic: { effort: undefined, thinking: undefined } });
-    expect(requestProviderOptions({ interfaceType: 'anthropic', reasoningEffort: 'high', webSearch: true }))
-      .toMatchObject({ anthropic: { effort: 'high', thinking: { type: 'adaptive' } } });
+    expect(
+      requestProviderOptions({ interfaceType: 'openai-responses', reasoningEffort: 'xhigh', webSearch: true }),
+    ).toMatchObject({ openai: { maxToolCalls: 10, reasoningEffort: 'xhigh' } });
+    expect(requestProviderOptions({ interfaceType: 'openai-chat', reasoningEffort: 'off', webSearch: false })).toEqual({
+      dreamCardAgentChat: { reasoningEffort: 'none' },
+    });
+    expect(
+      requestProviderOptions({ interfaceType: 'anthropic', reasoningEffort: 'auto', webSearch: false }),
+    ).toMatchObject({ anthropic: { effort: undefined, thinking: undefined } });
+    expect(
+      requestProviderOptions({ interfaceType: 'anthropic', reasoningEffort: 'high', webSearch: true }),
+    ).toMatchObject({ anthropic: { effort: 'high', thinking: { type: 'adaptive' } } });
 
-    expect(requestProviderOptions({
-      compatibilityMode: 'deepseek',
-      interfaceType: 'openai-chat',
-      reasoningEffort: 'custom-id',
-      webSearch: false,
-    })).toEqual({ dreamCardAgentChat: { reasoningEffort: 'custom-id', thinking: { type: 'enabled' } } });
-    expect(requestProviderOptions({
-      compatibilityMode: 'deepseek',
-      interfaceType: 'openai-responses',
-      reasoningEffort: 'off',
-      webSearch: true,
-    })).toEqual({
+    expect(
+      requestProviderOptions({
+        compatibilityMode: 'deepseek',
+        interfaceType: 'openai-chat',
+        reasoningEffort: 'custom-id',
+        webSearch: false,
+      }),
+    ).toEqual({ dreamCardAgentChat: { reasoningEffort: 'custom-id', thinking: { type: 'enabled' } } });
+    expect(
+      requestProviderOptions({
+        compatibilityMode: 'deepseek',
+        interfaceType: 'openai-responses',
+        reasoningEffort: 'off',
+        webSearch: true,
+      }),
+    ).toEqual({
       openai: {
         forceReasoning: false,
         include: ['web_search_call.results'],
@@ -180,12 +193,14 @@ describe('AiSdkModelStepExecutor', () => {
         store: false,
       },
     });
-    expect(requestProviderOptions({
-      compatibilityMode: 'deepseek',
-      interfaceType: 'anthropic',
-      reasoningEffort: 'high',
-      webSearch: true,
-    })).toMatchObject({ anthropic: { effort: 'high', thinking: { type: 'enabled' } } });
+    expect(
+      requestProviderOptions({
+        compatibilityMode: 'deepseek',
+        interfaceType: 'anthropic',
+        reasoningEffort: 'high',
+        webSearch: true,
+      }),
+    ).toMatchObject({ anthropic: { effort: 'high', thinking: { type: 'enabled' } } });
   });
 
   it('把HTTP成功但没有文本、消息或工具调用的结果视为协议错误', async () => {

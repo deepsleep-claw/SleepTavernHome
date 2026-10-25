@@ -11,7 +11,7 @@
         <span>当前 Profile</span>
         <DcaSelect
           aria-label="当前预设 Profile"
-          :model-value="state.activePresetId"
+          :model-value="selectedId"
           :options="presetOptions"
           @update:model-value="selectPresetProfile"
         />
@@ -24,7 +24,7 @@
         <button
           class="dca-btn-danger"
           type="button"
-          :disabled="builtinPreset || state.presetProfiles.length <= 1"
+          :disabled="saving || builtinPreset || state.presetProfiles.length <= 1"
           @click="removePresetProfile"
         >
           删除 Profile
@@ -39,9 +39,6 @@
       />
     </div>
     <template v-if="presetDraft">
-      <div v-if="builtinPreset" class="dca-alert dca-alert-info">
-        <span>内置预设始终随脚本更新且不可编辑；需要调整时请先“另存为”。</span>
-      </div>
       <label class="dca-field">
         <span>预设名称</span><input v-model="presetDraft.name" type="text" :disabled="builtinPreset" />
       </label>
@@ -67,7 +64,13 @@
             :options="roleOptions"
             @update:model-value="updateNodeRole(node.id, $event)"
           />
-          <button class="dca-icon-btn" type="button" title="删除节点" :disabled="builtinPreset" @click="removePresetNode(node.id)">
+          <button
+            class="dca-icon-btn"
+            type="button"
+            title="删除节点"
+            :disabled="builtinPreset"
+            @click="removePresetNode(node.id)"
+          >
             <i class="fa-solid fa-trash" aria-hidden="true"></i>
           </button>
         </header>
@@ -75,28 +78,44 @@
       </article>
       <div class="dca-resource-savebar">
         <button v-if="!builtinPreset" type="button" @click="addPresetNode">添加节点</button>
-        <button v-if="!builtinPreset" type="button" @click="savePresetProfile">保存 Profile</button>
-        <button class="dca-btn-primary" type="button" :disabled="!state.active" @click="saveAndApplyPreset">
+        <span v-if="!builtinPreset && (dirty || feedback || saving)" class="dca-editor-feedback" role="status">{{
+          saving
+            ? feedback
+            : dirty
+              ? feedback.startsWith('保存失败')
+                ? feedback
+                : '有未保存的修改 · 切页保留草稿'
+              : feedback
+        }}</span>
+        <button v-if="!builtinPreset && dirty" type="button" :disabled="saving" @click="editor.discard()">
+          放弃修改
+        </button>
+        <button v-if="!builtinPreset" type="button" :disabled="saving" @click="savePresetProfile">
+          {{ saving ? '正在保存…' : '保存 Profile' }}
+        </button>
+        <button class="dca-btn-primary" type="button" :disabled="!state.active || saving" @click="saveAndApplyPreset">
           {{ builtinPreset ? '应用到当前会话' : '保存并应用到当前会话' }}
         </button>
       </div>
       <p v-if="state.active" class="dca-muted-note">
         当前会话固定使用“{{ state.active.preset.name }}”v{{ state.active.preset.version }}。
       </p>
-      <div v-if="!usesSkillInstructions" class="dca-alert dca-alert-warning">
-        <span>这个预设没有使用 <code v-text="skillInstructionsMacro"></code>，内置与 full Skill 不会进入固定头部；仍可保存。</span>
-      </div>
       <section class="dca-preset-macros">
         <header>
           <div><strong>位置宏实际内容</strong><span>按当前 Agent 配置计算，显示真正替换进预设的文本。</span></div>
         </header>
         <details v-for="macro in regularMacroPreviews" :key="macro.name">
-          <summary><code v-text="macro.label"></code><button type="button" @click.prevent="copyText(macro.content, macro.name)">复制</button></summary>
+          <summary>
+            <code v-text="macro.label"></code
+            ><button type="button" @click.prevent="copyText(macro.content, macro.name)">复制</button>
+          </summary>
           <pre>{{ macro.content || '（空）' }}</pre>
         </details>
         <article class="dca-skill-macro-preview">
           <header>
-            <div><code v-text="skillInstructionsMacro"></code><span>full Skill 会在首次请求及下一次压缩后注入。</span></div>
+            <div>
+              <code v-text="skillInstructionsMacro"></code><span>full Skill 会在首次请求及下一次压缩后注入。</span>
+            </div>
             <button type="button" @click="copyText(macroValues.skill_instructions, '全部Skill')">复制全部</button>
           </header>
           <DcaSelect
@@ -110,7 +129,12 @@
           <div v-else class="dca-empty">当前没有可注入的 full Skill。</div>
           <details v-if="onDemandSkills.length">
             <summary>按需 Skill（不直接注入）</summary>
-            <ul><li v-for="skill in onDemandSkills" :key="skill.id"><strong>{{ skill.name }}</strong>：{{ skill.description }}</li></ul>
+            <ul>
+              <li v-for="skill in onDemandSkills" :key="skill.id">
+                <strong>{{ skill.name }}</strong
+                >：{{ skill.description }}
+              </li>
+            </ul>
           </details>
         </article>
       </section>
@@ -119,6 +143,7 @@
 </template>
 
 <script setup lang="ts">
+import { notify } from '../../composables/notifications';
 import { computed, ref, watch } from 'vue';
 import { parseYamlObject, serializeYaml } from '../../../core/mapping/serde';
 import {
@@ -132,12 +157,19 @@ import { defaultPresetValues } from '../../../core/session/prompt';
 import { fullSkillInstructions } from '../../../core/skills/skill-registry';
 import { downloadText } from '../../composables/format';
 import { useDreamCardAgent } from '../../composables/runtime';
+import { useResourceEditor } from '../../composables/resource-drafts';
 import DcaSelect from '../DcaSelect.vue';
 import DcaSwitch from '../DcaSwitch.vue';
 
-const { action, runtime, state } = useDreamCardAgent();
+const { action, runtime, state, notifications, resourceDrafts } = useDreamCardAgent();
 
-const presetDraft = ref<StructuredPreset>();
+const editor = useResourceEditor(
+  resourceDrafts,
+  'preset',
+  () => state.value.presetProfiles,
+  () => state.value.activePresetId,
+);
+const { draft: presetDraft, selectedId, dirty, saving, feedback } = editor;
 const draggedPresetNodeId = ref('');
 const presetImportInput = ref<HTMLInputElement>();
 
@@ -153,8 +185,9 @@ const sortedPresetNodes = computed(() =>
 const builtinPreset = computed(() => presetDraft.value?.id === DEFAULT_PRESET.id);
 const activeAgentConfiguration = computed(
   () =>
-    state.value.agentConfigurations.find(configuration => configuration.id === state.value.activeAgentConfigurationId) ??
-    state.value.agentConfigurations[0],
+    state.value.agentConfigurations.find(
+      configuration => configuration.id === state.value.activeAgentConfigurationId,
+    ) ?? state.value.agentConfigurations[0],
 );
 const enabledSkills = computed(() => {
   const enabled = new Set(
@@ -188,11 +221,24 @@ const presetOptions = computed(() =>
 );
 
 watch(
-  () =>
-    `${state.value.activePresetId}:${state.value.presetProfiles.map(preset => `${preset.id}@${preset.version}`).join('|')}`,
-  () => {
-    const preset = state.value.presetProfiles.find(item => item.id === state.value.activePresetId);
-    presetDraft.value = preset ? cloneStructuredPreset(preset) : undefined;
+  [builtinPreset, usesSkillInstructions, () => presetDraft.value?.id],
+  ([builtin, usesSkills, id]) => {
+    if (builtin)
+      notifications?.upsert({
+        id: 'preset:readonly',
+        title: '内置预设只读',
+        message: '内置预设随脚本更新；需要调整时请先另存为。',
+        level: 'info',
+      });
+    else notifications?.resolve('preset:readonly');
+    if (id && !usesSkills)
+      notifications?.upsert({
+        id: 'preset:skills',
+        title: '预设未包含 Skill 指令',
+        message: `这个预设没有使用 ${skillInstructionsMacro}，内置与 full Skill 不会进入固定头部；仍可保存。`,
+        level: 'warning',
+      });
+    else notifications?.resolve('preset:skills');
   },
   { immediate: true },
 );
@@ -246,7 +292,10 @@ function dropPresetNode(targetId: string) {
 }
 
 async function selectPresetProfile(id: string) {
-  if (id) await action(() => runtime.selectPresetProfile(id));
+  if (!id) return;
+  const previous = selectedId.value;
+  selectedId.value = id;
+  if (!(await action(() => runtime.selectPresetProfile(id))) && selectedId.value === id) selectedId.value = previous;
 }
 
 function updateNodeRole(id: string, role: string) {
@@ -265,27 +314,30 @@ function uniquePresetName(base: string): string {
 }
 
 async function persistNewPreset(candidate: StructuredPreset, message: string) {
+  const previous = selectedId.value;
   let saved: StructuredPreset | undefined;
   const succeeded = await action(async () => {
     saved = await runtime.savePresetProfile(cloneStructuredPreset(candidate));
   });
   if (!succeeded || !saved) return;
-  presetDraft.value = cloneStructuredPreset(saved);
-  toastr.success(message, '梦境创客');
+  if (selectedId.value === previous) selectedId.value = saved.id;
+  notify.success(message, '梦境创客');
 }
 
 async function newPresetProfile() {
   const candidate: StructuredPreset = {
     id: `preset:${crypto.randomUUID()}`,
     name: uniquePresetName('新预设'),
-    nodes: [{
-      content: '{{custom_instructions}}',
-      enabled: true,
-      id: crypto.randomUUID(),
-      order: 10,
-      role: 'system',
-      title: '新节点',
-    }],
+    nodes: [
+      {
+        content: '{{custom_instructions}}',
+        enabled: true,
+        id: crypto.randomUUID(),
+        order: 10,
+        role: 'system',
+        title: '新节点',
+      },
+    ],
     version: 1,
   };
   await persistNewPreset(candidate, '新预设已创建并切换。');
@@ -294,34 +346,42 @@ async function newPresetProfile() {
 async function copyPresetProfile() {
   if (!presetDraft.value) return;
   const source = cloneStructuredPreset(presetDraft.value);
-  await persistNewPreset({
-    ...cloneStructuredPreset(presetDraft.value),
-    id: `preset:${crypto.randomUUID()}`,
-    name: uniquePresetName(`${source.name} 副本`),
-    version: 1,
-  }, '预设副本已创建并切换。');
+  await persistNewPreset(
+    {
+      ...cloneStructuredPreset(presetDraft.value),
+      id: `preset:${crypto.randomUUID()}`,
+      name: uniquePresetName(`${source.name} 副本`),
+      version: 1,
+    },
+    '预设副本已创建并切换。',
+  );
 }
 
 async function savePresetProfile(): Promise<StructuredPreset | undefined> {
-  if (!presetDraft.value || builtinPreset.value) return undefined;
+  if (!presetDraft.value || builtinPreset.value || saving.value) return undefined;
   let saved: StructuredPreset | undefined;
   const succeeded = await action(async () => {
-    saved = await runtime.savePresetProfile(cloneStructuredPreset(presetDraft.value!));
+    saved = await editor.save(value => runtime.savePresetProfile(value, { makeDefault: false }));
   });
-  if (succeeded && saved) presetDraft.value = cloneStructuredPreset(saved);
-  return saved;
+  return succeeded ? saved : undefined;
 }
 
 async function saveAndApplyPreset() {
+  const sessionId = state.value.active?.sessionId;
   if (builtinPreset.value) {
     if (presetDraft.value && state.value.active && (await action(() => runtime.applyPreset(presetDraft.value!)))) {
-      toastr.success('内置预设已应用到当前会话。', '梦境创客');
+      notify.success('内置预设已应用到当前会话。', '梦境创客');
     }
     return;
   }
   const saved = await savePresetProfile();
-  if (saved && state.value.active && (await action(() => runtime.applyPreset(saved!)))) {
-    toastr.success('预设Profile已保存，并应用到当前会话。', '梦境创客');
+  if (
+    saved &&
+    sessionId &&
+    state.value.active?.sessionId === sessionId &&
+    (await action(() => runtime.applyPreset(saved!)))
+  ) {
+    notify.success('预设Profile已保存，并应用到当前会话。', '梦境创客');
   }
 }
 
@@ -346,10 +406,10 @@ async function importPresetProfile(event: Event) {
     parsed.id = `preset:${crypto.randomUUID()}`;
     parsed.version = 1;
     const saved = await runtime.savePresetProfile(cloneStructuredPreset(parsed));
-    presetDraft.value = cloneStructuredPreset(saved);
-    toastr.success(`已导入“${saved.name}”。`, '梦境创客');
+    selectedId.value = saved.id;
+    notify.success(`已导入“${saved.name}”。`, '梦境创客');
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '预设导入失败');
+    notify.error(error instanceof Error ? error.message : String(error), '预设导入失败');
   }
 }
 
@@ -365,9 +425,9 @@ function exportPresetProfile() {
 async function copyText(content: string, label: PresetMacro | string) {
   try {
     await navigator.clipboard.writeText(content);
-    toastr.success(`已复制${label}。`, '梦境创客');
+    notify.success(`已复制${label}。`, '梦境创客');
   } catch {
-    toastr.error('浏览器未允许写入剪贴板。', '复制失败');
+    notify.error('浏览器未允许写入剪贴板。', '复制失败');
   }
 }
 </script>

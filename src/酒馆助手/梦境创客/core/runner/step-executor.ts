@@ -6,9 +6,17 @@ import {
   type ProviderRuntime,
 } from '../provider-probe';
 import { normalizeProviderFailure } from '../provider/provider-failure';
+import {
+  isGeminiArgon,
+  omitsSamplingParameters,
+  requiresReasoning,
+  usesCompatibleResponsesReasoning,
+  usesGeminiThinkingLevel,
+} from '../provider/model-behavior';
 import { withProviderModelRuntime, type ApiModel, type ApiProvider } from '../provider/provider-config';
 import { takeDeepSeekWebSearchResult } from '../provider/deepseek-responses-adapter';
 import type { RunnerTool } from './tools';
+import { normalizeTokenUsage, type ModelTokenUsage } from './context';
 
 export type RunnerToolCall = {
   input: unknown;
@@ -51,6 +59,7 @@ export type ModelRequestSettings = ModelRequestControls & {
 
 export type ModelStepRequest = {
   abortSignal: AbortSignal;
+  purpose?: 'summary';
   forceTool?: string;
   messages: ModelMessage[];
   modelSettings?: ModelRequestSettings;
@@ -64,18 +73,18 @@ export type ModelStepRequest = {
   tools: RunnerTool[];
 };
 
-export type ModelStepResult = {
+export type ModelStepResult = ModelTokenUsage & {
   assistantMessages: ModelMessage[];
   finishReason: string;
-  inputTokens?: number;
+  rawFinishReason?: string;
   invalidToolCalls?: InvalidRunnerToolCall[];
-  outputTokens?: number;
   providerToolCalls?: ProviderToolCall[];
   text: string;
   toolCalls: RunnerToolCall[];
 };
 
 export interface ModelStepExecutor {
+  readonly maxOutputTokens?: number;
   execute(request: ModelStepRequest): Promise<ModelStepResult>;
 }
 
@@ -88,18 +97,20 @@ export function requestProviderOptions(
   settings?: ModelRequestSettings,
 ): Record<string, Record<string, unknown>> | undefined {
   const effort = reasoningEffort(settings);
+  if (effort === 'none' && requiresReasoning(settings?.modelId))
+    throw new Error('当前模型不能关闭推理，请选择自动或支持的推理档位。');
   const mode = settings?.compatibilityMode ?? 'standard';
   switch (settings?.interfaceType) {
     case 'gemini': {
-      const isGemini3 = /gemini-3/u.test(settings.modelId ?? '');
-      if (effort === 'none' && (isGemini3 || /gemini-2\.5-pro/u.test(settings.modelId ?? '')))
-        throw new Error('当前 Gemini 模型不能关闭思考，请选择自动或支持的思考档位。');
+      const usesLevel = usesGeminiThinkingLevel(settings.modelId);
+      if (isGeminiArgon(settings.modelId) && effort && !['low', 'medium', 'high'].includes(effort))
+        throw new Error('Gemini 4 Argon 的思考档位仅支持 low、medium 和 high。');
       return {
         google: {
           thinkingConfig: {
             includeThoughts: effort !== 'none',
-            ...(isGemini3 && effort ? { thinkingLevel: effort } : {}),
-            ...(!isGemini3 && effort === 'none' ? { thinkingBudget: 0 } : {}),
+            ...(usesLevel && effort ? { thinkingLevel: effort } : {}),
+            ...(!usesLevel && effort === 'none' ? { thinkingBudget: 0 } : {}),
           },
         },
       };
@@ -156,6 +167,7 @@ export function requestProviderOptions(
       }
       return {
         openai: {
+          ...(usesCompatibleResponsesReasoning(settings.modelId) ? { forceReasoning: true } : {}),
           include: ['reasoning.encrypted_content'],
           maxToolCalls: settings.webSearch ? (settings.webSearchMaxUses ?? 10) : undefined,
           reasoningEffort: effort,
@@ -205,6 +217,7 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
       abortSignal: request.abortSignal,
       allowSystemInMessages: true,
       maxOutputTokens: request.modelSettings?.maxOutputTokens,
+      maxRetries: request.purpose === 'summary' ? 0 : undefined,
       messages: request.messages,
       model: runtime.model,
       onChunk: async chunk => {
@@ -325,14 +338,21 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
     return {
       assistantMessages: assistantMessages as ModelMessage[],
       finishReason,
-      inputTokens: usage.inputTokens,
+      rawFinishReason,
+      ...normalizeTokenUsage({
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        totalTokens: usage.totalTokens,
+        cacheReadTokens: usage.inputTokenDetails.cacheReadTokens,
+        cacheWriteTokens: usage.inputTokenDetails.cacheWriteTokens,
+        reasoningTokens: usage.outputTokenDetails.reasoningTokens,
+      }),
       invalidToolCalls: invalidLocalCalls.map(call => ({
         error: errorMessage(call.error),
         input: call.input,
         toolCallId: call.toolCallId,
         toolName: call.toolName,
       })),
-      outputTokens: usage.outputTokens,
       providerToolCalls: providerCalls.map(call => ({
         input: call.input,
         output:
@@ -358,12 +378,17 @@ export class ProviderModelStepExecutor implements ModelStepExecutor {
     private readonly model: ApiModel,
   ) {}
 
+  get maxOutputTokens(): number | undefined {
+    return this.model.modelSettings.maxOutputTokens || undefined;
+  }
+
   async execute(request: ModelStepRequest): Promise<ModelStepResult> {
     try {
       const modelSettings = this.model.modelSettings;
       const reasoningEffort = request.modelSettings?.reasoningEffort ?? 'auto';
       const reasoningActive = reasoningEffort !== 'off';
-      const suppressSampling = this.model.compatibilityMode === 'deepseek' && reasoningActive;
+      const suppressSampling =
+        (this.model.compatibilityMode === 'deepseek' && reasoningActive) || omitsSamplingParameters(this.model.modelId);
       const webSearch =
         request.modelSettings?.webSearch === true && modelSettings.capabilities.webSearch !== 'disabled';
       return await withProviderModelRuntime(

@@ -117,10 +117,6 @@
               </button>
             </div>
           </header>
-          <div v-if="secretWarning" class="dca-secret-banner warning" role="status">
-            <i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i>
-            <span>{{ secretWarning }}</span>
-          </div>
           <section v-if="isProjectManifest && projectCheck" class="dca-project-check-result">
             <header>
               <strong>{{ projectCheck.projectName }}</strong>
@@ -143,10 +139,6 @@
             </ul>
             <p v-else>检查通过，可以编译。</p>
           </section>
-          <div v-else-if="secretFindings.length" class="dca-secret-banner protected" role="status">
-            <i class="fa-solid fa-shield-halved" aria-hidden="true"></i>
-            <span>检测到 {{ secretFindings.length }} 处敏感内容；界面显示原文，Agent读取时自动遮罩。</span>
-          </div>
           <div v-if="isBinaryFile" class="dca-binary-file-note">
             <i class="fa-regular fa-file" aria-hidden="true"></i>
             <strong>二进制文件</strong>
@@ -248,7 +240,7 @@
       <header class="dca-side-heading">
         <div>
           <strong>上下文监视器</strong>
-          <small>{{ contextSourceLabel }} · 70% 自动压缩，用户消息 80% 时暂停</small>
+          <small>{{ contextSourceLabel }} · 请求前达到 70% 或输出空间不足时自动压缩</small>
         </div>
       </header>
       <div class="dca-context-meter">
@@ -258,7 +250,7 @@
       <div class="dca-metric-grid">
         <div>
           <strong>{{ state.active?.contextUsage.totalTokens }}</strong>
-          <span>{{ state.active?.contextUsage.measurement === 'api' ? 'API 基准总 Token' : '估算总 Token' }}</span>
+          <span>当前占用（估算）</span>
         </div>
         <div>
           <strong>{{ state.active?.contextUsage.remainingTokens }}</strong>
@@ -266,29 +258,46 @@
         </div>
         <div>
           <strong>{{ state.active?.contextUsage.systemTokens }}</strong>
-          <span>静态头部</span>
+          <span>系统消息（估算）</span>
         </div>
         <div>
           <strong>{{ state.active?.contextUsage.userTokens }}</strong>
-          <span>用户消息</span>
+          <span>用户消息（估算）</span>
         </div>
         <div>
           <strong>{{ state.active?.contextUsage.assistantTokens }}</strong>
-          <span>助手消息</span>
+          <span>助手消息（估算）</span>
         </div>
         <div>
           <strong>{{ state.active?.contextUsage.toolTokens }}</strong>
-          <span>工具链</span>
+          <span>工具结果（估算）</span>
+        </div>
+        <div>
+          <strong>{{ state.active?.contextUsage.toolSchemaTokens ?? '—' }}</strong>
+          <span>工具定义（估算）</span>
+        </div>
+        <div>
+          <strong>{{ state.active?.contextUsage.contextWindow }}</strong>
+          <span>上下文窗口</span>
         </div>
       </div>
       <div v-if="state.active?.contextUsage.measurement === 'api'" class="dca-context-source-note">
-        最近请求：输入 {{ state.active.contextUsage.apiInputTokens ?? 0 }} · 输出
-        {{ state.active.contextUsage.apiOutputTokens ?? 0 }} · 请求后增量估算
-        {{ state.active.contextUsage.estimatedDeltaTokens ?? 0 }}
+        最近有效 API 回执：输入 {{ state.active.contextUsage.apiInputTokens ?? '—' }} · 输出
+        {{ state.active.contextUsage.apiOutputTokens ?? '—' }} · 推理
+        {{ state.active.contextUsage.apiReasoningTokens ?? '—' }} · 缓存读取
+        {{ state.active.contextUsage.apiCacheReadTokens ?? '—' }} · 缓存写入
+        {{ state.active.contextUsage.apiCacheWriteTokens ?? '—' }}。请求后内容增量估算：
+        {{ state.active.contextUsage.estimatedDeltaTokens ?? 0 }}。
       </div>
       <details>
         <summary>上下文事件</summary>
-        <pre>{{ pretty(state.active?.events.filter(event => event.type === 'context-compacted') ?? []) }}</pre>
+        <pre>{{
+          pretty(
+            state.active?.events.filter(
+              event => event.type.startsWith('context-compaction') || event.type === 'context-compacted',
+            ) ?? [],
+          )
+        }}</pre>
       </details>
     </section>
 
@@ -317,6 +326,7 @@
 </template>
 
 <script setup lang="ts">
+import { notify } from '../../../composables/notifications';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useStoredDraft } from '../../../composables/stored-draft';
 import { strToU8, zipSync } from 'fflate';
@@ -351,7 +361,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ close: []; 'update:tab': [value: SidebarTab] }>();
 
-const { action, runtime, state } = useDreamCardAgent();
+const { action, runtime, state, notifications } = useDreamCardAgent();
 
 const selectedFilePath = ref('');
 const editorView = ref<'edit' | 'preview'>('edit');
@@ -361,7 +371,6 @@ const diffFilter = ref('');
 const selectedDiffPath = ref('');
 const diffViewport = ref<HTMLElement>();
 const secretFindings = ref<Awaited<ReturnType<typeof maskSecretsForModel>>['findings']>([]);
-const secretWarning = ref('');
 const projectCheck = ref<HtmlProjectCheck>();
 const projectBusy = ref(false);
 const projectOverwrite = ref(false);
@@ -388,8 +397,7 @@ const activeModel = computed(() => {
     ?.models.find(model => model.id === selection.modelId);
 });
 const contextSourceLabel = computed(() => {
-  const source = state.value.active?.contextUsage.measurement === 'api' ? 'API 用量 + 增量估算' : '本地估算';
-  return activeModel.value?.modelSettings?.contextWindow ? source : `${source}（默认 128K）`;
+  return state.value.active?.contextUsage.measurement === 'api' ? 'API 输入校准 + 增量估算' : '本地估算';
 });
 const visibleFileTreeRows = computed<FileTreeRow[]>(() => {
   const directories = new Set<string>();
@@ -547,18 +555,30 @@ watch(
 );
 
 watch(
-  [() => selectedFile.value?.path, fileDraft],
-  ([path]) => {
+  [() => state.value.active?.sessionId, () => selectedFile.value?.path, fileDraft],
+  ([sessionId, path]) => {
     if (secretScanTimer !== undefined) window.clearTimeout(secretScanTimer);
     const revision = ++secretScanRevision;
     secretFindings.value = [];
-    secretWarning.value = '';
     if (!path?.endsWith('/data.yaml')) return;
     secretScanTimer = window.setTimeout(async () => {
       const result = await maskSecretsForModel(fileDraft.value, path);
       if (revision !== secretScanRevision) return;
       secretFindings.value = result.findings;
-      secretWarning.value = result.warning ?? '';
+      const id = `file-protection:${sessionId}:${path}`;
+      const message =
+        result.warning ||
+        (result.findings.length
+          ? `检测到 ${result.findings.length} 处敏感内容；界面显示原文，Agent 读取时自动遮罩。`
+          : '');
+      if (message)
+        notifications?.upsert({
+          id,
+          title: `${path} · 敏感信息保护`,
+          message,
+          level: result.warning ? 'warning' : 'info',
+        });
+      else notifications?.resolve(id);
     }, 250);
   },
   { immediate: true },
@@ -653,23 +673,23 @@ async function uploadFiles(event: Event) {
   try {
     const attachments = await Promise.all(selected.map(fileToSessionAttachment));
     await action(() => runtime.uploadWorkspaceFiles(uploadTargetDirectory(), attachments));
-    toastr.success(`已上传 ${selected.length} 个文件。`, '梦境创客');
+    notify.success(`已上传 ${selected.length} 个文件。`, '梦境创客');
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '上传失败');
+    notify.error(error instanceof Error ? error.message : String(error), '上传失败');
   }
 }
 
 async function setCharacterAvatar() {
   if (!selectedFile.value || !canUseAsAvatar.value) return;
   if (await action(() => runtime.setWorkspaceAvatar(selectedFile.value!.path, 'character'))) {
-    toastr.success('角色头像已更新，可在Diff中撤销。', '梦境创客');
+    notify.success('角色头像已更新，可在Diff中撤销。', '梦境创客');
   }
 }
 
 async function setUserAvatar() {
   if (!selectedFile.value || !canUseAsAvatar.value || !avatarUserName.value) return;
   if (await action(() => runtime.setWorkspaceAvatar(selectedFile.value!.path, { userName: avatarUserName.value }))) {
-    toastr.success(`User“${avatarUserName.value}”头像已更新，可在Diff中撤销。`, '梦境创客');
+    notify.success(`User“${avatarUserName.value}”头像已更新，可在Diff中撤销。`, '梦境创客');
   }
 }
 
@@ -684,7 +704,7 @@ async function exportSelectedFile() {
   try {
     await exportFile(selectedFile.value);
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '导出失败');
+    notify.error(error instanceof Error ? error.message : String(error), '导出失败');
   }
 }
 
@@ -702,7 +722,7 @@ async function exportTreeRow(row: FileTreeRow) {
     for (const file of selected) entries[file.path.slice(prefix.length)] = await bytesForFile(file);
     downloadBytes(`${row.name}.zip`, zipSync(entries, { level: 6 }), 'application/zip');
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '导出失败');
+    notify.error(error instanceof Error ? error.message : String(error), '导出失败');
   }
 }
 
@@ -783,7 +803,7 @@ async function saveFile() {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (!message.startsWith('MANUAL_EDIT_CONFLICT')) {
-      toastr.error(message, '梦境创客');
+      notify.error(message, '梦境创客');
       return;
     }
     const usePlayer = window.confirm('这个文件在你编辑期间又被修改了。\n\n确定：保存你的版本\n取消：保留酒馆当前版本');
@@ -804,7 +824,7 @@ async function checkProject() {
   try {
     projectCheck.value = await runtime.checkHtmlProject(selectedFile.value.path);
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '工程检查失败');
+    notify.error(error instanceof Error ? error.message : String(error), '工程检查失败');
   } finally {
     projectBusy.value = false;
   }
@@ -819,12 +839,12 @@ async function compileProject() {
       scope: projectScope.value,
     });
     projectCheck.value = await runtime.checkHtmlProject(selectedFile.value.path);
-    toastr.success(
+    notify.success(
       `工程已编译到${projectScope.value === 'character' ? '角色' : projectScope.value === 'global' ? '全局' : '当前预设'}正则。`,
       '梦境创客',
     );
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '工程编译失败');
+    notify.error(error instanceof Error ? error.message : String(error), '工程编译失败');
   } finally {
     projectBusy.value = false;
   }
@@ -1152,29 +1172,6 @@ async function redo() {
 .dca-editor-note {
   color: var(--dca-text-muted);
   font-size: 0.76rem;
-}
-
-.dca-secret-banner {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: flex-start;
-  gap: 0.4rem;
-  border: 1px solid;
-  border-radius: var(--dca-radius-sm);
-  padding: 0.4rem 0.5rem;
-  font-size: 0.74rem;
-}
-
-.dca-secret-banner.protected {
-  border-color: color-mix(in srgb, var(--dca-warning) 40%, transparent);
-  background: var(--dca-warning-soft);
-  color: var(--dca-warning);
-}
-
-.dca-secret-banner.warning {
-  border-color: color-mix(in srgb, var(--dca-danger) 45%, transparent);
-  background: var(--dca-danger-soft);
-  color: var(--dca-danger);
 }
 
 .dca-file-preview {

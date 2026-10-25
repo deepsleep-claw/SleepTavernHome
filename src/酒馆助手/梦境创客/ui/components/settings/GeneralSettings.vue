@@ -36,7 +36,7 @@
       <div class="dca-toggle-row">
         <span>
           <strong>Ctrl + Enter 发送</strong>
-          <small>关闭时按 Enter 发送，Shift + Enter 换行；开启后按 Enter 换行</small>
+          <small>电脑端开启后 Enter 换行，关闭时 Enter 发送。手机触屏使用 Enter 换行，点击按钮发送。</small>
         </span>
         <DcaSwitch
           label="Ctrl + Enter 发送"

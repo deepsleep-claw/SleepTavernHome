@@ -1,12 +1,9 @@
 // @vitest-environment happy-dom
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  DEFAULT_DREAM_CARD_AGENT_SETTINGS,
-  TavernAgentSettingsStore,
-  type CharacterStoreReference,
-} from './settings';
+import { DEFAULT_DREAM_CARD_AGENT_SETTINGS, TavernAgentSettingsStore, type CharacterStoreReference } from './settings';
 import { DEFAULT_BUILTIN_AGENT } from './builtin-agent';
+import { createApiProvider } from '../provider/provider-config';
 
 function character(id: string): CharacterStoreReference {
   return {
@@ -56,7 +53,9 @@ describe('tavern settings cross-window cache', () => {
   it('旧版Agent配置不再迁移，始终使用当前内置配置', () => {
     const legacy = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS) as unknown as Record<string, unknown>;
     legacy.activeAgentConfigurationId = 'agent:old';
-    legacy.agentConfigurations = [{ id: 'agent:old', name: '旧配置', presetId: 'preset:default', skillIds: ['writer'] }];
+    legacy.agentConfigurations = [
+      { id: 'agent:old', name: '旧配置', presetId: 'preset:default', skillIds: ['writer'] },
+    ];
     SillyTavern.extensionSettings['dream-card-agent'] = legacy;
     const store = new TavernAgentSettingsStore();
     const settings = store.load();
@@ -70,5 +69,29 @@ describe('tavern settings cross-window cache', () => {
     ]);
     expect(settings.activeAgentConfigurationId).toBe(DEFAULT_BUILTIN_AGENT.id);
     store.destroy();
+  });
+
+  it('两个页面基于同一版本修改不同 Provider 时不覆盖对方', async () => {
+    const firstStore = new TavernAgentSettingsStore();
+    const secondStore = new TavernAgentSettingsStore();
+    try {
+      const setup = firstStore.load();
+      setup.providers = await Promise.all(
+        ['a', 'b'].map(name =>
+          createApiProvider({ name, enabled: true, baseURL: 'https://example.test', interfaceType: 'openai-chat' }),
+        ),
+      );
+      await firstStore.save(setup);
+      const first = firstStore.load();
+      const second = secondStore.load();
+      first.providers[0].name = 'A edited';
+      second.providers[1].name = 'B edited';
+      await firstStore.save(first);
+      await secondStore.save(second);
+      expect(firstStore.load().providers.map(item => item.name)).toEqual(['A edited', 'B edited']);
+    } finally {
+      firstStore.destroy();
+      secondStore.destroy();
+    }
   });
 });

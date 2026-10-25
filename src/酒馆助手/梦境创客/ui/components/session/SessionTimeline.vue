@@ -1,6 +1,19 @@
 <template>
   <div class="dca-timeline-shell">
-    <div ref="timelineScroller" class="dca-timeline" @scroll.passive="handleTimelineScroll">
+    <div
+      ref="timelineScroller"
+      class="dca-timeline"
+      tabindex="0"
+      aria-label="会话消息"
+      @scroll.passive="scroll.onScroll"
+      @wheel.passive="scroll.onWheel"
+      @touchstart.passive="scroll.onTouchStart"
+      @touchmove.passive="scroll.onTouchMove"
+      @touchend.passive="scroll.onTouchEnd"
+      @touchcancel.passive="scroll.onTouchEnd"
+      @pointerdown="scroll.onPointerDown"
+      @keydown.capture="scroll.onKeydown"
+    >
       <div ref="timelineColumn" class="dca-timeline-column">
         <button v-if="hiddenTimelineCount > 0" class="dca-load-more" type="button" @click="loadEarlier">
           再显示较早的 {{ Math.min(200, hiddenTimelineCount) }} 条
@@ -28,11 +41,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import type { ToolConfirmation } from '../../../core/runner/tools';
 import { useDreamCardAgent } from '../../composables/runtime';
 import type { OperationDiffFocus } from '../../composables/operation-diff';
 import { buildTimelineBlocks, defaultRunCollapsed, type RunTimelineBlock } from '../../composables/timeline';
+import { useTimelineScroll } from '../../composables/timeline-scroll';
 import FailureCard from './timeline/FailureCard.vue';
 import OperationDiffCard from './timeline/OperationDiffCard.vue';
 import RunBlock from './timeline/RunBlock.vue';
@@ -43,17 +57,21 @@ const emit = defineEmits<{ 'open-diff': [focus: OperationDiffFocus] }>();
 const { runtime, state } = useDreamCardAgent();
 
 const timelineLimit = ref(200);
-const runCollapseOverrides = reactive<Record<string, boolean>>({});
+const runCollapseOverrides = ref<Record<string, boolean>>({});
 const timelineNow = ref(Date.now());
 const timelineScroller = ref<HTMLElement>();
 const timelineColumn = ref<HTMLElement>();
 let timelineClock: ReturnType<typeof setInterval> | undefined;
-let timelineResizeObserver: ResizeObserver | undefined;
-let timelineFrame: number | undefined;
-let previousTimelineHeight = 0;
-const followTimelineTail = ref(true);
-
-const TIMELINE_TAIL_THRESHOLD = 32;
+const scroll = useTimelineScroll({
+  owner: runtime,
+  key: () => (state.value.active ? JSON.stringify([state.value.active.bindingId, state.value.active.sessionId]) : ''),
+  itemCount: () => state.value.active?.ui.length ?? 0,
+  scroller: timelineScroller,
+  column: timelineColumn,
+  limit: timelineLimit,
+  collapsedRuns: runCollapseOverrides,
+});
+const { following: followTimelineTail, jumpToLatest, loadEarlier } = scroll;
 
 const runIsActive = computed(() => ['running', 'waiting-approval'].includes(state.value.active?.status ?? ''));
 const activeToolConfirmation = computed<ToolConfirmation | undefined>(() => {
@@ -80,85 +98,14 @@ watch(
   { immediate: true },
 );
 
-watch(
-  () => state.value.active?.sessionId,
-  async () => {
-    followTimelineTail.value = true;
-    timelineLimit.value = 200;
-    previousTimelineHeight = 0;
-    await nextTick();
-    scheduleTimelineTail();
-  },
-);
-
-onMounted(() => {
-  const column = timelineColumn.value;
-  if (column && typeof ResizeObserver !== 'undefined') {
-    timelineResizeObserver = new ResizeObserver(entries => {
-      const nextHeight = entries.at(-1)?.contentRect.height ?? column.getBoundingClientRect().height;
-      // 回退会先移除旧分支。若浏览器已把滚动位置夹回新的底部，需要重新恢复贴底状态，
-      // 这样随后重发产生的新内容才能继续更新真实可滚动边界。
-      if (nextHeight < previousTimelineHeight && isTimelineNearTail()) followTimelineTail.value = true;
-      previousTimelineHeight = nextHeight;
-      if (followTimelineTail.value) scheduleTimelineTail();
-    });
-    timelineResizeObserver.observe(column);
-  }
-  scheduleTimelineTail();
-});
-
 onBeforeUnmount(() => {
   if (timelineClock) clearInterval(timelineClock);
-  timelineResizeObserver?.disconnect();
-  if (timelineFrame !== undefined) cancelAnimationFrame(timelineFrame);
 });
-
-function isTimelineNearTail(): boolean {
-  const scroller = timelineScroller.value;
-  if (!scroller) return true;
-  return scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop <= TIMELINE_TAIL_THRESHOLD;
-}
-
-async function loadEarlier() {
-  const scroller = timelineScroller.value;
-  if (!scroller) return;
-  const top = scroller.scrollTop;
-  const height = scroller.scrollHeight;
-  followTimelineTail.value = false;
-  timelineLimit.value += 200;
-  await nextTick();
-  scroller.scrollTop = top + scroller.scrollHeight - height;
-}
-function jumpToLatest() {
-  followTimelineTail.value = true;
-  scheduleTimelineTail();
-}
-
-function handleTimelineScroll() {
-  followTimelineTail.value = isTimelineNearTail();
-}
-
-function scheduleTimelineTail() {
-  if (!followTimelineTail.value || !timelineScroller.value) return;
-  if (timelineFrame !== undefined) cancelAnimationFrame(timelineFrame);
-  timelineFrame = requestAnimationFrame(() => {
-    timelineFrame = undefined;
-    if (!followTimelineTail.value || !timelineScroller.value) return;
-    timelineScroller.value.scrollTop = timelineScroller.value.scrollHeight;
-    // <details> 展开与流式 Vue patch 可能跨越相邻两次布局；第二帧用于读取最终边界。
-    timelineFrame = requestAnimationFrame(() => {
-      timelineFrame = undefined;
-      if (followTimelineTail.value && timelineScroller.value) {
-        timelineScroller.value.scrollTop = timelineScroller.value.scrollHeight;
-      }
-    });
-  });
-}
 
 function isRunCollapsed(block: RunTimelineBlock): boolean {
   const activeToolCallId = activeToolConfirmation.value?.toolCallId;
   if (activeToolCallId && block.items.some(item => item.toolCallId === activeToolCallId)) return false;
-  return runCollapseOverrides[block.id] ?? defaultRunCollapsed(block);
+  return runCollapseOverrides.value[block.id] ?? defaultRunCollapsed(block);
 }
 
 function resolveConfirmation(approved: boolean) {
@@ -166,7 +113,7 @@ function resolveConfirmation(approved: boolean) {
 }
 
 function toggleRunBlock(block: RunTimelineBlock) {
-  runCollapseOverrides[block.id] = !isRunCollapsed(block);
+  runCollapseOverrides.value[block.id] = !isRunCollapsed(block);
 }
 </script>
 
@@ -186,10 +133,10 @@ function toggleRunBlock(block: RunTimelineBlock) {
 }
 .dca-timeline {
   flex: 1 1 auto;
-  min-height: 10rem;
+  min-height: 0;
   overflow: auto;
   overflow-anchor: none;
-  padding: 0.75rem 0.75rem 0.35rem;
+  padding: 0.6rem 0.65rem 0.3rem;
   scrollbar-gutter: stable;
 }
 
@@ -198,7 +145,7 @@ function toggleRunBlock(block: RunTimelineBlock) {
   width: min(52rem, 100%);
   min-height: 100%;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 0.45rem;
   margin: 0 auto;
 }
 
@@ -208,5 +155,11 @@ function toggleRunBlock(block: RunTimelineBlock) {
 
 .dca-load-more {
   align-self: center;
+}
+
+@media (max-width: 720px) {
+  .dca-timeline {
+    padding: 0.45rem 0.5rem 0.25rem;
+  }
 }
 </style>

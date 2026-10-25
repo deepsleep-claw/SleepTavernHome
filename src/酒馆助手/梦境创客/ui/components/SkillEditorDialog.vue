@@ -4,7 +4,15 @@
       <header>
         <div>
           <h3 id="dca-skill-title">
-            {{ skillDeletePending ? '删除 Skill' : builtinReadonly ? '查看内置 Skill' : skillDraft.id ? '编辑 Skill' : '新建 Skill' }}
+            {{
+              skillDeletePending
+                ? '删除 Skill'
+                : builtinReadonly
+                  ? '查看内置 Skill'
+                  : skillDraft.id
+                    ? '编辑 Skill'
+                    : '新建 Skill'
+            }}
           </h3>
           <p v-if="!skillDeletePending">
             Skill 在全局资源库中跨角色复用；文件可自由组织，根目录 SKILL.md 保留给主 Skill。
@@ -24,7 +32,9 @@
       <template v-else>
         <fieldset class="dca-skill-fields" :disabled="builtinReadonly">
           <div class="dca-form-grid">
-            <label class="dca-field"><span>名称</span><input v-model="skillDraft.name" type="text" @input="markDirty" /></label>
+            <label class="dca-field"
+              ><span>名称</span><input v-model="skillDraft.name" type="text" @input="markDirty"
+            /></label>
             <label class="dca-field">
               <span>类型</span>
               <DcaSelect
@@ -70,7 +80,13 @@
               <button type="button" @click="createDirectory">新建文件夹</button>
               <button type="button" @click="createTextFile">新建文本</button>
               <button type="button" @click="resourceUploadInput?.click()">上传文件</button>
-              <input ref="resourceUploadInput" class="dca-hidden-input" type="file" multiple @change="uploadResources" />
+              <input
+                ref="resourceUploadInput"
+                class="dca-hidden-input"
+                type="file"
+                multiple
+                @change="uploadResources"
+              />
             </div>
           </header>
 
@@ -94,13 +110,18 @@
               >
                 <button
                   class="dca-skill-file-row"
-                  :class="{ active: entry.kind === 'file' && selectedPath === entry.path, directory: entry.kind === 'directory' }"
+                  :class="{
+                    active: entry.kind === 'file' && selectedPath === entry.path,
+                    directory: entry.kind === 'directory',
+                  }"
                   type="button"
                   @click="selectResource(entry)"
                 >
                   <i
                     v-if="entry.kind === 'directory'"
-                    :class="expandedDirectories.has(entry.path) ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right'"
+                    :class="
+                      expandedDirectories.has(entry.path) ? 'fa-solid fa-chevron-down' : 'fa-solid fa-chevron-right'
+                    "
                     aria-hidden="true"
                   ></i>
                   <i v-else class="fa-regular fa-file" aria-hidden="true"></i>
@@ -108,13 +129,30 @@
                   <small>{{ entry.kind === 'directory' ? '文件夹' : formatBytes(entry.size) }}</small>
                 </button>
                 <span class="dca-row-actions dca-skill-entry-actions">
-                  <button class="dca-icon-btn" type="button" :title="entry.kind === 'directory' ? '导出文件夹 ZIP' : '导出文件'" @click.stop="downloadEntry(entry)">
+                  <button
+                    class="dca-icon-btn"
+                    type="button"
+                    :title="entry.kind === 'directory' ? '导出文件夹 ZIP' : '导出文件'"
+                    @click.stop="downloadEntry(entry)"
+                  >
                     <i class="fa-solid fa-download" aria-hidden="true"></i>
                   </button>
-                  <button v-if="!builtinReadonly" class="dca-icon-btn" type="button" title="重命名" @click.stop="renameEntry(entry)">
+                  <button
+                    v-if="!builtinReadonly"
+                    class="dca-icon-btn"
+                    type="button"
+                    title="重命名"
+                    @click.stop="renameEntry(entry)"
+                  >
                     <i class="fa-solid fa-pen" aria-hidden="true"></i>
                   </button>
-                  <button v-if="!builtinReadonly" class="dca-icon-btn" type="button" title="删除" @click.stop="deleteEntry(entry)">
+                  <button
+                    v-if="!builtinReadonly"
+                    class="dca-icon-btn"
+                    type="button"
+                    title="删除"
+                    @click.stop="deleteEntry(entry)"
+                  >
                     <i class="fa-solid fa-trash" aria-hidden="true"></i>
                   </button>
                 </span>
@@ -122,9 +160,18 @@
               <div v-if="allResourceEntries.length === 0" class="dca-empty">暂无额外资源，不会预创建任何目录。</div>
             </div>
 
-            <div class="dca-skill-file-preview-layer" :class="{ open: mobileResourceOpen }" @click.self="closeMobileResource">
+            <div
+              class="dca-skill-file-preview-layer"
+              :class="{ open: mobileResourceOpen }"
+              @click.self="closeMobileResource"
+            >
               <div class="dca-skill-file-preview">
-                <button class="dca-icon-btn dca-skill-mobile-preview-close" type="button" title="关闭资源文件" @click="closeMobileResource">
+                <button
+                  class="dca-icon-btn dca-skill-mobile-preview-close"
+                  type="button"
+                  title="关闭资源文件"
+                  @click="closeMobileResource"
+                >
                   <i class="fa-solid fa-xmark" aria-hidden="true"></i>
                 </button>
                 <template v-if="selectedPath === 'SKILL.md'">
@@ -133,7 +180,10 @@
                 </template>
                 <template v-else-if="selectedResource">
                   <header>
-                    <div><strong>{{ selectedPath }}</strong><small>{{ selectedResource.mediaType }}</small></div>
+                    <div>
+                      <strong>{{ selectedPath }}</strong
+                      ><small>{{ selectedResource.mediaType }}</small>
+                    </div>
                     <button type="button" @click="downloadResource(selectedPath, selectedResource)">
                       <i class="fa-solid fa-download" aria-hidden="true"></i>导出
                     </button>
@@ -210,6 +260,7 @@
 </template>
 
 <script setup lang="ts">
+import { notify } from '../composables/notifications';
 import { computed, onBeforeUnmount, onMounted, reactive, ref, shallowRef, toRaw, watch } from 'vue';
 import { zipSync } from 'fflate';
 import {
@@ -224,6 +275,7 @@ import { createSkillTemplate } from '../../core/skills/skill-registry';
 import type { AgentSkill, SkillLoadingMode, SkillResource } from '../../core/skills/types';
 import { downloadBytes, downloadText, formatBytes } from '../composables/format';
 import { useDreamCardAgent } from '../composables/runtime';
+import { useBackLayer } from '../composables/workspace-navigation';
 import DcaSelect from './DcaSelect.vue';
 
 type ResourceEntry = { depth: number; kind: 'directory' | 'file'; name: string; path: string; size: number };
@@ -243,6 +295,15 @@ const selectedPath = ref('SKILL.md');
 const expandedDirectories = ref(new Set<string>());
 const mobileResourceOpen = ref(false);
 const resourceMenu = ref<{ entry: ResourceEntry; x: number; y: number }>();
+useBackLayer(
+  computed(() => Boolean(skillEditorRequest.value)),
+  closeSkillEditor,
+);
+useBackLayer(mobileResourceOpen, closeMobileResource);
+useBackLayer(
+  computed(() => Boolean(resourceMenu.value)),
+  closeResourceMenu,
+);
 let loadToken = 0;
 
 const skillDraft = reactive({
@@ -262,7 +323,9 @@ const canSaveSkill = computed(
   () => skillDraft.name.trim() !== '' && skillDraft.description.trim() !== '' && skillDraft.body.trim() !== '',
 );
 const resourceFileCount = computed(() => Object.keys(resourceDraft.value).length);
-const resourceBytes = computed(() => Object.values(resourceDraft.value).reduce((sum, resource) => sum + resource.size, 0));
+const resourceBytes = computed(() =>
+  Object.values(resourceDraft.value).reduce((sum, resource) => sum + resource.size, 0),
+);
 const selectedResource = computed(() => resourceDraft.value[selectedPath.value]);
 const allResourceEntries = computed<ResourceEntry[]>(() => {
   const directories = new Set(directoryDraft.value);
@@ -293,13 +356,15 @@ const allResourceEntries = computed<ResourceEntry[]>(() => {
     return left.path.localeCompare(right.path);
   });
 });
-const visibleResourceEntries = computed(() => allResourceEntries.value.filter(entry => {
-  const parts = entry.path.split('/');
-  for (let index = 1; index < parts.length; index += 1) {
-    if (!expandedDirectories.value.has(parts.slice(0, index).join('/'))) return false;
-  }
-  return true;
-}));
+const visibleResourceEntries = computed(() =>
+  allResourceEntries.value.filter(entry => {
+    const parts = entry.path.split('/');
+    for (let index = 1; index < parts.length; index += 1) {
+      if (!expandedDirectories.value.has(parts.slice(0, index).join('/'))) return false;
+    }
+    return true;
+  }),
+);
 
 watch(skillEditorRequest, request => {
   if (!request) return;
@@ -323,13 +388,15 @@ watch(skillEditorRequest, request => {
       .then(skill => {
         if (token === loadToken) assignSkill(skill);
       })
-      .catch(error => toastr.error(error instanceof Error ? error.message : String(error), 'Skill载入失败'))
+      .catch(error => notify.error(error instanceof Error ? error.message : String(error), 'Skill载入失败'))
       .finally(() => {
         if (token === loadToken) loading.value = false;
       });
     return;
   }
-  assignSkill(request.skill ?? createSkillTemplate('新 Skill', '说明这个Skill何时使用、能帮助Agent做什么。', 'on-demand'));
+  assignSkill(
+    request.skill ?? createSkillTemplate('新 Skill', '说明这个Skill何时使用、能帮助Agent做什么。', 'on-demand'),
+  );
   if (!request.skill) {
     skillDraft.id = '';
     editingSkill.value = undefined;
@@ -343,8 +410,9 @@ function assignSkill(input: AgentSkill) {
   resourceDraft.value = structuredClone(skillResources(skill));
   directoryDraft.value = skillDirectories(skill);
   expandedDirectories.value = new Set(
-    [...directoryDraft.value, ...Object.keys(resourceDraft.value).map(path => path.split('/')[0])]
-      .filter(path => path && !path.includes('/')),
+    [...directoryDraft.value, ...Object.keys(resourceDraft.value).map(path => path.split('/')[0])].filter(
+      path => path && !path.includes('/'),
+    ),
   );
   dirty.value = false;
   loading.value = false;
@@ -405,7 +473,7 @@ async function commitSkillSave() {
   if (await action(() => runtime.saveGlobalSkill(skill))) {
     dirty.value = false;
     closeSkillEditor();
-    toastr.success(`全局Skill“${skill.name}”已保存；已发送的固定头部不会被自动改写。`, '梦境创客');
+    notify.success(`全局Skill“${skill.name}”已保存；已发送的固定头部不会被自动改写。`, '梦境创客');
   }
 }
 
@@ -415,7 +483,7 @@ async function deleteSkill() {
     const name = skillDraft.name;
     dirty.value = false;
     closeSkillEditor();
-    toastr.success(`已删除全局Skill“${name}”。`, '梦境创客');
+    notify.success(`已删除全局Skill“${name}”。`, '梦境创客');
   }
 }
 
@@ -435,14 +503,15 @@ async function uploadResources(event: Event) {
       const path = targetPath(file.name);
       if (next[path] && !window.confirm(`资源“${path}”已经存在，是否替换？`)) continue;
       const mediaType = file.type || inferSkillMediaType(path);
-      next[path] = mediaType.startsWith('text/') || mediaType === 'application/json'
-        ? { content: await file.text(), mediaType, size: file.size }
-        : { data: new Uint8Array(await file.arrayBuffer()), mediaType, size: file.size };
+      next[path] =
+        mediaType.startsWith('text/') || mediaType === 'application/json'
+          ? { content: await file.text(), mediaType, size: file.size }
+          : { data: new Uint8Array(await file.arrayBuffer()), mediaType, size: file.size };
     }
     resourceDraft.value = next;
     markDirty();
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '资源上传失败');
+    notify.error(error instanceof Error ? error.message : String(error), '资源上传失败');
   }
 }
 
@@ -456,7 +525,7 @@ function createDirectory() {
     selectedPath.value = path;
     markDirty();
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '无法创建文件夹');
+    notify.error(error instanceof Error ? error.message : String(error), '无法创建文件夹');
   }
 }
 
@@ -473,7 +542,7 @@ function createTextFile() {
     selectedPath.value = path;
     markDirty();
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '无法新建文本文件');
+    notify.error(error instanceof Error ? error.message : String(error), '无法新建文本文件');
   }
 }
 
@@ -526,7 +595,8 @@ function renameEntry(entry: ResourceEntry) {
   const input = window.prompt('输入新的相对路径：', entry.path);
   if (!input || input === entry.path) return;
   try {
-    const nextPath = entry.kind === 'directory' ? normalizeSkillDirectoryPath(input) : normalizeSkillResourcePath(input);
+    const nextPath =
+      entry.kind === 'directory' ? normalizeSkillDirectoryPath(input) : normalizeSkillResourcePath(input);
     if (entry.kind === 'file') {
       if (resourceDraft.value[nextPath]) throw new Error(`文件已经存在：${nextPath}`);
       const next = { ...resourceDraft.value };
@@ -549,7 +619,7 @@ function renameEntry(entry: ResourceEntry) {
     selectedPath.value = nextPath;
     markDirty();
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '无法重命名');
+    notify.error(error instanceof Error ? error.message : String(error), '无法重命名');
   }
 }
 
@@ -605,7 +675,9 @@ function downloadEntry(entry: ResourceEntry) {
   }
   const prefix = `${entry.path}/`;
   const files = Object.entries(resourceDraft.value).filter(([path]) => path.startsWith(prefix));
-  const archive = Object.fromEntries(files.map(([path, resource]) => [path.slice(prefix.length), resourceDataBytes(resource)]));
+  const archive = Object.fromEntries(
+    files.map(([path, resource]) => [path.slice(prefix.length), resourceDataBytes(resource)]),
+  );
   downloadBytes(`${entry.name}.zip`, zipSync(archive, { level: 6 }), 'application/zip');
 }
 

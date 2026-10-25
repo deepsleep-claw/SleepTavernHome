@@ -5,32 +5,16 @@
     :class="{ 'sidebar-collapsed': sidebarCollapsed, 'is-narrow': workbenchWidth < 646 }"
     :style="{ '--dca-sidebar-width': `${Math.min(sidebarWidth, Math.max(320, workbenchWidth - 326))}px` }"
   >
-    <div class="dca-session-panel">
+    <div
+      class="dca-session-panel"
+      :inert="isMobile && !sidebarCollapsed"
+      :aria-hidden="isMobile && !sidebarCollapsed ? true : undefined"
+    >
       <SessionToolbar :sidebar-collapsed="sidebarCollapsed" @toggle-sidebar="toggleSidebar" />
-      <details v-if="state.active?.warnings.length" class="dca-session-warnings">
-        <summary>会话提示（{{ state.active.warnings.length }}）</summary>
-        <ul>
-          <li v-for="warning in state.active.warnings" :key="warning">{{ warning }}</li>
-        </ul>
-      </details>
       <SessionTimeline @open-diff="openDiff" />
       <div v-if="state.activeSessionAccess === 'readonly-history'" class="dca-readonly-composer">
         <i class="fa-solid fa-lock" aria-hidden="true"></i>
-        <div>
-          <strong>历史记录只读</strong
-          ><span>{{
-            state.active?.error ||
-            '对应角色卡已不可用。你仍可查看消息、工具过程、操作记录与 Diff，但不能发送或修改内容。'
-          }}</span>
-        </div>
-        <button
-          v-if="state.active?.scope === 'global' || state.active?.bindingId === state.currentCharacter?.bindingId"
-          type="button"
-          :disabled="state.busy"
-          @click="retryWorkspace"
-        >
-          重新加载工作区
-        </button>
+        <span>历史记录只读</span>
       </div>
       <SessionComposer v-else />
     </div>
@@ -52,28 +36,27 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useElementWidth } from '../../composables/element-width';
 import { useDreamCardAgent, type SidebarTab } from '../../composables/runtime';
 import type { OperationDiffFocus } from '../../composables/operation-diff';
 import { useSidebarResize } from '../../composables/sidebar-resize';
+import { useBackLayer } from '../../composables/workspace-navigation';
 import SessionComposer from './SessionComposer.vue';
 import OperationReplayDialog from './OperationReplayDialog.vue';
 import SessionTimeline from './SessionTimeline.vue';
 import SessionToolbar from './SessionToolbar.vue';
 import SessionSidebar from './sidebar/SessionSidebar.vue';
 
-const { sidebarFocus, state, runtime, action } = useDreamCardAgent();
-
-async function retryWorkspace() {
-  const active = state.value.active;
-  if (!active) return;
-  await action(() =>
-    active.scope === 'global' ? runtime.openGlobalSession(active.sessionId) : runtime.openSession(active.sessionId),
-  );
-}
+const { sidebarFocus, state, isMobile } = useDreamCardAgent();
 
 const sidebarCollapsed = ref(true);
+useBackLayer(
+  computed(() => Boolean(isMobile?.value && !sidebarCollapsed.value)),
+  () => {
+    sidebarCollapsed.value = true;
+  },
+);
 const workbenchRoot = ref<HTMLElement>();
 const workbenchWidth = useElementWidth(workbenchRoot);
 const sidebarWidth = ref(390);
@@ -117,18 +100,6 @@ watch(
 );
 </script>
 
-<style scoped>
-.dca-session-warnings {
-  padding: 0.5rem 0.75rem;
-  border-bottom: 1px solid var(--dca-border);
-  font-size: 0.85rem;
-  overflow-wrap: anywhere;
-}
-.dca-session-warnings summary {
-  cursor: pointer;
-}
-</style>
-
 <style lang="scss">
 .dca-workbench {
   position: relative;
@@ -154,26 +125,12 @@ watch(
   flex: 0 0 auto;
   align-items: center;
   gap: 0.75rem;
-  margin: 0.7rem;
-  border: 1px solid color-mix(in srgb, var(--dca-info) 28%, transparent);
-  border-radius: 0.75rem;
-  padding: 0.75rem 0.9rem;
-  background: color-mix(in srgb, var(--dca-info-soft) 55%, transparent);
+  padding: 0.35rem 0.9rem;
+  font-size: 0.74rem;
   color: var(--dca-text-muted);
 }
 .dca-readonly-composer > i {
   color: var(--dca-info);
-}
-.dca-readonly-composer > div {
-  display: flex;
-  flex-direction: column;
-}
-.dca-readonly-composer strong {
-  color: var(--dca-text);
-  font-size: 0.82rem;
-}
-.dca-readonly-composer span {
-  font-size: 0.72rem;
 }
 
 .dca-sidebar-resizer {

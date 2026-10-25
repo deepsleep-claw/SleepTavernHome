@@ -156,14 +156,19 @@
 
       <footer>
         <button type="button" @click="emit('close')">取消</button>
-        <button class="dca-btn-primary" type="button" :disabled="loading" @click="save">保存模型</button>
+        <span v-if="saveFeedback" role="status">{{ saveFeedback }}</span>
+        <button class="dca-btn-primary" type="button" :disabled="loading || saving || Boolean(loadError)" @click="save">
+          {{ saving ? '正在保存' : '保存模型' }}
+        </button>
       </footer>
     </section>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { notify } from '../../composables/notifications';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { useBackLayer } from '../../composables/workspace-navigation';
 import {
   builtinModelTemplates,
   defaultModelSettings,
@@ -177,12 +182,14 @@ import {
   type ModelTemplate,
 } from '../../../core/provider/model-catalog';
 import type { ApiModel, ApiModelInput, ApiProvider } from '../../../core/provider/provider-config';
+import { omitsSamplingParameters } from '../../../core/provider/model-behavior';
 import { useDreamCardAgent } from '../../composables/runtime';
 import DcaSelect, { type SelectOption } from '../DcaSelect.vue';
 import SearchableCombobox, { type ComboboxOption } from '../SearchableCombobox.vue';
 
 const props = defineProps<{ copying?: boolean; model?: ApiModel; open: boolean; provider?: ApiProvider }>();
 const emit = defineEmits<{ close: []; saved: [model: ApiModel] }>();
+useBackLayer(ref(true), () => emit('close'));
 const { action, runtime } = useDreamCardAgent();
 const builtins = builtinModelTemplates();
 const clouds = ref<ModelTemplate[]>([]);
@@ -191,7 +198,7 @@ const loading = ref(false);
 const selectedTemplateId = ref('custom');
 const appliedTemplate = ref<AppliedModelTemplate>();
 let applying = false;
-let autoApplied = false;
+let autoTemplateLocked = false;
 
 type Form = {
   bodyParameters: string;
@@ -211,6 +218,22 @@ type Form = {
 };
 
 const form = reactive<Form>(emptyForm());
+const saving = ref(false);
+const saveFeedback = ref('');
+const loadError = ref('');
+let editorGeneration = 0;
+let editRevision = 0;
+watch(
+  form,
+  () => {
+    editRevision += 1;
+    saveFeedback.value = '';
+  },
+  { deep: true, flush: 'sync' },
+);
+onBeforeUnmount(() => {
+  editorGeneration += 1;
+});
 const compatibilityOptions = computed<SelectOption[]>(() => [
   { label: '标准', value: 'standard' },
   ...(props.provider?.interfaceType === 'gemini' ? [] : [{ label: 'DeepSeek', value: 'deepseek' }]),
@@ -250,63 +273,80 @@ const selectedTemplate = computed(() => availableTemplates.value.find(item => it
 const templateSource = computed(() =>
   selectedTemplate.value?.source === 'cloud' ? 'models.dev' : selectedTemplate.value ? '本地配置' : '自定义',
 );
-const samplingIgnored = computed(() => form.compatibilityMode === 'deepseek');
+const samplingIgnored = computed(() => form.compatibilityMode === 'deepseek' || omitsSamplingParameters(form.modelId));
 
 watch(
-  () => [props.open, props.model?.id, props.copying] as const,
+  () => [props.open, props.provider?.id, props.model?.id, props.copying] as const,
   async ([open]) => {
+    const generation = ++editorGeneration;
+    loadError.value = '';
+    saveFeedback.value = '';
+    saving.value = false;
     if (!open) return;
+    const model = props.model;
+    const provider = props.provider;
+    const copying = props.copying;
     loading.value = true;
     applying = true;
-    autoApplied = false;
+    autoTemplateLocked = false;
     try {
       Object.assign(form, emptyForm());
-      if (props.model) {
-        const request = props.provider ? await runtime.revealModel(props.provider.id, props.model.id) : undefined;
+      if (model) {
+        const request = provider ? await runtime.revealModel(provider.id, model.id) : undefined;
+        if (generation !== editorGeneration) return;
         Object.assign(form, {
           bodyParameters: request?.bodyParameters.text ?? '',
-          capabilities: { ...props.model.modelSettings.capabilities },
-          compatibilityMode: props.model.compatibilityMode,
-          contextWindow: props.model.modelSettings.contextWindow,
-          enabled: props.model.enabled,
+          capabilities: { ...model.modelSettings.capabilities },
+          compatibilityMode: model.compatibilityMode,
+          contextWindow: model.modelSettings.contextWindow,
+          enabled: model.enabled,
           excludedBodyParameters: request?.excludedBodyParameters.text ?? '',
-          id: props.copying ? '' : props.model.id,
-          maxOutputTokens: props.model.modelSettings.maxOutputTokens,
-          modelId: props.model.modelId,
-          name: props.copying ? `${props.model.name} 2` : props.model.name,
-          reasoningEfforts: formatEfforts(props.model.modelSettings.reasoningEfforts),
+          id: copying ? '' : model.id,
+          maxOutputTokens: model.modelSettings.maxOutputTokens,
+          modelId: model.modelId,
+          name: copying ? `${model.name} 2` : model.name,
+          reasoningEfforts: formatEfforts(model.modelSettings.reasoningEfforts),
           requestHeaders: request?.requestHeaders.text ?? '',
-          temperature: props.model.modelSettings.temperature ?? '',
-          topP: props.model.modelSettings.topP ?? '',
+          temperature: model.modelSettings.temperature ?? '',
+          topP: model.modelSettings.topP ?? '',
         });
-        appliedTemplate.value = props.model.appliedModelTemplate ? { ...props.model.appliedModelTemplate } : undefined;
-        selectedTemplateId.value = props.model.appliedModelTemplate?.id ?? 'custom';
-        autoApplied = true;
+        appliedTemplate.value = model.appliedModelTemplate ? { ...model.appliedModelTemplate } : undefined;
+        selectedTemplateId.value = model.appliedModelTemplate?.id ?? 'custom';
+        autoTemplateLocked = true;
       } else {
         selectedTemplateId.value = 'custom';
         appliedTemplate.value = undefined;
       }
+    } catch (error) {
+      if (generation === editorGeneration) {
+        loadError.value = error instanceof Error ? error.message : String(error);
+        saveFeedback.value = `读取失败：${loadError.value}`;
+      }
     } finally {
-      applying = false;
-      loading.value = false;
+      if (generation === editorGeneration) {
+        applying = false;
+        loading.value = false;
+      }
     }
   },
-  { immediate: true },
+  { immediate: true, flush: 'sync' },
 );
 
 watch(
   () => form.modelId,
   modelId => {
-    if (applying || form.id || autoApplied || !modelId.trim()) return;
+    if (applying || form.id || autoTemplateLocked) return;
     const match = matchModelTemplates(
       modelId,
       builtins.filter(item => !item.interfaceType || item.interfaceType === props.provider?.interfaceType),
       1,
     )[0];
-    if (!match) return;
+    if (!modelId.trim() || !match) {
+      if (appliedTemplate.value) applyTemplate();
+      return;
+    }
     selectedTemplateId.value = match.template.id;
     applyTemplate(match.template);
-    autoApplied = true;
   },
 );
 
@@ -359,28 +399,33 @@ function currentSettings() {
   };
 }
 
-function applyTemplate(template: ModelTemplate) {
+function applyTemplate(template?: ModelTemplate) {
   applying = true;
-  const settings = settingsForAppliedTemplate(template, currentSettings());
+  const settings = template ? settingsForAppliedTemplate(template, currentSettings()) : defaultModelSettings();
   Object.assign(form, {
     capabilities: { ...settings.capabilities },
-    compatibilityMode: template.compatibilityMode ?? form.compatibilityMode,
+    compatibilityMode: template ? (template.compatibilityMode ?? form.compatibilityMode) : 'standard',
     contextWindow: settings.contextWindow,
     maxOutputTokens: settings.maxOutputTokens,
     reasoningEfforts: formatEfforts(settings.reasoningEfforts),
     temperature: settings.temperature ?? '',
     topP: settings.topP ?? '',
   });
-  appliedTemplate.value = { id: template.id, revision: template.revision, source: template.source };
+  selectedTemplateId.value = template?.id ?? 'custom';
+  appliedTemplate.value = template
+    ? { id: template.id, revision: template.revision, source: template.source }
+    : undefined;
   queueMicrotask(() => {
     applying = false;
   });
 }
 function applySelectedTemplate() {
+  autoTemplateLocked = true;
   if (selectedTemplate.value) applyTemplate(selectedTemplate.value);
 }
 function markCustom() {
   if (!applying) {
+    autoTemplateLocked = true;
     selectedTemplateId.value = 'custom';
     appliedTemplate.value = undefined;
   }
@@ -390,9 +435,9 @@ async function loadCloud() {
   cloudLoading.value = true;
   try {
     clouds.value = await fetchModelsDevCatalog();
-    toastr.success(`读取了 ${clouds.value.length} 个云端模型模板。`, '梦境创客');
+    notify.success(`读取了 ${clouds.value.length} 个云端模型模板。`, '梦境创客');
   } catch (error) {
-    toastr.warning(error instanceof Error ? error.message : String(error), '梦境创客');
+    notify.warning(error instanceof Error ? error.message : String(error), '梦境创客');
   } finally {
     cloudLoading.value = false;
   }
@@ -406,23 +451,38 @@ function updateCapability(key: ModelCapabilityKey, value: string) {
 }
 
 async function save() {
-  if (!props.provider) return;
+  if (!props.provider || loading.value || saving.value || loadError.value) return;
+  const providerId = props.provider.id;
+  const generation = editorGeneration;
+  const revision = editRevision;
+  saving.value = true;
   let saved: ApiModel | undefined;
-  const succeeded = await action(async () => {
-    saved = await runtime.saveModel(props.provider!.id, {
-      appliedModelTemplate: appliedTemplate.value ?? null,
-      bodyParameters: { text: form.bodyParameters },
-      compatibilityMode: form.compatibilityMode,
-      enabled: form.enabled,
-      excludedBodyParameters: { text: form.excludedBodyParameters },
-      id: form.id || undefined,
-      modelId: form.modelId,
-      modelSettings: currentSettings(),
-      name: form.name,
-      requestHeaders: { text: form.requestHeaders },
+  try {
+    const succeeded = await action(async () => {
+      saved = await runtime.saveModel(providerId, {
+        appliedModelTemplate: appliedTemplate.value ?? null,
+        bodyParameters: { text: form.bodyParameters },
+        compatibilityMode: form.compatibilityMode,
+        enabled: form.enabled,
+        excludedBodyParameters: { text: form.excludedBodyParameters },
+        id: form.id || undefined,
+        modelId: form.modelId,
+        modelSettings: currentSettings(),
+        name: form.name,
+        requestHeaders: { text: form.requestHeaders },
+      });
     });
-  });
-  if (succeeded && saved) emit('saved', saved);
+    if (generation !== editorGeneration) return;
+    if (succeeded && saved) {
+      if (revision === editRevision) emit('saved', saved);
+      else {
+        form.id = saved.id;
+        saveFeedback.value = '已保存提交的内容，仍有新修改待保存';
+      }
+    } else saveFeedback.value = '保存失败，修改已保留，可重试';
+  } finally {
+    if (generation === editorGeneration) saving.value = false;
+  }
 }
 
 function formatTokens(value: number) {
@@ -434,10 +494,11 @@ function formatTokens(value: number) {
 </script>
 
 <style lang="scss">
-.dca-model-editor {
+.dca-modal.dca-model-editor {
   display: flex;
   width: min(58rem, calc(100vw - 2rem));
-  max-height: min(90vh, 54rem);
+  min-height: 0;
+  max-height: min(90dvh, 54rem);
   flex-direction: column;
   overflow: hidden;
 }
@@ -522,14 +583,14 @@ function formatTokens(value: number) {
   margin-bottom: 0.7rem;
 }
 @media (max-width: 720px) {
-  .dca-model-editor-backdrop {
+  .dca-modal-backdrop.dca-model-editor-backdrop {
     padding: 0;
     place-items: stretch;
   }
-  .dca-model-editor {
+  .dca-modal.dca-model-editor {
     width: 100%;
     height: 100%;
-    max-height: none;
+    max-height: 100%;
     border: 0;
     border-radius: 0;
     padding-top: max(3.35rem, calc(0.85rem + env(safe-area-inset-top)));

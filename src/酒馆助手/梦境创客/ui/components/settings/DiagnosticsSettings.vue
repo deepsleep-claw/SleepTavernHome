@@ -49,6 +49,7 @@
 </template>
 
 <script setup lang="ts">
+import { notify } from '../../composables/notifications';
 import { computed } from 'vue';
 import { pretty } from '../../composables/format';
 import { useDreamCardAgent } from '../../composables/runtime';
@@ -64,7 +65,7 @@ const orphanSessions = computed(() =>
 
 async function copyDiagnostics() {
   await navigator.clipboard.writeText(JSON.stringify(runtime.diagnosticBundle(), null, 2));
-  toastr.success('已复制脱敏诊断包', '梦境创客');
+  notify.success('已复制脱敏诊断包', '梦境创客');
 }
 </script>
 

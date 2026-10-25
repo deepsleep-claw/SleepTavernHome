@@ -70,7 +70,7 @@ describe('card agent realtime session service', () => {
     const adapter = new MemoryCardStateAdapter(transactionState());
     const first = await createService({
       adapter,
-      executor: new QueueExecutor([{ ...step([], '旧回答'), inputTokens: 100_000, outputTokens: 8000 }]),
+      executor: new QueueExecutor([{ ...step([], '旧回答'.repeat(200)), inputTokens: 100_000, outputTokens: 8000 }]),
       onPersist: async value => {
         saved = structuredClone(value);
       },
@@ -78,7 +78,8 @@ describe('card agent realtime session service', () => {
     await first.send('第一轮');
     const executor = new QueueExecutor([step([], '交接摘要'), step([], '继续完成')]);
     const restored = await CardAgentSessionService.restore({ adapter, executor }, saved);
-    expect(restored.view().contextUsage.totalTokens).toBe(108_000);
+    expect(restored.view().contextUsage.totalTokens).toBe(first.view().contextUsage.totalTokens);
+    expect(restored.view().contextUsage.apiInputTokens).toBe(100_000);
     expect((await restored.send('第二轮')).status).toBe('completed');
     expect(executor.requests[0].tools).toEqual([]);
     expect(executor.requests[1].tools.length).toBeGreaterThan(0);
@@ -87,7 +88,11 @@ describe('card agent realtime session service', () => {
   it('手动压缩后回退最新消息，移除摘要并恢复此前对话', async () => {
     let saved!: PersistedSessionRuntime;
     const service = await createService({
-      executor: new QueueExecutor([step([], '第一轮答案'), step([], '第二轮答案'), step([], '包含第二轮的摘要')]),
+      executor: new QueueExecutor([
+        step([], '第一轮答案'.repeat(200)),
+        step([], '第二轮答案'),
+        step([], '包含第二轮的摘要'),
+      ]),
       onPersist: async value => {
         saved = structuredClone(value);
       },
@@ -224,18 +229,22 @@ describe('card agent realtime session service', () => {
 
   it('生成期间可以分叉历史输出，正在流式增长的输出须等到固定后', async () => {
     let started!: () => void;
-    const ready = new Promise<void>(resolve => { started = resolve; });
+    const ready = new Promise<void>(resolve => {
+      started = resolve;
+    });
     let calls = 0;
-    const service = await createService({ executor: {
-      execute: request => {
-        if (calls++ === 0) return Promise.resolve(step([], '已完成的回答'));
-        request.onTextDelta?.('正在生成的回答');
-        started();
-        return new Promise((_resolve, reject) => {
-          request.abortSignal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
-        });
+    const service = await createService({
+      executor: {
+        execute: request => {
+          if (calls++ === 0) return Promise.resolve(step([], '已完成的回答'));
+          request.onTextDelta?.('正在生成的回答');
+          started();
+          return new Promise((_resolve, reject) => {
+            request.abortSignal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+          });
+        },
       },
-    } });
+    });
     const first = await service.send('第一轮');
     const target = first.ui.find(item => item.kind === 'assistant')!;
     const running = service.send('第二轮');
@@ -247,7 +256,9 @@ describe('card agent realtime session service', () => {
     expect(service.view().status).toBe('running');
     service.stop();
     await running;
-    expect(service.forkRuntime(streaming.id, 'fork:stopped').modelMessages.at(-1)).toMatchObject({ content: '正在生成的回答' });
+    expect(service.forkRuntime(streaming.id, 'fork:stopped').modelMessages.at(-1)).toMatchObject({
+      content: '正在生成的回答',
+    });
     expect(fork.ui.filter(item => item.kind === 'assistant')).toHaveLength(1);
   });
 
@@ -330,7 +341,7 @@ describe('card agent realtime session service', () => {
         { content: '{{skill_instructions}}', enabled: true, id: 'skills', order: 10, role: 'system', title: 'Skill' },
       ],
     };
-    const executor = new QueueExecutor([step([], 'x'.repeat(150_000)), step([], '保留目标'), step([], '压缩后完成')]);
+    const executor = new QueueExecutor([step([], 'x'.repeat(110_000)), step([], '保留目标'), step([], '压缩后完成')]);
     const service = await CardAgentSessionService.create({
       adapter: new MemoryCardStateAdapter(transactionState()),
       agentConfiguration: {

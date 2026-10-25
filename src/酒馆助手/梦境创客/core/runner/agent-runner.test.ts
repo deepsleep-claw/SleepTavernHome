@@ -69,7 +69,15 @@ describe('AgentRunner', () => {
 
   it('手动压缩强制请求摘要，完成后不继续模型任务', async () => {
     const executor = new QueueExecutor([modelStep(), modelStep([], '摘要')]);
-    const runner = new AgentRunner({ executor, journal: new MemoryRunnerJournal(), tools: [] });
+    const runner = new AgentRunner({
+      executor,
+      initialMessages: [
+        { role: 'user', content: '旧任务' },
+        { role: 'assistant', content: '旧进展'.repeat(500) },
+      ],
+      journal: new MemoryRunnerJournal(),
+      tools: [],
+    });
     await runner.start('first');
     expect((await runner.compact()).status).toBe('completed');
     expect(executor.requests).toHaveLength(2);
@@ -123,6 +131,7 @@ describe('AgentRunner', () => {
     });
     const state = await runner.start('request');
     expect(executor.requests[0].modelSettings).toEqual({
+      maxOutputTokens: 32_000,
       reasoningEffort: 'xhigh',
       webSearch: true,
       webSearchMaxUses: 10,
@@ -131,7 +140,7 @@ describe('AgentRunner', () => {
       apiInputTokens: 120,
       apiOutputTokens: 30,
       measurement: 'api',
-      totalTokens: 150,
+      totalTokens: 126,
     });
   });
 
@@ -290,17 +299,22 @@ describe('AgentRunner', () => {
       { input: { path: '/files/c.md' }, toolCallId: 'transitive', toolName: 'read_file' },
       { input: { path: '/worldbooks/book/entries/0002-2-entry.md' }, toolCallId: 'other', toolName: 'delete_path' },
     ];
-    const tools = ['delete_path', 'copy_path', 'read_file'].map(name => runnerTool(name, name === 'read_file', async (_input, id) => {
-      invoked.push(id);
-      if (id === 'failed') throw new Error('missing');
-      return { ok: true };
-    }));
+    const tools = ['delete_path', 'copy_path', 'read_file'].map(name =>
+      runnerTool(name, name === 'read_file', async (_input, id) => {
+        invoked.push(id);
+        if (id === 'failed') throw new Error('missing');
+        return { ok: true };
+      }),
+    );
     const journal = new MemoryRunnerJournal();
     const runner = new AgentRunner({ executor: new QueueExecutor([modelStep(calls), modelStep()]), journal, tools });
     expect((await runner.start('batch')).status).toBe('completed');
     expect(invoked).toEqual(['failed', 'independent', 'other']);
-    expect(journal.events.filter(event => event.type === 'tool-failed').map(event => event.call.toolCallId))
-      .toEqual(['failed', 'dependent', 'transitive']);
+    expect(journal.events.filter(event => event.type === 'tool-failed').map(event => event.call.toolCallId)).toEqual([
+      'failed',
+      'dependent',
+      'transitive',
+    ]);
   });
 
   it('Schema校验失败只返回一次工具错误，不执行无效调用并允许模型继续', async () => {
@@ -434,12 +448,12 @@ describe('AgentRunner', () => {
   it('下一次调用前达到阈值时先独立压缩，再带摘要继续原任务', async () => {
     const executor = new QueueExecutor([modelStep([], '保留目标与完成项'), modelStep([], 'after compact')]);
     const runner = new AgentRunner({
-      contextWindow: 500,
+      contextWindow: 5000,
       executor,
       headerMessageCount: 1,
       initialMessages: [
         { content: 'head', role: 'system' },
-        { content: 'x'.repeat(2500), role: 'assistant' },
+        { content: 'x'.repeat(10500), role: 'assistant' },
         { content: 'latest', role: 'assistant' },
       ],
       journal: new MemoryRunnerJournal(),
@@ -458,7 +472,7 @@ describe('AgentRunner', () => {
     expect(state.status).toBe('completed');
   });
 
-  it('用户消息超过80%时暂停；空压缩摘要不会覆盖原上下文', async () => {
+  it('最新输入自身超限时暂停；空压缩摘要不会覆盖原上下文', async () => {
     const exhaustedExecutor = new QueueExecutor([]);
     const exhausted = new AgentRunner({
       contextWindow: 100,
@@ -470,13 +484,16 @@ describe('AgentRunner', () => {
     expect(exhaustedExecutor.requests).toHaveLength(0);
 
     const missing = new AgentRunner({
-      contextWindow: 100,
-      executor: new QueueExecutor([modelStep([], '')]),
-      initialMessages: [{ content: 'a'.repeat(500), role: 'assistant' }],
+      contextWindow: 1000,
+      executor: new QueueExecutor([modelStep([], ''), modelStep([], ''), modelStep([], '')]),
+      initialMessages: [
+        { content: 'a'.repeat(1000), role: 'assistant' },
+        { role: 'user', content: 'small' },
+      ],
       journal: new MemoryRunnerJournal(),
       tools: [],
     });
-    const failed = await missing.start('small');
+    const failed = await missing.compact();
     expect(failed.status).toBe('failed');
     expect(failed.failure).toContain('原上下文已保留');
     expect(JSON.stringify(failed.messages)).toContain('a'.repeat(500));

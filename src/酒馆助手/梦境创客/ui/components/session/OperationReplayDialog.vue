@@ -10,7 +10,8 @@
       </header>
       <ul>
         <li v-for="conflict in request.conflicts" :key="conflict.operationId">
-          <code>{{ conflict.path }}</code><span>{{ conflict.reason }}</span>
+          <code>{{ conflict.path }}</code
+          ><span>{{ conflict.reason }}</span>
         </li>
       </ul>
       <footer>
@@ -26,19 +27,50 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { useDreamCardAgent } from '../../composables/runtime';
+import { useBackLayer } from '../../composables/workspace-navigation';
 
 const { action, runtime, state } = useDreamCardAgent();
 const request = computed(() => state.value.active?.operationReplay);
+useBackLayer(
+  computed(() => Boolean(request.value)),
+  () => {
+    void action(() => runtime.confirmOperationReplay(false));
+  },
+);
 </script>
 
 <style lang="scss">
-.dca-replay-dialog { width: min(36rem, calc(100vw - 2rem)); }
-.dca-replay-dialog > header { display: flex; gap: 0.7rem; }
-.dca-replay-dialog > header i { color: var(--dca-warning); }
+.dca-replay-dialog {
+  width: min(36rem, calc(100vw - 2rem));
+}
+.dca-replay-dialog > header {
+  display: flex;
+  gap: 0.7rem;
+}
+.dca-replay-dialog > header i {
+  color: var(--dca-warning);
+}
 .dca-replay-dialog > header div,
-.dca-replay-dialog li { display: grid; gap: 0.2rem; }
+.dca-replay-dialog li {
+  display: grid;
+  gap: 0.2rem;
+}
 .dca-replay-dialog header span,
-.dca-replay-dialog li span { color: var(--dca-text-muted); font-size: 0.78rem; }
-.dca-replay-dialog ul { display: grid; max-height: 40vh; gap: 0.45rem; overflow: auto; padding: 0; list-style: none; }
-.dca-replay-dialog footer { display: flex; justify-content: flex-end; gap: 0.5rem; }
+.dca-replay-dialog li span {
+  color: var(--dca-text-muted);
+  font-size: 0.78rem;
+}
+.dca-replay-dialog ul {
+  display: grid;
+  max-height: 40vh;
+  gap: 0.45rem;
+  overflow: auto;
+  padding: 0;
+  list-style: none;
+}
+.dca-replay-dialog footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
 </style>

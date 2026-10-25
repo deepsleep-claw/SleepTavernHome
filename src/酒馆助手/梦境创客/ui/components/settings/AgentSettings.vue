@@ -12,7 +12,7 @@
         <span>默认 Agent</span>
         <DcaSelect
           aria-label="默认 Agent"
-          :model-value="state.activeAgentConfigurationId"
+          :model-value="selectedId"
           :options="configurationOptions"
           @update:model-value="selectConfiguration"
         />
@@ -25,7 +25,7 @@
         <button
           class="dca-btn-danger"
           type="button"
-          :disabled="isBuiltinConfiguration || state.agentConfigurations.length <= 1"
+          :disabled="saving || isBuiltinConfiguration || state.agentConfigurations.length <= 1"
           @click="removeConfiguration"
         >
           <i class="fa-regular fa-trash-can"></i> 删除
@@ -68,7 +68,9 @@
           <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
           <div>
             <strong>已有会话如何更新</strong>
-            <span>保存后，使用这套配置且不在运行的会话会立即刷新 Skill 与工具；静态头部会在首次发送或压缩时重新编译。</span>
+            <span
+              >保存后，使用这套配置且不在运行的会话会立即刷新 Skill 与工具；静态头部会在首次发送或压缩时重新编译。</span
+            >
           </div>
         </div>
       </section>
@@ -88,7 +90,9 @@
               <span>{{ skill.description }}</span>
               <small>
                 {{ skill.kind }} · 默认 {{ loadingLabel(skill.defaultLoading) }}
-                <template v-if="skill.remoteState && skill.remoteState !== 'available'"> · {{ remoteStateLabel(skill.remoteState) }}</template>
+                <template v-if="skill.remoteState && skill.remoteState !== 'available'">
+                  · {{ remoteStateLabel(skill.remoteState) }}</template
+                >
               </small>
             </div>
             <div class="dca-agent-skill-controls">
@@ -153,9 +157,32 @@
 
       <div class="dca-resource-savebar">
         <span v-if="isBuiltinConfiguration">内置 Agent 始终使用随脚本更新的定义；请另存为后再调整。</span>
-        <span v-else>保存会更新默认选择，也会同步所有使用本配置的空闲会话。</span>
-        <button v-if="!isBuiltinConfiguration" class="dca-btn-primary" type="button" @click="saveConfiguration">
-          保存 Agent
+        <span v-else-if="!dirty && !feedback && !saving">保存会同步所有使用本配置的空闲会话。</span>
+        <span
+          v-if="!isBuiltinConfiguration && (dirty || feedback || saving)"
+          class="dca-editor-feedback"
+          role="status"
+          >{{
+            saving
+              ? feedback
+              : dirty
+                ? feedback.startsWith('保存失败')
+                  ? feedback
+                  : '有未保存的修改 · 切页保留草稿'
+                : feedback
+          }}</span
+        >
+        <button v-if="!isBuiltinConfiguration && dirty" type="button" :disabled="saving" @click="editor.discard()">
+          放弃修改
+        </button>
+        <button
+          v-if="!isBuiltinConfiguration"
+          class="dca-btn-primary"
+          type="button"
+          :disabled="saving"
+          @click="saveConfiguration"
+        >
+          {{ saving ? '正在保存…' : '保存 Agent' }}
         </button>
         <button v-else class="dca-btn-primary" type="button" @click="copyConfiguration">另存为自定义 Agent</button>
       </div>
@@ -164,11 +191,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, toRaw, watch } from 'vue';
-import {
-  DEFAULT_AGENT_CONFIGURATION_ID,
-  type AgentConfiguration,
-} from '../../../core/persistence/settings';
+import { notify } from '../../composables/notifications';
+import { computed, ref, toRaw } from 'vue';
+import { DEFAULT_AGENT_CONFIGURATION_ID, type AgentConfiguration } from '../../../core/persistence/settings';
 import type { AgentSkillSetting } from '../../../core/persistence/builtin-agent';
 import {
   AGENT_TOOL_GROUPS,
@@ -180,6 +205,7 @@ import { BUILTIN_CARD_WORKSPACE_SKILL } from '../../../core/skills/builtin-card-
 import { REMOTE_BUILTIN_SKILLS } from '../../../core/skills/remote-builtin-catalog';
 import type { SkillLoadingMode } from '../../../core/skills/types';
 import { useDreamCardAgent } from '../../composables/runtime';
+import { useResourceEditor } from '../../composables/resource-drafts';
 import DcaSelect from '../DcaSelect.vue';
 import DcaSwitch from '../DcaSwitch.vue';
 
@@ -194,9 +220,15 @@ const loadingOptions = [
   { label: '按需加载', value: 'on-demand' },
 ];
 
-const { action, runtime, state } = useDreamCardAgent();
+const { action, runtime, state, resourceDrafts } = useDreamCardAgent();
 const activeTab = ref<AgentTab>('main');
-const draft = ref<AgentConfiguration>();
+const editor = useResourceEditor(
+  resourceDrafts,
+  'agent',
+  () => state.value.agentConfigurations,
+  () => state.value.activeAgentConfigurationId,
+);
+const { draft, selectedId, dirty, saving, feedback } = editor;
 const isBuiltinConfiguration = computed(() => draft.value?.id === DEFAULT_AGENT_CONFIGURATION_ID);
 const toolGroups = AGENT_TOOL_GROUPS;
 const allToolCount = ALL_AGENT_TOOL_IDS.length;
@@ -239,28 +271,12 @@ const allSkills = computed(() => {
   return [...new Map(skills.map(skill => [skill.id, skill])).values()];
 });
 
-watch(
-  () =>
-    `${state.value.activeAgentConfigurationId}:${state.value.agentConfigurations
-      .map(configuration => JSON.stringify(configuration))
-      .join('|')}`,
-  () => {
-    const selected =
-      state.value.agentConfigurations.find(item => item.id === state.value.activeAgentConfigurationId) ??
-      state.value.agentConfigurations[0];
-    draft.value = selected
-      ? {
-          ...structuredClone(toRaw(selected)),
-          skills: structuredClone(toRaw(selected.skills ?? [])),
-          toolIds: [...(selected.toolIds ?? ALL_AGENT_TOOL_IDS)],
-        }
-      : undefined;
-  },
-  { immediate: true },
-);
-
 async function selectConfiguration(id: string) {
-  if (id) await action(() => runtime.selectAgentConfiguration(id));
+  if (!id) return;
+  const previous = selectedId.value;
+  selectedId.value = id;
+  if (!(await action(() => runtime.selectAgentConfiguration(id))) && selectedId.value === id)
+    selectedId.value = previous;
 }
 
 function uniqueConfigurationName(base: string): string {
@@ -273,35 +289,44 @@ function uniqueConfigurationName(base: string): string {
 }
 
 async function persistNewConfiguration(candidate: AgentConfiguration, successMessage: string) {
+  const previous = selectedId.value;
   let saved: AgentConfiguration | undefined;
   const succeeded = await action(async () => {
     saved = await runtime.saveAgentConfiguration(structuredClone(toRaw(candidate)));
   });
   if (!succeeded || !saved) return;
-  draft.value = structuredClone(saved);
-  activeTab.value = 'main';
-  toastr.success(successMessage, '梦境创客');
+  if (selectedId.value === previous) {
+    selectedId.value = saved.id;
+    activeTab.value = 'main';
+  }
+  notify.success(successMessage, '梦境创客');
 }
 
 async function newConfiguration() {
   const defaults = new Map(allSkills.value.map(skill => [skill.id, skill.defaultLoading]));
-  await persistNewConfiguration({
-    id: `agent:${crypto.randomUUID()}`,
-    name: uniqueConfigurationName('新 Agent'),
-    presetId: draft.value?.presetId ?? state.value.activePresetId,
-    skills: [...defaults].map(([id, loading]) => ({ enabled: true, id, loading })),
-    toolIds: [...ALL_AGENT_TOOL_IDS],
-  }, '新 Agent 已创建并切换。');
+  await persistNewConfiguration(
+    {
+      id: `agent:${crypto.randomUUID()}`,
+      name: uniqueConfigurationName('新 Agent'),
+      presetId: draft.value?.presetId ?? state.value.activePresetId,
+      skills: [...defaults].map(([id, loading]) => ({ enabled: true, id, loading })),
+      toolIds: [...ALL_AGENT_TOOL_IDS],
+    },
+    '新 Agent 已创建并切换。',
+  );
 }
 
 async function copyConfiguration() {
   if (!draft.value) return;
   const source = structuredClone(toRaw(draft.value));
-  await persistNewConfiguration({
-    ...structuredClone(toRaw(draft.value)),
-    id: `agent:${crypto.randomUUID()}`,
-    name: uniqueConfigurationName(`${source.name} 副本`),
-  }, 'Agent 副本已创建并切换。');
+  await persistNewConfiguration(
+    {
+      ...structuredClone(toRaw(draft.value)),
+      id: `agent:${crypto.randomUUID()}`,
+      name: uniqueConfigurationName(`${source.name} 副本`),
+    },
+    'Agent 副本已创建并切换。',
+  );
 }
 
 function skillSetting(id: string): AgentSkillSetting {
@@ -348,22 +373,15 @@ function setToolEnabled(id: AgentToolId, enabled: boolean) {
 }
 
 async function saveConfiguration() {
-  if (!draft.value) return;
-  let saved: AgentConfiguration | undefined;
-  const succeeded = await action(async () => {
-    saved = await runtime.saveAgentConfiguration(structuredClone(toRaw(draft.value!)));
-  });
-  if (succeeded && saved) {
-    draft.value = structuredClone(saved);
-    toastr.success('Agent 配置已保存。', '梦境创客');
-  }
+  if (!draft.value || saving.value) return;
+  await action(() => editor.save(value => runtime.saveAgentConfiguration(value, { makeDefault: false })));
 }
 
 async function removeConfiguration() {
   if (!draft.value) return;
   const removed = draft.value.name;
   if (await action(() => runtime.removeAgentConfiguration(draft.value!.id))) {
-    toastr.success(`已删除 Agent“${removed}”。`, '梦境创客');
+    notify.success(`已删除 Agent“${removed}”。`, '梦境创客');
   }
 }
 
@@ -372,46 +390,202 @@ function loadingLabel(value: SkillLoadingMode): string {
 }
 
 function remoteStateLabel(value: string): string {
-  return ({ available: '已下载', downloading: '下载中', error: '下载失败', missing: '未下载', outdated: '需要更新' } as Record<string, string>)[value] ?? value;
+  return (
+    (
+      {
+        available: '已下载',
+        downloading: '下载中',
+        error: '下载失败',
+        missing: '未下载',
+        outdated: '需要更新',
+      } as Record<string, string>
+    )[value] ?? value
+  );
 }
 </script>
 
 <style lang="scss">
-.dca-agent-settings { min-width: 0; }
-.dca-agent-toolbar { position: sticky; z-index: 5; top: 0; }
-.dca-agent-tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--dca-border); }
-.dca-agent-tabs > button { display: flex; align-items: center; gap: .42rem; border: 0; border-radius: var(--dca-radius-sm) var(--dca-radius-sm) 0 0; padding: .58rem .9rem; background: transparent; color: var(--dca-text-muted); }
-.dca-agent-tabs > button.active { background: var(--dca-raised); color: var(--dca-text); box-shadow: inset 0 -2px 0 var(--dca-accent); }
-.dca-agent-tabs small { min-width: 1.2rem; border-radius: 999px; padding: .05rem .3rem; background: var(--dca-highlight); font-size: .68rem; }
-.dca-agent-tab-panel { display: flex; min-width: 0; flex-direction: column; gap: .7rem; }
-.dca-agent-info-card { display: flex; gap: .65rem; border: 1px solid var(--dca-border); border-radius: var(--dca-radius-md); padding: .75rem; background: var(--dca-raised); }
-.dca-agent-info-card > i { color: var(--dca-info); }
-.dca-agent-info-card > div { display: grid; gap: .18rem; }
-.dca-agent-info-card span, .dca-agent-panel-heading span { color: var(--dca-text-muted); font-size: .78rem; }
-.dca-agent-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
-.dca-agent-panel-heading > div { display: grid; gap: .15rem; }
-.dca-agent-skill-list, .dca-agent-tool-groups { display: grid; gap: .5rem; }
-.dca-agent-skill-row { display: flex; min-width: 0; align-items: center; justify-content: space-between; gap: .8rem; border: 1px solid var(--dca-border); border-radius: var(--dca-radius-md); padding: .65rem .75rem; background: var(--dca-surface); }
-.dca-agent-skill-copy { display: grid; min-width: 0; flex: 1; gap: .1rem; }
-.dca-agent-skill-copy > span, .dca-agent-skill-copy > small { color: var(--dca-text-muted); font-size: .75rem; }
-.dca-agent-skill-controls { display: flex; flex: 0 0 auto; align-items: center; gap: .7rem; }
-.dca-agent-skill-controls .dca-select { min-width: 8.2rem; }
-.dca-agent-tool-group { overflow: hidden; border: 1px solid var(--dca-border); border-radius: var(--dca-radius-md); background: var(--dca-surface); }
-.dca-agent-tool-group > header { display: flex; align-items: center; justify-content: space-between; gap: .8rem; padding: .7rem .8rem; background: var(--dca-raised); }
-.dca-agent-tool-group > header > div { display: grid; gap: .1rem; }
-.dca-agent-tool-group > header span, .dca-agent-tool-group > header small { color: var(--dca-text-muted); font-size: .74rem; }
-.dca-agent-tool-group > header small { color: var(--dca-accent-strong); }
-.dca-agent-tool-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: var(--dca-border); }
-.dca-agent-tool-list > label { display: flex; align-items: center; justify-content: space-between; gap: .55rem; padding: .55rem .75rem; background: var(--dca-surface); }
-.dca-agent-tool-list > label > span { display: grid; gap: .05rem; }
-.dca-agent-tool-list small { color: var(--dca-text-muted); font-size: .7rem; }
+.dca-agent-settings {
+  min-width: 0;
+}
+.dca-agent-toolbar {
+  position: sticky;
+  z-index: 5;
+  top: 0;
+}
+.dca-agent-tabs {
+  display: flex;
+  gap: 0.25rem;
+  border-bottom: 1px solid var(--dca-border);
+}
+.dca-agent-tabs > button {
+  display: flex;
+  align-items: center;
+  gap: 0.42rem;
+  border: 0;
+  border-radius: var(--dca-radius-sm) var(--dca-radius-sm) 0 0;
+  padding: 0.58rem 0.9rem;
+  background: transparent;
+  color: var(--dca-text-muted);
+}
+.dca-agent-tabs > button.active {
+  background: var(--dca-raised);
+  color: var(--dca-text);
+  box-shadow: inset 0 -2px 0 var(--dca-accent);
+}
+.dca-agent-tabs small {
+  min-width: 1.2rem;
+  border-radius: 999px;
+  padding: 0.05rem 0.3rem;
+  background: var(--dca-highlight);
+  font-size: 0.68rem;
+}
+.dca-agent-tab-panel {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+.dca-agent-info-card {
+  display: flex;
+  gap: 0.65rem;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-md);
+  padding: 0.75rem;
+  background: var(--dca-raised);
+}
+.dca-agent-info-card > i {
+  color: var(--dca-info);
+}
+.dca-agent-info-card > div {
+  display: grid;
+  gap: 0.18rem;
+}
+.dca-agent-info-card span,
+.dca-agent-panel-heading span {
+  color: var(--dca-text-muted);
+  font-size: 0.78rem;
+}
+.dca-agent-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+.dca-agent-panel-heading > div {
+  display: grid;
+  gap: 0.15rem;
+}
+.dca-agent-skill-list,
+.dca-agent-tool-groups {
+  display: grid;
+  gap: 0.5rem;
+}
+.dca-agent-skill-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-md);
+  padding: 0.65rem 0.75rem;
+  background: var(--dca-surface);
+}
+.dca-agent-skill-copy {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 0.1rem;
+}
+.dca-agent-skill-copy > span,
+.dca-agent-skill-copy > small {
+  color: var(--dca-text-muted);
+  font-size: 0.75rem;
+}
+.dca-agent-skill-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0.7rem;
+}
+.dca-agent-skill-controls .dca-select {
+  min-width: 8.2rem;
+}
+.dca-agent-tool-group {
+  overflow: hidden;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-md);
+  background: var(--dca-surface);
+}
+.dca-agent-tool-group > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.7rem 0.8rem;
+  background: var(--dca-raised);
+}
+.dca-agent-tool-group > header > div {
+  display: grid;
+  gap: 0.1rem;
+}
+.dca-agent-tool-group > header span,
+.dca-agent-tool-group > header small {
+  color: var(--dca-text-muted);
+  font-size: 0.74rem;
+}
+.dca-agent-tool-group > header small {
+  color: var(--dca-accent-strong);
+}
+.dca-agent-tool-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--dca-border);
+}
+.dca-agent-tool-list > label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--dca-surface);
+}
+.dca-agent-tool-list > label > span {
+  display: grid;
+  gap: 0.05rem;
+}
+.dca-agent-tool-list small {
+  color: var(--dca-text-muted);
+  font-size: 0.7rem;
+}
 @media (max-width: 720px) {
-  .dca-agent-toolbar { position: static; }
-  .dca-agent-tabs > button { flex: 1; justify-content: center; padding-inline: .4rem; }
-  .dca-agent-skill-row { align-items: flex-start; flex-direction: column; }
-  .dca-agent-skill-controls { width: 100%; justify-content: space-between; }
-  .dca-agent-skill-controls .dca-select { flex: 1; }
-  .dca-agent-tool-list { grid-template-columns: 1fr; }
-  .dca-agent-panel-heading { flex-direction: column; gap: .3rem; }
+  .dca-agent-toolbar {
+    position: static;
+  }
+  .dca-agent-tabs > button {
+    flex: 1;
+    justify-content: center;
+    padding-inline: 0.4rem;
+  }
+  .dca-agent-skill-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .dca-agent-skill-controls {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .dca-agent-skill-controls .dca-select {
+    flex: 1;
+  }
+  .dca-agent-tool-list {
+    grid-template-columns: 1fr;
+  }
+  .dca-agent-panel-heading {
+    flex-direction: column;
+    gap: 0.3rem;
+  }
 }
 </style>

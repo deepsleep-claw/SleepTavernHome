@@ -34,9 +34,7 @@
         <button class="dca-theme-select" type="button" @click="selectTheme(theme.id)">
           <span class="dca-theme-preview" :style="previewStyle(theme)" aria-hidden="true">
             <span class="dca-theme-preview-sidebar"></span>
-            <span class="dca-theme-preview-content">
-              <i></i><i></i><i></i>
-            </span>
+            <span class="dca-theme-preview-content"> <i></i><i></i><i></i> </span>
           </span>
           <span class="dca-theme-copy">
             <span class="dca-theme-title-line">
@@ -70,6 +68,7 @@
 </template>
 
 <script setup lang="ts">
+import { notify } from '../../composables/notifications';
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { useDreamCardAgent } from '../../composables/runtime';
 import { getThemeStore, parseThemePackage } from '../../theme/store';
@@ -90,9 +89,10 @@ function schemeLabel(scheme: ThemeColorScheme): string {
 }
 
 function previewStyle(theme: ThemeSummary): Record<string, string> {
-  const fallback = theme.colorScheme === 'light'
-    ? { accent: '#171717', canvas: '#fafafa', surface: '#ffffff', text: '#171717' }
-    : { accent: '#9d7cff', canvas: '#111116', surface: '#20202a', text: '#eeeeef' };
+  const fallback =
+    theme.colorScheme === 'light'
+      ? { accent: '#171717', canvas: '#fafafa', surface: '#ffffff', text: '#171717' }
+      : { accent: '#9d7cff', canvas: '#111116', surface: '#20202a', text: '#eeeeef' };
   const preview = theme.preview ?? fallback;
   return {
     '--dca-preview-accent': preview.accent,
@@ -128,17 +128,17 @@ async function importTheme(event: Event) {
     const installed = await store.install(themePackage, hasJavascript);
     refreshThemes();
     await runtime.updateSettings({ activeThemeId: installed.package.id });
-    toastr.success(`已导入并启用“${installed.package.name}”。`, '主题');
+    notify.success(`已导入并启用“${installed.package.name}”。`, '主题');
   } catch (error) {
     console.error('[梦境创客] 导入主题失败', error);
-    toastr.error(error instanceof Error ? error.message : String(error), '导入主题失败');
+    notify.error(error instanceof Error ? error.message : String(error), '导入主题失败');
   }
 }
 
 function exportTheme(id: string) {
   const theme = store.get(id);
   if (!theme) {
-    toastr.error('主题不存在或已经被删除。', '导出主题失败');
+    notify.error('主题不存在或已经被删除。', '导出主题失败');
     return;
   }
   const blob = new Blob([JSON.stringify(theme.package, null, 2)], { type: 'application/json' });
@@ -155,7 +155,7 @@ async function deleteTheme(id: string, name: string) {
   if (state.value.activeThemeId === id) await runtime.updateSettings({ activeThemeId: DEFAULT_THEME_ID });
   store.remove(id);
   refreshThemes();
-  toastr.success(`已删除“${name}”。`, '主题');
+  notify.success(`已删除“${name}”。`, '主题');
 }
 
 onMounted(() => {

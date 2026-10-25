@@ -165,6 +165,7 @@
 </template>
 
 <script setup lang="ts">
+import { notify } from '../../composables/notifications';
 import { computed, ref } from 'vue';
 import type { CharacterFileStorageSummary, ManagedFileSummary } from '../../../core/persistence/workspace-file-store';
 import { formatBytes, formatSessionDate } from '../../composables/format';
@@ -235,7 +236,7 @@ async function run(work: () => Promise<unknown>, success: string): Promise<boole
   busy.value = true;
   try {
     const succeeded = await action(work);
-    if (succeeded) toastr.success(success, '梦境创客');
+    if (succeeded) notify.success(success, '梦境创客');
     return succeeded;
   } finally {
     busy.value = false;

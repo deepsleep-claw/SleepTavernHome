@@ -4,7 +4,12 @@ import {
   type BrowserRecordStore,
 } from '../core/persistence/browser-record-store';
 import { BufferedSessionRecordStore } from '../core/persistence/buffered-session-record-store';
-import { LocalSessionStore, type SessionBackupStatus } from '../core/persistence/local-session-store';
+import {
+  LocalSessionStore,
+  type SessionBackupConflict,
+  type SessionBackupResolution,
+  type SessionBackupStatus,
+} from '../core/persistence/local-session-store';
 import { klona } from 'klona';
 import { IndexedDbOperationRecoveryStore } from '../core/operations/recovery-store';
 import { materializeCardWorkspace, projectCardWorkspace } from '../core/mapping/card-workspace-mapper';
@@ -47,9 +52,13 @@ import {
   type ApiModelInput,
   type ApiProvider,
   type ApiProviderInput,
+  type ApiProviderEditableField,
   type ModelSelection,
 } from '../core/provider/provider-config';
 import { normalizeProviderFailure } from '../core/provider/provider-failure';
+import { reasoningOptions, resolveCommandModel } from '../core/provider/session-model-options';
+import { assertCommandArguments, commandDisabledReason, parseComposerCommand } from '../core/session/composer-commands';
+import { fileReference, resolveCommandSkill, skillReferencePath } from '../core/session/composer-references';
 import {
   ProviderModelStepExecutor,
   UnavailableModelStepExecutor,
@@ -59,6 +68,7 @@ import { measureContext } from '../core/runner/context';
 import { HtmlProjectCompiler, type HtmlProjectCheck } from '../core/projects/html-project';
 import type { ToolConfirmation } from '../core/runner/tools';
 import { CardAgentSessionService } from '../core/session/session-service';
+import { SessionInputSubmissions, type SessionInput, type SessionInputReceipt } from '../core/session/input-submission';
 import { defaultPresetValues } from '../core/session/prompt';
 import { GlobalAgentTaskLock } from '../core/session/task-lock';
 import type {
@@ -189,10 +199,12 @@ export class DreamCardAgentRuntime {
   private readonly resourceBaseUrl?: string;
   private readonly settingsStore: AgentSettingsStore;
   private readonly services = new Map<string, CardAgentSessionService>();
+  private readonly inputSubmissions = new SessionInputSubmissions();
   private readonly serviceModelSelections = new Map<string, string>();
   private readonly historyViews = new Map<string, SessionView>();
   private readonly settingsUnsubscribe?: () => void;
   private readonly subscribers = new Set<Subscriber>();
+  private readonly providerMutations = new Map<string, Promise<unknown>>();
   private readonly deferredSessionSaves = new Map<string, DeferredSessionSave>();
   private readonly pendingAgentSyncs = new Set<string>();
   private toolConfirmationResolve?: {
@@ -381,6 +393,30 @@ export class DreamCardAgentRuntime {
 
   async backupSessions(): Promise<void> {
     await this.localSessions?.backup();
+  }
+
+  async resolveSessionBackupConflict(
+    conflict: SessionBackupConflict,
+    resolution: SessionBackupResolution,
+  ): Promise<void> {
+    if (!this.localSessions) throw new Error('当前环境没有浏览器会话数据库。');
+    const service = this.services.get(conflict.sessionId);
+    if (service?.isOperationActive()) throw new Error('请先停止或完成这个会话的任务，再处理备份冲突。');
+    const active = this.state.active?.sessionId === conflict.sessionId ? this.state.active : undefined;
+    if (resolution === 'remote') await this.closeSession(conflict.sessionId);
+    try {
+      await this.localSessions.resolveConflict(conflict, resolution);
+    } finally {
+      await this.reloadCharacterSessions();
+      await this.reloadGlobalSessions();
+      await this.reloadCharacterGroups();
+      if (resolution === 'remote' && active && !this.state.active) {
+        if (active.scope === 'global') await this.openGlobalSession(active.sessionId);
+        else if (active.bindingId === this.state.currentCharacter?.bindingId) await this.openSession(active.sessionId);
+        else await this.openHistorySession(active.bindingId, active.sessionId);
+      }
+      this.emit();
+    }
   }
 
   async exportBrowserSessions(): Promise<string> {
@@ -928,7 +964,96 @@ export class DreamCardAgentRuntime {
     this.emit();
   }
 
-  async send(message: string, attachments: SessionAttachmentInput[] = []): Promise<SessionView> {
+  submitInput(input: SessionInput): Promise<SessionInputReceipt> {
+    const existing = this.inputSubmissions.get(input);
+    if (existing) return existing;
+    if (!input.id || input.sessionId !== this.activeService?.sessionId || this.state.activeSessionAccess !== 'live') {
+      return Promise.reject(new Error('目标会话已切换或不可编辑，请返回该会话后重试。'));
+    }
+    if (!input.text.trim() && !(input.kind === 'message' && input.attachments?.length)) {
+      return Promise.reject(new Error('请输入要提交的内容。'));
+    }
+    return this.inputSubmissions.submit(
+      input,
+      () => {
+        if (input.kind === 'guidance') return this.enqueueGuidance(input.text, input.id);
+        if (input.kind === 'compact') return this.compactContext(parseComposerCommand(input.text)?.args);
+        if (input.kind === 'command') return this.executeComposerCommand(input);
+        return this.send(input.text, input.attachments, input.id);
+      },
+      error => {
+        this.state.error = error instanceof Error ? error.message : String(error);
+        this.emit();
+      },
+      input.kind === 'command' && parseComposerCommand(input.text)?.command?.id === 'resume',
+    );
+  }
+
+  private async executeComposerCommand(input: SessionInput): Promise<unknown> {
+    const parsed = parseComposerCommand(input.text);
+    if (!parsed?.command) throw new Error('未知指令，请使用 /help 查看可用指令。');
+    const { command, args } = parsed;
+    assertCommandArguments(command, args);
+    if (input.attachments?.length) throw new Error('指令请单独提交，附件已保留。');
+    const service = this.requireService();
+    const view = service.view();
+    const providers = this.settingsStore.load().providers;
+    const selected = findSelectedModel(providers, view.modelSelection);
+    const disabled = commandDisabledReason(command, {
+      status: view.status,
+      busy: this.state.busy,
+      hasModels: providers.some(provider => provider.enabled && provider.models.some(model => model.enabled)),
+      supportsReasoning: reasoningOptions(selected?.provider, selected?.model).length > 0,
+      skillCount: view.skills.length,
+      compactionEnabled: view.agentConfiguration.toolIds.includes('compact_context'),
+    });
+    if (disabled) throw new Error(disabled);
+    switch (command.id) {
+      case 'compact':
+        return this.compactContext(args);
+      case 'stop':
+        this.stopSession(input.sessionId);
+        return;
+      case 'resume':
+        return this.resume();
+      case 'model': {
+        const match = resolveCommandModel(providers, args);
+        return this.selectSessionModel({ providerId: match.provider.id, modelId: match.model.id });
+      }
+      case 'effort': {
+        const option = reasoningOptions(selected?.provider, selected?.model).find(
+          item => item.value === args || item.label === args,
+        );
+        if (!option) throw new Error('此推理档位不适用于当前模型，请从 /effort 候选列表重新选择。');
+        return this.setModelControls({ reasoningEffort: option.value });
+      }
+      case 'skill': {
+        const { skill } = resolveCommandSkill(view.skills, args);
+        const configuration = this.settingsStore
+          .load()
+          .agentConfigurations.find(item => item.id === view.agentConfiguration.id);
+        const selectedSkill = configuration?.skills.find(item => item.id === skill.id && item.enabled);
+        if (!configuration || !selectedSkill) throw new Error('此 Skill 已被停用，请重新选择。');
+        if (selectedSkill.loading === 'on-demand' && !configuration.toolIds.includes('read_file'))
+          throw new Error('当前助手需要启用读取文件工具，才能加载此 Skill。');
+        return this.sendPrompt('', [], input.id, args);
+      }
+      case 'help':
+      case 'context':
+        throw new Error('请在当前页面打开此指令。');
+    }
+  }
+
+  async send(message: string, attachments: SessionAttachmentInput[] = [], inputId?: string): Promise<SessionView> {
+    return this.sendPrompt(message, attachments, inputId);
+  }
+
+  private async sendPrompt(
+    message: string,
+    attachments: SessionAttachmentInput[],
+    inputId?: string,
+    skillArgs?: string,
+  ): Promise<SessionView> {
     return this.runActiveView(async service => {
       await service.finishInterruptedTurn();
       await this.prepareServiceModel(service, service.view().modelSelection);
@@ -943,7 +1068,13 @@ export class DreamCardAgentRuntime {
         this.selectedPreset(sessionConfiguration.presetId),
         this.availableSkills(),
       );
-      return service.send(message, undefined, attachments);
+      if (skillArgs !== undefined) {
+        const { skill, task } = resolveCommandSkill(service.view().skills, skillArgs);
+        if (skill.loading === 'on-demand' && !sessionConfiguration.toolIds.includes('read_file'))
+          throw new Error('当前助手需要启用读取文件工具，才能加载此 Skill。');
+        message = `请使用 ${fileReference(skillReferencePath(skill), skill.name)} 中的 Skill 完成本次任务；如尚未加载，请先读取它。\n\n${task}`;
+      }
+      return service.send(message, inputId, attachments);
     });
   }
 
@@ -1270,7 +1401,10 @@ export class DreamCardAgentRuntime {
     });
   }
 
-  async saveAgentConfiguration(input: AgentConfiguration): Promise<AgentConfiguration> {
+  async saveAgentConfiguration(
+    input: AgentConfiguration,
+    options?: { makeDefault?: boolean },
+  ): Promise<AgentConfiguration> {
     if (input.id === DEFAULT_AGENT_CONFIGURATION_ID) {
       throw new Error('内置Agent不可编辑，请先另存为新的Agent配置。');
     }
@@ -1299,7 +1433,7 @@ export class DreamCardAgentRuntime {
     const index = settings.agentConfigurations.findIndex(item => item.id === configuration.id);
     if (index >= 0) settings.agentConfigurations[index] = configuration;
     else settings.agentConfigurations.push(configuration);
-    settings.activeAgentConfigurationId = configuration.id;
+    if (options?.makeDefault !== false) settings.activeAgentConfigurationId = configuration.id;
     await this.settingsStore.save(settings);
     await this.reloadSkills();
     for (const service of this.services.values()) {
@@ -1378,7 +1512,7 @@ export class DreamCardAgentRuntime {
     await this.requireService().applyPreset(preset);
   }
 
-  async savePresetProfile(input: StructuredPreset): Promise<StructuredPreset> {
+  async savePresetProfile(input: StructuredPreset, options?: { makeDefault?: boolean }): Promise<StructuredPreset> {
     if (input.id === DEFAULT_PRESET.id) throw new Error('内置预设不可编辑，请先另存为新的Profile。');
     const name = input.name.trim();
     if (!name) throw new Error('预设名称不能为空。');
@@ -1421,7 +1555,7 @@ export class DreamCardAgentRuntime {
     const index = settings.presetProfiles.findIndex(item => item.id === preset.id);
     if (index >= 0) settings.presetProfiles[index] = preset;
     else settings.presetProfiles.push(preset);
-    settings.activePresetId = preset.id;
+    if (options?.makeDefault !== false) settings.activePresetId = preset.id;
     await this.settingsStore.save(settings);
     this.reloadSettingsState();
     return cloneStructuredPreset(preset);
@@ -1455,8 +1589,8 @@ export class DreamCardAgentRuntime {
     await this.requireService().editUserMessage(messageId, content);
   }
 
-  async enqueueGuidance(message: string): Promise<void> {
-    await this.requireService().enqueueGuidance(message);
+  async enqueueGuidance(message: string, inputId?: string): Promise<void> {
+    await this.requireService().enqueueGuidance(message, inputId);
   }
 
   stop(): void {
@@ -1470,10 +1604,10 @@ export class DreamCardAgentRuntime {
     running.stop();
   }
 
-  async compactContext(): Promise<SessionView> {
+  async compactContext(instructions = ''): Promise<SessionView> {
     return this.runActiveView(async service => {
       await this.prepareServiceModel(service, service.view().modelSelection);
-      return service.compactContext();
+      return service.compactContext(instructions);
     });
   }
 
@@ -1514,73 +1648,102 @@ export class DreamCardAgentRuntime {
     return models;
   }
 
-  async saveProvider(input: ApiProviderInput): Promise<ApiProvider> {
-    const settings = this.settingsStore.load();
-    const name = input.name.trim().normalize('NFC');
-    if (!name) throw new Error('Provider名称不能为空。');
-    if (settings.providers.some(item => item.id !== input.id && item.name.normalize('NFC') === name)) {
-      throw new Error(`Provider名称已存在：${name}`);
-    }
-    const existing = input.id ? settings.providers.find(item => item.id === input.id) : undefined;
-    const provider = existing
-      ? await updateApiProvider(existing, { ...input, id: existing.id, name })
-      : await createApiProvider({ ...input, id: undefined, name });
-    settings.providers = existing
-      ? settings.providers.map(item => (item.id === provider.id ? provider : item))
-      : [...settings.providers, provider];
-    await this.settingsStore.save(settings);
-    this.reloadSettingsState();
-    return provider;
+  async saveProvider(
+    input: ApiProviderInput,
+    editedFields?: readonly ApiProviderEditableField[],
+  ): Promise<ApiProvider> {
+    const captured = klona(input);
+    const fields = editedFields ? [...editedFields] : undefined;
+    return this.mutateProviderSettings(captured.id ?? 'new-provider', async () => {
+      const settings = this.settingsStore.load();
+      const existing = captured.id ? settings.providers.find(item => item.id === captured.id) : undefined;
+      if (captured.id && !existing) throw new Error('Provider已被删除，请重新读取配置。');
+      // 只把表单实际编辑的字段应用到最新配置，排队期间的新模型和其它字段由存储保留。
+      const input: ApiProviderInput =
+        existing && fields
+          ? {
+              id: existing.id,
+              name: existing.name,
+              baseURL: existing.baseURL,
+              enabled: existing.enabled,
+              interfaceType: existing.interfaceType,
+              ...Object.fromEntries(fields.map(field => [field, captured[field]])),
+            }
+          : captured;
+      const name = input.name.trim().normalize('NFC');
+      if (!name) throw new Error('Provider名称不能为空。');
+      if (settings.providers.some(item => item.id !== input.id && item.name.normalize('NFC') === name)) {
+        throw new Error(`Provider名称已存在：${name}`);
+      }
+      const provider = existing
+        ? await updateApiProvider(existing, { ...input, id: existing.id, name })
+        : await createApiProvider({ ...input, id: undefined, name });
+      settings.providers = existing
+        ? settings.providers.map(item => (item.id === provider.id ? provider : item))
+        : [...settings.providers, provider];
+      await this.settingsStore.save(settings);
+      this.reloadSettingsState();
+      return provider;
+    });
   }
 
   async saveModel(providerId: string, input: ApiModelInput): Promise<ApiModel> {
-    const settings = this.settingsStore.load();
-    const provider = settings.providers.find(item => item.id === providerId);
-    if (!provider) throw new Error(`Provider不存在：${providerId}`);
-    const name = input.name.trim().normalize('NFC');
-    if (!name) throw new Error('模型显示名称不能为空。');
-    if (provider.models.some(item => item.id !== input.id && item.name.normalize('NFC') === name)) {
-      throw new Error(`该Provider下已有同名模型：${name}`);
-    }
-    const existing = input.id ? provider.models.find(item => item.id === input.id) : undefined;
-    const model = existing
-      ? await updateApiModel(existing, { ...input, id: existing.id, name })
-      : await createApiModel({ ...input, id: undefined, name });
-    provider.models = existing
-      ? provider.models.map(item => (item.id === model.id ? model : item))
-      : [...provider.models, model];
-    settings.providers = settings.providers.map(item => (item.id === providerId ? provider : item));
-    if (!settings.defaultModelSelection && provider.enabled && model.enabled) {
-      settings.defaultModelSelection = { modelId: model.id, providerId };
-    }
-    await this.settingsStore.save(settings);
-    this.reloadSettingsState();
-    return model;
+    const captured = klona(input);
+    return this.mutateProviderSettings(providerId, async () => {
+      const input = captured;
+      const settings = this.settingsStore.load();
+      const provider = settings.providers.find(item => item.id === providerId);
+      if (!provider) throw new Error(`Provider不存在：${providerId}`);
+      const name = input.name.trim().normalize('NFC');
+      if (!name) throw new Error('模型显示名称不能为空。');
+      if (provider.models.some(item => item.id !== input.id && item.name.normalize('NFC') === name)) {
+        throw new Error(`该Provider下已有同名模型：${name}`);
+      }
+      const existing = input.id ? provider.models.find(item => item.id === input.id) : undefined;
+      if (input.id && !existing) throw new Error('模型已被删除，请重新读取配置。');
+      const model = existing
+        ? await updateApiModel(existing, { ...input, id: existing.id, name })
+        : await createApiModel({ ...input, id: undefined, name });
+      provider.models = existing
+        ? provider.models.map(item => (item.id === model.id ? model : item))
+        : [...provider.models, model];
+      settings.providers = settings.providers.map(item => (item.id === providerId ? provider : item));
+      if (!settings.defaultModelSelection && provider.enabled && model.enabled) {
+        settings.defaultModelSelection = { modelId: model.id, providerId };
+      }
+      await this.settingsStore.save(settings);
+      this.reloadSettingsState();
+      return model;
+    });
   }
 
   async removeProvider(providerId: string): Promise<void> {
-    const settings = this.settingsStore.load();
-    if (!settings.providers.some(item => item.id === providerId)) return;
-    settings.providers = settings.providers.filter(item => item.id !== providerId);
-    if (settings.defaultModelSelection?.providerId === providerId) settings.defaultModelSelection = undefined;
-    await this.settingsStore.save(settings);
-    this.reloadSettingsState();
+    return this.mutateProviderSettings(providerId, async () => {
+      const settings = this.settingsStore.load();
+      if (!settings.providers.some(item => item.id === providerId)) return;
+      settings.providers = settings.providers.filter(item => item.id !== providerId);
+      if (settings.defaultModelSelection?.providerId === providerId) settings.defaultModelSelection = undefined;
+      await this.settingsStore.save(settings);
+      this.reloadSettingsState();
+    });
   }
 
   async removeModel(providerId: string, modelId: string): Promise<void> {
-    const settings = this.settingsStore.load();
-    const provider = settings.providers.find(item => item.id === providerId);
-    if (!provider) return;
-    provider.models = provider.models.filter(item => item.id !== modelId);
-    settings.providers = settings.providers.map(item => (item.id === providerId ? provider : item));
-    if (
-      settings.defaultModelSelection?.providerId === providerId &&
-      settings.defaultModelSelection.modelId === modelId
-    ) {
-      settings.defaultModelSelection = undefined;
-    }
-    await this.settingsStore.save(settings);
-    this.reloadSettingsState();
+    return this.mutateProviderSettings(providerId, async () => {
+      const settings = this.settingsStore.load();
+      const provider = settings.providers.find(item => item.id === providerId);
+      if (!provider) return;
+      provider.models = provider.models.filter(item => item.id !== modelId);
+      settings.providers = settings.providers.map(item => (item.id === providerId ? provider : item));
+      if (
+        settings.defaultModelSelection?.providerId === providerId &&
+        settings.defaultModelSelection.modelId === modelId
+      ) {
+        settings.defaultModelSelection = undefined;
+      }
+      await this.settingsStore.save(settings);
+      this.reloadSettingsState();
+    });
   }
 
   async selectDefaultModel(selection?: ModelSelection): Promise<void> {
@@ -1603,49 +1766,62 @@ export class DreamCardAgentRuntime {
 
   async importProviderBundle(source: string): Promise<ApiProvider> {
     const bundle = parseApiProviderBundle(source);
-    const settings = this.settingsStore.load();
-    const uniqueName = (base: string, used: Set<string>) => {
-      const normalized = base.trim() || '导入的Provider';
-      if (!used.has(normalized.normalize('NFC'))) return normalized;
-      let index = 2;
-      while (used.has(`${normalized} ${index}`.normalize('NFC'))) index += 1;
-      return `${normalized} ${index}`;
-    };
-    const providerNames = new Set(settings.providers.map(item => item.name.normalize('NFC')));
-    const providerRequest = bundle.provider.request;
-    const provider = await createApiProvider({
-      apiKey: providerRequest?.apiKey ?? bundle.provider.apiKey ?? '',
-      baseURL: bundle.provider.baseURL,
-      bodyParameters: providerRequest?.bodyParameters ?? bundle.provider.bodyParameters,
-      enabled: bundle.provider.enabled,
-      excludedBodyParameters: providerRequest?.excludedBodyParameters ?? bundle.provider.excludedBodyParameters,
-      interfaceType: bundle.provider.interfaceType,
-      name: uniqueName(bundle.provider.name, providerNames),
-      requestHeaders: providerRequest?.requestHeaders ?? bundle.provider.requestHeaders,
+    return this.mutateProviderSettings('new-provider', async () => {
+      const settings = this.settingsStore.load();
+      const uniqueName = (base: string, used: Set<string>) => {
+        const normalized = base.trim() || '导入的Provider';
+        if (!used.has(normalized.normalize('NFC'))) return normalized;
+        let index = 2;
+        while (used.has(`${normalized} ${index}`.normalize('NFC'))) index += 1;
+        return `${normalized} ${index}`;
+      };
+      const providerNames = new Set(settings.providers.map(item => item.name.normalize('NFC')));
+      const providerRequest = bundle.provider.request;
+      const provider = await createApiProvider({
+        apiKey: providerRequest?.apiKey ?? bundle.provider.apiKey ?? '',
+        baseURL: bundle.provider.baseURL,
+        bodyParameters: providerRequest?.bodyParameters ?? bundle.provider.bodyParameters,
+        enabled: bundle.provider.enabled,
+        excludedBodyParameters: providerRequest?.excludedBodyParameters ?? bundle.provider.excludedBodyParameters,
+        interfaceType: bundle.provider.interfaceType,
+        name: uniqueName(bundle.provider.name, providerNames),
+        requestHeaders: providerRequest?.requestHeaders ?? bundle.provider.requestHeaders,
+      });
+      const modelNames = new Set<string>();
+      for (const sourceModel of bundle.models) {
+        const request = sourceModel.request;
+        const name = uniqueName(sourceModel.name || sourceModel.modelId, modelNames);
+        modelNames.add(name.normalize('NFC'));
+        provider.models.push(
+          await createApiModel({
+            appliedModelTemplate: sourceModel.appliedModelTemplate,
+            bodyParameters: request?.bodyParameters ?? sourceModel.bodyParameters,
+            compatibilityMode: sourceModel.compatibilityMode,
+            enabled: sourceModel.enabled,
+            excludedBodyParameters: request?.excludedBodyParameters ?? sourceModel.excludedBodyParameters,
+            modelId: sourceModel.modelId,
+            modelSettings: sourceModel.modelSettings,
+            name,
+            requestHeaders: request?.requestHeaders ?? sourceModel.requestHeaders,
+          }),
+        );
+      }
+      settings.providers.push(provider);
+      await this.settingsStore.save(settings);
+      this.reloadSettingsState();
+      return provider;
     });
-    const modelNames = new Set<string>();
-    for (const sourceModel of bundle.models) {
-      const request = sourceModel.request;
-      const name = uniqueName(sourceModel.name || sourceModel.modelId, modelNames);
-      modelNames.add(name.normalize('NFC'));
-      provider.models.push(
-        await createApiModel({
-          appliedModelTemplate: sourceModel.appliedModelTemplate,
-          bodyParameters: request?.bodyParameters ?? sourceModel.bodyParameters,
-          compatibilityMode: sourceModel.compatibilityMode,
-          enabled: sourceModel.enabled,
-          excludedBodyParameters: request?.excludedBodyParameters ?? sourceModel.excludedBodyParameters,
-          modelId: sourceModel.modelId,
-          modelSettings: sourceModel.modelSettings,
-          name,
-          requestHeaders: request?.requestHeaders ?? sourceModel.requestHeaders,
-        }),
-      );
-    }
-    settings.providers.push(provider);
-    await this.settingsStore.save(settings);
-    this.reloadSettingsState();
-    return provider;
+  }
+
+  private mutateProviderSettings<T>(key: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.providerMutations.get(key) ?? Promise.resolve();
+    const pending = previous.catch(() => undefined).then(operation);
+    this.providerMutations.set(key, pending);
+    const clear = () => {
+      if (this.providerMutations.get(key) === pending) this.providerMutations.delete(key);
+    };
+    void pending.then(clear, clear);
+    return pending;
   }
 
   async revealProvider(providerId: string) {
@@ -1723,6 +1899,7 @@ export class DreamCardAgentRuntime {
   }
 
   destroy(): void {
+    this.inputSubmissions.dispose();
     if (this.browserRecords instanceof BufferedSessionRecordStore) this.browserRecords.dispose();
     this.localSessions?.dispose();
     this.resolveToolConfirmation(false, this.toolConfirmationResolve?.sessionId);
@@ -2264,6 +2441,7 @@ export class DreamCardAgentRuntime {
   }
 
   private updateService(view: SessionView): void {
+    this.inputSubmissions.observe(view);
     if (!isSessionOperationActive(view.status) && this.toolConfirmationResolve?.sessionId === view.sessionId)
       this.resolveToolConfirmation(false, view.sessionId);
     const effectiveView = this.effectiveSessionView(view);

@@ -11,7 +11,6 @@
       <i class="fa-solid fa-chevron-down dca-details-chevron" aria-hidden="true"></i>
       <span
         v-if="!expanded && item.status === 'running' && item.content"
-        ref="previewRef"
         class="dca-reasoning-preview"
         aria-label="最新思考内容"
       >
@@ -23,50 +22,18 @@
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { ref } from 'vue';
 import type { SessionUiItem } from '../../../../core/session/types';
 import { reasoningLabel } from '../../../composables/timeline';
 
-const props = defineProps<{ item: SessionUiItem }>();
+defineProps<{ item: SessionUiItem }>();
 
 const detailsRef = ref<HTMLDetailsElement>();
 const expanded = ref(false);
-const previewRef = ref<HTMLElement>();
-let resizeObserver: ResizeObserver | undefined;
-
-function scrollPreviewToLatest(): void {
-  const preview = previewRef.value;
-  if (preview) preview.scrollTop = preview.scrollHeight;
-}
 
 function handleToggle(): void {
   expanded.value = detailsRef.value?.open ?? false;
-  if (!expanded.value) void nextTick(scrollPreviewToLatest);
 }
-
-watch(
-  () => props.item.content,
-  () => void nextTick(scrollPreviewToLatest),
-  { flush: 'post' },
-);
-
-watch(previewRef, (current, previous) => {
-  if (previous) resizeObserver?.unobserve(previous);
-  if (current) {
-    resizeObserver?.observe(current);
-    void nextTick(scrollPreviewToLatest);
-  }
-});
-
-onMounted(() => {
-  if (typeof ResizeObserver !== 'undefined') {
-    resizeObserver = new ResizeObserver(scrollPreviewToLatest);
-    if (previewRef.value) resizeObserver.observe(previewRef.value);
-  }
-  scrollPreviewToLatest();
-});
-
-onBeforeUnmount(() => resizeObserver?.disconnect());
 </script>
 
 <style lang="scss">
@@ -92,13 +59,16 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
 
 .dca-step-card.dca-reasoning-card > summary > .dca-reasoning-preview {
   position: relative;
-  display: block;
+  display: flex;
   height: 4.2rem;
+  flex-direction: column;
+  justify-content: flex-end;
   grid-column: 1 / -1;
   justify-self: stretch;
   margin: 0.05rem 0 0;
   padding: 0.15rem 0.15rem 0.05rem 1.32rem;
-  overflow: hidden;
+  // 预览只展示末尾，由外层时间线接收触摸滚动。
+  overflow: clip;
   color: var(--dca-text-muted);
   font-size: 0.78rem;
   line-height: 1.45;
@@ -121,12 +91,9 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
   );
 }
 
-.dca-reasoning-card.running > summary > .dca-reasoning-preview {
-  scroll-behavior: smooth;
-}
-
 .dca-reasoning-preview-content {
   display: flex;
+  flex: 0 0 auto;
   min-height: 100%;
   flex-direction: column;
   justify-content: flex-end;
@@ -137,9 +104,11 @@ onBeforeUnmount(() => resizeObserver?.disconnect());
 }
 
 .dca-reasoning-card > summary > .dca-reasoning-preview::before {
-  position: sticky;
+  position: absolute;
   z-index: 1;
   top: 0;
+  right: 0;
+  left: 0;
   display: block;
   height: 0.85rem;
   margin-bottom: -0.85rem;

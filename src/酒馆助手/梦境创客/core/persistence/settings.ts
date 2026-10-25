@@ -8,6 +8,7 @@ import { cloneStructuredPreset, DEFAULT_PRESET, type StructuredPreset } from '..
 import { DEFAULT_BUILTIN_AGENT, defaultBuiltinAgentConfiguration, type AgentConfiguration } from './builtin-agent';
 import type { SessionMode } from '../session/types';
 import { isAgentToolId } from '../runner/tool-catalog';
+import { mergeProviderSettings } from './provider-settings-merge';
 
 export type { AgentConfiguration } from './builtin-agent';
 
@@ -182,16 +183,21 @@ export interface AgentSettingsStore {
 }
 
 export class MemoryAgentSettingsStore implements AgentSettingsStore {
+  private readonly baselines = new WeakMap<DreamCardAgentSettings, DreamCardAgentSettings>();
   private readonly listeners = new Set<() => void>();
   private value: DreamCardAgentSettings;
   constructor(initial: DreamCardAgentSettings = DEFAULT_DREAM_CARD_AGENT_SETTINGS) {
     this.value = normalizeSettings(initial);
   }
   load(): DreamCardAgentSettings {
-    return structuredClone(this.value);
+    const result = structuredClone(this.value);
+    this.baselines.set(result, structuredClone(this.value));
+    return result;
   }
   async save(settings: DreamCardAgentSettings): Promise<void> {
-    this.value = normalizeSettings(settings);
+    const base = this.baselines.get(settings) ?? this.value;
+    this.value = mergeSettingsChanges(base, normalizeSettings(settings), this.value);
+    this.baselines.set(settings, structuredClone(settings));
     this.listeners.forEach(listener => listener());
   }
   subscribe(listener: () => void): () => void {
@@ -361,7 +367,7 @@ export function mergeSettingsChanges(
     globalSkills: applyRecordChanges(base.globalSkills, incoming.globalSkills, latest.globalSkills),
     onboardingDone: choose('onboardingDone'),
     defaultModelSelection: choose('defaultModelSelection'),
-    providers: choose('providers'),
+    providers: mergeProviderSettings(base.providers, incoming.providers, latest.providers),
     presetProfiles: choose('presetProfiles'),
     sendWithCtrlEnter: choose('sendWithCtrlEnter'),
     syncRevision: Math.max(base.syncRevision, incoming.syncRevision, latest.syncRevision) + 1,

@@ -2,7 +2,28 @@
   <nav class="dca-tabs" aria-label="已打开页面">
     <div class="dca-tab-strip">
       <button
-        v-if="isMobile"
+        v-if="isMobile && workspaceView === 'settings'"
+        class="dca-tab dca-mobile-return"
+        type="button"
+        :aria-label="state.active ? '返回当前会话' : '返回会话列表'"
+        :title="state.active?.title ?? '会话列表'"
+        @click="returnToConversation"
+      >
+        <i class="fa-solid fa-arrow-left" aria-hidden="true"></i>
+        <span>{{ state.active ? '返回会话' : '会话列表' }}</span>
+        <small v-if="state.active">{{ state.active.title }}</small>
+      </button>
+      <button
+        v-if="isMobile && workspaceView !== 'settings' && navigation?.canGoBack.value"
+        class="dca-tab dca-mobile-back"
+        type="button"
+        aria-label="返回"
+        @click="navigation.back()"
+      >
+        ‹
+      </button>
+      <button
+        v-if="isMobile && workspaceView !== 'settings'"
         class="dca-tab dca-mobile-navigation-tab"
         type="button"
         title="角色与会话"
@@ -10,7 +31,7 @@
       >
         <i class="fa-solid fa-bars" aria-hidden="true"></i>
       </button>
-      <div v-if="isMobile" class="dca-mobile-brand">
+      <div v-if="isMobile && workspaceView !== 'settings'" class="dca-mobile-brand">
         <i class="fa-solid fa-address-card" aria-hidden="true"></i>
         <strong :title="mobileCharacterTitle">{{ mobileCharacterTitle }}</strong>
       </div>
@@ -58,7 +79,7 @@
     </div>
     <div class="dca-tab-actions">
       <button
-        v-if="embedded"
+        v-if="embedded && !isMobile"
         class="dca-tab dca-native-fullscreen-button"
         type="button"
         :title="nativeFullscreen ? '退出全屏' : '全屏显示工作台'"
@@ -69,6 +90,7 @@
         <i :class="nativeFullscreen ? 'fa-solid fa-compress' : 'fa-solid fa-expand'" aria-hidden="true"></i>
       </button>
       <button
+        v-if="!isMobile"
         class="dca-tab"
         type="button"
         :disabled="!state.interfaceModes?.detached"
@@ -78,6 +100,7 @@
         <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i>
       </button>
       <button
+        v-if="!isMobile"
         class="dca-tab dca-version-tab"
         type="button"
         :class="{ available: updaterSnapshot.updateAvailable }"
@@ -93,6 +116,17 @@
         <span v-else class="dca-version-current">v{{ updaterSnapshot.runningVersion }}</span>
       </button>
       <button
+        v-if="isMobile && (embedded || state.interfaceModes?.detached || updaterSnapshot.updateAvailable)"
+        class="dca-tab dca-window-options"
+        :class="{ available: updaterSnapshot.updateAvailable }"
+        type="button"
+        :title="updaterSnapshot.updateAvailable ? '窗口操作，有可用更新' : '窗口操作'"
+        :aria-expanded="windowMenuOpen"
+        @click="windowMenuOpen = !windowMenuOpen"
+      >
+        <i class="fa-solid fa-ellipsis" aria-hidden="true"></i>
+      </button>
+      <button
         class="dca-tab dca-settings-tab"
         type="button"
         :class="{ active: workspaceView === 'settings' }"
@@ -101,7 +135,26 @@
       >
         <i class="fa-solid fa-gear" aria-hidden="true"></i><span>设置</span>
       </button>
+      <NotificationButton v-if="isMobile" />
     </div>
+    <WorkspaceMenu
+      :open="windowMenuOpen"
+      title="窗口操作"
+      panel-class="dca-window-menu"
+      @close="windowMenuOpen = false"
+    >
+      <button v-if="embedded" type="button" @click="runWindowAction(toggleNativeFullscreen)">
+        <i :class="nativeFullscreen ? 'fa-solid fa-compress' : 'fa-solid fa-expand'" aria-hidden="true"></i>
+        <span>{{ nativeFullscreen ? '退出全屏' : '全屏显示工作台' }}</span>
+      </button>
+      <button v-if="state.interfaceModes?.detached" type="button" @click="runWindowAction(openDetachedInterface)">
+        <i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i><span>在新窗口打开</span>
+      </button>
+      <button type="button" @click="runWindowAction(() => openSettings('update'))">
+        <i class="fa-solid fa-download" aria-hidden="true"></i>
+        <span>{{ updaterSnapshot.updateAvailable ? '查看可用更新' : '版本与更新' }}</span>
+      </button>
+    </WorkspaceMenu>
     <div v-if="closingSessionId" class="dca-modal-backdrop" role="presentation">
       <section class="dca-modal dca-stop-close-dialog" role="dialog" aria-modal="true">
         <header>
@@ -152,12 +205,15 @@
 
 <script setup lang="ts">
 import { clientEnvironment, readClientHost, openDetachedInterface } from '../runtime-client';
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue';
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue';
 import { useDreamCardAgent } from '../composables/runtime';
 import { useDreamCardAgentUpdater } from '../updater';
+import NotificationButton from './notifications/NotificationButton.vue';
+import WorkspaceMenu from './WorkspaceMenu.vue';
 
 const {
   closeSessionTab,
+  navigation,
   createGlobalSession,
   createSession,
   createSessionForAvatar,
@@ -189,6 +245,18 @@ const openedSessions = computed(() =>
     ),
 );
 const mobileCharacterTitle = computed(() => state.value.currentCharacter?.name || '未打开角色卡');
+const windowMenuOpen = ref(false);
+watch(isMobile, () => {
+  windowMenuOpen.value = false;
+});
+function runWindowAction(action: () => unknown) {
+  windowMenuOpen.value = false;
+  action();
+}
+function returnToConversation() {
+  mobileSurface.value = 'workspace';
+  workspaceView.value = state.value.active ? 'session' : 'home';
+}
 const closingSessionId = ref('');
 const newSessionChoiceOpen = ref(false);
 const showCharacterChoices = ref(false);
@@ -267,7 +335,11 @@ async function createCharacterFromTab(avatarId: string) {
   overflow-x: auto;
   scrollbar-width: none;
 }
-.dca-tab-strip::-webkit-scrollbar { display: none; width: 0; height: 0; }
+.dca-tab-strip::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
 
 .dca-tab-actions {
   display: flex;
@@ -291,6 +363,49 @@ async function createCharacterFromTab(avatarId: string) {
   align-items: center;
   gap: 0.4rem;
   color: var(--dca-text);
+}
+
+.dca-app .dca-mobile-return {
+  min-width: 0;
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  gap: 0.4rem;
+  padding: 0 0.5rem;
+  color: var(--dca-text);
+}
+.dca-mobile-return > i,
+.dca-mobile-return > span {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.dca-mobile-return > small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dca-text-muted);
+}
+.dca-window-options {
+  position: relative;
+}
+.dca-window-options.available::after {
+  position: absolute;
+  top: 0.3rem;
+  right: 0.3rem;
+  width: 0.35rem;
+  height: 0.35rem;
+  border-radius: 50%;
+  background: var(--dca-accent);
+  content: '';
+}
+.dca-window-menu .dca-sheet-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.dca-app .dca-window-menu .dca-sheet-body > button {
+  min-height: 2.75rem;
+  justify-content: flex-start;
+  gap: 0.6rem;
 }
 
 .dca-app .dca-tab:hover:not(:disabled) {
@@ -513,7 +628,16 @@ async function createCharacterFromTab(avatarId: string) {
 @media (max-width: 720px) {
   .dca-tabs {
     min-width: 0;
+    min-height: 2.75rem;
+    padding-top: 0;
+    padding-left: 0.25rem;
     padding-right: var(--dca-window-actions-width, 4.7rem);
+  }
+
+  .dca-app .dca-tab-actions > .dca-tab,
+  .dca-app .dca-mobile-navigation-tab {
+    min-width: 2.5rem;
+    padding-inline: 0.4rem;
   }
 
   .dca-tab-strip {
@@ -522,18 +646,6 @@ async function createCharacterFromTab(avatarId: string) {
 
   .dca-settings-tab span,
   .dca-session-tab-open small {
-    display: none;
-  }
-
-  .dca-version-tab {
-    padding-inline: 0.32rem !important;
-  }
-
-  .dca-version-new {
-    padding-inline: 0.3rem;
-  }
-
-  .dca-version-current-prefix {
     display: none;
   }
 

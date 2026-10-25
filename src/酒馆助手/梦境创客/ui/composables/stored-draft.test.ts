@@ -79,4 +79,31 @@ describe('stored drafts', () => {
     await nextTick();
     expect(result.draft.value.text).toBe('刚输入');
   });
+
+  it('卸载期间结算的草稿在重新挂载时保持已消费状态', async () => {
+    mocked.runtime = { loadBrowserDraft: vi.fn(async () => undefined), saveBrowserDraft: vi.fn(async () => {}) };
+    const first = mount(ref('a'));
+    await nextTick();
+    first.result.draft.value = { text: '已提交' };
+    const settle = first.result.capture();
+    first.dispose();
+    cleanup.splice(0, 1);
+    expect(settle({ text: '' })).toBe(true);
+    expect(settle({ text: '迟到结果' })).toBe(false);
+    const next = mount(ref('a'));
+    await nextTick();
+    expect(next.result.draft.value.text).toBe('');
+  });
+
+  it('另一组件改写原草稿后，旧提交不能消费新的草稿版本', async () => {
+    mocked.runtime = { saveBrowserDraft: vi.fn(async () => {}) };
+    const first = mount(ref('a'));
+    first.result.draft.value = { text: '旧内容' };
+    const settle = first.result.capture();
+    const next = mount(ref('a'));
+    next.result.draft.value = { text: '新内容' };
+    expect(first.result.draft.value.text).toBe('新内容');
+    expect(settle({ text: '' })).toBe(false);
+    expect(next.result.draft.value.text).toBe('新内容');
+  });
 });

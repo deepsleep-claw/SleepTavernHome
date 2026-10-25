@@ -178,6 +178,7 @@ function mountConfiguredSkills(configuration: AgentConfiguration, availableSkill
 export class CardAgentSessionService {
   private executing = false;
   private compacting = false;
+  private compactionResumeStatus?: SessionLifecycleStatus;
   private restoredUsageBaseline?: ApiUsageBaseline;
   readonly bindingId: string;
   readonly characterName: string;
@@ -191,6 +192,7 @@ export class CardAgentSessionService {
   private readonly attachmentStore?: SessionAttachmentStore;
   private readonly canWriteNonCharacterResources: () => boolean;
   private compiledPreset: CompiledPreset;
+  private preparedCompactionPreset?: CompiledPreset;
   private contextWindow: number;
   private executor: ModelStepExecutor;
   private readonly lock: GlobalAgentTaskLock;
@@ -378,7 +380,12 @@ export class CardAgentSessionService {
       characterName: this.characterName,
       contextUsage:
         this.runner?.state.contextUsage ??
-        measureContext(this.modelMessages, this.contextWindow, this.restoredUsageBaseline),
+        measureContext(
+          this.modelMessages,
+          this.contextWindow,
+          this.restoredUsageBaseline,
+          this.restoredUsageBaseline?.toolSchemaTokens,
+        ),
       error: this.lastError,
       events: klona(this.events),
       mode: this.mode,
@@ -780,8 +787,9 @@ export class CardAgentSessionService {
     }
   }
 
-  async compactContext(): Promise<SessionView> {
-    if (this.executing || this.activeCheckpointId) throw new Error('请先完成或结束当前轮次再压缩。');
+  async compactContext(instructions = ''): Promise<SessionView> {
+    if (instructions.length > 4000) throw new Error('摘要重点过长，请控制在 4000 字符以内。');
+    if (this.executing) throw new Error('请先停止当前任务再压缩。');
     if (!this.agentConfiguration.toolIds.includes('compact_context')) throw new Error('当前助手未启用上下文压缩工具。');
     const user = [...this.ui].reverse().find(item => item.kind === 'user' && !item.hidden);
     if (!user) throw new Error('当前会话还没有需要压缩的对话。');
@@ -789,8 +797,11 @@ export class CardAgentSessionService {
     this.lock.acquire(this.sessionId);
     this.executing = true;
     this.compacting = true;
-    this.activeCheckpointId = user.checkpointId;
-    const before = this.view().contextUsage.totalTokens;
+    const interruptedCheckpoint = this.activeCheckpointId;
+    const previousStatus = this.status;
+    this.compactionResumeStatus = interruptedCheckpoint ? 'stopped' : previousStatus;
+    const pending = this.runner?.state.pending;
+    const eventStart = this.events.length;
     const item: SessionUiItem = {
       id: `compact:${crypto.randomUUID()}`,
       at: this.now(),
@@ -799,22 +810,34 @@ export class CardAgentSessionService {
     };
     this.ui.push(item);
     try {
-      this.buildRunner();
-      const state = await this.runner!.compact();
+      this.buildRunner('idle', pending);
+      const state = await this.runner!.compact(instructions);
       this.modelMessages = klona(state.messages);
       this.status = state.status;
       this.lastError = state.failure;
+      const compacted = [...this.events].reverse().find(event => event.type === 'context-compacted');
+      const skipped = this.events.slice(eventStart).find(event => event.type === 'context-compaction-skipped');
       item.content =
         state.status === 'completed'
-          ? `上下文压缩完成：约 ${before.toLocaleString()} → ${state.contextUsage.totalTokens.toLocaleString()} tokens。`
+          ? (skipped?.reason ??
+            `上下文压缩完成：同口径估算约 ${compacted?.beforeTokens?.toLocaleString() ?? '—'} → ${compacted?.afterTokens?.toLocaleString() ?? '—'} tokens。${interruptedCheckpoint ? '可从中断处继续。' : ''}`)
           : (state.failure ?? '上下文压缩已停止。');
       item.status = state.status === 'completed' ? 'completed' : 'failed';
-      this.activeCheckpointId = undefined;
+      this.activeCheckpointId = interruptedCheckpoint;
+      if (interruptedCheckpoint && state.status === 'completed') {
+        // 维护上下文不执行挂起工具，也不结束原轮次的撤销与继续边界。
+        this.status = 'stopped';
+        this.buildRunner('stopped', pending);
+      } else if (!interruptedCheckpoint && state.status !== 'completed') {
+        this.status = previousStatus;
+        this.buildRunner(previousStatus === 'abnormal' ? 'failed' : previousStatus);
+      }
       await this.persist();
       return this.view();
     } finally {
       this.compacting = false;
-      this.activeCheckpointId = undefined;
+      this.compactionResumeStatus = undefined;
+      this.activeCheckpointId = interruptedCheckpoint;
       this.executing = false;
       this.lock.release(this.sessionId);
     }
@@ -833,12 +856,12 @@ export class CardAgentSessionService {
     return this.executing;
   }
 
-  async enqueueGuidance(message: string): Promise<void> {
+  async enqueueGuidance(message: string, inputId?: string): Promise<void> {
     if (!this.runner || !['running', 'waiting-approval'].includes(this.runner.state.status)) {
       throw new Error('当前没有正在运行的Agent步骤。');
     }
     if (!message.trim()) return;
-    const id = this.runner.enqueueGuidance(message);
+    const id = this.runner.enqueueGuidance(message, inputId);
     this.ui.push({
       id,
       at: this.now(),
@@ -1382,10 +1405,24 @@ export class CardAgentSessionService {
   private buildRunner(initialStatus: RunnerStatus = 'idle', initialPending?: PendingRunnerStep): void {
     if (!this.repository) throw new Error('实时文件工作区尚未初始化。');
     const journal = new PersistentRunnerJournal(this.events, async events => {
-      this.events = events;
-      this.consumeLatestEvent(events.at(-1)!);
-      this.modelMessages = klona(this.runner?.state.messages ?? this.modelMessages);
-      await this.persist();
+      const snapshot =
+        events.at(-1)?.type === 'context-compacted'
+          ? { events: this.events, ui: klona(this.ui), header: this.headerMessageCount, preset: this.compiledPreset }
+          : undefined;
+      try {
+        this.events = events;
+        this.consumeLatestEvent(events.at(-1)!);
+        this.modelMessages = klona(this.runner?.state.messages ?? this.modelMessages);
+        await this.persist();
+      } catch (error) {
+        if (snapshot) {
+          this.events = snapshot.events;
+          this.ui = snapshot.ui;
+          this.headerMessageCount = snapshot.header;
+          this.compiledPreset = snapshot.preset;
+        }
+        throw error;
+      }
     });
     const initialApiUsageBaseline = this.runner ? this.runner.usageBaseline() : this.restoredUsageBaseline;
     this.restoredUsageBaseline = undefined;
@@ -1621,8 +1658,7 @@ export class CardAgentSessionService {
       this.preset,
       defaultPresetValues(this.skills, this.agentConfiguration.toolIds, this.scope),
     );
-    this.headerMessageCount = next.messages.length;
-    this.compiledPreset = next;
+    this.preparedCompactionPreset = next;
     return klona(next.messages);
   }
 
@@ -1881,9 +1917,29 @@ export class CardAgentSessionService {
           status: 'running',
         });
     } else if (event.type === 'context-compacted') {
-      const item = [...this.ui].reverse().find(item => item.kind === 'status' && item.content === '正在压缩上下文…');
+      if (this.preparedCompactionPreset) {
+        this.compiledPreset = this.preparedCompactionPreset;
+        this.headerMessageCount = this.compiledPreset.messages.length;
+        this.preparedCompactionPreset = undefined;
+      }
+      const item = [...this.ui]
+        .reverse()
+        .find(item => item.kind === 'status' && item.id.startsWith('compact:') && item.status !== 'completed');
       if (item) {
         item.content = '上下文压缩完成，继续当前任务。';
+        item.status = 'completed';
+      }
+    } else if (event.type === 'context-compaction-retrying') {
+      const item = [...this.ui]
+        .reverse()
+        .find(item => item.kind === 'status' && item.id.startsWith('compact:') && item.status !== 'completed');
+      if (item) item.content = `正在重试压缩（${event.attempt}/3）：${event.reason}`;
+    } else if (event.type === 'context-compaction-skipped') {
+      const item = [...this.ui]
+        .reverse()
+        .find(item => item.kind === 'status' && item.id.startsWith('compact:') && item.status !== 'completed');
+      if (item) {
+        item.content = event.reason;
         item.status = 'completed';
       }
     } else if (event.type === 'status') {
@@ -1893,13 +1949,15 @@ export class CardAgentSessionService {
         this.hasStreamedReasoningInCurrentStep = false;
         this.completeStreamingText(event.at);
         this.hasStreamedTextInCurrentStep = false;
-        if (['completed', 'context-exhausted', 'failed', 'stopped'].includes(event.status)) {
+        if (!this.compacting && ['completed', 'context-exhausted', 'failed', 'stopped'].includes(event.status)) {
           this.completeRunUi(event.status as 'completed' | 'context-exhausted' | 'failed' | 'stopped', event.at);
         }
       }
       if (event.failure) this.lastError = event.failure;
       if (event.status === 'failed' || event.status === 'stopped') {
-        const item = [...this.ui].reverse().find(item => item.kind === 'status' && item.content === '正在压缩上下文…');
+        const item = [...this.ui]
+          .reverse()
+          .find(item => item.kind === 'status' && item.id.startsWith('compact:') && item.status !== 'completed');
         if (item) {
           item.content = event.failure ?? '上下文压缩已停止。';
           item.status = 'failed';
@@ -1962,7 +2020,7 @@ export class CardAgentSessionService {
       scope: this.scope,
       sessionId: this.sessionId,
       skills: klona(this.skills),
-      status: this.status,
+      status: this.compactionResumeStatus ?? this.status,
       tavernChats: this.tavernChatWorkspace?.exportRuntime(),
       title: this.title,
       ui: klona(this.ui),

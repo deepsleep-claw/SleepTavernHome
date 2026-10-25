@@ -18,15 +18,21 @@
       <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
     </button>
 
-    <Teleport to=".dca-app">
+    <WorkspaceMenu
+      :open="open"
+      :title="ariaLabel"
+      :panel-class="mobile ? 'dca-select-sheet' : 'dca-select-container'"
+      teleport
+      @close="closeMenu"
+    >
       <div
         v-if="open"
         :id="listboxId"
         ref="menu"
-        class="dca-select-menu"
+        :class="mobile ? 'dca-select-sheet-options' : 'dca-select-menu'"
         role="listbox"
         :aria-label="ariaLabel"
-        :style="menuStyle"
+        :style="mobile ? undefined : menuStyle"
       >
         <button
           v-for="(option, index) in options"
@@ -49,12 +55,14 @@
         </button>
         <div v-if="options.length === 0" class="dca-select-empty">暂无可用选项</div>
       </div>
-    </Teleport>
+    </WorkspaceMenu>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch, type CSSProperties } from 'vue';
+import WorkspaceMenu from './WorkspaceMenu.vue';
+import { useWorkspaceNavigation } from '../composables/workspace-navigation';
 
 export type SelectOption = {
   description?: string;
@@ -79,6 +87,8 @@ const root = ref<HTMLElement>();
 const trigger = ref<HTMLButtonElement>();
 const menu = ref<HTMLElement>();
 const open = ref(false);
+const navigation = useWorkspaceNavigation();
+const mobile = computed(() => navigation?.isMobile.value ?? false);
 const activeIndex = ref(0);
 const menuStyle = ref<CSSProperties>({});
 const listboxId = `dca-select-${crypto.randomUUID()}`;

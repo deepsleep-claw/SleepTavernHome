@@ -1,7 +1,9 @@
 import type { ModelMessage } from 'ai';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MemoryTavernFileClient } from '../core/persistence/file-client';
 import { MemoryBrowserRecordStore } from '../core/persistence/browser-record-store';
+import { SessionRevisionStore } from '../core/persistence/session-store';
+import { MemorySessionDraftCache } from '../core/persistence/session-draft-cache';
 import { MemoryAgentSettingsStore, type DreamCardAgentSettings } from '../core/persistence/settings';
 import type { ModelStepExecutor, ModelStepRequest, ModelStepResult } from '../core/runner/step-executor';
 import { MemoryCardStateAdapter } from '../core/transaction/adapter';
@@ -125,6 +127,153 @@ function agentConfiguration(id: string, name: string, presetId: string, skillIds
 }
 
 describe('DreamCardAgentRuntime', () => {
+  it('同一 Provider 的并发模型新增串行执行，失败不会阻塞后续保存', async () => {
+    const runtime = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+      fileClient: new MemoryTavernFileClient(),
+      settingsStore: new MemoryAgentSettingsStore(),
+    });
+    try {
+      const { provider } = await addProfile(runtime);
+      const input = (name: string) => ({ name, modelId: name, compatibilityMode: 'standard' as const, enabled: true });
+      const results = await Promise.allSettled([
+        runtime.saveModel(provider.id, input('new-one')),
+        runtime.saveModel(provider.id, input('new-one')),
+        runtime.saveModel(provider.id, input('new-two')),
+      ]);
+      expect(results.map(item => item.status)).toEqual(['fulfilled', 'rejected', 'fulfilled']);
+      expect(runtime.snapshot().providers[0].models.map(item => item.name)).toEqual(['model', 'new-one', 'new-two']);
+    } finally {
+      runtime.destroy();
+    }
+  });
+
+  it('保存表单只应用编辑字段，保留新模型、当前连接和隐藏请求配置', async () => {
+    const runtime = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+      fileClient: new MemoryTavernFileClient(),
+      settingsStore: new MemoryAgentSettingsStore(),
+    });
+    try {
+      const { provider } = await addProfile(runtime);
+      await runtime.saveProvider({
+        ...provider,
+        name: provider.name,
+        baseURL: 'https://new.example.test',
+        bodyParameters: { text: 'metadata:\n  source: preserved' },
+      });
+      await runtime.saveProvider(
+        { ...provider, name: 'renamed', baseURL: 'https://stale.example.test', bodyParameters: { text: '' } },
+        ['name'],
+      );
+      const next = runtime.snapshot().providers[0];
+      expect(next).toMatchObject({ name: 'renamed', baseURL: 'https://new.example.test' });
+      expect(next.models).toHaveLength(1);
+      expect((await runtime.revealProvider(provider.id)).bodyParameters.text).toContain('preserved');
+    } finally {
+      runtime.destroy();
+    }
+  });
+
+  it('不同 Provider 的并发编辑均保留，删除后旧保存不会重建 Provider', async () => {
+    const runtime = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+      fileClient: new MemoryTavernFileClient(),
+      settingsStore: new MemoryAgentSettingsStore(),
+    });
+    try {
+      const { provider } = await addProfile(runtime);
+      const second = await runtime.saveProvider({ ...provider, id: undefined, name: 'second' });
+      await Promise.all([
+        runtime.saveProvider({ ...provider, name: 'first edited', apiKey: 'first' }),
+        runtime.saveProvider({ ...second, name: 'second edited', apiKey: 'second' }),
+      ]);
+      expect(runtime.snapshot().providers.map(item => item.name)).toEqual(['first edited', 'second edited']);
+      await runtime.removeProvider(provider.id);
+      await expect(runtime.saveProvider({ ...provider, name: 'stale' })).rejects.toThrow('已被删除');
+      expect(runtime.snapshot().providers.map(item => item.id)).toEqual([second.id]);
+    } finally {
+      runtime.destroy();
+    }
+  });
+
+  it('选择后端备份后重建活动会话，之后的编辑不会写回旧运行实例', async () => {
+    const files = new MemoryTavernFileClient();
+    const settings = new MemoryAgentSettingsStore();
+    const runtime = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+      bridge: new FakeTavernBridge(),
+      fileClient: files,
+      settingsStore: settings,
+      browserRecords: new MemoryBrowserRecordStore(),
+    });
+    try {
+      await useAgentWithoutRemoteSkills(runtime);
+      await runtime.refreshCharacter();
+      const session = await runtime.createSession({ title: '初始会话' });
+      await runtime.backupSessions();
+      const remote = new SessionRevisionStore(files, settings, Date.now, new MemorySessionDraftCache(), true);
+      const backup = await remote.load(session.bindingId, session.sessionId);
+      await remote.commit({
+        bindingId: session.bindingId,
+        characterName: session.characterName,
+        status: backup.entry.status,
+        runtime: { ...backup.runtime, title: '后端会话' },
+      });
+      await runtime.renameSession('本机会话');
+      await runtime.backupSessions();
+      const conflict = runtime.snapshot().sessionBackup!.conflicts![0];
+      await runtime.resolveSessionBackupConflict(conflict, 'remote');
+      expect(runtime.snapshot().active?.title).toBe('后端会话');
+      expect(runtime.snapshot().sessionBackup?.conflicts).toEqual([]);
+      await runtime.renameSession('继续编辑');
+      await runtime.backupSessions();
+      expect((await remote.load(session.bindingId, session.sessionId)).runtime.title).toBe('继续编辑');
+      expect(await runtime.exportBrowserSessions()).toContain('本机会话');
+    } finally {
+      runtime.destroy();
+    }
+  });
+
+  it('输入按 ID 接收一次，回执先于模型完成，切换会话后重试仍返回原回执', async () => {
+    const executor = new DeferredExecutor();
+    const execute = vi.spyOn(executor, 'execute');
+    const runtime = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+      bridge: new FakeTavernBridge(),
+      fileClient: new MemoryTavernFileClient(),
+      settingsStore: new MemoryAgentSettingsStore(),
+      executorFactory: () => executor,
+    });
+    try {
+      await addProfile(runtime);
+      await useAgentWithoutRemoteSkills(runtime);
+      await runtime.refreshCharacter();
+      const other = await runtime.createSession({ title: '另一个会话' });
+      const session = await runtime.createSession();
+      const input = { id: 'input:message', sessionId: session.sessionId, kind: 'message' as const, text: '开始处理' };
+      const receipt = runtime.submitInput(input);
+      expect(runtime.submitInput(input)).toBe(receipt);
+      await expect(receipt).resolves.toEqual({ id: input.id, sessionId: session.sessionId, kind: 'message' });
+      await executor.startedPromise;
+      expect(runtime.snapshot().active?.status).toBe('running');
+      expect(execute).toHaveBeenCalledOnce();
+      const guidance = { ...input, id: 'input:guidance', kind: 'guidance' as const, text: '调整语气' };
+      await runtime.submitInput(guidance);
+      await runtime.submitInput(guidance);
+      expect(runtime.snapshot().active?.ui.filter(item => item.id === guidance.id)).toHaveLength(1);
+      await runtime.openSession(other.sessionId);
+      expect(runtime.submitInput(input)).toBe(receipt);
+      await expect(runtime.submitInput({ ...input, id: 'input:late' })).rejects.toThrow('目标会话');
+      executor.finish(modelStep());
+      await vi.waitFor(() => expect(runtime.snapshot().sessionStatuses[session.sessionId]).toBe('completed'));
+      expect(execute).toHaveBeenCalledTimes(2);
+    } finally {
+      executor.finish(modelStep());
+      runtime.destroy();
+    }
+  });
+
   it('浏览器重载后实时资源不可用时仍可进入只读历史', async () => {
     const files = new MemoryTavernFileClient();
     const settings = new MemoryAgentSettingsStore();
@@ -395,6 +544,27 @@ describe('DreamCardAgentRuntime', () => {
     runtime.destroy();
   });
 
+  it('仅保存编辑内容时不改变当前默认 Agent 与预设', async () => {
+    const runtime = new DreamCardAgentRuntime({
+      adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+      executorFactory: () => new QueueExecutor([]),
+      fileClient: new MemoryTavernFileClient(),
+      settingsStore: new MemoryAgentSettingsStore(),
+    });
+    const initial = runtime.snapshot();
+    await runtime.saveAgentConfiguration(agentConfiguration('agent:edited', '独立编辑', initial.activePresetId, []), {
+      makeDefault: false,
+    });
+    expect(runtime.snapshot().activeAgentConfigurationId).toBe(initial.activeAgentConfigurationId);
+    await runtime.savePresetProfile(
+      { ...structuredClone(initial.presetProfiles[0]), id: 'preset:edited', name: '独立编辑' },
+      { makeDefault: false },
+    );
+    expect(runtime.snapshot().activePresetId).toBe(initial.activePresetId);
+    expect(runtime.snapshot().presetProfiles.some(item => item.id === 'preset:edited')).toBe(true);
+    runtime.destroy();
+  });
+
   it('全局Skill跨运行时复用，已打开会话从下一条消息开始挂载新版', async () => {
     const settings = new MemoryAgentSettingsStore();
     const files = new MemoryTavernFileClient();
@@ -518,9 +688,9 @@ describe('DreamCardAgentRuntime', () => {
   it('后台运行期间分叉历史输出，原会话继续完成且不会覆盖新会话', async () => {
     const deferred = new DeferredExecutor();
     let stepIndex = 0;
-    const executor: ModelStepExecutor = { execute: request => stepIndex++ === 0
-      ? Promise.resolve(modelStep(false))
-      : deferred.execute(request) };
+    const executor: ModelStepExecutor = {
+      execute: request => (stepIndex++ === 0 ? Promise.resolve(modelStep(false)) : deferred.execute(request)),
+    };
     const runtime = new DreamCardAgentRuntime({
       adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
       executorFactory: () => executor,

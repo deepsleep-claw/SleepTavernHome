@@ -94,14 +94,14 @@ describe('runner context', () => {
   it('优先使用API用量，并只对请求后新增消息做本地增量估算', () => {
     const before: ModelMessage[] = [{ content: 'hello', role: 'user' }];
     const estimatedAtRequest = measureContext(before, 100_000).totalTokens;
-    const baseline = { estimatedTokens: estimatedAtRequest, inputTokens: 120, outputTokens: 30 };
+    const baseline = { version: 2 as const, estimatedTokens: estimatedAtRequest, inputTokens: 120, outputTokens: 30 };
     const exact = measureContext(before, 100_000, baseline);
     expect(exact).toMatchObject({
       apiInputTokens: 120,
       apiOutputTokens: 30,
       estimatedDeltaTokens: 0,
       measurement: 'api',
-      totalTokens: 150,
+      totalTokens: 120,
     });
     const after = measureContext(
       [
@@ -121,7 +121,7 @@ describe('runner context', () => {
       100_000,
       baseline,
     );
-    expect(after.totalTokens).toBeGreaterThan(150);
+    expect(after.totalTokens).toBeGreaterThan(120);
     expect(after.toolTokens).toBeGreaterThan(0);
   });
 
@@ -146,7 +146,7 @@ describe('runner context', () => {
     expect(usage.userTokens).toBeLessThan(2_000);
   });
 
-  it('优先识别用户消息耗尽，否则在70%或输出空间不足时压缩', () => {
+  it('历史用户消息过多、达到70%或输出空间不足时均进入压缩判断', () => {
     expect(
       decideContext({
         assistantTokens: 0,
@@ -159,7 +159,7 @@ describe('runner context', () => {
         totalTokens: 81,
         userTokens: 81,
       }),
-    ).toBe('users-exhausted');
+    ).toBe('compact');
     expect(
       decideContext(
         {
@@ -194,7 +194,7 @@ describe('runner context', () => {
     ).toBe('continue');
   });
 
-  it('压缩后保留静态头、全部用户消息、摘要和最新完整助手链', () => {
+  it('压缩后保留静态头、最新用户消息、摘要和最新完整助手链', () => {
     const messages: ModelMessage[] = [
       { content: 'head', role: 'system' },
       { content: 'old user', role: 'user' },
@@ -221,7 +221,6 @@ describe('runner context', () => {
     expect(compacted).toEqual([
       { content: 'head', role: 'system' },
       { content: '【上下文压缩摘要】\nsummary', role: 'system' },
-      { content: 'old user', role: 'user' },
       { content: 'new user', role: 'user' },
       { content: 'latest assistant', role: 'assistant' },
     ]);

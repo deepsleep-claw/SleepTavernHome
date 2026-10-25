@@ -145,13 +145,16 @@ const navItems: { icon: string; label: string; section: SettingsSection }[] = [
     overflow-x: auto;
     border-right: 0;
     border-bottom: 1px solid var(--dca-border);
-    padding: 0.4rem;
+    padding: 0.125rem 0.25rem;
+    scrollbar-width: none;
   }
   .dca-settings-nav > strong {
     display: none;
   }
   .dca-settings-nav button {
     flex: 0 0 auto;
+    min-height: 2.5rem;
+    padding-inline: 0.5rem;
   }
   .dca-settings-nav button.active {
     box-shadow: inset 0 -2px 0 var(--dca-accent);
@@ -159,6 +162,21 @@ const navItems: { icon: string; label: string; section: SettingsSection }[] = [
 }
 .dca-settings-content-inner.is-tight .dca-form-grid {
   grid-template-columns: minmax(0, 1fr);
+}
+.dca-settings-content-inner.is-tight .dca-resource-savebar {
+  flex-wrap: wrap;
+  bottom: 0;
+  gap: 0.4rem;
+  padding: 0.6rem;
+}
+.dca-settings-content-inner.is-tight .dca-resource-savebar > span {
+  flex: 1 0 100%;
+  margin-right: 0;
+}
+.dca-settings-content-inner.is-tight .dca-resource-savebar > button {
+  flex: 1 1 auto;
+  min-height: 2.75rem;
+  white-space: nowrap;
 }
 
 @media (max-width: 720px) {
@@ -172,7 +190,8 @@ const navItems: { icon: string; label: string; section: SettingsSection }[] = [
     overflow-x: auto;
     border-right: 0;
     border-bottom: 1px solid var(--dca-border);
-    padding: 0.4rem;
+    padding: 0.125rem 0.25rem;
+    scrollbar-width: none;
   }
 
   .dca-settings-nav > strong {
@@ -181,6 +200,8 @@ const navItems: { icon: string; label: string; section: SettingsSection }[] = [
 
   .dca-settings-nav button {
     flex: 0 0 auto;
+    min-height: 2.5rem;
+    padding-inline: 0.5rem;
   }
 
   .dca-settings-nav button.active {

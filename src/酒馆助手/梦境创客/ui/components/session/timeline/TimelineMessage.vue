@@ -59,6 +59,7 @@
 </template>
 
 <script setup lang="ts">
+import { notify } from '../../../composables/notifications';
 import { computed, nextTick, ref } from 'vue';
 import type { SessionUiItem } from '../../../../core/session/types';
 import { formatBytes, formatTime } from '../../../composables/format';
@@ -146,9 +147,9 @@ async function resend() {
 async function copyOutput() {
   try {
     await navigator.clipboard.writeText(props.item.content);
-    toastr.success('已复制本轮输出。', '梦境创客');
+    notify.success('已复制本轮输出。', '梦境创客');
   } catch (error) {
-    toastr.error(`复制失败：${error instanceof Error ? error.message : String(error)}`, '梦境创客');
+    notify.error(`复制失败：${error instanceof Error ? error.message : String(error)}`, '梦境创客');
   }
 }
 </script>
@@ -158,7 +159,7 @@ async function copyOutput() {
   max-width: 88%;
   border: 1px solid var(--dca-border);
   border-radius: var(--dca-radius-lg);
-  padding: 0.55rem 0.75rem;
+  padding: 0.45rem 0.65rem;
   background: var(--dca-surface);
   box-shadow: var(--dca-shadow-1);
 }
@@ -285,11 +286,12 @@ async function copyOutput() {
 
 @media (max-width: 720px) {
   .dca-message {
-    max-width: 97%;
+    max-width: 100%;
+    padding: 0.4rem 0.55rem;
   }
 
   .dca-message-editing {
-    width: 97%;
+    width: 100%;
   }
 }
 </style>

@@ -5,6 +5,28 @@ import { BufferedSessionRecordStore } from './buffered-session-record-store';
 afterEach(() => vi.useRealTimers());
 
 describe('会话延迟落盘', () => {
+  it('旧格式页面写入更新的正文时，记录计数更大的旧内容仍不能覆盖它', async () => {
+    vi.useFakeTimers();
+    const base = new MemoryBrowserRecordStore();
+    const store = new BufferedSessionRecordStore(base);
+    await store.put('session:one', { recordVersion: 20, entry: { revision: 2 }, input: '本页旧内容' });
+    await base.put('session:one', { entry: { revision: 3 }, input: '其他页面的新内容' });
+    await expect(store.flush()).rejects.toThrow('其他页面');
+    expect(await base.get('session:one')).toMatchObject({ input: '其他页面的新内容' });
+    store.dispose();
+  });
+
+  it('显式恢复会话后按新的记录版本落盘，允许正文版本回到备份值', async () => {
+    vi.useFakeTimers();
+    const base = new MemoryBrowserRecordStore();
+    await base.put('session:one', { recordVersion: 20, entry: { revision: 8 }, input: '本机内容' });
+    const store = new BufferedSessionRecordStore(base);
+    await store.put('session:one', { recordVersion: 21, entry: { revision: 3 }, input: '恢复的备份' });
+    await store.flush();
+    expect(await base.get('session:one')).toMatchObject({ recordVersion: 21, input: '恢复的备份' });
+    store.dispose();
+  });
+
   it('检测其他页面的同版本写入冲突并保留待保存内容', async () => {
     vi.useFakeTimers();
     const base = new MemoryBrowserRecordStore();

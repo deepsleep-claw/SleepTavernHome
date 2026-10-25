@@ -10,10 +10,9 @@
         :aria-controls="listboxId"
         @focus="openMenu"
         @input="updateQuery"
-        @keydown.down.prevent="move(1)"
-        @keydown.up.prevent="move(-1)"
-        @keydown.enter.prevent="chooseHighlighted"
-        @keydown.esc.prevent="closeMenu"
+        @compositionstart="composing = true"
+        @compositionend="composing = false"
+        @keydown="handleKeydown"
       />
       <button type="button" tabindex="-1" :aria-label="open ? '收起选项' : '展开选项'" @click="toggleMenu">
         <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
@@ -40,6 +39,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { useBackLayer } from '../composables/workspace-navigation';
 
 export type ComboboxOption = { description?: string; label: string; value: string };
 
@@ -56,8 +56,10 @@ const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
 
 const root = ref<HTMLElement>();
 const open = ref(false);
+useBackLayer(open, closeMenu);
 const highlighted = ref(0);
 const query = ref('');
+const composing = ref(false);
 const listboxId = `dca-combobox-${crypto.randomUUID()}`;
 
 const selected = computed(() => props.options.find(option => option.value === props.modelValue));
@@ -65,7 +67,9 @@ const filteredOptions = computed(() => {
   const needle = query.value.trim().toLocaleLowerCase();
   if (!needle || (selected.value && query.value === selected.value.label)) return props.options.slice(0, 100);
   return props.options
-    .filter(option => `${option.label}\n${option.value}\n${option.description ?? ''}`.toLocaleLowerCase().includes(needle))
+    .filter(option =>
+      `${option.label}\n${option.value}\n${option.description ?? ''}`.toLocaleLowerCase().includes(needle),
+    )
     .slice(0, 100);
 });
 
@@ -102,9 +106,27 @@ function chooseHighlighted() {
   else if (props.freeInput) closeMenu();
 }
 
+function handleKeydown(event: KeyboardEvent) {
+  // 输入法的候选确认可能早于 compositionend；229 兼容未设置 isComposing 的事件。
+  if (composing.value || event.isComposing || event.keyCode === 229) return;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    move(event.key === 'ArrowDown' ? 1 : -1);
+  } else if (event.key === 'Enter' && open.value) {
+    event.preventDefault();
+    chooseHighlighted();
+  } else if (event.key === 'Escape' && open.value) {
+    event.preventDefault();
+    closeMenu();
+  }
+}
+
 function openMenu() {
   open.value = true;
-  highlighted.value = Math.max(0, filteredOptions.value.findIndex(option => option.value === props.modelValue));
+  highlighted.value = Math.max(
+    0,
+    filteredOptions.value.findIndex(option => option.value === props.modelValue),
+  );
 }
 
 function closeMenu() {

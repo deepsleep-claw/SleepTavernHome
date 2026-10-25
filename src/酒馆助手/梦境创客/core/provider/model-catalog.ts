@@ -152,7 +152,7 @@ function parseMatchRules(value: unknown, id: string, aliases: string[], patterns
     else result.exact.push(value);
   }
   return Object.fromEntries(
-    Object.entries(result).map(([key, values]) => [key, [...new Set(values.map(normalizeId).filter(Boolean))]]),
+    Object.entries(result).map(([key, values]) => [key, [...new Set(values.map(normalizeModelId).filter(Boolean))]]),
   ) as ModelTemplateMatchRules;
 }
 
@@ -265,19 +265,41 @@ export function normalizeModelSettings(value?: Partial<ModelSettings>): ModelSet
   };
 }
 
-function normalizeId(value: string): string {
+export function normalizeModelId(value: string): string {
   return value
     .trim()
     .toLocaleLowerCase()
     .replace(/[\\_\s]+/gu, '-')
-    .replace(/-{2,}/gu, '-');
+    .replace(/-{2,}/gu, '-')
+    .replace(/(claude-(?:opus|sonnet|haiku|fable|mythos)-\d+)\.(\d+)/gu, '$1-$2');
+}
+
+function wildcardMatches(value: string, pattern: string): boolean {
+  let at = 0;
+  let part = 0;
+  let star = -1;
+  let retry = 0;
+  while (at < value.length) {
+    if (pattern[part] === '*') {
+      star = part++;
+      retry = at;
+    } else if (pattern[part] === value[at]) {
+      at++;
+      part++;
+    } else if (star >= 0) {
+      part = star + 1;
+      at = ++retry;
+    } else return false;
+  }
+  while (pattern[part] === '*') part++;
+  return part === pattern.length;
 }
 
 function matchScore(
   modelId: string,
   template: ModelTemplate,
 ): { length: number; rank: number; score: number } | undefined {
-  const normalized = normalizeId(modelId);
+  const normalized = normalizeModelId(modelId);
   const candidates: Array<{ length: number; rank: number; score: number }> = [];
   for (const value of template.match.exact)
     if (normalized === value) candidates.push({ length: value.length, rank: 4, score: 1 });
@@ -287,6 +309,13 @@ function matchScore(
     if (normalized.endsWith(value)) candidates.push({ length: value.length, rank: 3, score: 0.9 });
   for (const value of template.match.contains)
     if (normalized.includes(value)) candidates.push({ length: value.length, rank: 2, score: 0.8 });
+  // 通配符只解释星号，模型名中的小数点与其他字符始终按字面匹配。
+  for (const raw of template.patterns) {
+    const pattern = normalizeModelId(raw);
+    if (!pattern.includes('*') || !wildcardMatches(normalized, pattern)) continue;
+    const rank = pattern.startsWith('*') && pattern.endsWith('*') ? 2 : 3;
+    candidates.push({ length: pattern.replaceAll('*', '').length, rank, score: rank === 2 ? 0.8 : 0.9 });
+  }
   return candidates.sort((left, right) => right.rank - left.rank || right.length - left.length)[0];
 }
 

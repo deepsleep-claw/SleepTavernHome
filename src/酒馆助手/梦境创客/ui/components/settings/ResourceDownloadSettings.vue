@@ -10,9 +10,13 @@
       <div>
         <strong>{{ resources.length }} 项资源</strong>
         <span>·</span>
-        <span>已下载 <b>{{ downloadedCount }}</b></span>
+        <span
+          >已下载 <b>{{ downloadedCount }}</b></span
+        >
         <span>·</span>
-        <span>待下载 <em>{{ pendingCount }}</em></span>
+        <span
+          >待下载 <em>{{ pendingCount }}</em></span
+        >
       </div>
       <div class="dca-row-actions">
         <button type="button" :disabled="working" @click="refresh">
@@ -57,13 +61,12 @@
       </div>
     </section>
 
-    <div v-if="!resources.length" class="dca-empty">
-      尚未读取到资源清单。点击“刷新”重新获取。
-    </div>
+    <div v-if="!resources.length" class="dca-empty">尚未读取到资源清单。点击“刷新”重新获取。</div>
   </section>
 </template>
 
 <script setup lang="ts">
+import { notify } from '../../composables/notifications';
 import { computed, ref } from 'vue';
 import { formatBytes } from '../../composables/format';
 import { useDreamCardAgent } from '../../composables/runtime';
@@ -72,7 +75,9 @@ const { action, runtime, state } = useDreamCardAgent();
 const working = ref(false);
 const resources = computed(() => state.value.builtinSkillResources ?? []);
 const downloadedCount = computed(() => resources.value.filter(resource => resource.cached).length);
-const pendingCount = computed(() => resources.value.filter(resource => !resource.cached || resource.state === 'outdated').length);
+const pendingCount = computed(
+  () => resources.value.filter(resource => !resource.cached || resource.state === 'outdated').length,
+);
 const resourceGroups = computed(() => {
   const creativeIds = new Set(['html-project', 'plain-html-regex', 'tavern-helper-regex']);
   return [
@@ -82,14 +87,18 @@ const resourceGroups = computed(() => {
 });
 
 function resourceIcon(id: string): string {
-  return ({
-    'html-project': 'fa-solid fa-code',
-    'mvu-frontend': 'fa-solid fa-display',
-    'mvu-zod-card': 'fa-solid fa-database',
-    'plain-html-regex': 'fa-solid fa-shield-halved',
-    'tavern-helper-api': 'fa-regular fa-file-code',
-    'tavern-helper-regex': 'fa-solid fa-puzzle-piece',
-  } as Record<string, string>)[id] ?? 'fa-solid fa-box-archive';
+  return (
+    (
+      {
+        'html-project': 'fa-solid fa-code',
+        'mvu-frontend': 'fa-solid fa-display',
+        'mvu-zod-card': 'fa-solid fa-database',
+        'plain-html-regex': 'fa-solid fa-shield-halved',
+        'tavern-helper-api': 'fa-regular fa-file-code',
+        'tavern-helper-regex': 'fa-solid fa-puzzle-piece',
+      } as Record<string, string>
+    )[id] ?? 'fa-solid fa-box-archive'
+  );
 }
 
 async function run(work: () => Promise<void>): Promise<boolean> {
@@ -109,16 +118,18 @@ async function downloadAll() {
   const targets = resources.value.filter(resource => !resource.cached || resource.state === 'outdated');
   if (!targets.length) return;
   const succeeded = await run(async () => {
-    const results = await Promise.allSettled(targets.map(resource => runtime.downloadBuiltinSkillResource(resource.id, resource.cached)));
+    const results = await Promise.allSettled(
+      targets.map(resource => runtime.downloadBuiltinSkillResource(resource.id, resource.cached)),
+    );
     const failed = results.filter(result => result.status === 'rejected').length;
     if (failed) throw new Error(`${failed} 项资源下载失败，请查看对应资源状态后重试。`);
   });
-  if (succeeded) toastr.success('资源下载完成。', '梦境创客');
+  if (succeeded) notify.success('资源下载完成。', '梦境创客');
 }
 
 async function download(id: string, force: boolean) {
   if (await run(() => runtime.downloadBuiltinSkillResource(id, force))) {
-    toastr.success(force ? '资源已经更新。' : '资源已经下载。', '梦境创客');
+    notify.success(force ? '资源已经更新。' : '资源已经下载。', '梦境创客');
   }
 }
 </script>

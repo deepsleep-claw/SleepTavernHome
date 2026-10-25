@@ -38,11 +38,6 @@
       </div>
     </article>
 
-    <div v-if="snapshot.error" class="dca-alert dca-alert-error">
-      <i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i>
-      <span>{{ snapshot.error }}</span>
-    </div>
-
     <section class="dca-settings-group" aria-label="更新设置">
       <div class="dca-toggle-row">
         <span>
@@ -64,15 +59,42 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { notify } from '../../composables/notifications';
+import { computed, ref, watch } from 'vue';
+import { useDreamCardAgent } from '../../composables/runtime';
 import { DREAM_CARD_AGENT_REPOSITORY, DREAM_CARD_AGENT_TAG_PREFIX } from '../../../version';
 import { setCheckUpdatesOnLoad, shouldCheckUpdatesOnLoad, useDreamCardAgentUpdater } from '../../updater';
 import DcaSwitch from '../DcaSwitch.vue';
 
 const updater = useDreamCardAgentUpdater();
+const { notifications } = useDreamCardAgent();
 const snapshot = updater.snapshot;
 const checkOnLoad = ref(shouldCheckUpdatesOnLoad());
 const busy = computed(() => snapshot.value.status === 'checking' || snapshot.value.status === 'installing');
+watch(
+  () => snapshot.value.error,
+  message => {
+    if (message)
+      notifications?.upsert({
+        id: 'update:error',
+        title: '更新检查未完成',
+        message,
+        level: 'error',
+        actions: [
+          {
+            id: 'retry',
+            label: '重新检查',
+            run: async () => {
+              await updater.check();
+              notifications?.resolve('update:error');
+            },
+          },
+        ],
+      });
+    else notifications?.resolve('update:error');
+  },
+  { immediate: true },
+);
 const checkedAtLabel = computed(() => {
   if (!snapshot.value.checkedAt) return '尚未检查';
   const value = new Date(snapshot.value.checkedAt);
@@ -99,15 +121,15 @@ const statusIcon = computed(() => {
 function toggleCheckOnLoad(value: boolean) {
   checkOnLoad.value = value;
   setCheckUpdatesOnLoad(value);
-  toastr.success(value ? '已开启加载后静默检查。' : '已关闭加载后静默检查。', '梦境创客');
+  notify.success(value ? '已开启加载后静默检查。' : '已关闭加载后静默检查。', '梦境创客');
 }
 
 async function checkForUpdates() {
   try {
     const result = await updater.check();
     if (result.updateAvailable && result.latestVersion)
-      toastr.info(`发现新版本 v${result.latestVersion}。`, '梦境创客');
-    else toastr.success('当前已经是最新版。', '梦境创客');
+      notify.info(`发现新版本 v${result.latestVersion}。`, '梦境创客');
+    else notify.success('当前已经是最新版。', '梦境创客');
   } catch {
     // 详细错误由更新器快照统一展示。
   }

@@ -54,8 +54,10 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { useDreamCardAgent } from '../../composables/runtime';
+import { useBackLayer } from '../../composables/workspace-navigation';
 const props = defineProps<{ bindingId: string }>();
 const emit = defineEmits<{ close: [] }>();
+useBackLayer(ref(true), () => emit('close'));
 const { deleteCharacterSession, isSessionTabRunning, openCharacterSession, state } = useDreamCardAgent();
 const query = ref('');
 const deletePending = ref<string>();

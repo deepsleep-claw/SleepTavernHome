@@ -1,28 +1,17 @@
 <template>
-  <div class="dca-composer">
-    <div
-      v-if="shortcutItems.length"
-      ref="shortcutMenu"
-      class="dca-shortcut-menu"
-      role="listbox"
-      aria-label="输入快捷指令"
-      :style="{ maxHeight: `${shortcutHeight}px` }"
-    >
-      <button
-        v-for="(item, index) in shortcutItems"
-        :key="item.value"
-        type="button"
-        role="option"
-        :aria-selected="index === shortcutIndex"
-        :class="{ active: index === shortcutIndex }"
-        :title="item.title"
-        @pointerdown.prevent
-        @click="selectShortcut(item.value)"
-      >
-        <i :class="item.icon" aria-hidden="true"></i>
-        <span class="dca-shortcut-name">{{ item.label }}</span>
-        <span class="dca-shortcut-detail">{{ item.description }}</span>
-      </button>
+  <div ref="composerRoot" class="dca-composer" @focusout="handleFocusOut">
+    <div v-if="shortcut" ref="shortcutMenu" class="dca-shortcut-anchor">
+      <ComposerSuggestionPanel
+        :items="shortcutItems"
+        :selected-index="shortcutIndex"
+        :category="referenceCategory"
+        :references="shortcut.kind === 'reference'"
+        :heading="shortcut.command?.usage ?? '选择指令'"
+        :height="shortcutHeight"
+        :list-id="suggestionId"
+        @select="selectShortcut"
+        @category="selectReferenceCategory"
+      />
     </div>
     <div
       ref="composerShell"
@@ -79,8 +68,17 @@
             <button class="dca-composer-icon" type="button" title="更多选项" @click="togglePlusMenu">
               <i class="fa-solid fa-plus"></i>
             </button>
-            <div v-if="plusOpen" class="dca-plus-menu">
+            <WorkspaceMenu
+              :open="plusOpen"
+              :title="plusLevel === 'agent' ? '选择 Agent' : plusLevel === 'approval' ? '审批模式' : '更多操作'"
+              :can-back="plusLevel !== 'root'"
+              panel-class="dca-plus-menu"
+              @close="plusOpen = false"
+              @back="plusLevel = 'root'"
+            >
               <template v-if="plusLevel === 'root'">
+                <button type="button" @click="openShortcut('command')"><span>/</span><span>选择指令</span></button>
+                <button type="button" @click="openShortcut('reference')"><span>@</span><span>引用内容</span></button>
                 <button type="button" :disabled="!canAddAttachments" @click="openFilePicker">
                   <i class="fa-solid fa-paperclip"></i><span>添加文件</span>
                 </button>
@@ -123,13 +121,19 @@
                   </button>
                 </template>
               </template>
-            </div>
+            </WorkspaceMenu>
           </div>
         </div>
         <textarea
           ref="messageInput"
           v-model="message"
-          rows="3"
+          :rows="compact ? 2 : 3"
+          aria-label="消息输入"
+          :enterkeyhint="mobileTextInput ? 'enter' : 'send'"
+          aria-autocomplete="list"
+          :aria-expanded="Boolean(shortcut)"
+          :aria-controls="shortcut ? suggestionId : undefined"
+          :aria-activedescendant="shortcutItems[shortcutIndex] ? `${suggestionId}-${shortcutIndex}` : undefined"
           :disabled="!canCompose || !draftReady"
           :placeholder="
             isRunning
@@ -139,11 +143,12 @@
                 : '告诉梦境创客你想做什么……'
           "
           @keydown="handleKeydown"
+          @compositionstart="composing = true"
+          @compositionend="composing = false"
           @input="updateShortcut"
           @click="updateShortcut"
           @keyup.left="updateShortcut"
           @keyup.right="updateShortcut"
-          @blur="shortcutsDismissed = true"
           @paste="handlePaste"
         ></textarea>
         <button
@@ -228,46 +233,80 @@
       </button>
       <input ref="imageInput" accept="image/*" hidden multiple type="file" @change="selectImages" />
     </div>
-    <small class="dca-shortcut-hint">{{ shortcutHint }} · / 指令 · @ 引用文件</small>
+    <small class="dca-shortcut-hint">{{ shortcutHint }} · / 指令 · @ 分类引用</small>
+    <ComposerHelpDialog v-if="helpOpen" @close="closeHelp" @choose="insertCommand" />
 
-    <div v-if="showFullAccessWarning" class="dca-modal-backdrop" role="presentation">
-      <section class="dca-modal dca-full-access-warning" role="dialog" aria-modal="true">
-        <header>
-          <i class="fa-solid fa-shield-halved"></i>
-          <div>
-            <strong>开启完全权限模式？</strong
-            ><span>之后所有工具调用都会自动放行，包括删除、覆盖和聊天操作。文件锁与只读权限仍然有效。</span>
-          </div>
-        </header>
-        <footer>
-          <button type="button" @click="showFullAccessWarning = false">取消</button
-          ><button class="danger" type="button" @click="enableFullAccess">我了解风险，开启</button>
-        </footer>
-      </section>
-    </div>
+    <WorkspaceMenu
+      :open="showFullAccessWarning"
+      title="开启完全权限模式？"
+      panel-class="dca-modal dca-full-access-warning"
+      backdrop-class="dca-modal-backdrop"
+      @close="showFullAccessWarning = false"
+    >
+      <header>
+        <i class="fa-solid fa-shield-halved"></i>
+        <div>
+          <strong>开启完全权限模式？</strong
+          ><span>之后所有工具调用都会自动放行，包括删除、覆盖和聊天操作。文件锁与只读权限仍然有效。</span>
+        </div>
+      </header>
+      <footer>
+        <button type="button" @click="showFullAccessWarning = false">取消</button
+        ><button class="danger" type="button" @click="enableFullAccess">我了解风险，开启</button>
+      </footer>
+    </WorkspaceMenu>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { notify } from '../../composables/notifications';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 import { providerAdapterCapabilities } from '../../../core/provider-probe';
 import { findSelectedModel } from '../../../core/provider/provider-config';
 import { fileToSessionAttachment, isImageAttachment, validateAttachmentFiles } from '../../../core/session/attachments';
 import { formatBytes } from '../../composables/format';
 import { useDreamCardAgent } from '../../composables/runtime';
 import { useStoredDraft } from '../../composables/stored-draft';
-import { composerShortcut, fileMention, isCompressionCommand } from '../../composables/composer-shortcuts';
+import { useMobileTextInput } from '../../composables/mobile-input';
+import { useBackLayer } from '../../composables/workspace-navigation';
+import WorkspaceMenu from '../WorkspaceMenu.vue';
+import { useComposerSubmission } from '../../composables/composer-submission';
+import { composerShortcut } from '../../composables/composer-shortcuts';
+import {
+  composerCommandContext,
+  createComposerSuggestionSource,
+  type ComposerSuggestion,
+} from '../../composables/composer-catalog';
+import {
+  assertCommandArguments,
+  commandDisabledReason,
+  parseComposerCommand,
+  type ComposerCommandId,
+} from '../../../core/session/composer-commands';
+import { REFERENCE_CATEGORIES, type ReferenceCategory } from '../../../core/session/composer-references';
+import ComposerSuggestionPanel from './ComposerSuggestionPanel.vue';
+import ComposerHelpDialog from './ComposerHelpDialog.vue';
 import DcaSelect from '../DcaSelect.vue';
 import SessionModelMenu from './SessionModelMenu.vue';
 import SessionAgentPicker from './SessionAgentPicker.vue';
 
 type AttachmentDraft = { file: File; id: string };
 const previews = new Map<string, string>();
-const { action, runtime, state } = useDreamCardAgent();
-const { draft, ready: draftReady } = useStoredDraft<{ message: string; attachments: AttachmentDraft[] }>(
+const { action, runtime, state, sidebarCollapsed, sidebarFocus } = useDreamCardAgent();
+const composerRoot = ref<HTMLElement>();
+const suggestionId = `dca-composer-${useId()}`;
+const helpOpen = ref(false);
+const {
+  draft,
+  ready: draftReady,
+  capture: captureDraft,
+} = useStoredDraft<{ message: string; attachments: AttachmentDraft[] }>(
   () => (state.value.active?.sessionId ? `composer:${state.value.active.sessionId}` : ''),
   () => ({ message: '', attachments: [] }),
 );
+const submission = useComposerSubmission(runtime, () => state.value.active?.sessionId ?? '');
+const { pending: submissionPending } = submission;
+const composing = ref(false);
 const message = computed({
   get: () => draft.value.message,
   set: value => {
@@ -280,40 +319,37 @@ const attachments = computed({
     draft.value = { ...draft.value, attachments: value };
   },
 });
-const attachmentBusy = ref(false);
 const messageInput = ref<HTMLTextAreaElement>();
 const shortcutMenu = ref<HTMLElement>();
 const shortcutHeight = ref(256);
 const caret = ref(0);
 const shortcutsDismissed = ref(false);
 const shortcutIndex = ref(0);
+const referenceCategory = ref<ReferenceCategory | 'all'>('all');
 const shortcut = computed(() => (shortcutsDismissed.value ? undefined : composerShortcut(message.value, caret.value)));
+const suggestionSource = createComposerSuggestionSource();
+const candidates = computed(() => (shortcut.value ? suggestionSource(shortcut.value, state.value) : []));
 const shortcutItems = computed(() => {
   const current = shortcut.value;
   if (!current) return [];
-  const query = current.query.toLocaleLowerCase();
-  if (current.kind === 'command')
-    return !isRunning.value && ['压缩', 'compact'].some(name => name.startsWith(query))
-      ? [
-          {
-            label: '压缩',
-            value: '/压缩',
-            description: '压缩当前会话上下文',
-            title: '压缩当前会话上下文',
-            icon: 'fa-solid fa-compress',
-          },
-        ]
-      : [];
-  return (state.value.active?.workingFiles ?? [])
-    .filter(file => !query || file.path.toLocaleLowerCase().includes(query))
-    .slice(0, 30)
-    .map(file => ({
-      label: file.path.split('/').at(-1) ?? file.path,
-      value: file.path,
-      description: file.path.slice(0, file.path.lastIndexOf('/')) || '/',
-      title: file.path,
-      icon: file.mediaType?.startsWith('image/') ? 'fa-regular fa-file-image' : 'fa-regular fa-file-lines',
-    }));
+  if (current.kind === 'reference')
+    return REFERENCE_CATEGORIES.filter(
+      category => referenceCategory.value === 'all' || category.id === referenceCategory.value,
+    ).flatMap(category =>
+      candidates.value
+        .filter(item => item.category === category.id)
+        .slice(0, referenceCategory.value === 'all' ? 10 : 60),
+    );
+  return [...new Set(candidates.value.map(item => item.group))]
+    .flatMap(group => candidates.value.filter(item => item.group === group))
+    .slice(0, 60);
+});
+watch(shortcutItems, items => {
+  if (!items[shortcutIndex.value] || items[shortcutIndex.value].disabledReason)
+    shortcutIndex.value = Math.max(
+      0,
+      items.findIndex(item => !item.disabledReason),
+    );
 });
 
 function updateShortcut() {
@@ -329,26 +365,86 @@ function updateShortcutHeight() {
   const root = panel?.getBoundingClientRect() ?? composerShell.value?.closest('.dca-app')?.getBoundingClientRect();
   const composer = composerShell.value?.getBoundingClientRect();
   if (root && composer)
-    shortcutHeight.value = Math.max(44, Math.min(256, composer.top - (toolbar?.bottom ?? root.top) - 12));
+    shortcutHeight.value = Math.max(104, Math.min(320, composer.top - (toolbar?.bottom ?? root.top) - 12));
 }
 
-async function selectShortcut(value: string) {
+async function selectShortcut(item: ComposerSuggestion) {
   const current = shortcut.value;
-  if (!current) return;
-  const insertion = current.kind === 'file' ? `${fileMention(value)} ` : value;
+  if (!current || !shortcutItems.value.some(candidate => candidate.id === item.id && candidate.value === item.value))
+    return;
+  if (item.disabledReason) {
+    notify.error(item.disabledReason, '梦境创客');
+    return;
+  }
+  const insertion = `${item.value} `;
   message.value = message.value.slice(0, current.start) + insertion + message.value.slice(current.end);
   const position = current.start + insertion.length;
-  shortcutsDismissed.value = true;
+  shortcutsDismissed.value = !(current.kind === 'command' && ['model', 'effort', 'skill'].includes(item.id));
   await nextTick();
   messageInput.value?.focus();
   messageInput.value?.setSelectionRange(position, position);
-  if (current.kind === 'command') await submit();
+  caret.value = position;
+  updateShortcutHeight();
+}
+async function selectReferenceCategory(category: ReferenceCategory | 'all') {
+  referenceCategory.value = category;
+  shortcutIndex.value = 0;
+  await nextTick();
+  messageInput.value?.focus();
+  messageInput.value?.setSelectionRange(caret.value, caret.value);
+}
+function dismissOutside(event: PointerEvent) {
+  if (event.target instanceof Node && !composerRoot.value?.contains(event.target)) shortcutsDismissed.value = true;
+}
+function handleFocusOut(event: FocusEvent) {
+  if (event.relatedTarget instanceof Node && !composerRoot.value?.contains(event.relatedTarget))
+    shortcutsDismissed.value = true;
+}
+async function closeHelp() {
+  helpOpen.value = false;
+  await nextTick();
+  messageInput.value?.focus();
+}
+async function insertCommand(id: ComposerCommandId) {
+  helpOpen.value = false;
+  message.value = `/${id} `;
+  await nextTick();
+  messageInput.value?.focus();
+  messageInput.value?.setSelectionRange(message.value.length, message.value.length);
+  updateShortcut();
 }
 const showFullAccessWarning = ref(false);
+const mobileTextInput = useMobileTextInput();
+useBackLayer(helpOpen, () => {
+  helpOpen.value = false;
+});
+useBackLayer(
+  computed(() => Boolean(shortcut.value)),
+  () => {
+    shortcutsDismissed.value = true;
+  },
+);
+
+async function openShortcut(kind: 'command' | 'reference') {
+  plusOpen.value = false;
+  if (kind === 'command') {
+    await nextTick();
+    helpOpen.value = true;
+    return;
+  }
+  const input = messageInput.value;
+  const position = input?.selectionStart ?? message.value.length;
+  const prefix = position && !/\s/u.test(message.value[position - 1]) ? ' @' : '@';
+  message.value = message.value.slice(0, position) + prefix + message.value.slice(position);
+  await nextTick();
+  input?.focus();
+  input?.setSelectionRange(position + prefix.length, position + prefix.length);
+  updateShortcut();
+}
 const plusOpen = ref(false);
 const plusLevel = ref<'approval' | 'root' | 'agent'>('root');
 const compactModelOpen = ref(false);
-const compact = ref(false);
+const compact = ref(window.innerWidth <= 720);
 const composerShell = ref<HTMLElement>();
 const fileInput = ref<HTMLInputElement>();
 const imageInput = ref<HTMLInputElement>();
@@ -386,19 +482,29 @@ const canResume = computed(() =>
 );
 const canSend = computed(() => Boolean(state.value.active && !isRunning.value));
 const canCompose = computed(() => isRunning.value || canSend.value);
-const canAddAttachments = computed(() => canSend.value && !state.value.busy && !attachmentBusy.value);
+const canAddAttachments = computed(() => canSend.value && !state.value.busy && !submissionPending.value);
 const canAddImages = computed(() => canAddAttachments.value && supportsVision.value);
+const parsedCommand = computed(() => parseComposerCommand(message.value));
+const isLocalCommand = computed(() => ['help', 'context', 'stop'].includes(parsedCommand.value?.command?.id ?? ''));
 const canSubmit = computed(
   () =>
     (Boolean(message.value.trim()) || (!isRunning.value && attachments.value.length > 0)) &&
-    !attachmentBusy.value &&
-    (isRunning.value || (canSend.value && !state.value.busy)),
+    (!submissionPending.value || isLocalCommand.value) &&
+    (isLocalCommand.value || isRunning.value || (canSend.value && !state.value.busy)),
 );
-const primaryAction = computed<'guidance' | 'send' | 'stop'>(() =>
-  !isRunning.value ? 'send' : message.value.trim() ? 'guidance' : 'stop',
+const primaryAction = computed<'guidance' | 'send' | 'stop' | 'command'>(() =>
+  parsedCommand.value?.command ? 'command' : !isRunning.value ? 'send' : message.value.trim() ? 'guidance' : 'stop',
 );
 const primaryActionLabel = computed(() =>
-  primaryAction.value === 'stop' ? '停止当前任务' : primaryAction.value === 'guidance' ? '发送中途引导' : '发送消息',
+  primaryAction.value === 'command'
+    ? `执行 /${parsedCommand.value!.command!.id}`
+    : primaryAction.value === 'stop'
+      ? '停止当前任务'
+      : submissionPending.value
+        ? '正在提交'
+        : primaryAction.value === 'guidance'
+          ? '发送中途引导'
+          : '发送消息',
 );
 const primaryActionIcon = computed(() =>
   primaryAction.value === 'stop'
@@ -413,11 +519,13 @@ const actionClasses = computed(() => ({
 }));
 const canUsePrimaryAction = computed(() => primaryAction.value === 'stop' || canSubmit.value);
 const shortcutHint = computed(() =>
-  isRunning.value
-    ? '运行中：发送即中途引导'
-    : state.value.sendWithCtrlEnter
-      ? 'Ctrl + Enter 发送'
-      : 'Enter 发送 · Shift + Enter 换行',
+  mobileTextInput.value
+    ? '回车换行 · 点击按钮发送'
+    : isRunning.value
+      ? '运行中：发送即中途引导'
+      : state.value.sendWithCtrlEnter
+        ? 'Ctrl + Enter 发送'
+        : 'Enter 发送 · Shift + Enter 换行',
 );
 const currentApprovalLabel = computed(
   () =>
@@ -430,59 +538,49 @@ async function submit() {
   if (!canSubmit.value || !draftReady.value) return;
   const text = message.value;
   const sessionId = state.value.active?.sessionId;
-  if (isCompressionCommand(text)) {
-    if (isRunning.value || attachments.value.length) {
-      toastr.error('请在任务结束后单独执行压缩指令。', '梦境创客');
-      return;
-    }
-    shortcutsDismissed.value = true;
-    if (await action(() => runtime.compactContext())) {
-      if (state.value.active?.sessionId === sessionId && message.value === text) message.value = '';
-    }
-    return;
-  }
-  if (isRunning.value) {
-    if (!text.trim()) return;
-    try {
-      await runtime.enqueueGuidance(text);
-      if (state.value.active?.sessionId === sessionId && message.value === text) message.value = '';
-    } catch (error) {
-      toastr.error(error instanceof Error ? error.message : String(error), '梦境创客');
-    }
-    return;
-  }
-  if (!text.trim() && attachments.value.length === 0) return;
-  attachmentBusy.value = true;
-  let converted;
+  if (!sessionId) return;
+  const previous = [...attachments.value];
+  const parsed = parseComposerCommand(text);
+  const kind = parsed ? 'command' : isRunning.value ? 'guidance' : 'message';
+  const settleDraft = captureDraft();
   try {
-    converted = await Promise.all(attachments.value.map(item => fileToSessionAttachment(item.file)));
-  } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '梦境创客');
-    attachmentBusy.value = false;
-    return;
-  }
-  attachmentBusy.value = false;
-  if (state.value.active?.sessionId !== sessionId) return;
-  const previous = attachments.value;
-  const existingIds = new Set(state.value.active?.ui?.map(item => item.id) ?? []);
-  const stopWatching = watch(
-    () => state.value.active,
-    active => {
-      if (
-        active?.sessionId !== sessionId ||
-        !active.ui?.some(item => item.kind === 'user' && !existingIds.has(item.id))
-      )
+    if (parsed) {
+      if (!parsed.command) throw new Error(`未知指令 /${parsed.name}，输入 /help 查看用法。`);
+      const command = parsed.command;
+      assertCommandArguments(command, parsed.args);
+      if (previous.length) throw new Error('指令请单独提交，附件已保留。');
+      const reason = commandDisabledReason(command, composerCommandContext(state.value));
+      if (reason) throw new Error(reason);
+      if (['model', 'effort', 'skill'].includes(command.id) && !parsed.args) {
+        await insertCommand(command.id);
         return;
-      if (message.value === text && attachments.value === previous) draft.value = { message: '', attachments: [] };
-      previous.forEach(revokePreview);
-      stopWatching();
-    },
-    { flush: 'sync' },
-  );
-  try {
-    await action(() => runtime.send(text, converted));
-  } finally {
-    stopWatching();
+      }
+      shortcutsDismissed.value = true;
+      if (command.id === 'help' || command.id === 'context' || command.id === 'stop') {
+        if (command.id === 'help') helpOpen.value = true;
+        else if (command.id === 'context') {
+          sidebarCollapsed.value = false;
+          sidebarFocus.value = { tab: 'context' };
+        } else runtime.stopSession(sessionId);
+        settleDraft({ message: '', attachments: [] });
+        return;
+      }
+    }
+    await submission.submit(
+      async id => {
+        const converted =
+          kind === 'message' ? await Promise.all(previous.map(item => fileToSessionAttachment(item.file))) : [];
+        if (state.value.active?.sessionId !== sessionId) return undefined;
+        return runtime.submitInput({ id, sessionId, kind, text, attachments: converted });
+      },
+      () => {
+        if (settleDraft({ message: '', attachments: kind === 'guidance' ? previous : [] }) && kind !== 'guidance') {
+          previous.forEach(revokePreview);
+        }
+      },
+    );
+  } catch (error) {
+    notify.error(error instanceof Error ? error.message : String(error), '梦境创客');
   }
 }
 function handlePrimaryAction() {
@@ -490,29 +588,40 @@ function handlePrimaryAction() {
   else void submit();
 }
 function handleKeydown(event: KeyboardEvent) {
-  if (!event.isComposing && shortcutItems.value.length) {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      shortcutsDismissed.value = true;
-      return;
-    }
+  if (composing.value || event.isComposing || event.keyCode === 229) return;
+  if (mobileTextInput.value && event.key === 'Enter' && !event.ctrlKey && !event.metaKey) return;
+  if (shortcut.value && event.key === 'Escape') {
+    event.preventDefault();
+    shortcutsDismissed.value = true;
+    return;
+  }
+  if (shortcutItems.value.length) {
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
-      shortcutIndex.value =
-        (shortcutIndex.value + (event.key === 'ArrowDown' ? 1 : -1) + shortcutItems.value.length) %
-        shortcutItems.value.length;
+      const direction = event.key === 'ArrowDown' ? 1 : -1;
+      for (let step = 0; step < shortcutItems.value.length; step++) {
+        shortcutIndex.value =
+          (shortcutIndex.value + direction + shortcutItems.value.length) % shortcutItems.value.length;
+        if (!shortcutItems.value[shortcutIndex.value].disabledReason) break;
+      }
       void nextTick(() =>
         shortcutMenu.value?.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' }),
       );
       return;
     }
-    if ((event.key === 'Enter' || event.key === 'Tab') && !event.shiftKey) {
+    if (
+      (event.key === 'Enter' || event.key === 'Tab') &&
+      !event.shiftKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
       event.preventDefault();
-      void selectShortcut(shortcutItems.value[shortcutIndex.value]?.value ?? shortcutItems.value[0].value);
+      void selectShortcut(shortcutItems.value[shortcutIndex.value] ?? shortcutItems.value[0]);
       return;
     }
   }
-  if (event.isComposing || event.key !== 'Enter') return;
+  if (event.key !== 'Enter') return;
   const shouldSend = state.value.sendWithCtrlEnter
     ? (event.ctrlKey || event.metaKey) && !event.shiftKey
     : !event.shiftKey;
@@ -561,13 +670,13 @@ function openCompactModelMenu() {
 function addFiles(files: File[]) {
   if (!canAddAttachments.value) return;
   if (files.some(file => isImageAttachment({ mediaType: file.type })) && !supportsVision.value) {
-    toastr.error('当前模型不支持视觉，无法添加图片。', '梦境创客');
+    notify.error('当前模型不支持视觉，无法添加图片。', '梦境创客');
     return;
   }
   try {
     validateAttachmentFiles([...attachments.value.map(item => item.file), ...files]);
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '梦境创客');
+    notify.error(error instanceof Error ? error.message : String(error), '梦境创客');
     return;
   }
   attachments.value = [
@@ -630,19 +739,25 @@ watch(
     plusOpen.value = false;
     showFullAccessWarning.value = false;
     compactModelOpen.value = false;
+    helpOpen.value = false;
+    referenceCategory.value = 'all';
   },
+  { flush: 'sync' },
 );
 
 onMounted(() => {
+  document.addEventListener('pointerdown', dismissOutside);
   window.addEventListener('resize', updateShortcutHeight);
   window.visualViewport?.addEventListener('resize', updateShortcutHeight);
   if (!composerShell.value) return;
   resizeObserver = new ResizeObserver(entries => {
     compact.value = (entries[0]?.contentRect.width ?? 1000) < 680;
+    void nextTick(updateShortcutHeight);
   });
   resizeObserver.observe(composerShell.value);
 });
 onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', dismissOutside);
   window.removeEventListener('resize', updateShortcutHeight);
   window.visualViewport?.removeEventListener('resize', updateShortcutHeight);
   resizeObserver?.disconnect();
@@ -659,8 +774,11 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 0.3rem;
   border-top: 1px solid var(--dca-border);
-  padding: 0.65rem 0.75rem 0.55rem;
+  padding: 0.45rem 0.65rem 0.4rem;
   background: var(--dca-surface);
+}
+.dca-shortcut-anchor {
+  display: contents;
 }
 .dca-shortcut-menu {
   position: absolute;
@@ -744,8 +862,8 @@ onBeforeUnmount(() => {
   border-color: color-mix(in srgb, var(--dca-accent) 65%, transparent);
   box-shadow: 0 0 0 2px var(--dca-focus-ring);
 }
-.dca-desktop-input textarea,
-.dca-compact-input-row textarea {
+.dca-composer .dca-desktop-input textarea,
+.dca-composer .dca-compact-input-row textarea {
   width: 100%;
   min-height: 4.6rem;
   border: 0;
@@ -760,7 +878,7 @@ onBeforeUnmount(() => {
   align-items: end;
   gap: 0.3rem;
 }
-.dca-compact-input-row textarea {
+.dca-composer .dca-compact-input-row textarea {
   min-height: 3.2rem;
 }
 .dca-compact-left-controls {
@@ -973,11 +1091,19 @@ onBeforeUnmount(() => {
 }
 @media (max-width: 720px) {
   .dca-composer {
-    padding: 0.45rem max(0.45rem, env(safe-area-inset-right)) max(0.4rem, env(safe-area-inset-bottom))
-      max(0.45rem, env(safe-area-inset-left));
+    padding: 0.25rem max(0.35rem, env(safe-area-inset-right)) max(0.25rem, env(safe-area-inset-bottom))
+      max(0.35rem, env(safe-area-inset-left));
   }
   .dca-composer-shell {
     border-radius: var(--dca-radius-lg);
+    gap: 0.15rem;
+    padding: 0.25rem;
+  }
+  .dca-composer .dca-compact-input-row textarea {
+    padding: 0.25rem 0.4rem;
+  }
+  .dca-app .dca-composer-control-strip .dca-select-trigger {
+    min-height: 2.25rem;
   }
   .dca-shortcut-hint {
     display: none;
@@ -993,7 +1119,7 @@ onBeforeUnmount(() => {
   .dca-composer-control-strip .dca-session-model-trigger {
     width: auto;
     max-width: 100%;
-    min-height: 1.95rem;
+    min-height: 2.25rem;
     border-color: transparent;
     padding: 0.15rem 0.42rem;
     background: transparent;

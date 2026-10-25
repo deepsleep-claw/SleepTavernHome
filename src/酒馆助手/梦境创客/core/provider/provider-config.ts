@@ -62,6 +62,8 @@ export type ApiProviderInput = {
   requestHeaders?: YamlRequestDocument;
 };
 
+export type ApiProviderEditableField = Exclude<keyof ApiProviderInput, 'id'>;
+
 export type ApiModelInput = {
   appliedModelTemplate?: AppliedModelTemplate | null;
   bodyParameters?: YamlRequestDocument;
@@ -167,6 +169,20 @@ export async function createApiProvider(input: ApiProviderInput, models: ApiMode
 }
 
 export async function updateApiProvider(provider: ApiProvider, input: ApiProviderInput): Promise<ApiProvider> {
+  if (
+    !input.apiKey &&
+    input.bodyParameters === undefined &&
+    input.excludedBodyParameters === undefined &&
+    input.requestHeaders === undefined
+  ) {
+    return normalizeApiProvider({
+      ...provider,
+      baseURL: input.baseURL,
+      enabled: input.enabled,
+      interfaceType: input.interfaceType,
+      name: input.name,
+    });
+  }
   const previous = await providerSecretValues(provider);
   try {
     return await createApiProvider(

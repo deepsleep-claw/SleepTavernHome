@@ -26,12 +26,7 @@
     </header>
 
     <div class="dca-sidebar-primary-actions">
-      <button
-        type="button"
-        :disabled="state.busy"
-        title="新建会话"
-        @click="createSessionFromTop"
-      >
+      <button type="button" :disabled="state.busy" title="新建会话" @click="createSessionFromTop">
         <i class="fa-solid fa-plus" aria-hidden="true"></i><span v-if="!collapsed">新建会话</span>
       </button>
       <button type="button" title="设置" @click="openSettingsFromSidebar">
@@ -344,9 +339,11 @@
 </template>
 
 <script setup lang="ts">
+import { notify } from '../../composables/notifications';
 import { computed, reactive, ref, watch } from 'vue';
 import { findSelectedModel } from '../../../core/provider/provider-config';
 import { useDreamCardAgent } from '../../composables/runtime';
+import { useBackLayer } from '../../composables/workspace-navigation';
 import AllSessionsDialog from './AllSessionsDialog.vue';
 
 const {
@@ -376,6 +373,30 @@ const newSessionMenuOpen = ref(false);
 const characterPickerOpen = ref(false);
 const characterSearch = ref('');
 const pendingCharacterAction = ref<{ bindingId: string; kind: 'delete' | 'hide' }>();
+useBackLayer(newSessionMenuOpen, () => {
+  newSessionMenuOpen.value = false;
+});
+useBackLayer(characterPickerOpen, () => {
+  characterPickerOpen.value = false;
+});
+useBackLayer(
+  computed(() => Boolean(characterMenuBindingId.value)),
+  () => {
+    characterMenuBindingId.value = undefined;
+  },
+);
+useBackLayer(
+  computed(() => Boolean(pendingCharacterAction.value)),
+  () => {
+    pendingCharacterAction.value = undefined;
+  },
+);
+useBackLayer(
+  computed(() => Boolean(closingSessionId.value)),
+  () => {
+    closingSessionId.value = '';
+  },
+);
 const HIDDEN_CHARACTERS_KEY = 'dream-card-agent:hidden-character-groups';
 const hiddenBindingIds = reactive(new Set(readHiddenBindingIds()));
 const groups = computed(() =>
@@ -474,7 +495,7 @@ async function confirmCharacterAction() {
     const sessionIds = new Set(group.sessions.map(session => session.sessionId));
     openedSessionIds.value = openedSessionIds.value.filter(id => !sessionIds.has(id));
     pendingCharacterAction.value = undefined;
-    toastr.success('角色卡已隐藏；下次打开时会自动恢复。', '梦境创客');
+    notify.success('角色卡已隐藏；下次打开时会自动恢复。', '梦境创客');
     return;
   }
 
@@ -488,7 +509,7 @@ async function confirmCharacterAction() {
   openedSessionIds.value = openedSessionIds.value.filter(id => !deletedIds.has(id));
   if (activeWasDeleted) workspaceView.value = 'home';
   pendingCharacterAction.value = undefined;
-  toastr.success(`已删除 ${sessionIds.length} 个会话及其操作记录。`, '梦境创客');
+  notify.success(`已删除 ${sessionIds.length} 个会话及其操作记录。`, '梦境创客');
 }
 
 async function openMobileSession(session: (typeof openedSessions.value)[number]) {
@@ -646,10 +667,23 @@ function relativeTime(timestamp: number): string {
   background: transparent;
   text-align: left;
 }
-.dca-new-session-menu > button:hover { background: var(--dca-sidebar-hover); }
-.dca-new-session-menu > button > i { width: 1.15rem; color: var(--dca-accent-strong); text-align: center; }
-.dca-new-session-menu > button > span { display: grid; min-width: 0; gap: 0.08rem; }
-.dca-new-session-menu small { color: var(--dca-text-muted); font-size: .68rem; }
+.dca-new-session-menu > button:hover {
+  background: var(--dca-sidebar-hover);
+}
+.dca-new-session-menu > button > i {
+  width: 1.15rem;
+  color: var(--dca-accent-strong);
+  text-align: center;
+}
+.dca-new-session-menu > button > span {
+  display: grid;
+  min-width: 0;
+  gap: 0.08rem;
+}
+.dca-new-session-menu small {
+  color: var(--dca-text-muted);
+  font-size: 0.68rem;
+}
 .dca-character-groups {
   min-height: 0;
   flex: 1;
@@ -672,25 +706,40 @@ function relativeTime(timestamp: number): string {
 }
 .dca-global-session-group {
   display: grid;
-  gap: .12rem;
-  margin-bottom: .7rem;
+  gap: 0.12rem;
+  margin-bottom: 0.7rem;
 }
 .dca-global-session-group > button {
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: .5rem;
+  gap: 0.5rem;
   border-color: transparent;
-  padding: .45rem .5rem;
+  padding: 0.45rem 0.5rem;
   background: transparent;
   color: var(--dca-text-muted);
   text-align: left;
 }
 .dca-global-session-group > button:hover,
-.dca-global-session-group > button.active { background: var(--dca-sidebar-active); color: var(--dca-text); }
-.dca-global-session-group > button > i { flex: 0 0 auto; color: var(--dca-accent-strong); }
-.dca-global-session-group > button > span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dca-global-session-group time { flex: 0 0 auto; font-size: .66rem; }
+.dca-global-session-group > button.active {
+  background: var(--dca-sidebar-active);
+  color: var(--dca-text);
+}
+.dca-global-session-group > button > i {
+  flex: 0 0 auto;
+  color: var(--dca-accent-strong);
+}
+.dca-global-session-group > button > span {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dca-global-session-group time {
+  flex: 0 0 auto;
+  font-size: 0.66rem;
+}
 .dca-character-heading {
   position: relative;
   overflow: visible;
@@ -1004,17 +1053,73 @@ function relativeTime(timestamp: number): string {
   gap: 0.45rem;
   margin-top: 1rem;
 }
-.dca-character-picker { display: flex; width: min(34rem, calc(100vw - 2rem)); max-height: min(42rem, calc(100vh - 2rem)); flex-direction: column; gap: .75rem; }
-.dca-character-picker > header { display: flex; align-items: flex-start; justify-content: space-between; gap: .7rem; }
-.dca-character-picker > header > div { display: grid; gap: .15rem; }
-.dca-character-picker > header span { color: var(--dca-text-muted); font-size: .76rem; }
-.dca-character-picker-search { display: flex; align-items: center; gap: .5rem; border: 1px solid var(--dca-border); border-radius: var(--dca-radius-sm); padding: 0 .65rem; background: var(--dca-canvas); }
-.dca-character-picker-search > i { color: var(--dca-text-muted); }
-.dca-character-picker-search > input { min-width: 0; flex: 1; border: 0 !important; background: transparent !important; box-shadow: none !important; }
-.dca-character-picker-list { display: grid; min-height: 0; gap: .25rem; overflow: auto; scrollbar-gutter: stable; }
-.dca-character-picker-list > button { display: flex; align-items: center; justify-content: flex-start; gap: .65rem; border-color: var(--dca-border); padding: .5rem; background: var(--dca-surface); text-align: left; }
-.dca-character-picker-list > button > strong { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dca-character-picker-list > button > i { color: var(--dca-text-muted); }
+.dca-character-picker {
+  display: flex;
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: min(42rem, calc(100vh - 2rem));
+  flex-direction: column;
+  gap: 0.75rem;
+}
+.dca-character-picker > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.7rem;
+}
+.dca-character-picker > header > div {
+  display: grid;
+  gap: 0.15rem;
+}
+.dca-character-picker > header span {
+  color: var(--dca-text-muted);
+  font-size: 0.76rem;
+}
+.dca-character-picker-search {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--dca-border);
+  border-radius: var(--dca-radius-sm);
+  padding: 0 0.65rem;
+  background: var(--dca-canvas);
+}
+.dca-character-picker-search > i {
+  color: var(--dca-text-muted);
+}
+.dca-character-picker-search > input {
+  min-width: 0;
+  flex: 1;
+  border: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+.dca-character-picker-list {
+  display: grid;
+  min-height: 0;
+  gap: 0.25rem;
+  overflow: auto;
+  scrollbar-gutter: stable;
+}
+.dca-character-picker-list > button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.65rem;
+  border-color: var(--dca-border);
+  padding: 0.5rem;
+  background: var(--dca-surface);
+  text-align: left;
+}
+.dca-character-picker-list > button > strong {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dca-character-picker-list > button > i {
+  color: var(--dca-text-muted);
+}
 .dca-primary-sidebar.collapsed .dca-sidebar-brand {
   justify-content: center;
   padding: 0;

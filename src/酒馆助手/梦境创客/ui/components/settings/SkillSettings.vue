@@ -44,13 +44,18 @@
       <header>
         <div>
           <strong>{{ remoteSkill.name }}</strong>
-          <span>内置 · on-demand · {{ remoteStatusLabel(remoteSkill.state) }} · {{ formatBytes(remoteSkill.size) }}</span>
+          <span
+            >内置 · on-demand · {{ remoteStatusLabel(remoteSkill.state) }} · {{ formatBytes(remoteSkill.size) }}</span
+          >
         </div>
         <div class="dca-row-actions dca-skill-actions">
           <template v-if="remoteSkill.cached">
             <button type="button" @click="inspectRemoteSkill(remoteSkill.id)">查看</button>
             <button type="button" @click="copyRemoteSkill(remoteSkill.id)">另存为</button>
-            <ExportMenu :menu-key="`remote:${remoteSkill.id}`" @export="format => exportRemoteSkill(remoteSkill.id, format)" />
+            <ExportMenu
+              :menu-key="`remote:${remoteSkill.id}`"
+              @export="format => exportRemoteSkill(remoteSkill.id, format)"
+            />
           </template>
           <button
             v-else
@@ -71,14 +76,18 @@
         <div>
           <strong>{{ currentSkill.name }}</strong>
           <span>
-            {{ currentSkill.loading }} · {{ currentSkill.locked ? '已锁定 · ' : '' }}{{ Object.keys(currentSkill.resources ?? {}).length }} 个资源 ·
+            {{ currentSkill.loading }} · {{ currentSkill.locked ? '已锁定 · ' : ''
+            }}{{ Object.keys(currentSkill.resources ?? {}).length }} 个资源 ·
             {{ formatBytes(skillResourceBytes(currentSkill)) }}
           </span>
         </div>
         <div class="dca-row-actions dca-skill-actions">
           <button type="button" @click="skillEditorRequest = { deleting: false, skill: currentSkill }">编辑</button>
           <button type="button" @click="copySkill(currentSkill, true)">另存为</button>
-          <ExportMenu :menu-key="`user:${currentSkill.id}`" @export="format => exportSkill(currentSkill, format, true)" />
+          <ExportMenu
+            :menu-key="`user:${currentSkill.id}`"
+            @export="format => exportSkill(currentSkill, format, true)"
+          />
           <button
             class="dca-btn-danger"
             type="button"
@@ -99,9 +108,15 @@
 </template>
 
 <script setup lang="ts">
+import { notify } from '../../composables/notifications';
 import { defineComponent, h, ref } from 'vue';
 import { BUILTIN_CARD_WORKSPACE_SKILL } from '../../../core/skills/builtin-card-workspace';
-import { exportSkillZip, importSkillMarkdown, importSkillZip, skillMarkdownSource } from '../../../core/skills/skill-package';
+import {
+  exportSkillZip,
+  importSkillMarkdown,
+  importSkillZip,
+  skillMarkdownSource,
+} from '../../../core/skills/skill-package';
 import type { AgentSkill } from '../../../core/skills/types';
 import { downloadBytes, downloadText, formatBytes } from '../../composables/format';
 import { useDreamCardAgent } from '../../composables/runtime';
@@ -126,11 +141,11 @@ async function hydratedSkill(skill: AgentSkill, loadFull = false): Promise<Agent
 async function exportSkill(skill: AgentSkill, format: 'md' | 'zip', loadFull = false): Promise<void> {
   exportMenuTarget.value = undefined;
   try {
-    const loaded = await hydratedSkill(skill, loadFull || format === 'zip' && !skill.builtin);
+    const loaded = await hydratedSkill(skill, loadFull || (format === 'zip' && !skill.builtin));
     if (format === 'md') downloadText(`${safeName(loaded.name)}.md`, skillMarkdownSource(loaded), 'text/markdown');
     else downloadBytes(`${safeName(loaded.name)}.zip`, exportSkillZip(loaded), 'application/zip');
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), 'Skill导出失败');
+    notify.error(error instanceof Error ? error.message : String(error), 'Skill导出失败');
   }
 }
 
@@ -140,7 +155,7 @@ async function exportRemoteSkill(id: string, format: 'md' | 'zip'): Promise<void
     const skill = await runtime.loadGlobalSkill(id);
     await exportSkill(skill, format);
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), 'Skill导出失败');
+    notify.error(error instanceof Error ? error.message : String(error), 'Skill导出失败');
   }
 }
 
@@ -148,25 +163,32 @@ const ExportMenu = defineComponent({
   props: { menuKey: { required: true, type: String } },
   emits: { export: (_format: 'md' | 'zip') => true },
   setup(props, { emit }) {
-    return () => h('span', { class: 'dca-skill-export-menu', onClick: (event: Event) => event.stopPropagation() }, [
-      h('button', {
-        'aria-expanded': exportMenuTarget.value === props.menuKey,
-        type: 'button',
-        onClick: () => { exportMenuTarget.value = exportMenuTarget.value === props.menuKey ? undefined : props.menuKey; },
-      }, ['导出', h('i', { 'aria-hidden': 'true', class: 'fa-solid fa-chevron-down' })]),
-      exportMenuTarget.value === props.menuKey
-        ? h('div', { class: 'dca-skill-export-options', role: 'menu' }, [
-            h('button', { role: 'menuitem', type: 'button', onClick: () => emit('export', 'md') }, [
-              h('i', { 'aria-hidden': 'true', class: 'fa-brands fa-markdown' }),
-              h('span', [h('strong', '仅导出 MD'), h('small', '只包含主 SKILL.md')]),
-            ]),
-            h('button', { role: 'menuitem', type: 'button', onClick: () => emit('export', 'zip') }, [
-              h('i', { 'aria-hidden': 'true', class: 'fa-regular fa-file-zipper' }),
-              h('span', [h('strong', '导出 ZIP'), h('small', '包含全部资源文件')]),
-            ]),
-          ])
-        : null,
-    ]);
+    return () =>
+      h('span', { class: 'dca-skill-export-menu', onClick: (event: Event) => event.stopPropagation() }, [
+        h(
+          'button',
+          {
+            'aria-expanded': exportMenuTarget.value === props.menuKey,
+            type: 'button',
+            onClick: () => {
+              exportMenuTarget.value = exportMenuTarget.value === props.menuKey ? undefined : props.menuKey;
+            },
+          },
+          ['导出', h('i', { 'aria-hidden': 'true', class: 'fa-solid fa-chevron-down' })],
+        ),
+        exportMenuTarget.value === props.menuKey
+          ? h('div', { class: 'dca-skill-export-options', role: 'menu' }, [
+              h('button', { role: 'menuitem', type: 'button', onClick: () => emit('export', 'md') }, [
+                h('i', { 'aria-hidden': 'true', class: 'fa-brands fa-markdown' }),
+                h('span', [h('strong', '仅导出 MD'), h('small', '只包含主 SKILL.md')]),
+              ]),
+              h('button', { role: 'menuitem', type: 'button', onClick: () => emit('export', 'zip') }, [
+                h('i', { 'aria-hidden': 'true', class: 'fa-regular fa-file-zipper' }),
+                h('span', [h('strong', '导出 ZIP'), h('small', '包含全部资源文件')]),
+              ]),
+            ])
+          : null,
+      ]);
   },
 });
 
@@ -185,9 +207,9 @@ async function copySkill(skill: AgentSkill, loadFull = false) {
       name: `${source.name} 副本`,
     };
     await runtime.saveGlobalSkill(copy);
-    toastr.success(`已另存为“${copy.name}”。`, '梦境创客');
+    notify.success(`已另存为“${copy.name}”。`, '梦境创客');
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), 'Skill另存失败');
+    notify.error(error instanceof Error ? error.message : String(error), 'Skill另存失败');
   }
 }
 
@@ -195,7 +217,7 @@ async function copyRemoteSkill(id: string) {
   try {
     await copySkill(await runtime.loadGlobalSkill(id));
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), 'Skill另存失败');
+    notify.error(error instanceof Error ? error.message : String(error), 'Skill另存失败');
   }
 }
 
@@ -213,22 +235,29 @@ async function importSkill(event: Event) {
       ? importSkillZip(new Uint8Array(await file.arrayBuffer()), file.name)
       : importSkillMarkdown(await file.text(), file.name);
     await runtime.saveGlobalSkill(skill);
-    toastr.success(`已作为新的全局Skill导入“${skill.name}”。`, '梦境创客');
+    notify.success(`已作为新的全局Skill导入“${skill.name}”。`, '梦境创客');
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), 'Skill导入失败');
+    notify.error(error instanceof Error ? error.message : String(error), 'Skill导入失败');
   }
 }
 
 function remoteStatusLabel(value: string): string {
-  return ({ available: '可用', downloading: '下载中', error: '下载失败', missing: '未下载', outdated: '待更新' } as Record<string, string>)[value] ?? value;
+  return (
+    (
+      { available: '可用', downloading: '下载中', error: '下载失败', missing: '未下载', outdated: '待更新' } as Record<
+        string,
+        string
+      >
+    )[value] ?? value
+  );
 }
 
 async function downloadRemoteSkill(id: string) {
   try {
     await runtime.downloadBuiltinSkillResource(id, false);
-    toastr.success('内置Skill资源已经下载。', '梦境创客');
+    notify.success('内置Skill资源已经下载。', '梦境创客');
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '内置Skill下载失败');
+    notify.error(error instanceof Error ? error.message : String(error), '内置Skill下载失败');
   }
 }
 
@@ -237,7 +266,7 @@ async function inspectRemoteSkill(id: string) {
     const skill = await runtime.loadGlobalSkill(id);
     viewSkill(skill);
   } catch (error) {
-    toastr.error(error instanceof Error ? error.message : String(error), '内置Skill不可用');
+    notify.error(error instanceof Error ? error.message : String(error), '内置Skill不可用');
   }
 }
 

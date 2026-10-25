@@ -7,6 +7,100 @@ import {
 } from './model-catalog';
 
 describe('model catalog', () => {
+  it('新增系列按实际 ID、渠道前缀和快照后缀匹配具体模板', () => {
+    const cases = [
+      ['gpt-6-astra', 'openai:gpt-6-astra', 'openai-responses', 1050000],
+      ['openai/gpt-6.1-sol-2026-10-14', 'openai:gpt-6.1-sol', 'openai-responses', 1050000],
+      ['GPT_6_SOL', 'openai:gpt-6-sol', 'openai-responses', 1050000],
+      ['gateway/openai/gpt-6-luna', 'openai:gpt-6-luna', 'openai-responses', 1050000],
+      ['models/gemini-4-argon', 'google:gemini-4-argon:gemini', 'gemini', 1048576],
+      ['google/gemini-4-argon', 'google:gemini-4-argon', 'openai-chat', 1048576],
+      ['xai/grok-4.7-latest', 'xai:chat:grok-4.7', 'openai-chat', 500000],
+      ['grok-4.6', 'xai:responses:grok-4.6', 'openai-responses', 500000],
+      ['grok-4.5-latest', 'xai:chat:grok-4.5', 'openai-chat', 500000],
+      ['k3.1-pro', 'kimi-code:chat:k3.1-pro', 'openai-chat', 1048576],
+      ['kimi/k3.1-pro-highspeed', 'kimi-code:responses:k3.1-pro-highspeed', 'openai-responses', 1048576],
+      ['kimi-k3.1-pro-highspeed', 'kimi-code:anthropic:k3.1-pro-highspeed', 'anthropic', 1048576],
+    ] as const;
+    for (const [modelId, templateId, interfaceType, contextWindow] of cases) {
+      const matched = matchModelTemplates(modelId, undefined, 1, { interfaceType, compatibilityMode: 'standard' })[0]
+        ?.template;
+      expect(matched, modelId).toMatchObject({ id: templateId, settings: { contextWindow } });
+    }
+  });
+
+  it('Claude 5 和 5.5 的完整型号优先于通用系列，点号与横线版本一致', () => {
+    for (const id of [
+      'opus-5',
+      'sonnet-5',
+      'fable-5',
+      'mythos-5',
+      'fable-5-1',
+      'mythos-5-1',
+      'opus-5-5',
+      'sonnet-5-5',
+      'haiku-5-5',
+    ]) {
+      for (const query of [
+        `claude-${id}`,
+        `anthropic/claude-${id}-20261001`,
+        `claude-${id.replace('-5-5', '-5.5').replace('-5-1', '-5.1')}`,
+      ]) {
+        const matched = matchModelTemplates(query, undefined, 1, {
+          interfaceType: 'anthropic',
+          compatibilityMode: 'standard',
+        })[0]?.template;
+        expect(matched?.id, query).toBe(`anthropic:claude-${id}`);
+        expect(matched?.settings.contextWindow).toBe(1000000);
+        expect(matched?.settings.maxOutputTokens).toBe(128000);
+      }
+    }
+  });
+
+  it('含中间星号的旧规则可以匹配，实际小数点仍按字面解释', () => {
+    expect(matchModelTemplates('vendor/claude-sonnet-4-6-20260217')[0]?.template.id).toBe('anthropic:claude-4.6');
+    expect(matchModelTemplates('anthropic/claude-haiku-4-5-20251001')[0]?.template.id).toBe('anthropic:claude-4.5');
+    expect(matchModelTemplates('gpt-6x1-sol')).toEqual([]);
+    expect(matchModelTemplates('gpt-60-sol')).toEqual([]);
+    expect(matchModelTemplates('not-gpt-6-astra')).toEqual([]);
+    expect(matchModelTemplates('claude-haiku-50')).toEqual([]);
+  });
+
+  it('最新 DeepSeek 与历史别名在三种接口下使用同一能力规格', () => {
+    for (const interfaceType of ['openai-chat', 'openai-responses', 'anthropic'] as const) {
+      for (const id of [
+        'deepseek-flash',
+        'deepseek/deepseek-v4-flash',
+        'deepseek-v4-flash-vision-exp',
+        'DeepSeek-V4.1-Flash-1017',
+      ]) {
+        const matched = matchModelTemplates(id, undefined, 1, { interfaceType, compatibilityMode: 'standard' })[0]
+          ?.template;
+        expect(matched, `${interfaceType}/${id}`).toMatchObject({
+          compatibilityMode: 'deepseek',
+          settings: { contextWindow: 1048576, maxOutputTokens: 393216, capabilities: { vision: 'enabled' } },
+        });
+      }
+    }
+  });
+
+  it('新模板只暴露已支持的推理档位，Gemini 单次输出不套用长解码上限', () => {
+    const templates = builtinModelTemplates();
+    for (const id of ['gpt-6-astra', 'gpt-6.1-sol'])
+      expect(matchModelTemplates(id, templates)[0].template.settings.reasoningEfforts.map(item => item.id)).toEqual([
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+      ]);
+    expect(matchModelTemplates('gpt-6-luna', templates)[0].template.settings.reasoningEfforts[0].id).toBe('none');
+    expect(matchModelTemplates('gemini-4-argon', templates)[0].template.settings).toMatchObject({
+      maxOutputTokens: 65536,
+      reasoningEfforts: [{ id: 'low' }, { id: 'medium' }, { id: 'high' }],
+    });
+    expect(new Set(templates.map(item => item.id)).size).toBe(templates.length);
+  });
   it('当前DeepSeek名称匹配1M视觉模板，Gemini原生接口有独立模板', () => {
     const templates = builtinModelTemplates();
     for (const interfaceType of ['openai-chat', 'openai-responses', 'anthropic'] as const) {

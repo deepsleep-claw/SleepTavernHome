@@ -1,12 +1,17 @@
-import type { ModelMessage, UserContent } from 'ai';
+import { asSchema, type ModelMessage, type UserContent } from 'ai';
 import { boundedWait } from '../async';
 import {
   decideContext,
   compactModelMessages,
   measureContext,
+  estimateTokens,
+  normalizeTokenUsage,
+  outputTokenBudget,
   type ApiUsageBaseline,
   type ContextUsage,
 } from './context';
+import { selectCompaction, reduceCompactionInput, composeCompactedMessages } from './context-compaction';
+import { isContextExceeded, isRetryableSummaryError } from './context-errors';
 import type {
   ModelRequestControls,
   ModelStepExecutor,
@@ -28,12 +33,20 @@ export type RunnerEvent =
   | { at: number; call: RunnerToolCall; output: unknown; type: 'tool-completed' }
   | { at: number; call: RunnerToolCall; error: string; type: 'tool-failed' }
   | { at: number; message: string; ids?: string[]; type: 'guidance-injected' }
-  | { at: number; summary: string; type: 'context-compacted' }
+  | { at: number; summary: string; beforeTokens?: number; afterTokens?: number; type: 'context-compacted' }
   | { at: number; type: 'context-compaction-started' }
+  | { at: number; reason: string; type: 'context-compaction-skipped' }
+  | { at: number; attempt: number; reason: string; type: 'context-compaction-retrying' }
   | { at: number; failure?: string; status: RunnerStatus; type: 'status' };
 
 export interface RunnerJournal {
   append(event: RunnerEvent): Promise<void>;
+}
+
+class CompactionSaveError extends Error {
+  constructor(cause: unknown) {
+    super('压缩结果未能保存，原上下文已保留。', { cause });
+  }
 }
 
 export class MemoryRunnerJournal implements RunnerJournal {
@@ -140,7 +153,9 @@ function mayDependOn(call: RunnerToolCall, failed: RunnerToolCall): boolean {
   const paths = fileToolPaths(call);
   const failedPaths = fileToolPaths(failed);
   if (!paths || !failedPaths) return true;
-  return paths.some(path => failedPaths.some(previous => isSameOrDescendant(path, previous) || isSameOrDescendant(previous, path)));
+  return paths.some(path =>
+    failedPaths.some(previous => isSameOrDescendant(path, previous) || isSameOrDescendant(previous, path)),
+  );
 }
 
 export class AgentRunner {
@@ -151,6 +166,7 @@ export class AgentRunner {
   private toolController?: AbortController;
   private compactionFresh = false;
   private manualCompaction = false;
+  private compactionInstructions = '';
   private readonly compactionEnabled: boolean;
   private readonly executor: ModelStepExecutor;
   private headerMessageCount: number;
@@ -169,6 +185,8 @@ export class AgentRunner {
   private stopRequested = false;
   private readonly toolMap: Map<string, RunnerTool>;
   private readonly tools: RunnerTool[];
+  private toolSchemaTokens = 0;
+  private toolSchemaReady?: Promise<void>;
   readonly state: AgentRunnerState;
 
   constructor(options: AgentRunnerOptions) {
@@ -202,17 +220,18 @@ export class AgentRunner {
     this.requestApproval = options.requestApproval;
     this.tools = this.compactionEnabled ? [...options.tools, COMPACT_CONTEXT_TOOL] : [...options.tools];
     this.toolMap = new Map(this.tools.map(item => [item.name, item]));
+    this.toolSchemaTokens = options.initialApiUsageBaseline?.toolSchemaTokens ?? 0;
     const messages = structuredClone(options.initialMessages ?? []);
     this.state = {
       guidance: structuredClone(options.initialGuidance ?? []),
-      contextUsage: measureContext(messages, this.contextWindow, this.apiUsageBaseline),
+      contextUsage: measureContext(messages, this.contextWindow, this.apiUsageBaseline, this.toolSchemaTokens),
       messages,
       pending: options.initialPending ? structuredClone(options.initialPending) : undefined,
       status: options.initialStatus ?? 'idle',
     };
   }
 
-  enqueueGuidance(message: string, id = crypto.randomUUID()): string {
+  enqueueGuidance(message: string, id: string = crypto.randomUUID()): string {
     const trimmed = message.trim();
     if (trimmed) this.state.guidance.push({ id, message: trimmed });
     return id;
@@ -250,12 +269,16 @@ export class AgentRunner {
     return this.runLoop();
   }
 
-  async compact(): Promise<AgentRunnerState> {
+  async compact(instructions = ''): Promise<AgentRunnerState> {
     if (!this.compactionEnabled) throw new Error('当前助手未启用上下文压缩工具。');
-    if (['running', 'waiting-approval'].includes(this.state.status) || this.state.pending)
-      throw new Error('请先停止或完成当前任务再压缩。');
+    if (['running', 'waiting-approval'].includes(this.state.status)) throw new Error('请先停止或完成当前任务再压缩。');
     this.compactionFresh = false;
-    return this.runLoop(true);
+    this.compactionInstructions = instructions.trim();
+    try {
+      return await this.runLoop(true);
+    } finally {
+      this.compactionInstructions = '';
+    }
   }
 
   private async runLoop(manualCompaction = false): Promise<AgentRunnerState> {
@@ -266,7 +289,7 @@ export class AgentRunner {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.state.failure = this.stopRequested ? '用户已停止当前任务。' : message;
-      this.state.status = this.stopRequested ? 'stopped' : 'failed';
+      this.state.status = this.stopRequested ? 'stopped' : isContextExceeded(error) ? 'context-exhausted' : 'failed';
       try {
         await boundedWait(
           this.journal.append({
@@ -294,7 +317,15 @@ export class AgentRunner {
     this.stopRequested = false;
     this.state.failure = undefined;
     await this.setStatus('running');
+    await this.prepareToolSchemas();
+    if (this.manualCompaction) {
+      await this.compactBeforeRequest();
+      if (this.stopRequested) return this.finishStopped();
+      await this.setStatus('completed');
+      return this.state;
+    }
     let modelSteps = 0;
+    let reactiveCompactionAttempted = false;
     while (modelSteps < 64) {
       if (this.stopRequested) return this.finishStopped();
       if (this.state.pending) {
@@ -308,14 +339,9 @@ export class AgentRunner {
         continue;
       }
       await this.injectGuidance();
-      const reserve = Math.min(4096, Math.floor(this.contextWindow * 0.1));
+      const reserve = Math.min(this.executor.maxOutputTokens ?? 32_000, Math.floor(this.contextWindow * 0.2));
       const decision = decideContext(this.measureContext(), reserve);
       this.state.contextUsage = this.measureContext();
-      if (decision === 'users-exhausted') {
-        this.state.failure = '全部用户消息已超过上下文窗口的80%，请新建会话、编辑历史或更换更大上下文模型。';
-        await this.setStatus('context-exhausted');
-        return this.state;
-      }
       if (decision === 'compact' && !this.compactionEnabled) {
         this.state.failure = '上下文已达到压缩阈值，但当前Agent关闭了上下文压缩工具。请新建会话或换用更大上下文模型。';
         await this.setStatus('context-exhausted');
@@ -329,13 +355,24 @@ export class AgentRunner {
         }
         continue;
       }
-      if (this.compactionFresh && this.measureContext().remainingTokens < reserve) {
+      const maxOutputTokens = outputTokenBudget(
+        this.contextWindow,
+        this.measureContext().totalTokens,
+        this.executor.maxOutputTokens,
+      );
+      if (maxOutputTokens <= 0) {
         this.state.failure = '压缩后仍没有足够的上下文空间，请减少本轮输入或更换更大上下文模型。';
         await this.setStatus('context-exhausted');
         return this.state;
       }
       this.controller = new AbortController();
       let result;
+      const estimatedAtRequest = measureContext(
+        this.state.messages,
+        this.contextWindow,
+        undefined,
+        this.toolSchemaTokens,
+      ).totalTokens;
       const liveProviderStarted = new Set<string>();
       const liveProviderCompleted = new Set<string>();
       try {
@@ -353,6 +390,7 @@ export class AgentRunner {
           messages: requestMessages,
           modelSettings: {
             ...this.modelControls,
+            maxOutputTokens,
             webSearch: this.modelControls.webSearch && this.providerWebSearchCount < 10,
             webSearchMaxUses: Math.max(0, 10 - this.providerWebSearchCount),
           },
@@ -377,20 +415,31 @@ export class AgentRunner {
           onToolInputStarted: this.onToolInputStarted,
           tools: this.tools,
         });
+        if (isContextExceeded(result.rawFinishReason) || isContextExceeded(result.finishReason))
+          throw new Error(result.rawFinishReason ?? result.finishReason);
       } catch (error) {
         if (this.stopRequested) return this.finishStopped();
+        if (isContextExceeded(error) && this.compactionEnabled && !reactiveCompactionAttempted) {
+          reactiveCompactionAttempted = true;
+          await this.compactBeforeRequest();
+          continue;
+        }
         this.state.failure = error instanceof Error ? error.message : String(error);
-        await this.setStatus('failed');
+        await this.setStatus(isContextExceeded(error) ? 'context-exhausted' : 'failed');
         return this.state;
       }
       modelSteps += 1;
+      reactiveCompactionAttempted = false;
       this.compactionFresh = false;
       this.state.messages.push(...structuredClone(result.assistantMessages));
-      if (typeof result.inputTokens === 'number' && typeof result.outputTokens === 'number') {
+      const usage = normalizeTokenUsage(result);
+      if (usage.inputTokens !== undefined && usage.inputTokens > 0) {
         this.apiUsageBaseline = {
-          estimatedTokens: measureContext(this.state.messages, this.contextWindow).totalTokens,
-          inputTokens: result.inputTokens,
-          outputTokens: result.outputTokens,
+          ...usage,
+          version: 2,
+          estimatedTokens: estimatedAtRequest,
+          inputTokens: usage.inputTokens,
+          toolSchemaTokens: this.toolSchemaTokens,
         };
       }
       await this.journal.append({ at: this.now(), messages: result.assistantMessages, type: 'model-completed' });
@@ -486,16 +535,13 @@ export class AgentRunner {
       const replacementHeader = this.refreshCompactionHeader
         ? await this.refreshCompactionHeader()
         : this.state.messages.slice(0, previousHeaderMessageCount);
-      this.headerMessageCount = replacementHeader.length;
-      this.state.messages = compactModelMessages(
+      const candidate = compactModelMessages(
         this.state.messages,
         summary,
         previousHeaderMessageCount,
         replacementHeader,
       );
-      this.apiUsageBaseline = undefined;
-      this.compactionFresh = true;
-      await this.journal.append({ at: this.now(), summary, type: 'context-compacted' });
+      await this.commitCompaction(candidate, summary, replacementHeader.length);
     }
     this.state.pending = undefined;
     this.state.contextUsage = this.measureContext();
@@ -507,36 +553,125 @@ export class AgentRunner {
     this.controller = new AbortController();
     const signal = this.controller.signal;
     const original = structuredClone(this.state.messages);
+    let selection = selectCompaction(original, this.headerMessageCount);
+    if (
+      this.manualCompaction &&
+      this.measureContext().ratio < 0.7 &&
+      measureContext(selection.groups.flat(), this.contextWindow).totalTokens < 256
+    ) {
+      await this.journal.append({
+        at: this.now(),
+        reason: '暂无足够可压缩的旧消息，当前内容已保留。',
+        type: 'context-compaction-skipped',
+      });
+      return;
+    }
+    if (selection.groups.length === 0)
+      throw new Error(
+        '上下文空间不足，当前只有最新输入和最近模型步骤，无法继续压缩。请缩短最新输入或更换更大上下文模型。',
+      );
+    const beforeTokens = measureContext(original, this.contextWindow, undefined, this.toolSchemaTokens).totalTokens;
     await this.journal.append({ at: this.now(), type: 'context-compaction-started' });
-    const messages = this.prepareMessages
-      ? await boundedWait(this.prepareMessages(original), '准备压缩上下文', 15_000, signal)
-      : original;
-    const result = await this.executor.execute({
-      abortSignal: signal,
-      messages: [
+    // 摘要有独立输出预算，为推理内容留出空间，同时服从模型上限和剩余窗口。
+    let summaryLimit = Math.min(8192, this.executor.maxOutputTokens ?? 20_000);
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      if (this.stopRequested || signal.aborted) throw new Error('压缩已取消。');
+      const selected = [...selection.header, ...selection.systems, ...selection.groups.flat()];
+      const messages = this.prepareMessages
+        ? await boundedWait(this.prepareMessages(selected), '准备压缩上下文', 15_000, signal)
+        : selected;
+      const requestMessages: ModelMessage[] = [
         ...messages,
         {
           role: 'user',
           content:
-            '请只输出一份简明的上下文交接摘要，保留用户目标与约束、已完成的真实修改、关键发现、失败点、最新请求和待办。不要继续执行任务，不要调用工具，不要声称完成未经证实的操作。',
+            '请只输出一份简明的上下文交接摘要，保留用户目标与约束、已完成的真实修改、关键发现、失败点和待办。最新输入和最近步骤会另外保留，不要继续执行任务，不要调用工具。摘要应显著短于原文，最多约 1500 字。' +
+            (this.manualCompaction && this.compactionInstructions
+              ? `\n\n用户指定的摘要重点：\n${this.compactionInstructions}`
+              : ''),
         },
-      ],
-      modelSettings: { ...this.modelControls, webSearch: false, maxOutputTokens: 4096 },
-      tools: [],
-    });
-    if (this.stopRequested) throw new Error('压缩已取消。');
-    const summary = result.text.trim();
-    if (!summary || result.toolCalls.length) throw new Error('压缩请求没有返回有效的文本摘要，原上下文已保留。');
-    const oldHeaderCount = this.headerMessageCount;
-    const header = this.refreshCompactionHeader
-      ? await this.refreshCompactionHeader()
-      : original.slice(0, oldHeaderCount);
-    this.state.messages = compactModelMessages(original, summary, oldHeaderCount, header);
-    this.headerMessageCount = header.length;
+      ];
+      const budget = outputTokenBudget(
+        this.contextWindow,
+        measureContext(requestMessages, this.contextWindow).totalTokens,
+        summaryLimit,
+      );
+      let reason: string;
+      try {
+        if (budget <= 0) throw new Error('摘要输入超过上下文窗口。');
+        const result = await this.executor.execute({
+          abortSignal: signal,
+          purpose: 'summary',
+          messages: requestMessages,
+          modelSettings: { ...this.modelControls, webSearch: false, maxOutputTokens: budget },
+          tools: [],
+        });
+        if (this.stopRequested || signal.aborted) throw new Error('压缩已取消。');
+        if (isContextExceeded(result.rawFinishReason) || isContextExceeded(result.finishReason))
+          throw new Error(result.rawFinishReason ?? result.finishReason);
+        const summary = result.text.trim();
+        if (result.toolCalls.length) throw new Error('压缩请求意外返回了工具调用，原上下文已保留。');
+        if (!summary || result.finishReason !== 'stop') {
+          reason = !summary ? '摘要为空' : `摘要未完整结束（${result.finishReason}）`;
+          summaryLimit = Math.min(summaryLimit * 2, this.executor.maxOutputTokens ?? 20_000, 20_000);
+        } else {
+          const header = this.refreshCompactionHeader ? await this.refreshCompactionHeader() : selection.header;
+          if (this.stopRequested || signal.aborted) throw new Error('压缩已取消。');
+          const candidate = composeCompactedMessages(selection, summary, header);
+          const afterTokens = measureContext(
+            candidate,
+            this.contextWindow,
+            undefined,
+            this.toolSchemaTokens,
+          ).totalTokens;
+          if (afterTokens >= beforeTokens) {
+            reason = '摘要未减少上下文占用';
+          } else {
+            await this.commitCompaction(candidate, summary, header.length);
+            return;
+          }
+        }
+      } catch (error) {
+        if (error instanceof CompactionSaveError) throw error;
+        if (this.stopRequested || signal.aborted) throw new Error('压缩已取消。');
+        if (isContextExceeded(error)) {
+          const reduced = reduceCompactionInput(selection);
+          if (!reduced)
+            throw new Error('摘要输入仍超出模型上下文窗口，原上下文已保留。请更换更大上下文模型后重试。', {
+              cause: error,
+            });
+          selection = reduced;
+          reason = '摘要输入超限，已缩小待摘要范围';
+        } else if (isRetryableSummaryError(error)) {
+          reason = error instanceof Error ? error.message : String(error);
+        } else throw error;
+      }
+      if (attempt === 3) throw new Error(`压缩在 3 次尝试后仍未完成：${reason}。原上下文已保留。`);
+      await this.journal.append({ at: this.now(), attempt: attempt + 1, reason, type: 'context-compaction-retrying' });
+    }
+  }
+
+  private async commitCompaction(messages: ModelMessage[], summary: string, headerCount: number): Promise<void> {
+    const original = this.state.messages;
+    const header = this.headerMessageCount;
+    const baseline = this.apiUsageBaseline;
+    const beforeTokens = measureContext(original, this.contextWindow, undefined, this.toolSchemaTokens).totalTokens;
+    const afterTokens = measureContext(messages, this.contextWindow, undefined, this.toolSchemaTokens).totalTokens;
+    if (afterTokens >= beforeTokens) throw new Error('摘要未减少上下文占用，原上下文已保留。');
+    this.state.messages = messages;
+    this.headerMessageCount = headerCount;
     this.apiUsageBaseline = undefined;
-    this.compactionFresh = true;
     this.state.contextUsage = this.measureContext();
-    await this.journal.append({ at: this.now(), summary, type: 'context-compacted' });
+    try {
+      await this.journal.append({ at: this.now(), summary, beforeTokens, afterTokens, type: 'context-compacted' });
+      this.compactionFresh = true;
+    } catch (error) {
+      this.state.messages = original;
+      this.headerMessageCount = header;
+      this.apiUsageBaseline = baseline;
+      this.state.contextUsage = this.measureContext();
+      throw new CompactionSaveError(error);
+    }
   }
 
   private async executeOne(call: RunnerToolCall): Promise<unknown> {
@@ -615,6 +750,20 @@ export class AgentRunner {
   }
 
   private measureContext(): ContextUsage {
-    return measureContext(this.state.messages, this.contextWindow, this.apiUsageBaseline);
+    return measureContext(this.state.messages, this.contextWindow, this.apiUsageBaseline, this.toolSchemaTokens);
+  }
+
+  private async prepareToolSchemas(): Promise<void> {
+    this.toolSchemaReady ??= Promise.all(
+      this.tools.map(async item => ({
+        name: item.name,
+        description: item.definition.description,
+        parameters: await asSchema(item.definition.inputSchema).jsonSchema,
+      })),
+    ).then(schemas => {
+      this.toolSchemaTokens = schemas.length ? estimateTokens(schemas) : 0;
+      this.state.contextUsage = this.measureContext();
+    });
+    await this.toolSchemaReady;
   }
 }

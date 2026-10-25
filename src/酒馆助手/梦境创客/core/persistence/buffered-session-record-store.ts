@@ -3,6 +3,26 @@ import type { BrowserRecordIndex, BrowserRecordStore } from './browser-record-st
 type PendingRecord = { value: unknown; index?: { key: string; value: unknown } };
 type Recovery = { storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>; key: () => Promise<string> };
 
+function compareRecordVersions(left: unknown, right: unknown): number | undefined {
+  type VersionedRecord = { recordVersion?: number; entry?: { revision?: number } } | undefined;
+  const previous = left as VersionedRecord;
+  const next = right as VersionedRecord;
+  if (typeof previous?.recordVersion === 'number' && typeof next?.recordVersion === 'number') {
+    return previous.recordVersion - next.recordVersion;
+  }
+  const previousContent = previous?.entry?.revision;
+  const nextContent = next?.entry?.revision;
+  // 旧页面只有正文版本，不能把新格式的记录计数直接当作更新的正文。
+  if (typeof previousContent === 'number' && typeof nextContent === 'number' && previousContent !== nextContent) {
+    return previousContent - nextContent;
+  }
+  const previousVersion = previous?.recordVersion ?? previousContent;
+  const nextVersion = next?.recordVersion ?? nextContent;
+  return typeof previousVersion === 'number' && typeof nextVersion === 'number'
+    ? previousVersion - nextVersion
+    : undefined;
+}
+
 /** 会话正文与索引一起延迟落盘；内存读取始终能看到最新版本。 */
 export class BufferedSessionRecordStore implements BrowserRecordStore {
   private readonly pending = new Map<string, PendingRecord>();
@@ -53,14 +73,9 @@ export class BufferedSessionRecordStore implements BrowserRecordStore {
       for (const row of rows) {
         if (!Array.isArray(row) || typeof row[0] !== 'string' || !row[0].startsWith('session:')) continue;
         if (row[1] && typeof row[1] === 'object' && 'value' in row[1]) {
-          const durable = await this.base.get<{ entry?: { revision?: number } }>(row[0]);
-          const revision = row[1].value?.entry?.revision;
-          if (
-            typeof revision === 'number' &&
-            typeof durable?.entry?.revision === 'number' &&
-            durable.entry.revision >= revision
-          )
-            continue;
+          const durable = await this.base.get(row[0]);
+          const order = compareRecordVersions(durable, row[1].value);
+          if (order !== undefined && order >= 0) continue;
           this.pending.set(row[0], row[1]);
         }
       }
@@ -151,14 +166,12 @@ export class BufferedSessionRecordStore implements BrowserRecordStore {
         await this.base.update(
           key,
           current => {
-            const previous = current as { entry?: { revision?: number }; input?: unknown } | undefined;
-            const next = row.value as { entry?: { revision?: number }; input?: unknown } | undefined;
+            const previous = current as { input?: unknown } | undefined;
+            const next = row.value as { input?: unknown } | undefined;
+            const order = compareRecordVersions(previous, next);
             if (
-              typeof previous?.entry?.revision === 'number' &&
-              typeof next?.entry?.revision === 'number' &&
-              (previous.entry.revision > next.entry.revision ||
-                (previous.entry.revision === next.entry.revision &&
-                  JSON.stringify(previous.input) !== JSON.stringify(next.input)))
+              order !== undefined &&
+              (order > 0 || (order === 0 && JSON.stringify(previous?.input) !== JSON.stringify(next?.input)))
             ) {
               throw new Error('会话已在其他页面更新，当前内容已保留，请导出后核对。');
             }
