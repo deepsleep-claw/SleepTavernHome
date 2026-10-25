@@ -48,6 +48,7 @@ export const ModernLayoutSettings = z
     modernWorldSelect: z.boolean().default(true).catch(true),
     modernCharacterManagement: z.boolean().default(true).catch(true),
     modernExtensionSettings: z.boolean().default(true).catch(true),
+    modernPresetEditor: z.boolean().default(true).catch(true),
   })
   .prefault({});
 

@@ -29,7 +29,6 @@ type ModernCharacterSummary = {
   main: HTMLElement;
   moves: MovedNode[];
   name: HTMLElement;
-  pinAndTabs: HTMLElement;
   summary: HTMLElement;
   tags: HTMLElement;
 };
@@ -65,15 +64,15 @@ function restoreCharacterSummary(state: ModernCharacterSummary | null): void {
 }
 
 function createCharacterSummary(doc: Document): ModernCharacterSummary | null {
+  // The native header toggles this block and must remain outside it.
   const summary = doc.querySelector<HTMLElement>('#avatar-and-name-block');
   const avatar = doc.querySelector<HTMLElement>('#avatar_div');
-  const pinAndTabs = doc.querySelector<HTMLElement>('#rm_PinAndTabs');
   const name = doc.querySelector<HTMLElement>('#name_div');
   const buttonsBlock = doc.querySelector<HTMLElement>('#avatar_controls > .form_create_bottom_buttons_block');
   const dropdown = doc.querySelector<HTMLElement>('#char-management-dropdown')?.closest<HTMLElement>('label');
   const tags = doc.querySelector<HTMLElement>('#tags_div');
 
-  if (!summary || !avatar || !pinAndTabs || !name || !buttonsBlock || !dropdown || !tags) {
+  if (!summary || !avatar || !name || !buttonsBlock || !dropdown || !tags) {
     return null;
   }
 
@@ -90,7 +89,6 @@ function createCharacterSummary(doc: Document): ModernCharacterSummary | null {
   try {
     moves.push(moveNode(doc, avatar, main));
     main.append(identity, buttons);
-    moves.push(moveNode(doc, pinAndTabs, identity));
     moves.push(moveNode(doc, name, identity));
     moves.push(moveNode(doc, buttonsBlock, buttons));
     moves.push(moveNode(doc, dropdown, fields));
@@ -104,7 +102,7 @@ function createCharacterSummary(doc: Document): ModernCharacterSummary | null {
     throw error;
   }
 
-  return { buttons, buttonsBlock, dropdown, fields, identity, main, moves, name, pinAndTabs, summary, tags };
+  return { buttons, buttonsBlock, dropdown, fields, identity, main, moves, name, summary, tags };
 }
 
 function isCurrentCharacterSummary(doc: Document, state: ModernCharacterSummary): boolean {
@@ -114,8 +112,6 @@ function isCurrentCharacterSummary(doc: Document, state: ModernCharacterSummary)
     state.main.parentElement === state.summary &&
     state.fields.parentElement === state.summary &&
     state.moves.every(move => move.marker.isConnected && move.node.isConnected) &&
-    doc.querySelector('#rm_PinAndTabs') === state.pinAndTabs &&
-    state.pinAndTabs.parentElement === state.identity &&
     doc.querySelector('#name_div') === state.name &&
     state.name.parentElement === state.identity &&
     state.buttonsBlock.parentElement === state.buttons &&

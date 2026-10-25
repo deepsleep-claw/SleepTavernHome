@@ -61,7 +61,10 @@ body.th-modern-enabled.th-modern-character-management
   #CharListButtonAndHotSwaps,
 body.th-modern-enabled.th-modern-character-management
   #right-nav-panel[data-menu-type='character_edit']
-  #CharListButtonAndHotSwaps {
+  #CharListButtonAndHotSwaps,
+body.th-modern-enabled.th-modern-character-management
+  #right-nav-panel:is([data-menu-type='create'], [data-menu-type='character_edit'])
+  > #rm_PinAndTabs {
   flex: 0 0 auto;
   padding: 8px;
   border: 1px solid var(--th-modern-line);
@@ -167,6 +170,13 @@ body.th-modern-enabled.th-modern-character-management .th-modern-character-summa
   min-width: 0;
 }
 
+body.th-modern-enabled.th-modern-character-management
+  #right-nav-panel[data-menu-type='character_edit']
+  .th-modern-character-summary-main {
+  grid-template-areas: 'avatar buttons';
+  grid-template-columns: 76px minmax(0, 1fr);
+}
+
 body.th-modern-enabled.th-modern-character-management .th-modern-character-summary-identity {
   grid-area: identity;
   min-width: 0;
@@ -223,71 +233,8 @@ body.th-modern-enabled.th-modern-character-management
 }
 
 body.th-modern-enabled.th-modern-character-management
-  .th-modern-character-summary-identity
-  #rm_PinAndTabs {
-  display: block;
-  width: 100%;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-
-body.th-modern-enabled.th-modern-character-management
-  .th-modern-character-summary-identity
-  #right-nav-panel-tabs {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 8px;
-  width: 100%;
-  min-width: 0;
-  overflow: visible;
-}
-
-body.th-modern-enabled.th-modern-character-management
-  .th-modern-character-summary-identity
-  #rm_button_selected_ch {
-  width: 100%;
-  min-width: 0;
-  padding: 0;
-  opacity: 1;
-}
-
-body.th-modern-enabled.th-modern-character-management
-  .th-modern-character-summary-identity
-  #rm_button_selected_ch
-  h2 {
-  overflow: hidden;
-  color: var(--SmartThemeEmColor);
-  font-size: calc(var(--mainFontSize) * 1.25);
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-body.th-modern-enabled.th-modern-character-management
-  .th-modern-character-summary-identity
-  #result_info {
-  align-items: center;
-  gap: 10px;
-  padding: 0;
-}
-
-body.th-modern-enabled.th-modern-character-management
-  .th-modern-character-summary-identity
-  #result_info_text {
-  flex-direction: row;
-  align-items: center;
-  gap: 14px;
-  line-height: 1.2;
-  text-align: left;
-}
-
-body.th-modern-enabled.th-modern-character-management
   #right-nav-panel[data-menu-type='create']
-  .th-modern-character-summary-identity
-  #rm_PinAndTabs {
+  > #rm_PinAndTabs {
   display: none;
 }
 
@@ -302,8 +249,7 @@ body.th-modern-enabled.th-modern-character-management
 
 body.th-modern-enabled.th-modern-character-management
   #right-nav-panel[data-menu-type='character_edit']
-  .th-modern-character-summary-identity
-  #name_div {
+  .th-modern-character-summary-identity {
   display: none !important;
 }
 
@@ -428,6 +374,12 @@ body.th-modern-enabled.th-modern-character-management #rm_group_chats_block {
       grid-template-columns: 96px minmax(180px, 1fr) minmax(300px, auto);
       align-items: center;
       column-gap: 16px;
+    }
+
+    body.th-modern-enabled.th-modern-character-management
+      #right-nav-panel[data-menu-type='character_edit']
+      .th-modern-character-summary-main {
+      grid-template-columns: 96px minmax(0, 1fr);
     }
 
     body.th-modern-enabled.th-modern-character-management

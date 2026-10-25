@@ -306,7 +306,8 @@ export function mountExtensionSettings(store: Store): { destroy: () => void } {
 
   function syncEntries(): void {
     syncFrame = 0;
-    if (!layout?.isConnected) {
+    // 关闭面板的内容可能暂时离开文档，打开后再确认可选项目。
+    if (!layout?.isConnected || !panel?.classList.contains('openDrawer')) {
       return;
     }
 
@@ -445,7 +446,7 @@ export function mountExtensionSettings(store: Store): { destroy: () => void } {
 
     structureObserver = new hostWindow.MutationObserver(handleStructureMutations);
     observeStructure();
-    panelObserver = new hostWindow.MutationObserver(() => scheduleEnsureSelectedEntryOpen());
+    panelObserver = new hostWindow.MutationObserver(scheduleSyncEntries);
     panelObserver.observe(panel, { attributes: true, attributeFilter: ['class'] });
     panelResizeObserver = new hostWindow.ResizeObserver(records => {
       const panelRecord = records.find(record => record.target === panel);

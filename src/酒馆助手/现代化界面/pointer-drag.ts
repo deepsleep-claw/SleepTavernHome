@@ -3,18 +3,18 @@ type HostPointerDragOptions = {
   event: PointerEvent;
   onMove: (event: PointerEvent) => void;
   onStop: () => void;
+  cursor?: string;
 };
 
 /** 在宿主文档中跟踪拖拽，透明遮罩使跨域 iframe 也不会截走指针。 */
-export function trackHostPointerDrag({ target, event, onMove, onStop }: HostPointerDragOptions): () => void {
+export function trackHostPointerDrag({ target, event, onMove, onStop, cursor = 'col-resize' }: HostPointerDragOptions): () => void {
   const document = target.ownerDocument;
   const host = document.defaultView!;
   const pointerId = event.pointerId;
   const shield = document.createElement('div');
   shield.className = 'th-modern-drag-shield';
   shield.setAttribute('aria-hidden', 'true');
-  shield.style.cssText =
-    'position:fixed;inset:0;z-index:2147483647;pointer-events:auto;touch-action:none;cursor:col-resize;background:transparent';
+  shield.style.cssText = `position:fixed;inset:0;z-index:2147483647;pointer-events:auto;touch-action:none;cursor:${cursor};background:transparent`;
   document.body.append(shield);
   let active = true;
 

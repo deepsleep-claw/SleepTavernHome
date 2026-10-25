@@ -21,12 +21,14 @@ import {
   type ModernLayoutSettings,
   useModernLayoutStore,
 } from './store';
+import { mountPresetEditor } from './preset-module';
 import { mountWorldInfoEditor } from './world-info-module';
 import './style.css';
 import './world-info.css';
 import './mobile-world-select.css';
 import './character-management.css';
 import './extension-settings.css';
+import './preset.css';
 
 const BODY_CLASS_ENABLED = 'th-modern-enabled';
 const BODY_CLASS_TWO_COLUMN = 'th-modern-two-column';
@@ -45,6 +47,9 @@ const BODY_CLASS_DRAWER_SWITCHING = 'th-modern-drawer-switching';
 const BODY_CLASS_QUICK_REPLIES_COLLAPSED = 'th-modern-quick-replies-collapsed';
 const ICON_STYLESHEET_ID = 'th-modern-bootstrap-icons';
 const ICON_STYLESHEET_HREF = 'https://cdn.jsdelivr.net/npm/bootstrap-icons@1.13.1/font/bootstrap-icons.min.css';
+const NATIVE_REDUCE_MOTION_CLASSES = ['reduced-motion'];
+const NATIVE_REDUCE_EFFECTS_CLASSES = ['noShadows', 'no-blur'];
+const PREFERS_REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 const SIDEBAR_ID = 'th-modern-sidebar';
 const SIDEBAR_RESIZE_HANDLE_ID = 'th-modern-sidebar-resize-handle';
 const OVERLAY_RESIZE_HANDLE_ID = 'th-modern-overlay-resize-handle';
@@ -1345,7 +1350,7 @@ function showFailsafeRestoreConfirm(
   const previous_focus = host_document.activeElement as HTMLElement | null;
   $('.th-modern-failsafe-overlay', host_document).remove();
 
-  const $overlay = $('<div>').addClass('th-modern-failsafe-overlay');
+  const $overlay = $('<div>').attr('data-tt-mobile-surface', 'backdrop').addClass('th-modern-failsafe-overlay');
   const title_id = 'th-modern-failsafe-title';
   const description_id = 'th-modern-failsafe-description';
   const $dialog = $('<div>')
@@ -1505,7 +1510,8 @@ function mountFailsafeRestore(store: ReturnType<typeof useModernLayoutStore>): {
   });
   const chat = host_document.querySelector('#chat');
   if (chat) {
-    welcome_observer.observe(chat, { childList: true, subtree: true });
+    // 欢迎面板作为 #chat 的直接子节点插入，无需观察整棵聊天树。
+    welcome_observer.observe(chat, { childList: true });
   }
 
   host_document.addEventListener('keydown', onKeyDown, true);
@@ -1878,8 +1884,12 @@ function mountQuickReplyController(store: ReturnType<typeof useModernLayoutStore
     );
   };
   const structure_observer = new host_window.MutationObserver(records => {
-    const structure_changed = records.some(record =>
-      [...record.addedNodes, ...record.removedNodes].some(containsQuickReplyStructure),
+    // 流式生成会在 #chat 内产生大量变更，输入区不在其中，直接跳过。
+    const chat = host_document.getElementById('chat');
+    const structure_changed = records.some(
+      record =>
+        !chat?.contains(record.target) &&
+        [...record.addedNodes, ...record.removedNodes].some(containsQuickReplyStructure),
     );
     if (structure_changed) {
       schedule();
@@ -1928,6 +1938,7 @@ function mountResponsiveMode(store: ReturnType<typeof useModernLayoutStore>): { 
   const host_document = getHostDocument();
   const host_window = host_document.defaultView ?? window;
   const compact_query = host_window.matchMedia(COMPACT_TWO_COLUMN_QUERY);
+  const reduced_motion_query = host_window.matchMedia(PREFERS_REDUCED_MOTION_QUERY);
 
   let sync_frame = 0;
   const sync = () => {
@@ -1961,7 +1972,21 @@ function mountResponsiveMode(store: ReturnType<typeof useModernLayoutStore>): { 
     }
   };
 
+  const native_classes = [...NATIVE_REDUCE_MOTION_CLASSES, ...NATIVE_REDUCE_EFFECTS_CLASSES];
+  const readNativeClassState = () =>
+    native_classes.map(class_name => host_document.body.classList.contains(class_name)).join();
+  let native_class_state = readNativeClassState();
+  const native_class_observer = new host_window.MutationObserver(() => {
+    const next_native_class_state = readNativeClassState();
+    if (next_native_class_state !== native_class_state) {
+      native_class_state = next_native_class_state;
+      scheduleSync();
+    }
+  });
+  native_class_observer.observe(host_document.body, { attributes: true, attributeFilter: ['class'] });
+
   compact_query.addEventListener('change', scheduleSync);
+  reduced_motion_query.addEventListener('change', scheduleSync);
   host_window.addEventListener('resize', scheduleSync);
   host_document.addEventListener('pointerdown', handlePointerDown, true);
   sync();
@@ -1971,7 +1996,9 @@ function mountResponsiveMode(store: ReturnType<typeof useModernLayoutStore>): { 
       if (sync_frame !== 0) {
         host_window.cancelAnimationFrame(sync_frame);
       }
+      native_class_observer.disconnect();
       compact_query.removeEventListener('change', scheduleSync);
+      reduced_motion_query.removeEventListener('change', scheduleSync);
       host_window.removeEventListener('resize', scheduleSync);
       host_document.removeEventListener('pointerdown', handlePointerDown, true);
       host_document.body.classList.remove(BODY_CLASS_AUTO_COLLAPSE, BODY_CLASS_TEMP_EXPANDED);
@@ -2502,19 +2529,35 @@ function shouldUseDockedDrawer(
   return viewport_width >= left_width + panel_width + DOCKED_DRAWER_MIN_CHAT_WIDTH + MAIN_LAYOUT_GAP * 2;
 }
 
+function getNativeMotionPreferences(): { reduceMotion: boolean; reduceEffects: boolean } {
+  const host_document = getHostDocument();
+  const host_window = getHostWindow();
+  const body_classes = host_document.body.classList;
+  return {
+    reduceMotion:
+      NATIVE_REDUCE_MOTION_CLASSES.some(class_name => body_classes.contains(class_name)) ||
+      host_window.matchMedia(PREFERS_REDUCED_MOTION_QUERY).matches,
+    reduceEffects: NATIVE_REDUCE_EFFECTS_CLASSES.some(class_name => body_classes.contains(class_name)),
+  };
+}
+
 function applyBodyState(settings: ModernLayoutSettings, is_active: boolean, should_use_two_column: boolean) {
   const host_document = getHostDocument();
   const host_window = getHostWindow();
   const $body = $(host_document.body);
   const should_auto_collapse = is_active && should_use_two_column && host_window.matchMedia(COMPACT_TWO_COLUMN_QUERY).matches;
   const should_use_docked_drawer = shouldUseDockedDrawer(settings, is_active, should_use_two_column);
+  const native_preferences = getNativeMotionPreferences();
   $body
     .toggleClass(BODY_CLASS_ENABLED, is_active)
     .toggleClass(BODY_CLASS_TWO_COLUMN, should_use_two_column)
     .toggleClass(BODY_CLASS_DOCKED_DRAWER, should_use_docked_drawer)
     .toggleClass(BODY_CLASS_MAIN_FILL, is_active && should_use_two_column && settings.mainChatMaxWidth === 0)
-    .toggleClass(BODY_CLASS_REDUCE_MOTION, is_active && settings.reduceMotion)
-    .toggleClass(BODY_CLASS_REDUCE_ADVANCED_EFFECTS, is_active && settings.reduceAdvancedEffects)
+    .toggleClass(BODY_CLASS_REDUCE_MOTION, is_active && (settings.reduceMotion || native_preferences.reduceMotion))
+    .toggleClass(
+      BODY_CLASS_REDUCE_ADVANCED_EFFECTS,
+      is_active && (settings.reduceAdvancedEffects || native_preferences.reduceEffects),
+    )
     .toggleClass(BODY_CLASS_QUICK_REPLIES_COLLAPSED, is_active && settings.quickReplyCollapsed)
     .toggleClass(BODY_CLASS_AUTO_COLLAPSE, should_auto_collapse)
     .removeClass(BODY_CLASS_LEGACY_THREE_COLUMN);
@@ -2611,6 +2654,7 @@ function mountActiveRuntime(store: ReturnType<typeof useModernLayoutStore>): { d
     cleanups.push(mountApiPanelEnhancements().destroy);
     cleanups.push(mountWorldInfoEditor(store).destroy);
     cleanups.push(mountCharacterManagement(store).destroy);
+    cleanups.push(mountPresetEditor(store).destroy);
 
     const stop_state_watch = watch(
       () => [klona(store.settings), store.should_use_two_column] as const,

@@ -102,6 +102,9 @@
           <input v-model="store.settings.reduceAdvancedEffects" type="checkbox" class="checkbox" />
           <span>减少高级美化</span>
         </label>
+        <small class="modern-layout-hint">
+          酒馆开启“减少动态效果”、“禁用模糊效果”、“禁用文本阴影”或系统要求减弱动态效果时，会自动应用对应项。
+        </small>
 
         <label class="checkbox_label modern-layout-checkbox">
           <input v-model="store.settings.modernWorldInfoEditor" type="checkbox" class="checkbox" />
@@ -128,6 +131,12 @@
           <input v-model="store.settings.modernExtensionSettings" type="checkbox" class="checkbox" />
           <span>启用现代扩展程序界面</span>
         </label>
+
+        <label class="checkbox_label modern-layout-checkbox">
+          <input v-model="store.settings.modernPresetEditor" type="checkbox" class="checkbox" />
+          <span>启用现代预设管理界面</span>
+        </label>
+        <small class="modern-layout-hint">对话补全预设分为参数、提示词、高级三页，提示词支持左右编辑、多选拖拽和选项组。</small>
 
         <component :is="updaterUi" v-if="updaterUi" :updater="updater" />
 

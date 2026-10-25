@@ -169,7 +169,13 @@ class MobileWorldSelectManager {
         this.closePicker();
       }
     });
-    this.documentObserver = new this.window.MutationObserver(this.scheduleControllerRefresh);
+    this.documentObserver = new this.window.MutationObserver(records => {
+      // 世界书选择器都不在 #chat 内，忽略流式生成带来的聊天区变更。
+      const chat = this.document.getElementById('chat');
+      if (records.some(record => !chat?.contains(record.target))) {
+        this.scheduleControllerRefresh();
+      }
+    });
   }
 
   mount(): void {
@@ -752,6 +758,8 @@ class MobileWorldPicker {
     const titleId = `th-modern-mobile-world-picker-title-${this.controller.source.id}`;
     overlay.setAttribute('role', 'dialog');
     overlay.setAttribute('aria-labelledby', titleId);
+    // TauriTavern 移动端布局约定：遮罩铺满屏幕，内部面板自行避让安全区。
+    overlay.dataset.ttMobileSurface = 'backdrop';
     overlay.tabIndex = -1;
 
     const sheet = makeElement(this.document, 'section', 'th-modern-mobile-world-picker-sheet');
@@ -821,6 +829,8 @@ class MobileWorldPicker {
     overlay.addEventListener('mousedown', this.stopDrawerAutoClose);
     overlay.addEventListener('click', this.onOverlayClick);
     overlay.addEventListener('keydown', this.onKeyDown);
+    overlay.addEventListener('cancel', this.onCancel);
+    overlay.addEventListener('close', this.close);
     this.window.addEventListener('resize', this.syncLayout, { passive: true });
 
     this.overlay = overlay;
@@ -840,6 +850,9 @@ class MobileWorldPicker {
     this.syncLayout();
     this.controller.syncTrigger();
     this.window.requestAnimationFrame(() => {
+      if (this.destroyed) {
+        return;
+      }
       this.scrollCurrentWorldIntoView();
       if (this.layout === 'wide') {
         this.searchInput?.focus({ preventScroll: true });
@@ -866,14 +879,19 @@ class MobileWorldPicker {
     this.overlay?.removeEventListener('mousedown', this.stopDrawerAutoClose);
     this.overlay?.removeEventListener('click', this.onOverlayClick);
     this.overlay?.removeEventListener('keydown', this.onKeyDown);
+    this.overlay?.removeEventListener('cancel', this.onCancel);
+    this.overlay?.removeEventListener('close', this.close);
     this.window.removeEventListener('resize', this.syncLayout);
+    if (this.overlay?.open) {
+      this.overlay.close();
+    }
     this.overlay?.remove();
     this.overlay = undefined;
     if (restoreFocus && this.previousFocus?.isConnected) {
       this.previousFocus.focus({ preventScroll: true });
     }
-    this.controller.syncTrigger();
     this.onDestroy();
+    this.controller.syncTrigger();
   }
 
   refreshFromSource(): void {
@@ -1240,6 +1258,11 @@ class MobileWorldPicker {
 
   private readonly close = () => {
     this.destroy();
+  };
+
+  private readonly onCancel = (event: Event) => {
+    event.preventDefault();
+    this.close();
   };
 
   private readonly onOverlayClick = (event: MouseEvent) => {

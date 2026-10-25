@@ -13,6 +13,9 @@ const NARROW_CLASS = 'th-modern-wi-narrow';
 const DETAIL_OPEN_CLASS = 'th-modern-wi-detail-open';
 const ROOT_DETAIL_OPEN_CLASS = 'th-modern-wi-mobile-detail-open';
 const NATIVE_EDITOR_LOADING_CLASS = 'th-modern-wi-native-editor-loading';
+const DISABLED_ENTRY_CLASS = 'disabledWIEntry';
+const ROW_TOGGLE_CLASS = 'th-modern-wi-row-toggle';
+const EDITOR_ENTRY_HOST_CLASS = 'th-modern-wi-editor-entry-host';
 const TABS_READY_FLAG = 'thModernTabsReady';
 const SUMMARY_READY_FLAG = 'thModernSummaryReady';
 const SUMMARY_LAYOUT_VERSION = '2026-07-18-compact-v2';
@@ -132,6 +135,8 @@ function isInteractiveTarget(target: EventTarget | null): boolean {
         '.th-modern-wi-editor-surface',
         '.th-modern-wi-editor-actions',
         '.th-modern-wi-toolbar',
+        '.th-modern-wi-row-toggle',
+        '.killSwitch',
         '.drag-handle',
         '.inline-drawer-toggle',
         '.move_entry_button',
@@ -689,6 +694,31 @@ function updateEntrySummary(entry: HTMLElement, source: ParentNode = entry): voi
     if (state) {
         entry.dataset.thModernEntryState = state;
     }
+    syncEntryToggle(entry);
+}
+
+function syncEntryToggle(entry: HTMLElement): void {
+    const toggle = entry.querySelector<HTMLButtonElement>(`.${ROW_TOGGLE_CLASS}`);
+    if (!toggle) {
+        return;
+    }
+
+    const enabled = !entry.classList.contains(DISABLED_ENTRY_CLASS);
+    toggle.setAttribute('aria-checked', String(enabled));
+    toggle.title = enabled ? '已启用，点击禁用此条目' : '已禁用，点击启用此条目';
+}
+
+function ensureEntryToggle(document: Document, header: HTMLElement): void {
+    if (header.querySelector(`:scope > .${ROW_TOGGLE_CLASS}`)) {
+        return;
+    }
+
+    // 开关与摘要并列放置，避免在 role="button" 的摘要内嵌套可交互元素。
+    const toggle = makeElement(document, 'button', ROW_TOGGLE_CLASS);
+    toggle.type = 'button';
+    toggle.setAttribute('role', 'switch');
+    toggle.setAttribute('aria-label', '启用条目');
+    header.append(toggle);
 }
 
 function ensureEntrySummary(document: Document, entry: HTMLElement, scheduleSummaryUpdate: ScheduleSummaryUpdate): void {
@@ -721,6 +751,7 @@ function ensureEntrySummary(document: Document, entry: HTMLElement, scheduleSumm
         ].join('');
         summary.dataset.layoutVersion = SUMMARY_LAYOUT_VERSION;
     }
+    ensureEntryToggle(document, header);
 
     if (entry.dataset[SUMMARY_READY_FLAG] !== 'true') {
         entry.dataset[SUMMARY_READY_FLAG] = 'true';
@@ -1022,6 +1053,16 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
 
     mount(): void {
         if (this.mounted) {
+            const list = this.findEntriesList();
+            if (list && this.listPane && list.parentElement !== this.listPane) {
+                // 面板恢复时，宿主可能将列表重新插回原生位置。
+                if (this.moved.some(item => item.node === list)) {
+                    this.listPane.append(list);
+                } else {
+                    moveNode(list, this.listPane, this.moved);
+                }
+                this.scheduleEnhance();
+            }
             return;
         }
 
@@ -1238,6 +1279,19 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
             const target = targetToElement(event.target);
             if (this.moreMenu?.open && target && !this.moreMenu.contains(target)) {
                 this.moreMenu.open = false;
+            }
+            const rowToggle = target?.closest<HTMLElement>(`.${ROW_TOGGLE_CLASS}`);
+            if (rowToggle) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                event.stopPropagation();
+                this.toggleEntryEnabled(rowToggle);
+                return;
+            }
+            if (target?.closest('.killSwitch') && this.selectedEntry && this.editorPane?.contains(target)) {
+                // 原生开关的处理器在冒泡阶段同步切换类名，下一帧再同步列表与编辑区。
+                const entry = this.selectedEntry;
+                this.window.requestAnimationFrame(() => this.syncEntryEnabled(entry));
             }
             if (getSelectableListEntry(event.target)) {
                 this.onEntryClick(event);
@@ -1547,7 +1601,7 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
             this.closeMobileDetail();
         });
 
-        const host = makeElement(this.document, 'div', `${entry.className} th-modern-wi-editor-entry-host`);
+        const host = makeElement(this.document, 'div', `${entry.className} ${EDITOR_ENTRY_HOST_CLASS}`);
         for (const attribute of Array.from(entry.attributes)) {
             if (attribute.name !== 'class') {
                 host.setAttribute(attribute.name, attribute.value);
@@ -1566,6 +1620,33 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
         content.classList.add('th-modern-wi-active-editor-content');
         moveNode(content, drawer, this.editorMoved);
         updateEntrySummary(entry, host);
+    }
+
+    private toggleEntryEnabled(toggle: HTMLElement): void {
+        const entry = closestEntry(toggle);
+        if (!entry || this.deleteBusy) {
+            return;
+        }
+
+        // 选中条目的原生开关已被移入右侧编辑区。
+        const killSwitch = entry.querySelector<HTMLElement>('.killSwitch')
+            ?? (entry === this.selectedEntry ? this.editorPane?.querySelector<HTMLElement>('.killSwitch') : null);
+        if (!killSwitch) {
+            toastr.error('未找到该条目的原生启用开关，请刷新世界书后重试');
+            return;
+        }
+
+        killSwitch.click();
+        this.syncEntryEnabled(entry);
+    }
+
+    private syncEntryEnabled(entry: HTMLElement): void {
+        syncEntryToggle(entry);
+        if (entry === this.selectedEntry) {
+            this.editorPane
+                ?.querySelector(`.${EDITOR_ENTRY_HOST_CLASS}`)
+                ?.classList.toggle(DISABLED_ENTRY_CLASS, entry.classList.contains(DISABLED_ENTRY_CLASS));
+        }
     }
 
     private toggleMultiSelect(): void {

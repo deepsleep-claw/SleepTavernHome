@@ -127,7 +127,6 @@ body.th-modern-enabled #top-settings-holder > .drawer > .drawer-content,
 body.th-modern-enabled #right-nav-panel,
 body.th-modern-enabled #right-nav-panel .scrollableInner,
 body.th-modern-enabled .scrollableInner,
-body.th-modern-enabled .th-modern-recent-list,
 body.th-modern-enabled #rm_api_block #main-API-selector-block,
 body.th-modern-enabled #rm_api_block #chat_completion_source[size],
 body.th-modern-enabled #rm_api_block #textgen_type[size],
@@ -860,7 +859,7 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
   body.th-modern-enabled {
     --th-modern-effective-input-bottom-gap: max(
       var(--th-modern-input-bottom-gap),
-      env(safe-area-inset-bottom, 0px)
+      var(--tt-inset-bottom, env(safe-area-inset-bottom, 0px))
     );
   }
 
@@ -921,9 +920,9 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
 
   body.th-modern-enabled #form_sheld {
     position: absolute;
-    right: max(8px, env(safe-area-inset-right));
+    right: max(8px, var(--tt-inset-right, env(safe-area-inset-right, 0px)));
     bottom: var(--th-modern-effective-input-bottom-gap);
-    left: max(8px, env(safe-area-inset-left));
+    left: max(8px, var(--tt-inset-left, env(safe-area-inset-left, 0px)));
     width: auto !important;
     margin: 0;
   }
@@ -1694,6 +1693,7 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
 
   body.th-modern-enabled.th-modern-two-column .th-modern-recent-list {
     display: flex;
+    box-sizing: border-box;
     width: 100%;
     min-width: 0;
     flex: 1 1 auto;
@@ -1701,14 +1701,14 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
     gap: 6px;
     min-height: 0;
     overflow-y: auto;
-    padding-right: 2px;
+    padding-inline: 2px;
     scrollbar-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 40%, transparent) transparent;
   }
 
   body.th-modern-enabled.th-modern-two-column .th-modern-recent-chat {
     display: grid;
     box-sizing: border-box;
-    grid-template-columns: 32px minmax(0, 1fr) minmax(42px, 54px);
+    grid-template-columns: 32px minmax(0, 1fr) max-content;
     align-items: center;
     gap: 8px;
     width: 100%;
@@ -1733,7 +1733,7 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
   body.th-modern-enabled.th-modern-two-column.th-modern-sidebar-collapsed .th-modern-recent-list {
     align-items: center;
     gap: 8px;
-    padding-right: 0;
+    padding-inline: 0;
   }
 
   body.th-modern-enabled.th-modern-two-column.th-modern-sidebar-collapsed .th-modern-recent-chat {
@@ -1747,7 +1747,7 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
   body.th-modern-enabled.th-modern-two-column.th-modern-auto-collapse:not(.th-modern-sidebar-temp-expanded) .th-modern-recent-list {
     align-items: center;
     gap: 8px;
-    padding-right: 0;
+    padding-inline: 0;
   }
 
   body.th-modern-enabled.th-modern-two-column.th-modern-auto-collapse:not(.th-modern-sidebar-temp-expanded) .th-modern-recent-chat {
@@ -1802,7 +1802,6 @@ body.th-modern-enabled .th-modern-drawer-fullscreen-toggle.bi::before {
   body.th-modern-enabled.th-modern-two-column .th-modern-recent-meta {
     display: flex;
     min-width: 0;
-    max-width: 54px;
     flex-direction: column;
     align-items: flex-end;
     gap: 2px;

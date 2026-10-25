@@ -444,7 +444,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #world_popup_entries_list
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #world_popup_entries_list .world_entry {
-  margin: 0 0 0.18rem;
+  margin: 0 0 0.14rem;
   border: 1px solid transparent;
   border-radius: 7px;
   background-color: var(--th-modern-wi-card);
@@ -468,17 +468,30 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #world_popup_entries_list
   background-color: color-mix(in srgb, var(--th-modern-wi-accent) 13%, var(--SmartThemeBlurTintColor) 64%);
 }
 
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #world_popup_entries_list .world_entry.th-modern-wi-selected {
+  box-shadow: inset 3px 0 0 var(--th-modern-wi-accent);
+}
+
+/* 原生禁用样式会让整行半透明并去色，开关也随之看不清；改为只淡化文字。 */
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #world_popup_entries_list .world_entry.disabledWIEntry,
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #world_popup_entries_list .world_entry.disabledWIEntry:hover {
+  opacity: 1;
+  filter: none;
+}
+
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .world_entry > form.world_entry_form > .inline-drawer > .inline-drawer-header {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  min-height: 2.7rem;
-  gap: 0.34rem;
-  padding: 0.22rem 0.42rem;
+  min-height: 2.4rem;
+  gap: 0.4rem;
+  padding: 0.18rem 0.5rem 0.18rem 0.42rem;
+  /* 部分主题会给折叠头加彩色竖线，在列表中与选中指示冲突。 */
+  border: 0 !important;
   cursor: pointer !important;
 }
 
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .world_entry > form.world_entry_form > .inline-drawer > .inline-drawer-header > :not(.drag-handle):not(.th-modern-wi-row-summary) {
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .world_entry > form.world_entry_form > .inline-drawer > .inline-drawer-header > :not(.drag-handle):not(.th-modern-wi-row-summary):not(.th-modern-wi-row-toggle) {
   display: none !important;
 }
 
@@ -529,30 +542,81 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-leading
   gap: 0.34rem;
 }
 
+/* 用实心小圆点表示条目状态，避免被误认为单选框。 */
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-entry-state-icon {
-  width: 0.98rem;
-  height: 0.98rem;
-  border: 0.22rem solid var(--th-modern-wi-accent);
+  width: 0.56rem;
+  height: 0.56rem;
   border-radius: 999px;
+  background-color: var(--th-modern-wi-accent);
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .world_entry[data-th-modern-entry-state="constant"] .th-modern-wi-entry-state-icon,
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .world_entry[constant="true"] .th-modern-wi-entry-state-icon {
-  border-color: #3f8cff;
+  background-color: #3f8cff;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .world_entry[data-th-modern-entry-state="normal"] .th-modern-wi-entry-state-icon,
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .world_entry[constant="false"] .th-modern-wi-entry-state-icon {
-  border-color: #29c76f;
+  background-color: #29c76f;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .world_entry[data-th-modern-entry-state="vectorized"] .th-modern-wi-entry-state-icon {
-  border-color: color-mix(in srgb, #29c76f 62%, #3f8cff);
+  background-color: color-mix(in srgb, #29c76f 62%, #3f8cff);
 }
 
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .world_entry.disabled .th-modern-wi-row-summary,
-body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .world_entry[disabled="true"] .th-modern-wi-row-summary {
-  opacity: 0.55;
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled #world_popup_entries_list .world_entry.disabledWIEntry .th-modern-wi-row-summary {
+  opacity: 0.5;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-toggle {
+  position: relative;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  width: 2rem;
+  height: 1.12rem;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--th-modern-wi-border);
+  border-radius: 999px;
+  background-color: color-mix(in srgb, var(--SmartThemeBodyColor) 12%, transparent);
+  cursor: pointer;
+  transition:
+    background-color var(--th-modern-motion-duration) ease,
+    border-color var(--th-modern-motion-duration) ease;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-toggle::after {
+  position: absolute;
+  top: 50%;
+  left: 2px;
+  width: 0.8rem;
+  height: 0.8rem;
+  border-radius: 999px;
+  background-color: var(--th-modern-wi-muted);
+  content: '';
+  transform: translateY(-50%);
+  transition:
+    left var(--th-modern-motion-duration) ease,
+    background-color var(--th-modern-motion-duration) ease;
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .world_entry:not(.disabledWIEntry) .th-modern-wi-row-toggle {
+  border-color: var(--th-modern-wi-accent);
+  background-color: var(--th-modern-wi-accent);
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .world_entry:not(.disabledWIEntry) .th-modern-wi-row-toggle::after {
+  left: calc(100% - 0.8rem - 2px);
+  background-color: color-mix(in srgb, white 92%, var(--th-modern-wi-accent));
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-toggle:hover {
+  border-color: color-mix(in srgb, var(--th-modern-wi-accent) 72%, transparent);
+}
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-toggle:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--th-modern-wi-accent) 72%, transparent);
+  outline-offset: 2px;
 }
 
 body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-row-text {
