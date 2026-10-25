@@ -17,8 +17,8 @@
       "name": "现代化界面",
       "channels": {
         "stable": {
-          "version": "0.1.5",
-          "tag": "modern-ui-v0.1.5",
+          "version": "0.2.0",
+          "tag": "modern-ui-v0.2.0",
           "entry": "dist/酒馆助手/现代化界面/index.js",
           "updaterApiMajor": 1,
           "minimum": {
