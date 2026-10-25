@@ -1,5 +1,5 @@
 import { createScriptIdDiv, teleportStyle } from '@util/script';
-import { createPinia } from 'pinia';
+import { createPinia, getActivePinia } from 'pinia';
 import { createApp } from 'vue';
 import Panel from './Panel.vue';
 

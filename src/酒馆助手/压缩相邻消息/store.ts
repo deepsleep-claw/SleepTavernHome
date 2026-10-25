@@ -1,4 +1,7 @@
 import { registerAsUniqueScript } from '@util/script';
+import { klona } from 'klona';
+import { defineStore } from 'pinia';
+import { computed, ref, watchEffect } from 'vue';
 import { WorldbookSettings } from './worldbook_settings';
 export { WorldbookExtractionPositionOrder } from './worldbook_settings';
 

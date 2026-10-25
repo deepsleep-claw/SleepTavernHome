@@ -1,3 +1,4 @@
+import { watch } from 'vue';
 import { initPanel } from './panel';
 import { initializeSquashDebugGlobal } from './debug';
 import { initSquashWithoutPanel } from './squash';

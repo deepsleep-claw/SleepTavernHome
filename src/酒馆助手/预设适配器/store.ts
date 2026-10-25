@@ -1,5 +1,6 @@
 import _ from 'lodash';
 import { defineStore } from 'pinia';
+import type { PartialDeep } from 'type-fest';
 import { computed, ref } from 'vue';
 import { z } from 'zod';
 import {
@@ -2345,7 +2346,7 @@ async function requestManualSummaryPrompt(settings: SummarySettings): Promise<st
   return prompt;
 }
 
-function buildSummaryWorldbookEntry(message_id: number, content: string): TypeFest.PartialDeep<WorldbookEntry> {
+function buildSummaryWorldbookEntry(message_id: number, content: string): PartialDeep<WorldbookEntry> {
   return {
     content,
     effect: {
