@@ -73,14 +73,35 @@ describe('window handoff', () => {
     expect(content.style.cssText).toBe(original);
   });
 
-  it('手机快捷入口自动全屏，并在键盘收起后恢复高度', async () => {
+  it('手机顶部栏保留普通抽屉，关闭再打开仍不改变展示模式', async () => {
+    vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(390);
+    const { drawer, registry } = await setup();
+    await Promise.resolve();
+    const content = drawer.querySelector<HTMLElement>('.drawer-content')!;
+    const original = content.style.cssText;
+    const listener = vi.fn();
+    registry.subscribeNativeFullscreen(listener);
+    expect(listener).toHaveBeenLastCalledWith(false);
+    expect(content.classList.contains('dca-native-fullscreen')).toBe(false);
+    const toggle = drawer.querySelector<HTMLElement>('.drawer-toggle')!;
+    toggle.click();
+    toggle.click();
+    await Promise.resolve();
+    expect(content.classList.contains('openDrawer')).toBe(true);
+    expect(content.style.cssText).toBe(original);
+    expect(listener).toHaveBeenLastCalledWith(false);
+  });
+
+  it('手机抽屉手动全屏后跟随键盘高度，退出时恢复原抽屉', async () => {
     const visual = Object.assign(new EventTarget(), { width: 390, height: 700, offsetLeft: 0, offsetTop: 0 });
     vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(390);
     vi.stubGlobal('visualViewport', visual);
-    const { drawer } = await setup();
+    const { drawer, registry } = await setup();
     await Promise.resolve();
     const content = drawer.querySelector<HTMLElement>('.drawer-content')!;
     const frame = content.querySelector('iframe');
+    const original = content.style.cssText;
+    registry.toggleNativeFullscreen();
     expect(content.classList.contains('dca-native-fullscreen')).toBe(true);
     expect(content.style.height).toBe('700px');
     visual.height = 300;
@@ -96,6 +117,8 @@ describe('window handoff', () => {
     expect(content.style.height).toBe('700px');
     expect(content.style.top).toBe('0px');
     expect(content.querySelector('iframe')).toBe(frame);
+    registry.toggleNativeFullscreen();
+    expect(content.style.cssText).toBe(original);
   });
   it('独立窗口启动应用宿主线路偏好，Vue 与主脚本共用双源加载', async () => {
     const html = clientDocument(

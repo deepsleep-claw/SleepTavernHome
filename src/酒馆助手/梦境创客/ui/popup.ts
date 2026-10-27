@@ -266,7 +266,7 @@ export function openDreamCardAgentWindow(): void {
 
   let removePointer = () => {};
   const keepVisible = () => placePreferredFrame();
-  const stopObservingViewport = observeHostViewport(host, keepVisible);
+  const stopObservingViewport = observeHostViewport(host, keepVisible, document);
   const destroy = () => {
     if (destroyed) return;
     destroyed = true;
@@ -379,6 +379,7 @@ export function openDreamCardAgentWindow(): void {
     connected: () => $window[0]?.isConnected === true && frame.isConnected,
     destroy,
     focus: () => {
+      placePreferredFrame();
       $(frame).css('z-index', 6100);
       $window.css('z-index', 6101);
       window.setTimeout(() => {

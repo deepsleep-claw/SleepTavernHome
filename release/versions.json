@@ -24,7 +24,7 @@
     },
     "dream-card-agent": {
       "name": "梦境创客",
-      "version": "0.2.5",
+      "version": "0.2.6",
       "tagPrefix": "dream-card-agent-v",
       "entry": "dist/酒馆助手/梦境创客/index.js",
       "installer": {

@@ -260,8 +260,7 @@ export function configureWindowHost(
         loadFrame();
         void Promise.resolve(main.doNavbarIconClick.call(toggle)).then(() => {
           if (disposed || !content.classList.contains('openDrawer')) return;
-          if (readHostViewport(host).mobile && !nativeFullscreen()) registry.toggleNativeFullscreen();
-          else publishFullscreen();
+          publishFullscreen();
         }).catch(error => toastr.error(String(error), '梦境创客'));
       });
       toggle.addEventListener('keydown', event => {
