@@ -1,8 +1,10 @@
 import vue from '@vitejs/plugin-vue';
+import { fileURLToPath } from 'node:url'; // eslint-disable-line import-x/no-nodejs-modules
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   plugins: [vue()],
+  resolve: { alias: { '@util': fileURLToPath(new URL('./util', import.meta.url)) } },
   test: {
     coverage: {
       include: ['src/酒馆助手/梦境创客/core/**/*.ts'],

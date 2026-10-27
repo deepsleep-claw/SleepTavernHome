@@ -2,6 +2,7 @@
 // popup.ts 在父页面创建窗口外壳，teleportStyle 会把这些规则带过去。
 
 .dca-floating-window {
+  box-sizing: border-box;
   position: fixed;
   z-index: 6000;
   display: flex;

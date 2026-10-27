@@ -124,11 +124,12 @@ function readFrame($window: JQuery<HTMLElement>): Frame {
   };
 }
 
-function applyFrame($window: JQuery<HTMLElement>, frame: Frame, fullscreen: boolean): void {
+function applyFrame($window: JQuery<HTMLElement>, frame: Frame, fullscreen: boolean): Frame {
   const value = fullscreen ? fullscreenFrame() : clamp(frame);
   $window.css({ height: `${value.height}px`, left: `${value.x}px`, top: `${value.y}px`, width: `${value.width}px` });
   $window.toggleClass('dca-floating-window-mobile', viewport().mobile);
   $window.toggleClass('dca-floating-window-fullscreen', fullscreen);
+  return value;
 }
 
 export function openDreamCardAgentWindow(): void {
@@ -216,7 +217,6 @@ export function openDreamCardAgentWindow(): void {
   mountPoint.dataset.dcaUiRoot = 'true';
   document.body.append(mountPoint);
   const app = createApp(WorkspaceWindow);
-  app.mount(mountPoint);
   const $resizeHandles = $(
     RESIZE_DIRECTIONS.map(
       direction =>
@@ -247,8 +247,8 @@ export function openDreamCardAgentWindow(): void {
   };
   const placeFrame = (value: Frame, nextFullscreen = fullscreen) => {
     fullscreen = viewport().mobile || nextFullscreen;
-    applyFrame($window, value, fullscreen);
-    const actual = readFrame($window);
+    // 外壳的计算高度可能仍处于宿主布局动画中，iframe 必须使用相同的目标尺寸。
+    const actual = applyFrame($window, value, fullscreen);
     $(frame).css({
       height: `${Math.max(1, actual.height)}px`,
       left: `${actual.x}px`,
@@ -263,6 +263,8 @@ export function openDreamCardAgentWindow(): void {
     placeFrame(useFullscreen ? fullscreenFrame() : (preferences.windowedFrame ?? defaultFrame()), useFullscreen);
   };
   placePreferredFrame();
+  // 后台脚本 iframe 原本没有可用视口，先定位再让工作台读取移动端布局。
+  app.mount(mountPoint);
 
   let removePointer = () => {};
   const keepVisible = () => placePreferredFrame();
