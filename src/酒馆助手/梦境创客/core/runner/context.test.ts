@@ -94,7 +94,7 @@ describe('runner context', () => {
   it('优先使用API用量，并只对请求后新增消息做本地增量估算', () => {
     const before: ModelMessage[] = [{ content: 'hello', role: 'user' }];
     const estimatedAtRequest = measureContext(before, 100_000).totalTokens;
-    const baseline = { version: 2 as const, estimatedTokens: estimatedAtRequest, inputTokens: 120, outputTokens: 30 };
+    const baseline = { version: 3 as const, estimatedTokens: estimatedAtRequest, inputTokens: 120, outputTokens: 30 };
     const exact = measureContext(before, 100_000, baseline);
     expect(exact).toMatchObject({
       apiInputTokens: 120,

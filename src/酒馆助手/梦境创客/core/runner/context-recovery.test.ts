@@ -186,7 +186,7 @@ describe('上下文恢复', () => {
       executor: { execute: async () => result() },
       initialMessages: messages,
       headerMessageCount: 1,
-      initialApiUsageBaseline: { version: 2, estimatedTokens: estimated, inputTokens: 18_000, outputTokens: 100 },
+      initialApiUsageBaseline: { version: 3, estimatedTokens: estimated, inputTokens: 18_000, outputTokens: 100 },
       journal,
       tools: [],
     });
@@ -250,7 +250,7 @@ describe('Token 统计口径', () => {
     const usage = measureContext(
       messages,
       1000,
-      { version: 2, inputTokens: 300, estimatedTokens: estimated, cacheReadTokens: 200, cacheWriteTokens: 50 },
+      { version: 3, inputTokens: 300, estimatedTokens: estimated, cacheReadTokens: 200, cacheWriteTokens: 50 },
       80,
     );
     expect(usage.totalTokens).toBe(300);

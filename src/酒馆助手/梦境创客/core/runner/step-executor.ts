@@ -7,6 +7,7 @@ import {
   type ProviderRuntime,
 } from '../provider-probe';
 import { normalizeProviderFailure } from '../provider/provider-failure';
+import { compatibleToolMessages } from '../provider/compatible-tool-messages';
 import {
   isGeminiArgon,
   omitsSamplingParameters,
@@ -220,7 +221,9 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
       allowSystemInMessages: true,
       maxOutputTokens: request.modelSettings?.maxOutputTokens,
       maxRetries: request.purpose === 'summary' ? 0 : undefined,
-      messages: request.messages,
+      messages: request.modelSettings?.interfaceType === 'openai-chat'
+        ? compatibleToolMessages(request.messages)
+        : request.messages,
       model: runtime.model,
       onChunk: async chunk => {
         await yieldIfBusy(request.abortSignal);

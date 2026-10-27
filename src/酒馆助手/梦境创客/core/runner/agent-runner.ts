@@ -437,7 +437,7 @@ export class AgentRunner {
       if (usage.inputTokens !== undefined && usage.inputTokens > 0) {
         this.apiUsageBaseline = {
           ...usage,
-          version: 2,
+          version: 3,
           estimatedTokens: estimatedAtRequest,
           inputTokens: usage.inputTokens,
           toolSchemaTokens: this.toolSchemaTokens,

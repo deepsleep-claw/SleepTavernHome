@@ -1,4 +1,4 @@
-import type { FilePart, ModelMessage } from 'ai';
+import type { FilePart, ModelMessage, ToolResultPart } from 'ai';
 import { canonicalStringify } from '../transaction/canonical';
 
 export type ModelTokenUsage = {
@@ -33,8 +33,8 @@ export type ContextUsage = {
 };
 
 export type ApiUsageBaseline = ModelTokenUsage & {
-  /** 版本 2 的锚点是请求发出时的输入，输出用量只用于展示。 */
-  version?: 2;
+  /** 锚点使用请求发出时的估算口径；输出用量只用于展示。 */
+  version?: 2 | 3;
   estimatedTokens: number;
   inputTokens: number;
   toolSchemaTokens?: number;
@@ -74,17 +74,49 @@ export function estimateTokens(value: unknown): number {
 }
 
 function filePartTokens(part: FilePart): number {
-  if (part.mediaType.toLocaleLowerCase().startsWith('image/')) return 1_200;
+  const mediaType = part.mediaType.toLowerCase().split('/')[0];
+  if (mediaType === 'image') return 1_200;
   if (typeof part.data === 'object' && 'type' in part.data && part.data.type === 'text')
     return estimateTokens(part.data.text);
   const data =
     typeof part.data === 'object' && 'type' in part.data && part.data.type === 'data' ? part.data.data : part.data;
-  const encodedLength =
-    typeof data === 'string' ? data.length : data instanceof Uint8Array ? (data.byteLength * 4) / 3 : 0;
-  const bytes = Math.ceil(encodedLength * 0.75);
-  return part.mediaType.toLocaleLowerCase().startsWith('text/')
-    ? Math.max(1, Math.ceil(bytes / 3))
-    : 1_000 + Math.ceil(bytes / 1_024);
+  const bytes =
+    typeof data === 'string'
+      ? Math.ceil(data.length * 0.75)
+      : data instanceof ArrayBuffer || ArrayBuffer.isView(data)
+        ? data.byteLength
+        : 0;
+  return mediaType === 'text' ? Math.max(1, Math.ceil(bytes / 3)) : 1_000 + Math.ceil(bytes / 1_024);
+}
+
+function toolOutputTokens(output: ToolResultPart['output']): number {
+  if (output.type === 'execution-denied') return estimateTokens(output.reason ?? '');
+  if (output.type !== 'content') return estimateTokens(output.value);
+  // 多模态工具结果与用户附件使用相同预算，传输编码和签名不是模型正文。
+  return output.value.reduce((total, part) => {
+    if (part.type === 'text') return total + estimateTokens(part.text);
+    if (part.type === 'file') return total + filePartTokens(part);
+    if (part.type === 'file-data')
+      return total + filePartTokens({ type: 'file', mediaType: part.mediaType, data: part.data });
+    if (part.type === 'file-url')
+      return (
+        total +
+        filePartTokens({
+          type: 'file',
+          mediaType: part.mediaType ?? 'application/octet-stream',
+          data: { type: 'url', url: part.url },
+        })
+      );
+    if (
+      part.type === 'image-data' ||
+      part.type === 'image-url' ||
+      part.type === 'image-file-id' ||
+      part.type === 'image-file-reference'
+    )
+      return total + 1_200;
+    if (part.type === 'file-id' || part.type === 'file-reference') return total + 1_000;
+    return total;
+  }, 0);
 }
 
 function messageTokens(message: ModelMessage): number {
@@ -94,7 +126,7 @@ function messageTokens(message: ModelMessage): number {
     if (part.type === 'file') return total + filePartTokens(part);
     if (part.type === 'image') return total + 1_200;
     if (part.type === 'tool-call') return total + estimateTokens({ name: part.toolName, input: part.input });
-    if (part.type === 'tool-result') return total + estimateTokens({ name: part.toolName, output: part.output });
+    if (part.type === 'tool-result') return total + 4 + estimateTokens(part.toolName) + toolOutputTokens(part.output);
     return total;
   }, 4);
 }
@@ -109,8 +141,9 @@ export function measureContext(
   for (const message of messages) totals[message.role] += messageTokens(message);
   const schemas = tokenNumber(toolSchemaTokens) ?? 0;
   const estimatedTokens = totals.assistant + totals.system + totals.tool + totals.user + schemas;
+  // 估算口径不同的锚点不能相减，否则旧编码长度可能把当前占用抵消为零。
   const baseline =
-    apiBaseline?.version === 2 &&
+    apiBaseline?.version === 3 &&
     tokenNumber(apiBaseline.estimatedTokens) !== undefined &&
     (tokenNumber(apiBaseline.inputTokens) ?? 0) > 0
       ? apiBaseline
