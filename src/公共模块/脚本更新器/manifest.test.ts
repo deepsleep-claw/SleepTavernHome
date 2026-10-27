@@ -55,7 +55,7 @@ describe('多源清单', () => {
         .mockResolvedValueOnce(Response.json({ ...manifest, repository: 'other/repo' }))
         .mockResolvedValueOnce(Response.json(manifest)),
     );
-    expect((await fetchManifest(config, 'auto')).plugins['modern-ui'].channels.stable.version).toBe('0.2.0');
+    expect((await fetchManifest(config, 'auto')).plugins['modern-ui'].channels.stable.version).toBe(config.fallback.version);
     expect(selectUpdaterRelease({}, config)).toBeUndefined();
   });
 

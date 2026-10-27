@@ -10,7 +10,9 @@ vi.mock('./sources', async importOriginal => {
   return { ...actual, createCdnRuntime: (source: string) => createCdnRuntime(source, importer) };
 });
 
-const release = manifest.plugins['modern-ui'].channels.stable;
+const release = { ...manifest.plugins['modern-ui'].channels.stable, version: '0.2.0', tag: 'modern-ui-v0.2.0' };
+const fixtureManifest = structuredClone(manifest);
+fixtureManifest.plugins['modern-ui'].channels.stable = release;
 const config: PluginUpdaterConfig = {
   pluginId: 'modern-ui',
   pluginName: '现代化界面',
@@ -122,10 +124,60 @@ describe('更新启动与线路状态', () => {
       channel: 'stable',
       active: { ...config.fallback, version: '0.2.1', tag: 'modern-ui-v0.2.1' },
     };
-    const updater = createPluginUpdater(config, { manifest });
+    const updater = createPluginUpdater(config, { manifest: fixtureManifest });
     expect(updater.getSnapshot().updateAvailable).toBe(false);
     await updater.install();
     expect(reload).not.toHaveBeenCalled();
     expect(state().active.version).toBe('0.2.1');
+  });
+
+  it('已安装版本启动失败后用较新的稳定版恢复，并保留其他脚本变量', async () => {
+    const recoveryManifest = structuredClone(fixtureManifest);
+    recoveryManifest.plugins['modern-ui'].channels.stable = { ...release, version: '0.2.2', tag: 'modern-ui-v0.2.2' };
+    const runtime = { dispose: vi.fn() };
+    const recovered = moduleFor('0.2.2', vi.fn(() => runtime));
+    importer.mockRejectedValueOnce(new Error('empty preset')).mockRejectedValueOnce(new Error('empty preset'));
+    importer.mockResolvedValue(recovered);
+    expect(await bootPluginHeadless(config, { manifest: recoveryManifest })).toBe(runtime);
+    expect(importer).toHaveBeenCalledTimes(3);
+    expect(recovered.activate).toHaveBeenCalledOnce();
+    expect(state().active.version).toBe('0.2.2');
+    expect(state().pending).toBeUndefined();
+    expect(variables.unrelated).toEqual({ enabled: true });
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('稳定版恢复失败不提交版本，也不重复尝试同一保底版本', async () => {
+    const fallback = { ...config.fallback, version: '0.2.2', tag: 'modern-ui-v0.2.2' };
+    const recoveryManifest = structuredClone(fixtureManifest);
+    recoveryManifest.plugins['modern-ui'].channels.stable = { ...release, version: fallback.version, tag: fallback.tag };
+    variables.__updater = { schemaVersion: 1, pluginId: config.pluginId, channel: 'stable', active: config.fallback };
+    importer.mockRejectedValue(new Error('offline'));
+    await expect(bootPluginHeadless({ ...config, fallback }, { manifest: recoveryManifest })).rejects.toThrow('模块加载失败');
+    expect(importer).toHaveBeenCalledTimes(4);
+    expect(state().active.version).toBe('0.2.0');
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it('重新导入的保底版成功启动后保存版本，下一次不再加载故障旧版', async () => {
+    const fallback = { ...config.fallback, version: '0.2.2', tag: 'modern-ui-v0.2.2' };
+    variables.__updater = { schemaVersion: 1, pluginId: config.pluginId, channel: 'stable', active: config.fallback };
+    importer.mockRejectedValueOnce(new Error('empty preset')).mockRejectedValueOnce(new Error('empty preset'));
+    importer.mockResolvedValue(moduleFor('0.2.2'));
+    await bootPluginHeadless({ ...config, fallback });
+    expect(state().active.version).toBe('0.2.2');
+    importer.mockClear();
+    await bootPluginHeadless({ ...config, fallback });
+    expect(importer).toHaveBeenCalledOnce();
+    expect(state().active.version).toBe('0.2.2');
+  });
+
+  it('正常启动的已安装版本仍由用户选择是否更新', async () => {
+    const recoveryManifest = structuredClone(fixtureManifest);
+    recoveryManifest.plugins['modern-ui'].channels.stable = { ...release, version: '0.2.2', tag: 'modern-ui-v0.2.2' };
+    importer.mockResolvedValue(moduleFor());
+    await bootPluginHeadless(config, { manifest: recoveryManifest });
+    expect(importer).toHaveBeenCalledOnce();
+    expect(state().active.version).toBe('0.2.0');
   });
 });

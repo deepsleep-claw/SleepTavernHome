@@ -554,6 +554,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
         },
       },
     },
+    externalsType: use_cdn_fallback ? 'promise' : 'module',
     externals: ({ context, request }, callback) => {
       if (!context || !request) {
         return callback();
@@ -597,7 +598,11 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
         const version = request === 'pinia' ? pinia_version : dependency_versions[request];
         const pinned = version && /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][\w.-]+)?$/u.test(version) ? `${request}@${version}` : request;
         const url = `https://cdn.jsdelivr.net/npm/${pinned}/+esm`;
-        return callback(null, `promise (${createCdnRuntime.toString()})(globalThis.__thCdnSource).importModule(${JSON.stringify(url)}).then(result => result.module)`);
+        // import() 返回 ES 模块命名空间；promise external 默认会按 CommonJS 解释默认导出。
+        return callback(null, {
+          promise: `(${createCdnRuntime.toString()})(globalThis.__thCdnSource).importModule(${JSON.stringify(url)}).then(result => result.module)`,
+          interop: 'esModule',
+        });
       }
       const cdn = {
         pinia: `https://testingcf.jsdelivr.net/npm/pinia@${pinia_version}/+esm`,

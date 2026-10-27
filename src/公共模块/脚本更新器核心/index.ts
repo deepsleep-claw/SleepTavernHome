@@ -230,6 +230,21 @@ class PluginUpdater implements PluginUpdaterController {
         return;
       }
 
+      // 已安装版本无法启动时，允许稳定版修复入口恢复界面；成功激活前保留原版本状态。
+      if (this.latest && compareStableVersions(this.latest.version, release.version) > 0) {
+        const recovery = copyRelease(this.latest);
+        try {
+          const runtime = await this.activateRelease(recovery, updaterUi);
+          this.state = { ...this.state, active: recovery, pending: undefined };
+          writeUpdaterState(this.state);
+          this.refreshVersionStatus(recovery.version);
+          return runtime;
+        } catch (recoveryError) {
+          if (hasSameReleaseIdentity(recovery, this.fallback)) throw recoveryError;
+          console.error(`[${this.pluginName}] 稳定版恢复失败。`, recoveryError);
+        }
+      }
+
       if (!hasSameReleaseIdentity(release, this.fallback)) {
         console.error(`[${this.pluginName}] 当前版本启动失败，尝试保底版本。`, error);
         this.updateSnapshot({
@@ -237,7 +252,11 @@ class PluginUpdater implements PluginUpdaterController {
           runningVersion: this.fallback.version,
           error: `v${release.version} 启动失败，当前使用保底版本。`,
         });
-        return await this.activateRelease(this.fallback, updaterUi);
+        const runtime = await this.activateRelease(this.fallback, updaterUi);
+        this.state = { ...this.state, active: copyRelease(this.fallback), pending: undefined };
+        writeUpdaterState(this.state);
+        this.refreshVersionStatus(this.fallback.version);
+        return runtime;
       }
       throw error;
     }
