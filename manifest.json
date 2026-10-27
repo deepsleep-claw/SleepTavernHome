@@ -5,8 +5,8 @@
     "apiMajors": {
       "1": {
         "stable": {
-          "version": "1.1.0",
-          "tag": "script-updater-v1.1.0",
+          "version": "1.1.1",
+          "tag": "script-updater-v1.1.1",
           "entry": "dist/公共模块/脚本更新器/index.js"
         }
       }
@@ -17,8 +17,8 @@
       "name": "现代化界面",
       "channels": {
         "stable": {
-          "version": "0.2.0",
-          "tag": "modern-ui-v0.2.0",
+          "version": "0.2.2",
+          "tag": "modern-ui-v0.2.2",
           "entry": "dist/酒馆助手/现代化界面/index.js",
           "updaterApiMajor": 1,
           "minimum": {
@@ -31,8 +31,8 @@
       "name": "梦境创客",
       "channels": {
         "stable": {
-          "version": "0.2.4",
-          "tag": "dream-card-agent-v0.2.4",
+          "version": "0.2.5",
+          "tag": "dream-card-agent-v0.2.5",
           "entry": "dist/酒馆助手/梦境创客/index.js",
           "updaterApiMajor": 1,
           "minimum": {
