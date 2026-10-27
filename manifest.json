@@ -31,8 +31,8 @@
       "name": "梦境创客",
       "channels": {
         "stable": {
-          "version": "0.2.5",
-          "tag": "dream-card-agent-v0.2.5",
+          "version": "0.2.6",
+          "tag": "dream-card-agent-v0.2.6",
           "entry": "dist/酒馆助手/梦境创客/index.js",
           "updaterApiMajor": 1,
           "minimum": {
