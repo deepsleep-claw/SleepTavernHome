@@ -1,3 +1,5 @@
+import { currentCdnRuntime } from '../../../../公共模块/脚本更新器/sources';
+
 export type AceRange = {
   end: { column: number; row: number };
   start: { column: number; row: number };
@@ -32,7 +34,9 @@ export type AceEditor = {
 export type AceNamespace = {
   config: { set(name: string, value: unknown): void };
   edit(element: HTMLElement): AceEditor;
-  require(module: 'ace/range'): { Range: new (startRow: number, startColumn: number, endRow: number, endColumn: number) => AceRange };
+  require(module: 'ace/range'): {
+    Range: new (startRow: number, startColumn: number, endRow: number, endColumn: number) => AceRange;
+  };
   require(module: string): unknown;
 };
 
@@ -118,29 +122,39 @@ function globalAce(): AceNamespace | undefined {
 function loadAsset(asset: Asset): Promise<void> {
   const existing = loadedAssets.get(asset.url);
   if (existing) return existing;
-  const promise = new Promise<void>((resolve, reject) => {
-    const script = document.createElement('script');
-    const timeout = window.setTimeout(() => {
-      script.remove();
-      reject(new Error(`加载编辑器资源超时：${asset.url}`));
-    }, 5_000);
-    script.async = true;
-    script.crossOrigin = 'anonymous';
-    script.integrity = asset.integrity;
-    script.referrerPolicy = 'no-referrer';
-    script.src = asset.url;
-    script.dataset.dcaAceAsset = asset.url;
-    script.addEventListener('load', () => {
-      window.clearTimeout(timeout);
-      resolve();
-    });
-    script.addEventListener('error', () => {
-      window.clearTimeout(timeout);
-      script.remove();
-      reject(new Error(`无法加载编辑器资源：${asset.url}`));
-    });
-    document.head.append(script);
-  });
+  const candidates = currentCdnRuntime().urls(asset.url);
+  const promise = (async () => {
+    for (const url of candidates) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const script = document.createElement('script');
+          const timeout = window.setTimeout(() => {
+            script.remove();
+            reject(new Error(`加载编辑器资源超时：${asset.url}`));
+          }, 5_000);
+          script.async = true;
+          script.crossOrigin = 'anonymous';
+          script.integrity = asset.integrity;
+          script.referrerPolicy = 'no-referrer';
+          script.src = url;
+          script.dataset.dcaAceAsset = asset.url;
+          script.addEventListener('load', () => {
+            window.clearTimeout(timeout);
+            resolve();
+          });
+          script.addEventListener('error', () => {
+            window.clearTimeout(timeout);
+            script.remove();
+            reject(new Error(`无法加载编辑器资源：${asset.url}`));
+          });
+          document.head.append(script);
+        });
+        return;
+      } catch (error) {
+        if (url === candidates.at(-1)) throw error;
+      }
+    }
+  })();
   loadedAssets.set(asset.url, promise);
   promise.catch(() => loadedAssets.delete(asset.url));
   return promise;

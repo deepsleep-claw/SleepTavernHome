@@ -2,6 +2,7 @@ import { registerAsUniqueScript } from '@util/script';
 import { klona } from 'klona';
 import { defineStore } from 'pinia';
 import { computed, ref, watchEffect } from 'vue';
+import { isBaiBaiInstalled, observeBaiBaiSettings } from './baibai-compat';
 
 export const SCRIPT_NAME = '现代化界面';
 
@@ -46,6 +47,7 @@ export const ModernLayoutSettings = z
     reduceAdvancedEffects: z.boolean().default(false).catch(false),
     modernWorldInfoEditor: z.boolean().default(true).catch(true),
     modernWorldSelect: z.boolean().default(true).catch(true),
+    baibaiWorldSelector: z.enum(['modern', 'baibai']).default('modern').catch('modern'),
     modernCharacterManagement: z.boolean().default(true).catch(true),
     modernExtensionSettings: z.boolean().default(true).catch(true),
     modernPresetEditor: z.boolean().default(true).catch(true),
@@ -74,6 +76,10 @@ function readSettings(): ModernLayoutSettings {
 
 export const useModernLayoutStore = defineStore(SCRIPT_NAME, () => {
   const settings = ref(readSettings());
+  const baibai_available = ref(isBaiBaiInstalled());
+  const stop_baibai_observer = observeBaiBaiSettings(() => {
+    baibai_available.value = isBaiBaiInstalled();
+  });
   const should_enable = ref(false);
 
   const { unregister, getPreferredScriptId, listenPreferenceState } = registerAsUniqueScript(SCRIPT_NAME);
@@ -105,6 +111,7 @@ export const useModernLayoutStore = defineStore(SCRIPT_NAME, () => {
   }
 
   function destroy(options: { unregisterUnique?: boolean } = {}) {
+    stop_baibai_observer();
     preference_event.stop();
     if (options.unregisterUnique !== false) {
       unregister();
@@ -113,6 +120,7 @@ export const useModernLayoutStore = defineStore(SCRIPT_NAME, () => {
 
   return {
     settings,
+    baibai_available,
     should_enable,
     is_active,
     should_use_two_column,

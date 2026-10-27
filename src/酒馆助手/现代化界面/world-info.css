@@ -2031,3 +2031,7 @@ body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .th-modern-wi-active-edit
     grid-column: auto;
   }
 }
+
+body.th-modern-enabled #WorldInfo.th-modern-wi-enabled .bai-bai-wi-popup-header {
+  display: contents !important;
+}

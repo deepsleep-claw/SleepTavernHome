@@ -1,6 +1,8 @@
+import { currentCdnRuntime } from '../../../公共模块/脚本更新器/sources';
 import { teleportStyle } from '@util/script';
 import { createApp } from 'vue';
 import WorkspaceWindow from './WorkspaceWindow.vue';
+import { observeHostViewport, readHostViewport } from './host-viewport';
 import {
   isolateDocumentDoubleClick,
   isWindowDragTarget,
@@ -22,20 +24,21 @@ const RESIZE_DIRECTIONS: ResizeDirection[] = ['n', 'ne', 'e', 'se', 's', 'sw', '
 
 function viewport() {
   const host = window.parent;
+  const visible = readHostViewport(host);
   const style = host.getComputedStyle(host.document.documentElement);
-  const inset = (name: string) => Math.max(0, Number.parseFloat(style.getPropertyValue(name)) || 0);
+  const inset = (name: string) => visible.mobile ? 0 : Math.max(0, Number.parseFloat(style.getPropertyValue(name)) || 0);
   return {
-    height: host.innerHeight,
+    height: visible.height,
     insets: {
       bottom: inset('--tt-inset-bottom'),
       left: inset('--tt-inset-left'),
       right: inset('--tt-inset-right'),
       top: inset('--tt-inset-top'),
     },
-    mobile: host.innerWidth <= 720,
-    scrollX: host.scrollX,
-    scrollY: host.scrollY,
-    width: host.innerWidth,
+    mobile: visible.mobile,
+    scrollX: visible.left,
+    scrollY: visible.top,
+    width: visible.width,
   };
 }
 
@@ -201,7 +204,10 @@ export function openDreamCardAgentWindow(): void {
   if (!iconStyle) {
     iconStyle = document.createElement('link');
     iconStyle.rel = 'stylesheet';
-    iconStyle.href = 'https://testingcf.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css';
+    currentCdnRuntime().stylesheet(
+      iconStyle,
+      'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css',
+    );
     iconStyle.dataset.dcaFontawesome = 'true';
     document.head.append(iconStyle);
   }
@@ -260,6 +266,7 @@ export function openDreamCardAgentWindow(): void {
 
   let removePointer = () => {};
   const keepVisible = () => placePreferredFrame();
+  const stopObservingViewport = observeHostViewport(host, keepVisible);
   const destroy = () => {
     if (destroyed) return;
     destroyed = true;
@@ -280,7 +287,7 @@ export function openDreamCardAgentWindow(): void {
     $window.remove();
     style.destroy();
     host.removeEventListener(WINDOW_LAYOUT_EVENT, updateDragSurface);
-    host.removeEventListener('resize', keepVisible);
+    stopObservingViewport();
     popup = undefined;
   };
   const track = (
@@ -368,7 +375,6 @@ export function openDreamCardAgentWindow(): void {
       placePreferredFrame();
     });
   $close.on('pointerdown', event => event.stopPropagation()).on('click', destroy);
-  host.addEventListener('resize', keepVisible);
   popup = {
     connected: () => $window[0]?.isConnected === true && frame.isConnected,
     destroy,

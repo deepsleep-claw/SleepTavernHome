@@ -485,7 +485,7 @@ export function createWorkspaceRunnerTools(
         );
       },
       definition: tool({
-        description: '新建或整体写入文本文件。已有长文件优先使用apply_patch。',
+        description: '新建或整体写入文本文件，已有长文件优先使用apply_patch。HTML工程先用manage_html_project的template获取完整清单。直接写入/regexes/<scope>/*.yaml必须提供完整VFS正则对象，格式见/skills/builtin/card-workspace-io/references/regex-and-scripts.md；不是SillyTavern导入JSON字段。',
         inputSchema: z.object({
           content: z.string(),
           overwrite: z.boolean().optional().describe('默认false。仅在确认需要整体替换一个已有文件时显式设为true。'),

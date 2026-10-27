@@ -1,3 +1,4 @@
+import { createCdnRuntime } from './util/cdn_runtime.mjs';
 import { FSWatcher, watch } from 'chokidar';
 import HtmlInlineScriptWebpackPlugin from 'html-inline-script-webpack-plugin';
 import HtmlWebpackPlugin from 'html-webpack-plugin';
@@ -191,6 +192,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
   const script_filepath = path.parse(entry.script);
 
   const is_dream_card_agent = entry.script.replaceAll('\\', '/').endsWith('/酒馆助手/梦境创客/index.ts');
+  const use_cdn_fallback = is_dream_card_agent || /\/(?:现代化界面|脚本更新器|脚本更新器核心)\/index\.ts$/u.test(entry.script.replaceAll('\\', '/'));
   return (_env, argv) => ({
     experiments: {
       outputModule: true,
@@ -590,6 +592,12 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
       };
       if (request in global) {
         return callback(null, 'var ' + global[request as keyof typeof global]);
+      }
+      if (use_cdn_fallback && request !== 'sass') {
+        const version = request === 'pinia' ? pinia_version : dependency_versions[request];
+        const pinned = version && /^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][\w.-]+)?$/u.test(version) ? `${request}@${version}` : request;
+        const url = `https://cdn.jsdelivr.net/npm/${pinned}/+esm`;
+        return callback(null, `promise (${createCdnRuntime.toString()})(globalThis.__thCdnSource).importModule(${JSON.stringify(url)}).then(result => result.module)`);
       }
       const cdn = {
         pinia: `https://testingcf.jsdelivr.net/npm/pinia@${pinia_version}/+esm`,

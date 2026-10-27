@@ -1,5 +1,7 @@
 import type { Component } from 'vue';
 import releaseVersions from '../../../release/versions.json';
+import { compareStableVersions, fetchManifest, normalizeRelease, parseManifest } from '../脚本更新器/manifest';
+import { createCdnRuntime, normalizeSource } from '../脚本更新器/sources';
 import {
   UPDATER_STATE_KEY,
   UPDATER_STATE_SCHEMA_VERSION,
@@ -13,43 +15,11 @@ import {
   type UpdaterListener,
   type UpdaterSnapshot,
   type UpdaterStatus,
+  type UpdateSource,
 } from '../脚本更新器/contracts';
 
 export const UPDATER_API_MAJOR = releaseVersions.updater.apiMajor;
 export const UPDATER_VERSION = releaseVersions.updater.version;
-
-const STABLE_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
-
-const ManifestReleaseSchema = z.object({
-  version: z.string().regex(STABLE_VERSION_PATTERN, '稳定版版本号必须使用 x.y.z 格式'),
-  tag: z.string().min(1),
-  entry: z.string().min(1),
-  updaterApiMajor: z.number().int().positive().optional(),
-});
-
-const RepositoryManifestSchema = z.object({
-  schemaVersion: z.literal(1),
-  repository: z.string().min(3),
-  updater: z.object({
-    apiMajors: z.record(
-      z.string(),
-      z.object({
-        stable: ManifestReleaseSchema,
-      }),
-    ),
-  }),
-  plugins: z.record(
-    z.string(),
-    z.object({
-      name: z.string().min(1),
-      channels: z.object({
-        stable: ManifestReleaseSchema,
-      }),
-    }),
-  ),
-});
-
-type RepositoryManifest = z.infer<typeof RepositoryManifestSchema>;
 
 function describeError(error: unknown): string {
   if (error instanceof Error && error.message) {
@@ -66,81 +36,8 @@ function hasSameReleaseIdentity(lhs: ReleaseDescriptor, rhs: ReleaseDescriptor):
   return lhs.version === rhs.version && lhs.tag === rhs.tag && lhs.entry === rhs.entry;
 }
 
-function compareStableVersions(lhs: string, rhs: string): number {
-  const left = lhs.split('.');
-  const right = rhs.split('.');
-  for (let index = 0; index < 3; index += 1) {
-    const leftPart = left[index];
-    const rightPart = right[index];
-    if (leftPart.length !== rightPart.length) {
-      return leftPart.length > rightPart.length ? 1 : -1;
-    }
-    if (leftPart !== rightPart) {
-      return leftPart > rightPart ? 1 : -1;
-    }
-  }
-  return 0;
-}
-
-function isSafeRepository(repository: string): boolean {
-  return /^[\w.-]+\/[\w.-]+$/u.test(repository);
-}
-
-function isSafeTag(tag: string): boolean {
-  return /^[\w.-]+$/u.test(tag);
-}
-
-function isSafeEntry(entry: string): boolean {
-  if (!entry || entry.startsWith('/') || entry.includes('\\')) {
-    return false;
-  }
-  return entry.split('/').every(segment => Boolean(segment) && segment !== '.' && segment !== '..');
-}
-
-function buildReleaseUrl(config: PluginUpdaterConfig, tag: string, entry: string): string {
-  if (!isSafeRepository(config.repository) || !isSafeTag(tag) || !isSafeEntry(entry)) {
-    throw new Error('更新地址包含不安全的仓库、Tag 或入口路径');
-  }
-
-  const base = config.cdnBaseUrl.replace(/\/+$/u, '');
-  const encodedEntry = entry.split('/').map(encodeURIComponent).join('/');
-  return `${base}/${config.repository}@${encodeURIComponent(tag)}/${encodedEntry}`;
-}
-
-function normalizeRelease(value: unknown, config: PluginUpdaterConfig): ReleaseDescriptor | undefined {
-  const result = ManifestReleaseSchema.safeParse(value);
-  if (!result.success) {
-    return undefined;
-  }
-
-  const release = result.data;
-  if (
-    release.tag !== `${config.tagPrefix}${release.version}` ||
-    !isSafeTag(release.tag) ||
-    !isSafeEntry(release.entry) ||
-    release.updaterApiMajor !== config.updaterApiMajor
-  ) {
-    return undefined;
-  }
-
-  return {
-    version: release.version,
-    tag: release.tag,
-    entry: release.entry,
-    url: buildReleaseUrl(config, release.tag, release.entry),
-    updaterApiMajor: release.updaterApiMajor,
-  };
-}
-
 function normalizeFallback(config: PluginUpdaterConfig): ReleaseDescriptor {
-  const result = ManifestReleaseSchema.safeParse(config.fallback);
-  if (
-    !result.success ||
-    result.data.tag !== `${config.tagPrefix}${result.data.version}` ||
-    result.data.updaterApiMajor !== config.updaterApiMajor ||
-    !isSafeTag(result.data.tag) ||
-    !isSafeEntry(result.data.entry)
-  ) {
+  if (!normalizeRelease(config.fallback, config)) {
     throw new Error(`${config.pluginName}的 fallback 配置无效`);
   }
   try {
@@ -194,6 +91,7 @@ function readUpdaterState(config: PluginUpdaterConfig, fallback: ReleaseDescript
     pluginId: config.pluginId,
     channel: config.channel,
     active,
+    source: normalizeSource(record.source),
     ...(pending && compareStableVersions(pending.version, active.version) > 0 ? { pending } : {}),
     ...(lastCheck ? { lastCheck } : {}),
   };
@@ -213,26 +111,6 @@ function writeUpdaterState(state: StoredUpdaterState): void {
     }),
     { type: 'script', script_id: getScriptId() },
   );
-}
-
-async function fetchManifest(url: string): Promise<unknown> {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 10_000);
-  try {
-    const requestUrl = new URL(url, window.location.href);
-    requestUrl.searchParams.set('_th_cache_bust', Date.now().toString(36));
-    const response = await fetch(requestUrl, {
-      cache: 'no-store',
-      headers: { Accept: 'application/json' },
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`Manifest 请求失败（HTTP ${response.status}）`);
-    }
-    return await response.json();
-  } finally {
-    window.clearTimeout(timeout);
-  }
 }
 
 class PluginUpdater implements PluginUpdaterController {
@@ -256,6 +134,9 @@ class PluginUpdater implements PluginUpdaterController {
     this.pluginName = config.pluginName;
     this.fallback = normalizeFallback(config);
     this.state = readUpdaterState(config, this.fallback);
+    (globalThis as typeof globalThis & { __thCdnSource?: UpdateSource }).__thCdnSource = normalizeSource(
+      this.state.source,
+    );
     writeUpdaterState(this.state);
     this.snapshot = {
       status: 'idle',
@@ -265,6 +146,7 @@ class PluginUpdater implements PluginUpdaterController {
       updateAvailable: false,
       checkedAt: this.state.lastCheck?.checkedAt,
       error: bootstrap.manifestError,
+      source: normalizeSource(this.state.source),
     };
 
     if (bootstrap.manifest !== undefined) {
@@ -291,12 +173,19 @@ class PluginUpdater implements PluginUpdaterController {
   async check(): Promise<UpdaterSnapshot> {
     this.updateSnapshot({ status: 'checking', error: undefined });
     try {
-      this.applyManifest(await fetchManifest(this.config.manifestUrl));
+      this.applyManifest(await fetchManifest(this.config, normalizeSource(this.state.source)));
       return this.getSnapshot();
     } catch (error) {
       this.recordCheckError(error);
       throw error;
     }
+  }
+
+  setSource(source: UpdateSource): void {
+    this.state = { ...this.state, source: normalizeSource(source) };
+    writeUpdaterState(this.state);
+    (globalThis as typeof globalThis & { __thCdnSource?: UpdateSource }).__thCdnSource = this.state.source;
+    this.updateSnapshot({ source: this.state.source });
   }
 
   async install(): Promise<void> {
@@ -341,7 +230,7 @@ class PluginUpdater implements PluginUpdaterController {
         return;
       }
 
-      if (release.url !== this.fallback.url) {
+      if (!hasSameReleaseIdentity(release, this.fallback)) {
         console.error(`[${this.pluginName}] 当前版本启动失败，尝试保底版本。`, error);
         this.updateSnapshot({
           status: 'error',
@@ -355,36 +244,33 @@ class PluginUpdater implements PluginUpdaterController {
   }
 
   private async activateRelease(release: ReleaseDescriptor, updaterUi?: Component): Promise<PluginRuntime | void> {
-    const module = (await import(/* webpackIgnore: true */ release.url)) as LoadablePluginModule;
-    if (module.PLUGIN_ID !== this.pluginId) {
-      throw new Error(`主脚本标识不匹配：期望 ${this.pluginId}，实际为 ${module.PLUGIN_ID ?? '未声明'}`);
+    const scope = globalThis as typeof globalThis & { __thManagedPluginLoad?: string };
+    scope.__thManagedPluginLoad = this.pluginId;
+    try {
+      const loaded = await createCdnRuntime(normalizeSource(this.state.source)).importModule(release.url, value => {
+        const module = value as LoadablePluginModule;
+        if (module.PLUGIN_ID !== this.pluginId) {
+          throw new Error(`主脚本标识不匹配：期望 ${this.pluginId}，实际为 ${module.PLUGIN_ID ?? '未声明'}`);
+        }
+        if (module.PLUGIN_VERSION !== release.version) {
+          throw new Error(`主脚本版本不匹配：期望 ${release.version}，实际为 ${module.PLUGIN_VERSION ?? '未声明'}`);
+        }
+        if (typeof module.activate !== 'function') throw new Error('主脚本没有导出 activate()');
+      });
+      const module = loaded.module as LoadablePluginModule;
+      this.updateSnapshot({ loadedFrom: new URL(loaded.url).hostname });
+      return await module.activate!({
+        release: { ...release, url: loaded.url },
+        updater: this,
+        updaterUi,
+      });
+    } finally {
+      delete scope.__thManagedPluginLoad;
     }
-    if (module.PLUGIN_VERSION !== release.version) {
-      throw new Error(`主脚本版本不匹配：期望 ${release.version}，实际为 ${module.PLUGIN_VERSION ?? '未声明'}`);
-    }
-    if (typeof module.activate !== 'function') {
-      throw new Error('主脚本没有导出 activate()');
-    }
-    return await module.activate({
-      release: copyRelease(release),
-      updater: this,
-      updaterUi,
-    });
-  }
-
-  private parseManifest(value: unknown): RepositoryManifest {
-    const result = RepositoryManifestSchema.safeParse(value);
-    if (!result.success) {
-      throw new Error(`Manifest 格式无效：${z.prettifyError(result.error)}`);
-    }
-    if (result.data.repository !== this.config.repository) {
-      throw new Error('Manifest 仓库与引导器配置不一致');
-    }
-    return result.data;
   }
 
   private applyManifest(value: unknown): void {
-    const manifest = this.parseManifest(value);
+    const manifest = parseManifest(value, this.config);
     const plugin = manifest.plugins[this.pluginId];
     if (!plugin) {
       throw new Error(`Manifest 中没有插件 ${this.pluginId}`);

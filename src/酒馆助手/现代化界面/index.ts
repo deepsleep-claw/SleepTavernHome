@@ -1,3 +1,4 @@
+import { createCdnRuntime, readSourcePreference } from '../../公共模块/脚本更新器/sources';
 import { checkMinimumVersion } from '@util/common';
 import { createScriptIdDiv, teleportStyle } from '@util/script';
 import { klona } from 'klona';
@@ -198,7 +199,7 @@ function mountIconStylesheet(): { destroy: () => void } {
   const link = host_document.createElement('link');
   link.id = ICON_STYLESHEET_ID;
   link.rel = 'stylesheet';
-  link.href = ICON_STYLESHEET_HREF;
+  createCdnRuntime(readSourcePreference()).stylesheet(link, ICON_STYLESHEET_HREF);
   link.dataset.thModernOwned = 'true';
   host_document.head.append(link);
 

@@ -111,7 +111,7 @@
           <span>启用现代世界书管理界面</span>
         </label>
 
-        <label class="checkbox_label modern-layout-checkbox">
+        <label v-if="!store.baibai_available" class="checkbox_label modern-layout-checkbox">
           <input
             v-model="store.settings.modernWorldSelect"
             type="checkbox"
@@ -121,6 +121,14 @@
           <span>使用现代世界书选择器</span>
         </label>
         <small class="modern-layout-hint">统一应用于宽屏、窄屏和手机；也可在世界书界面直接切换。</small>
+
+        <label v-if="store.baibai_available" class="modern-layout-field">
+          <span>世界书选择器</span>
+          <select v-model="store.settings.baibaiWorldSelector" class="text_pole" :disabled="!store.settings.modernWorldInfoEditor">
+            <option value="modern">现代化界面</option>
+            <option value="baibai">柏宝箱</option>
+          </select>
+        </label>
 
         <label class="checkbox_label modern-layout-checkbox">
           <input v-model="store.settings.modernCharacterManagement" type="checkbox" class="checkbox" />

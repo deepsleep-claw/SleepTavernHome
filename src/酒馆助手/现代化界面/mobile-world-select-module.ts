@@ -668,7 +668,7 @@ class MobileWorldSelectController {
   }
 
   private findSelect2Container(): HTMLElement | undefined {
-    const next = this.source.nextElementSibling;
+    const next = this.window.$?.(this.source).data('select2')?.$container?.[0] ?? this.source.nextElementSibling;
     return next instanceof this.window.HTMLElement && next.classList.contains('select2-container') ? next : undefined;
   }
 

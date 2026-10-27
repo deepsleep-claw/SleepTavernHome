@@ -810,10 +810,12 @@ function specializedPresentation(
     const valid = output.valid === true || (measured && errors === 0 && output.valid !== false);
     const bytes = number(output, 'outputBytes');
     return {
-      title: action === 'check' ? '检查 HTML 工程' : '编译 HTML 工程',
+      title: action === 'template' ? '准备 HTML 工程模板' : action === 'check' ? '检查 HTML 工程' : '编译 HTML 工程',
       path: text(output, 'path') ?? text(input, 'project'),
       summary: running
         ? '正在处理工程'
+        : action === 'template'
+          ? `已准备 ${Array.isArray(output.files) ? output.files.length : 0} 个源码文件`
         : errors || output.valid === false
           ? '检查未通过'
           : action === 'compile' && text(output, 'path')
@@ -928,6 +930,18 @@ function specializedPresentation(
 
 export function buildToolPresentation(item: SessionUiItem): ToolPresentation {
   const descriptor = descriptorFor(item);
+  // 大段代码参数尚未闭合时不反复解析或格式化 JSON，完成后再展示结构化结果。
+  if (item.status === 'running' && item.toolPhase === 'generating' && (item.toolInput?.length ?? 0) > 8192) {
+    return {
+      ...descriptor,
+      expandable: false,
+      rows: [],
+      metrics: [{ label: '参数字符', value: String(item.toolInput!.length) }],
+      rawInput: item.toolInput!,
+      rawOutput: '正在生成调用参数…',
+      summary: '正在生成调用参数…',
+    };
+  }
   const inputValue = parsePayload(item.toolInput);
   const outputValue = item.status === 'running' ? undefined : parsePayload(item.content);
   const input = record(inputValue);

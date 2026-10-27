@@ -3,6 +3,7 @@ import type {
   PluginActivationContext,
   PluginUpdaterController,
   UpdaterSnapshot,
+  UpdateSource,
 } from '../../../公共模块/脚本更新器/contracts';
 import { DREAM_CARD_AGENT_NAME, DREAM_CARD_AGENT_VERSION } from '../version';
 
@@ -106,6 +107,7 @@ export type DreamCardAgentUpdater = {
   snapshot: Readonly<Ref<UpdaterSnapshot>>;
   check: () => Promise<UpdaterSnapshot>;
   install: () => Promise<void>;
+  setSource: (source: UpdateSource) => void;
 };
 
 export function useDreamCardAgentUpdater(): DreamCardAgentUpdater {
@@ -119,5 +121,6 @@ export function useDreamCardAgentUpdater(): DreamCardAgentUpdater {
       if (!controller) throw new Error('更新器尚未初始化');
       await controller.install();
     },
+    setSource: source => controller?.setSource?.(source),
   };
 }

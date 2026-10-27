@@ -7,7 +7,7 @@ import { MemoryCardStateAdapter } from '../transaction/adapter';
 import { transactionState } from '../transaction/test-fixture';
 import { CardAgentSessionService } from './session-service';
 import { GlobalAgentTaskLock } from './task-lock';
-import type { PersistedSessionRuntime } from './types';
+import type { PersistedSessionRuntime, SessionView } from './types';
 import { defaultBuiltinAgentConfiguration } from '../persistence/builtin-agent';
 
 function step(toolCalls: RunnerToolCall[] = [], text = '完成啦'): ModelStepResult {
@@ -65,6 +65,56 @@ function createService(input: {
 }
 
 describe('card agent realtime session service', () => {
+  it('流式快照复用静态工作区，工具写入后刷新且不改写此前快照', async () => {
+    let scheduled: (() => void) | undefined;
+    let latest!: SessionView;
+    const streamed: SessionView[] = [];
+    const publish = () => {
+      scheduled?.();
+      scheduled = undefined;
+      streamed.push(latest);
+    };
+    let index = 0;
+    const service = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      agentConfiguration: defaultBuiltinAgentConfiguration(),
+      executor: {
+        execute: async request => {
+          if (index++ === 0) {
+            request.onTextDelta?.('开始');
+            publish();
+            request.onTextDelta?.('写入');
+            publish();
+            return step([writeDescription('更新后的描述')], '开始写入');
+          }
+          request.onReasoningDelta?.('检查写入结果');
+          publish();
+          return step();
+        },
+      },
+      lock: new GlobalAgentTaskLock(),
+      mode: 'full',
+      onUpdate: view => { latest = view; },
+      scheduleStreamingUpdate: callback => {
+        scheduled = callback;
+        return () => { scheduled = undefined; };
+      },
+    });
+    await service.send('更新描述');
+    expect(streamed).toHaveLength(3);
+    expect(streamed[0].workingFiles).toBe(streamed[1].workingFiles);
+    expect(streamed[0].ui.at(-1)?.content).toBe('开始');
+    expect(streamed[1].ui.at(-1)?.content).toBe('开始写入');
+    const description = (view: SessionView) => view.workingFiles.find(file => file.path === '/character/definition/description.md')?.content;
+    expect(description(streamed[0])).not.toBe('更新后的描述');
+    expect(description(streamed[2])).toBe('更新后的描述');
+    expect(streamed[2].operationLog).not.toBe(streamed[0].operationLog);
+    expect(streamed[2].ui.at(-1)?.content).toBe('检查写入结果');
+    const independent = service.view();
+    independent.ui[0].content = '外部修改';
+    expect(service.view().ui[0].content).not.toBe('外部修改');
+  });
+
   it('恢复会话仍使用API实际用量，在下一次正常请求前先压缩', async () => {
     let saved!: PersistedSessionRuntime;
     const adapter = new MemoryCardStateAdapter(transactionState());

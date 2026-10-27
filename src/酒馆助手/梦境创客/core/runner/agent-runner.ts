@@ -1,5 +1,6 @@
 import { asSchema, type ModelMessage, type UserContent } from 'ai';
 import { boundedWait } from '../async';
+import { createCooperativeYield } from '../cooperative';
 import {
   decideContext,
   compactModelMessages,
@@ -696,6 +697,7 @@ export class AgentRunner {
     this.toolController = new AbortController();
     if (this.stopRequested) this.toolController.abort();
     try {
+      await createCooperativeYield()(this.toolController.signal, true);
       return await target.execute(call.input, call.toolCallId, { abortSignal: this.toolController.signal });
     } finally {
       this.toolController = undefined;

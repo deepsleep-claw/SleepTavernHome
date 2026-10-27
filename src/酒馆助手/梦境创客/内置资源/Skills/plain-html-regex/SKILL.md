@@ -17,6 +17,6 @@ loading: on-demand
 
 详细约定见 `references/patterns.md`。
 
-最小流程：读取 HTML 工程的 `templates/minimal/`，将三个文件写入自己的工程目录，修改 HTML/CSS，执行 `manage_html_project` 的 `check` 和 `compile`。编译返回真实正则路径后，调用 `prepare_render`，使用 `sourceType: "regex"`、`renderer: "plain-html"` 和能匹配正则的 `inputText`。最后将返回标记单独放在回复的一行。
+最小流程：调用 `manage_html_project`：`{"action":"template","project":"/character/files/status/project.yaml","renderer":"plain-html"}`，将返回的三个文件写入各自路径。清单必填 `name`、`renderer`、`build.entry`、`regex.find`。修改 HTML/CSS 后执行同一工具的 `check` 和 `compile`。编译返回真实正则路径后，调用 `prepare_render`，使用 `sourceType: "regex"`、`renderer: "plain-html"` 和能匹配正则的 `inputText`。最后将返回标记单独放在回复的一行。
 
 正则替换不会自动转义 `$1` 等捕获值。纯展示样例使用固定标记 `[STATUS]`；需要展示任意不可信文本时，用受控代码通过 `textContent` 渲染，而不是直接拼入 HTML。

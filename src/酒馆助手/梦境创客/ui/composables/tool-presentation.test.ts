@@ -16,6 +16,21 @@ function tool(overrides: Partial<SessionUiItem> = {}): SessionUiItem {
 }
 
 describe('tool presentation', () => {
+  it('大段参数生成时显示进度，完成后恢复详情并保留失败信息', () => {
+    const input = JSON.stringify({ path: '/character/files/long.html', content: '<p>正文</p>\n'.repeat(3000) });
+    const generating = tool({ status: 'running', toolName: 'write_file', toolPhase: 'generating', toolInput: input });
+    const progress = buildToolPresentation(generating);
+    expect(progress.metrics).toEqual([{ label: '参数字符', value: String(input.length) }]);
+    expect(progress.preview).toBeUndefined();
+    expect(progress.rawInput).toBe(input);
+    const completed = buildToolPresentation({ ...generating, status: 'completed', toolPhase: undefined });
+    expect(completed.path).toBe('/character/files/long.html');
+    expect(JSON.parse(completed.rawInput)).toEqual(JSON.parse(input));
+    const failed = buildToolPresentation({ ...generating, status: 'failed', content: '参数生成中断' });
+    expect(failed.summary).toBe('参数生成中断');
+    expect(failed.tone).toBe('danger');
+  });
+
   it('工程检查失败按诊断展示，而不是声称文件操作完成', () => {
     const presentation = buildToolPresentation(
       tool({

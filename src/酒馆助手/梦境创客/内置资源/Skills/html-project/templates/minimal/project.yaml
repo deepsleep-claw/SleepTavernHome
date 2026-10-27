@@ -4,6 +4,9 @@ regex:
   find: '/\[STATUS\]/g'
   placement: [2]
   disabled: false
+  destination:
+    display: true
+    prompt: false
 build:
   entry: template.html
   styles: [style.css]

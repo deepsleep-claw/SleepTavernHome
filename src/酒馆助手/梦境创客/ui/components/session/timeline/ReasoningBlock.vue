@@ -14,19 +14,21 @@
         class="dca-reasoning-preview"
         aria-label="最新思考内容"
       >
-        <span class="dca-reasoning-preview-content">{{ item.content }}</span>
+        <span class="dca-reasoning-preview-content">{{ preview }}</span>
       </span>
     </summary>
-    <pre>{{ item.content }}</pre>
+    <pre v-if="expanded">{{ item.content }}</pre>
   </details>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import type { SessionUiItem } from '../../../../core/session/types';
 import { reasoningLabel } from '../../../composables/timeline';
 
-defineProps<{ item: SessionUiItem }>();
+const props = defineProps<{ item: SessionUiItem }>();
+// 折叠状态只排版末尾片段，避免长思考每个增量都重排全部文本。
+const preview = computed(() => props.item.content.slice(-600));
 
 const detailsRef = ref<HTMLDetailsElement>();
 const expanded = ref(false);

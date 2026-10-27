@@ -1,3 +1,4 @@
+import { currentCdnRuntime } from '../../../../公共模块/脚本更新器/sources';
 import { parse, stringify } from 'yaml';
 import { normalizeWorkspacePath, parentWorkspacePath } from '../workspace/path';
 import type { WorkspaceFile } from '../workspace/types';
@@ -93,6 +94,12 @@ function parseConfig(file: WorkspaceFile): ProjectConfig {
   const value = object(raw);
   const build = object(value.build);
   const regex = object(value.regex);
+  const missing = [
+    ['name', value.name], ['renderer', value.renderer], ['build.entry', build.entry], ['regex.find', regex.find],
+  ].filter(([, field]) => typeof field !== 'string' || !field.trim()).map(([name]) => name);
+  if (missing.length) throw new Error(
+    `project.yaml缺少或未填写必填字段：${missing.join('、')}。先调用manage_html_project（action: "template", project: "${file.path}"）获取完整清单和源码，再写入工程并重新check。清单使用name/regex.find，导出的正则YAML使用name/find_regex，两种格式不能混用。`,
+  );
   const renderer = value.renderer === 'tavern-helper' ? 'tavern-helper' : value.renderer === 'plain-html' ? 'plain-html' : undefined;
   if (typeof value.name !== 'string' || !value.name.trim()) throw new Error('project.yaml缺少非空name。');
   if (!renderer) throw new Error('project.yaml的renderer必须是plain-html或tavern-helper。');
@@ -289,12 +296,12 @@ export class HtmlProjectCompiler {
   }
 
   private async loadValidator(): Promise<RuntimeValidator> {
-    this.validator ??= await import(/* webpackIgnore: true */ new URL('vendor/compiler-validator.js', this.resourceBaseUrl).href) as RuntimeValidator;
+    this.validator ??= (await currentCdnRuntime().importModule(new URL('vendor/compiler-validator.js', this.resourceBaseUrl).href)).module as RuntimeValidator;
     return this.validator;
   }
 
   private async loadRollup(): Promise<RollupRuntime> {
-    this.rollup ??= await import(/* webpackIgnore: true */ new URL('vendor/rollup.browser.js', this.resourceBaseUrl).href) as RollupRuntime;
+    this.rollup ??= (await currentCdnRuntime().importModule(new URL('vendor/rollup.browser.js', this.resourceBaseUrl).href)).module as RollupRuntime;
     return this.rollup;
   }
 }

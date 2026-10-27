@@ -7,21 +7,6 @@
       "group_id": "",
       "option_id": "",
       "detect_regexes": []
-    },
-    "settings": {
-      "content_handling": "direct",
-      "filter_html_code_blocks": false,
-      "manual_prompt_enabled": false,
-      "hide_rules": {
-        "only_before_latest_summary": true,
-        "hide_first": false,
-        "hide_user": true,
-        "hide_assistant_system": true,
-        "hide_summary": false,
-        "keep_latest_enabled": true,
-        "keep_latest_count": 5,
-        "auto_hide_after_manual": true
-      }
     }
   },
   "groups": [
@@ -41,14 +26,14 @@
         {
           "id": "string_match",
           "label": "字符串精确匹配",
-          "description": "用字符串按提示词 name 精确命中，并演示 Kimi Partial Mode effect。",
+          "description": "用字符串按提示词 name 精确命中，并演示 Gemini 工具输出模式 effect。",
           "enable": ["示例：字符串命中项"],
           "disable": [
             {
               "name": "示例：对象名称命中项"
             }
           ],
-          "effect": ["kimi_partial_mode"]
+          "effect": ["gemini_tool_output_mode"]
         },
         {
           "id": "name_match",

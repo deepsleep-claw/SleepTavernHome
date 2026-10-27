@@ -1,4 +1,5 @@
 import { streamText, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { createCooperativeYield } from '../cooperative';
 import {
   CHAT_PROVIDER_OPTIONS_KEY,
   type ProviderCompatibilityMode,
@@ -213,6 +214,7 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
     const providerOutputByCallId = new Map<string, unknown>();
     const supplementedProviderCalls = new Set<string>();
     const streamedToolCalls = new Set<string>();
+    const yieldIfBusy = createCooperativeYield();
     const result = streamText({
       abortSignal: request.abortSignal,
       allowSystemInMessages: true,
@@ -221,6 +223,7 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
       messages: request.messages,
       model: runtime.model,
       onChunk: async chunk => {
+        await yieldIfBusy(request.abortSignal);
         if (chunk.chunk.type === 'text-delta') request.onTextDelta?.(chunk.chunk.text);
         if (chunk.chunk.type === 'reasoning-delta') request.onReasoningDelta?.(chunk.chunk.text);
         if (chunk.chunk.type === 'tool-input-start') {
@@ -343,9 +346,9 @@ export class AiSdkModelStepExecutor implements ModelStepExecutor {
         inputTokens: usage.inputTokens,
         outputTokens: usage.outputTokens,
         totalTokens: usage.totalTokens,
-        cacheReadTokens: usage.inputTokenDetails.cacheReadTokens,
-        cacheWriteTokens: usage.inputTokenDetails.cacheWriteTokens,
-        reasoningTokens: usage.outputTokenDetails.reasoningTokens,
+        cacheReadTokens: usage.inputTokenDetails?.cacheReadTokens,
+        cacheWriteTokens: usage.inputTokenDetails?.cacheWriteTokens,
+        reasoningTokens: usage.outputTokenDetails?.reasoningTokens,
       }),
       invalidToolCalls: invalidLocalCalls.map(call => ({
         error: errorMessage(call.error),

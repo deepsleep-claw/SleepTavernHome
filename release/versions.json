@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "updater": {
     "apiMajor": 1,
-    "version": "1.0.0",
+    "version": "1.1.0",
     "tagPrefix": "script-updater-v",
     "entry": "dist/公共模块/脚本更新器/index.js",
     "coreEntry": "dist/公共模块/脚本更新器核心/index.js"
@@ -10,7 +10,7 @@
   "plugins": {
     "modern-ui": {
       "name": "现代化界面",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "tagPrefix": "modern-ui-v",
       "entry": "dist/酒馆助手/现代化界面/index.js",
       "installer": {
@@ -24,7 +24,7 @@
     },
     "dream-card-agent": {
       "name": "梦境创客",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "tagPrefix": "dream-card-agent-v",
       "entry": "dist/酒馆助手/梦境创客/index.js",
       "installer": {

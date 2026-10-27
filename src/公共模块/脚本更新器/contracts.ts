@@ -4,6 +4,7 @@ export const UPDATER_STATE_KEY = '__updater';
 export const UPDATER_STATE_SCHEMA_VERSION = 1;
 
 export type UpdateChannel = 'stable';
+export type UpdateSource = 'auto' | 'jsdmirror' | 'jsdelivr';
 
 export type ReleaseDescriptor = {
   version: string;
@@ -18,6 +19,7 @@ export type StoredUpdaterState = {
   pluginId: string;
   channel: UpdateChannel;
   active: ReleaseDescriptor;
+  source?: UpdateSource;
   pending?: ReleaseDescriptor;
   lastCheck?: {
     checkedAt: string;
@@ -36,6 +38,8 @@ export type UpdaterSnapshot = {
   updateAvailable: boolean;
   checkedAt?: string;
   error?: string;
+  source?: UpdateSource;
+  loadedFrom?: string;
 };
 
 export type UpdaterListener = (snapshot: UpdaterSnapshot) => void;
@@ -47,6 +51,7 @@ export type PluginUpdaterController = {
   subscribe: (listener: UpdaterListener) => () => void;
   check: () => Promise<UpdaterSnapshot>;
   install: () => Promise<void>;
+  setSource?: (source: UpdateSource) => void;
 };
 
 export type PluginActivationContext = {

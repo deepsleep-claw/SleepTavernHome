@@ -1,8 +1,10 @@
+import cdnRuntimeSource from '../../../../util/cdn_runtime.mjs?raw';
 import type { PluginActivationContext } from '../../../公共模块/脚本更新器/contracts';
 import type { DreamCardAgentRuntime } from '../runtime/dream-card-agent-runtime';
 import { destroyDreamCardAgentWindow, openDreamCardAgentWindow } from './popup';
 import { CLIENT_ENV_KEY, CLIENT_HOST_KEY, createRuntimeClient, type ClientHost } from './runtime-client';
 import { bindMobileHistory } from './composables/workspace-navigation';
+import { observeHostViewport, readHostViewport } from './host-viewport';
 
 const DRAWER_ID = 'dream-creator-drawer';
 let openDefault = () => openDreamCardAgentWindow();
@@ -20,7 +22,7 @@ export function clientDocument(entryUrl: string, mode: 'embedded' | 'detached'):
   );
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>梦境创客</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,${icon}">
-<link rel="stylesheet" href="https://testingcf.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css">
+<link id="dca-client-icons" rel="stylesheet">
 <style>html,body{height:100%;margin:0;overflow:hidden}#dca-client-loading{padding:24px;font:14px sans-serif} .dca-client-toast{position:fixed;z-index:99999;right:16px;top:16px;max-width:80%;padding:12px;background:#292b34;color:#fff;border-radius:8px}</style></head>
 <body><div id="dca-client-loading">正在连接酒馆……</div><script type="module">
 try {
@@ -30,11 +32,14 @@ try {
   if (!registry) throw new Error('酒馆核心尚未就绪，请从酒馆重新打开创客。');
   window[${scriptString(CLIENT_ENV_KEY)}] = { host, mode: ${scriptString(mode)} };
   Object.assign(window, registry.globals);
-  window.Vue = await import('https://testingcf.jsdelivr.net/npm/vue@3.5.42/dist/vue.esm-browser.prod.js');
+  globalThis.__thCdnSource = registry.context.updater.getSnapshot().source;
+  const transport = (${cdnRuntimeSource.replace('export function createCdnRuntime', 'function createCdnRuntime')})(globalThis.__thCdnSource);
+  transport.stylesheet(document.getElementById('dca-client-icons'), 'https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free/css/all.min.css');
+  window.Vue = (await transport.importModule('https://cdn.jsdelivr.net/npm/vue@3.5.42/dist/vue.esm-browser.prod.js')).module;
   window.toastr = Object.fromEntries(['error','warning','success','info'].map(level => [level, text => {
     const node = document.createElement('div'); node.className = 'dca-client-toast'; node.setAttribute('role','alert'); node.textContent = String(text); document.body.append(node); setTimeout(() => node.remove(), 6000);
   }]));
-  await import(${scriptString(entryUrl)});
+  await transport.importModule(${scriptString(entryUrl)});
 } catch (error) { const message = document.getElementById('dca-client-loading') || document.body.appendChild(document.createElement('p')); message.textContent = '连接失败：' + String(error); }
 </script></body></html>`;
 }
@@ -55,10 +60,48 @@ export function configureWindowHost(
   let handoffTimer: number | undefined;
   let closeDrawer = () => {};
   let fallbackFullscreenStyle: string | undefined;
+  let modernViewportStyle: { content: HTMLElement; properties: Array<[string, string, string]> } | undefined;
   const fullscreenListeners = new Set<(fullscreen: boolean) => void>();
   const nativeFullscreen = () =>
     Boolean(drawer?.querySelector('.th-modern-drawer-fullscreen-content, .dca-native-fullscreen'));
-  const publishFullscreen = () => fullscreenListeners.forEach(listener => listener(nativeFullscreen()));
+  const publishFullscreen = () => {
+    const fullscreen = nativeFullscreen();
+    const content = drawer?.querySelector<HTMLElement>('.drawer-content');
+    const modernFullscreen = content?.classList.contains('th-modern-drawer-fullscreen-content');
+    if (!modernFullscreen && modernViewportStyle) {
+      for (const [name, value, priority] of modernViewportStyle.properties) {
+        if (value) modernViewportStyle.content.style.setProperty(name, value, priority);
+        else modernViewportStyle.content.style.removeProperty(name);
+      }
+      modernViewportStyle = undefined;
+    }
+    if (fullscreen && content) {
+      const viewport = readHostViewport(host);
+      const bounds = {
+        top: `${viewport.top}px`,
+        left: `${viewport.left}px`,
+        right: 'auto',
+        bottom: 'auto',
+        width: `${viewport.width}px`,
+        height: `${viewport.height}px`,
+        'max-width': `${viewport.width}px`,
+        'max-height': `${viewport.height}px`,
+      };
+      // 现代化界面用 class 切换全屏，退出时需还原我们设置的可视区域尺寸。
+      if (modernFullscreen && !modernViewportStyle) {
+        modernViewportStyle = {
+          content,
+          properties: Object.keys(bounds).map(name => [name, content.style.getPropertyValue(name), content.style.getPropertyPriority(name)]),
+        };
+      }
+      for (const [name, value] of Object.entries(bounds)) {
+        if (content.style.getPropertyValue(name) !== value || content.style.getPropertyPriority(name) !== 'important')
+          content.style.setProperty(name, value, 'important');
+      }
+    }
+    fullscreenListeners.forEach(listener => listener(fullscreen));
+  };
+  const stopObservingViewport = observeHostViewport(host, publishFullscreen);
   const fullscreenObserver = new (host as Window & typeof globalThis).MutationObserver(publishFullscreen);
   const embeddedViews = new Set<() => void>();
   const clearEmbedded = () => {
@@ -215,7 +258,11 @@ export function configureWindowHost(
         }
         destroyDreamCardAgentWindow();
         loadFrame();
-        void main.doNavbarIconClick.call(toggle);
+        void Promise.resolve(main.doNavbarIconClick.call(toggle)).then(() => {
+          if (disposed || !content.classList.contains('openDrawer')) return;
+          if (readHostViewport(host).mobile && !nativeFullscreen()) registry.toggleNativeFullscreen();
+          else publishFullscreen();
+        }).catch(error => toastr.error(String(error), '梦境创客'));
       });
       toggle.addEventListener('keydown', event => {
         if (event.key === 'Enter' || event.key === ' ') {
@@ -259,6 +306,7 @@ export function configureWindowHost(
     if (startupTimer !== undefined) host.clearTimeout(startupTimer);
     if (handoffTimer !== undefined) host.clearTimeout(handoffTimer);
     fullscreenObserver.disconnect();
+    stopObservingViewport();
     fullscreenListeners.clear();
     unsubscribe();
     clearEmbedded();

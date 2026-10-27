@@ -4,10 +4,10 @@ import type { PartialDeep } from 'type-fest';
 import { computed, ref } from 'vue';
 import { z } from 'zod';
 import {
-  getKimiPartialModeApi,
-  KIMI_PARTIAL_EFFECT_ID,
-  type KimiPartialModeApi,
-} from '../../公共模块/kimi_partial_mode';
+  GEMINI_TOOL_OUTPUT_EFFECT_ID,
+  getGeminiToolOutputModeApi,
+  type GeminiToolOutputModeApi,
+} from '../../公共模块/gemini_tool_output_mode';
 import default_config_raw from './default_config.json?raw';
 import {
   buildSelectionPlan,
@@ -26,11 +26,13 @@ import { DEFAULT_PRESET_ADAPTER_THEME, PRESET_ADAPTER_THEME_IDS, type PresetAdap
 
 export const SCRIPT_NAME = '梦鲸思客设置';
 export const DEFAULT_SCRIPT_BUTTON_NAME = '梦鲸思客设置';
+export const UI_PREFERENCES_KEY = 'dream_whale_preset_adapter_ui';
+export const SUMMARY_SETTINGS_KEY = 'dream_whale_preset_adapter_summary_settings';
 
 const LEGACY_SCRIPT_NAME = '预设适配器';
 const LEGACY_SCRIPT_BUTTON_NAME = '打开预设适配器';
 const SQUASH_DEBUG_GLOBAL_KEY = '__dream_whale_squash_debug_api__';
-const SUPPORTED_EFFECT_IDS = new Set([KIMI_PARTIAL_EFFECT_ID]);
+const SUPPORTED_EFFECT_IDS = new Set([GEMINI_TOOL_OUTPUT_EFFECT_ID]);
 const REASONER_FORMAT_PRESET_NAME = '梦鲸思客思考';
 const REASONER_FORMAT_PREFIX = '<think>\n';
 const REASONER_FORMAT_SUFFIX = '\n</think>';
@@ -197,7 +199,6 @@ const SummaryConfigSchema = z
         option_id: '',
         detect_regexes: [],
       }),
-    settings: SummarySettingsSchema,
   })
   .default({
     generation: {
@@ -205,7 +206,6 @@ const SummaryConfigSchema = z
       option_id: '',
       detect_regexes: [],
     },
-    settings: SummarySettingsSchema.parse({}),
   });
 
 const AdapterConfigSchema = z
@@ -214,7 +214,6 @@ const AdapterConfigSchema = z
     description: z.string().default(''),
     script_button_name: z.string().min(1).default(DEFAULT_SCRIPT_BUTTON_NAME),
     summary: SummaryConfigSchema,
-    ui: AdapterUiPreferencesSchema,
     groups: z.array(AdapterGroupSchema).default([]),
   })
   .prefault({});
@@ -1231,6 +1230,28 @@ function readScriptVariables(): Record<string, any> {
   return default_config;
 }
 
+function readGlobalPreferences<T>(key: string, script_path: string, schema: z.ZodType<T>, label: string): T {
+  const variables = getVariables({ type: 'global' });
+  const script_variables = readScriptVariables();
+  const has_global_preferences = _.has(variables, key);
+  const preferences = schema.parse(has_global_preferences ? variables[key] : _.get(script_variables, script_path));
+
+  if (_.has(script_variables, script_path)) {
+    try {
+      // 全局值写入成功后才清理旧值，迁移可在下次读取时继续。
+      if (!has_global_preferences) {
+        replaceVariables({ ...variables, [key]: preferences }, { type: 'global' });
+      }
+      const next_script_variables = cloneJson(script_variables);
+      _.unset(next_script_variables, script_path);
+      replaceVariables(next_script_variables, getScriptVariableScope());
+    } catch (error) {
+      console.warn(`[${SCRIPT_NAME}] 迁移${label}失败。`, error);
+    }
+  }
+  return preferences;
+}
+
 function getDuplicateValues(values: string[]): string[] {
   const seen = new Set<string>();
   const duplicated = new Set<string>();
@@ -1412,7 +1433,7 @@ type EffectState = {
 };
 
 function readEffectState(effect: string): EffectState {
-  if (effect !== KIMI_PARTIAL_EFFECT_ID) {
+  if (effect !== GEMINI_TOOL_OUTPUT_EFFECT_ID) {
     return {
       available: false,
       enabled: false,
@@ -1420,12 +1441,12 @@ function readEffectState(effect: string): EffectState {
     };
   }
 
-  const api = getKimiPartialModeApi();
+  const api = getGeminiToolOutputModeApi();
   if (!api) {
     return {
       available: false,
       enabled: false,
-      label: 'Kimi Partial Mode：脚本未启用',
+      label: 'Gemini 工具输出模式：基米工具未启用',
     };
   }
 
@@ -1434,14 +1455,14 @@ function readEffectState(effect: string): EffectState {
     return {
       available: true,
       enabled,
-      label: `Kimi Partial Mode：${enabled ? '已开启' : '未开启'}`,
+      label: `Gemini 工具输出模式：${enabled ? '已开启' : '未开启'}`,
     };
   } catch (error) {
-    console.warn(`[${SCRIPT_NAME}] 读取 Kimi Partial Mode 设置失败。`, error);
+    console.warn(`[${SCRIPT_NAME}] 读取 Gemini 工具输出模式设置失败。`, error);
     return {
       available: false,
       enabled: false,
-      label: 'Kimi Partial Mode：设置读取失败',
+      label: 'Gemini 工具输出模式：设置读取失败',
     };
   }
 }
@@ -1691,24 +1712,30 @@ function getFavoriteOptionKey(group_id: string, preference_id: string): string {
 }
 
 function orderGroupViews(group_views: GroupView[], group_order: string[]): GroupView[] {
-  const order_indexes = new Map(group_order.map((id, index) => [id, index]));
-  return group_views
-    .map((group, source_index) => ({ group, source_index }))
-    .sort((lhs, rhs) => {
-      const lhs_index = order_indexes.get(lhs.group.id);
-      const rhs_index = order_indexes.get(rhs.group.id);
-      if (lhs_index === undefined && rhs_index === undefined) {
-        return lhs.source_index - rhs.source_index;
-      }
-      if (lhs_index === undefined) {
-        return 1;
-      }
-      if (rhs_index === undefined) {
-        return -1;
-      }
-      return lhs_index - rhs_index;
-    })
-    .map(entry => entry.group);
+  const groups_by_id = new Map(group_views.map(group => [group.id, group]));
+  const ordered = [...new Set(group_order)].flatMap(id => {
+    const group = groups_by_id.get(id);
+    return group ? [group] : [];
+  });
+  const inserted = new Set(ordered.map(group => group.id));
+  group_views.forEach((group, index) => {
+    if (inserted.has(group.id)) return;
+
+    // 已保存的相对顺序保持稳定，新分组优先跟随配置中的前邻，再查找后邻。
+    let insertion_index = -1;
+    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+      if (!inserted.has(group_views[cursor].id)) continue;
+      insertion_index = ordered.findIndex(candidate => candidate.id === group_views[cursor].id) + 1;
+      break;
+    }
+    if (insertion_index < 0) {
+      const next = group_views.slice(index + 1).find(candidate => inserted.has(candidate.id));
+      if (next) insertion_index = ordered.findIndex(candidate => candidate.id === next.id);
+    }
+    ordered.splice(insertion_index < 0 ? ordered.length : insertion_index, 0, group);
+    inserted.add(group.id);
+  });
+  return ordered;
 }
 
 function buildOptionView(
@@ -1918,8 +1945,8 @@ function buildOptionEffectTargetStates(
   return target_states;
 }
 
-function getEffectApi(effect: string): KimiPartialModeApi | undefined {
-  return effect === KIMI_PARTIAL_EFFECT_ID ? getKimiPartialModeApi() : undefined;
+function getEffectApi(effect: string): GeminiToolOutputModeApi | undefined {
+  return effect === GEMINI_TOOL_OUTPUT_EFFECT_ID ? getGeminiToolOutputModeApi() : undefined;
 }
 
 function applyEffectTargetStates(target_states: Map<string, boolean>): { changed: boolean; errors: string[] } {
@@ -1928,12 +1955,12 @@ function applyEffectTargetStates(target_states: Map<string, boolean>): { changed
   target_states.forEach((enabled, effect) => {
     const api = getEffectApi(effect);
     if (!api) {
-      if (effect === KIMI_PARTIAL_EFFECT_ID && !enabled) {
+      if (SUPPORTED_EFFECT_IDS.has(effect) && !enabled) {
         return;
       }
       errors.push(
-        effect === KIMI_PARTIAL_EFFECT_ID
-          ? '未检测到“Kimi 前缀填充”脚本，无法切换 Partial Mode 设置。请确认对应脚本已启用。'
+        effect === GEMINI_TOOL_OUTPUT_EFFECT_ID
+          ? '未检测到基米工具接口，无法切换 Gemini 工具输出模式。请确认基米工具脚本已更新并启用。'
           : `无法应用未知 effect：${effect}`,
       );
       return;
@@ -2502,7 +2529,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   const title = ref(SCRIPT_NAME);
   const description = ref('');
   const active_tab = ref<TabId>('preset');
-  const summary_settings = ref<SummarySettings>(cloneJson(EMPTY_CONFIG.summary.settings));
+  const summary_settings = ref<SummarySettings>(SummarySettingsSchema.parse(undefined));
   const summary_state = ref<SummaryViewState>({ ...EMPTY_SUMMARY_STATE });
   const debug_available = ref(false);
   const debug_loading = ref(false);
@@ -2535,7 +2562,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   });
   const loaded_preset_name = ref('');
   const groups = ref<GroupView[]>([]);
-  const ui_preferences = ref<AdapterUiPreferences>(cloneJson(EMPTY_CONFIG.ui));
+  const ui_preferences = ref<AdapterUiPreferences>(AdapterUiPreferencesSchema.parse(undefined));
   const errors = ref<string[]>([]);
   const blocking_errors = ref<string[]>([]);
   const is_applying = ref(false);
@@ -2634,7 +2661,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   let debug_subscription: { stop: () => void } | undefined;
   let debug_poll_timer: ReturnType<typeof window.setInterval> | undefined;
   let debug_attach_serial = 0;
-  let effect_api: KimiPartialModeApi | undefined;
+  let effect_api: GeminiToolOutputModeApi | undefined;
   let effect_subscription: { stop: () => void } | undefined;
   let effect_poll_timer: ReturnType<typeof window.setInterval> | undefined;
   let summary_event_stops: EventOnReturn[] = [];
@@ -2796,11 +2823,17 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
 
   function saveUiPreferences(preferences: AdapterUiPreferences) {
     const normalized = AdapterUiPreferencesSchema.parse(preferences);
-    const variables = readScriptVariables();
-    _.set(variables, 'ui', normalized);
-    replaceVariables(variables, getScriptVariableScope());
+    const variables = getVariables({ type: 'global' });
+    replaceVariables({ ...variables, [UI_PREFERENCES_KEY]: normalized }, { type: 'global' });
     ui_preferences.value = cloneJson(normalized);
-    config.value = AdapterConfigSchema.parse({ ...config.value, ui: normalized });
+  }
+
+  function refreshUiPreferences() {
+    try {
+      ui_preferences.value = readGlobalPreferences(UI_PREFERENCES_KEY, 'ui', AdapterUiPreferencesSchema, '界面偏好');
+    } catch (error) {
+      console.warn(`[${SCRIPT_NAME}] 读取界面偏好失败。`, error);
+    }
   }
 
   function moveArrayItem<T>(items: T[], source: T, target: T): T[] {
@@ -2969,12 +3002,11 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     attachDebugApi(undefined);
   }
 
-  function attachEffectApi(api: KimiPartialModeApi | undefined) {
+  function attachEffectApi(api: GeminiToolOutputModeApi | undefined) {
     if (api === effect_api) {
       return;
     }
 
-    const previous_api = effect_api;
     effect_subscription?.stop();
     effect_subscription = undefined;
     effect_api = api;
@@ -2984,13 +3016,14 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
           loadState();
         }
       });
-    } else if (previous_api && !is_applying.value) {
+    }
+    if (!is_applying.value) {
       loadState();
     }
   }
 
   function refreshEffectApi() {
-    attachEffectApi(getKimiPartialModeApi());
+    attachEffectApi(getGeminiToolOutputModeApi());
   }
 
   function startEffectWatch() {
@@ -3092,18 +3125,23 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
 
   function saveSummarySettings(settings: SummarySettings) {
     const normalized_settings = SummarySettingsSchema.parse(settings);
-    const variables = readScriptVariables();
-    _.set(variables, 'summary.settings', normalized_settings);
-    replaceVariables(variables, getScriptVariableScope());
-    config.value = AdapterConfigSchema.parse({
-      ...config.value,
-      summary: {
-        ...config.value.summary,
-        settings: normalized_settings,
-      },
-    });
+    const variables = getVariables({ type: 'global' });
+    replaceVariables({ ...variables, [SUMMARY_SETTINGS_KEY]: normalized_settings }, { type: 'global' });
     summary_settings.value = cloneJson(normalized_settings);
     refreshSummaryState();
+  }
+
+  function refreshSummarySettings() {
+    try {
+      summary_settings.value = readGlobalPreferences(
+        SUMMARY_SETTINGS_KEY,
+        'summary.settings',
+        SummarySettingsSchema,
+        '总结操作设置',
+      );
+    } catch (error) {
+      console.warn(`[${SCRIPT_NAME}] 读取总结操作设置失败。`, error);
+    }
   }
 
   function setSummaryContentHandling(content_handling: SummaryContentHandling) {
@@ -3693,12 +3731,12 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
 
   function loadState(): LoadedState {
     refreshSelectionLibrary();
+    refreshUiPreferences();
+    refreshSummarySettings();
     const config_result = readAdapterConfig();
     config.value = config_result.config;
     title.value = config_result.config.title;
     description.value = config_result.config.description;
-    summary_settings.value = cloneJson(config_result.config.summary.settings);
-    ui_preferences.value = cloneJson(config_result.config.ui);
     loaded_preset_name.value = getLoadedPresetName();
 
     let preset: Preset | undefined;
@@ -3715,7 +3753,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     }
 
     const built = buildGroupViews(config_result.config, preset);
-    groups.value = orderGroupViews(built.groups, config_result.config.ui.group_order);
+    groups.value = orderGroupViews(built.groups, ui_preferences.value.group_order);
     const has_unsupported_reasoner_format_check = built.groups.some(group =>
       group.reasoner_format_checks.some(check => check.disabled),
     );

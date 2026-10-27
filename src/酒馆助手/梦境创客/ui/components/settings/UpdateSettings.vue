@@ -39,6 +39,18 @@
     </article>
 
     <section class="dca-settings-group" aria-label="更新设置">
+      <label v-if="snapshot.source" class="dca-update-info-row">
+        <span><strong>下载线路</strong><small>首选线路失败后自动尝试备用线路，下次加载脚本时生效</small></span>
+        <select :value="snapshot.source ?? 'auto'" :disabled="busy" @change="changeSource">
+          <option value="auto">自动（JSDMirror 优先）</option>
+          <option value="jsdmirror">JSDMirror 优先</option>
+          <option value="jsdelivr">jsDelivr 优先</option>
+        </select>
+      </label>
+      <div v-if="snapshot.loadedFrom" class="dca-update-info-row">
+        <span><strong>当前脚本来源</strong></span
+        ><span>{{ snapshot.loadedFrom }}</span>
+      </div>
       <div class="dca-toggle-row">
         <span>
           <strong>首次加载后静默检查更新</strong>
@@ -65,6 +77,7 @@ import { useDreamCardAgent } from '../../composables/runtime';
 import { DREAM_CARD_AGENT_REPOSITORY, DREAM_CARD_AGENT_TAG_PREFIX } from '../../../version';
 import { setCheckUpdatesOnLoad, shouldCheckUpdatesOnLoad, useDreamCardAgentUpdater } from '../../updater';
 import DcaSwitch from '../DcaSwitch.vue';
+import type { UpdateSource } from '../../../../../公共模块/脚本更新器/contracts';
 
 const updater = useDreamCardAgentUpdater();
 const { notifications } = useDreamCardAgent();
@@ -122,6 +135,10 @@ function toggleCheckOnLoad(value: boolean) {
   checkOnLoad.value = value;
   setCheckUpdatesOnLoad(value);
   notify.success(value ? '已开启加载后静默检查。' : '已关闭加载后静默检查。', '梦境创客');
+}
+
+function changeSource(event: Event) {
+  updater.setSource((event.target as HTMLSelectElement).value as UpdateSource);
 }
 
 async function checkForUpdates() {

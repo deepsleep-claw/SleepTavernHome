@@ -32,6 +32,12 @@ describe('HTML工程正则输出模式', () => {
     renderer: 'tavern-helper' as const,
   };
 
+  it('一次说明所有缺失清单字段，并提供可执行的模板调用', async () => {
+    const file = { ...project(), content: 'regex:\n  find_regex: /UI/g\n' };
+    await expect(compiler.check(file.path, [file])).rejects.toThrow('name、renderer、build.entry、regex.find');
+    await expect(compiler.check(file.path, [file])).rejects.toThrow('action: "template"');
+  });
+
   it.each(['plain-html', 'tavern-helper'])('%s默认仅显示', renderer => {
     const file = project(undefined, renderer);
     const output = compiler.regexYaml(checked, file.path, [file], 'character', false);

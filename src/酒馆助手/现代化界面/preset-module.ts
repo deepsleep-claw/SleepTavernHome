@@ -1,5 +1,6 @@
 import { watch } from 'vue';
 
+import { getBaiBaiDisabledPrompts, isBaiBaiInstalled, observeBaiBaiSettings, readBaiBaiPromptGroups } from './baibai-compat';
 import { getHostDocument, getHostWindow } from './host-context';
 import { trackHostPointerDrag } from './pointer-drag';
 import {
@@ -51,6 +52,7 @@ export type HostPromptManager = {
   updateQuickEdit?(identifier: string, prompt: HostPrompt): void;
   saveServiceSettings(): unknown;
   render(afterTryGenerate?: boolean): unknown;
+  renderPromptManagerListItems?(): unknown;
   getUuidv4?(): string;
   messages?: { hasItemWithIdentifier(identifier: string): boolean; getItemByIdentifier(identifier: string): unknown } | null;
   loadMessagesIntoInspectForm?(messages: unknown): void;
@@ -62,6 +64,7 @@ export type HostPromptManager = {
 
 export type PresetEditorHost = {
   getPromptManager(): HostPromptManager | null;
+  getPresetName?(): string | undefined;
 };
 
 export type PresetEditorOptions = {
@@ -197,9 +200,15 @@ async function loadDefaultHost(): Promise<PresetEditorHost> {
   const hostWindow = getHostWindow() as Window & { Function: FunctionConstructor };
   const url = new URL('scripts/openai.js', getHostDocument().baseURI || hostWindow.location.href).href;
   const importModule = hostWindow.Function('url', 'return import(url);') as (url: string) => Promise<unknown>;
-  const module = (await importModule(url)) as { promptManager?: HostPromptManager | null };
+  const module = (await importModule(url)) as {
+    promptManager?: HostPromptManager | null;
+    oai_settings?: { preset_settings_openai?: string };
+  };
   // 模块命名空间是实时绑定，切换 API 后重建的 promptManager 也能读到。
-  return { getPromptManager: () => module.promptManager ?? null };
+  return {
+    getPromptManager: () => module.promptManager ?? null,
+    getPresetName: () => module.oai_settings?.preset_settings_openai,
+  };
 }
 
 class PresetEditor {
@@ -218,6 +227,17 @@ class PresetEditor {
   private dirtyBadge?: HTMLElement;
   private saveButton?: HTMLButtonElement;
   private promptSection?: HTMLElement;
+  private groupingTabs?: HTMLElement;
+  private groupingMode: 'default' | 'baibai' = 'default';
+  private groupingPreset?: HostPrompt[];
+  private groupingPresetName?: string;
+  private groupingWasAvailable = false;
+  private groupingHadData = false;
+  private baibaiDisabled = new Map<string, string>();
+  private parameterSettings?: HTMLElement;
+  private readonly baibaiMoves: MovedNode[] = [];
+  private readonly stopBaiBaiObserver: () => void;
+  private editorObserver?: MutationObserver;
 
   private shell?: HTMLElement;
   private list?: HTMLElement;
@@ -279,6 +299,7 @@ class PresetEditor {
     const HostMutationObserver = (this.window as Window & { MutationObserver: typeof MutationObserver })
       .MutationObserver;
     this.observer = new HostMutationObserver(() => this.scheduleSync());
+    this.stopBaiBaiObserver = observeBaiBaiSettings(this.scheduleSync);
   }
 
   readonly scheduleSync = (): void => {
@@ -290,6 +311,7 @@ class PresetEditor {
   };
 
   destroy(): void {
+    this.stopBaiBaiObserver();
     if (this.scheduledSync) {
       this.window.cancelAnimationFrame(this.scheduledSync);
       this.scheduledSync = 0;
@@ -334,8 +356,10 @@ class PresetEditor {
     this.ensurePanelPin(panel);
     this.ensureToolbar(presetsBlock);
     this.ensurePromptShell(container);
+    this.syncBaiBaiSettings();
+    this.syncGroupingMode();
     this.applyTab();
-    this.renderList();
+    if (this.groupingMode === 'default') this.renderList();
     this.ensureDirtyPolling();
   }
 
@@ -365,7 +389,10 @@ class PresetEditor {
     }
     if (container) {
       // 原生每次改动都会重绘这个容器，借此得知数据变化。
-      this.observer.observe(container, { childList: true, subtree: true, characterData: true });
+      this.observer.observe(container, {
+        childList: true, subtree: true, characterData: true,
+        attributes: true, attributeFilter: ['class', 'aria-checked'],
+      });
     }
   }
 
@@ -381,10 +408,7 @@ class PresetEditor {
     this.resizeObserver = undefined;
 
     this.cancelLongPress();
-    restoreMovedNode(this.editAreaMove);
-    this.editAreaMove = undefined;
-    restoreMovedNode(this.inspectMove);
-    this.inspectMove = undefined;
+    this.restoreEditor();
     this.previewSource = undefined;
     restoreMovedNode(this.presetsMove);
     this.presetsMove = undefined;
@@ -392,6 +416,14 @@ class PresetEditor {
     this.pinMove = undefined;
     this.toolbar?.remove();
     this.toolbar = undefined;
+    this.groupingTabs = undefined;
+    this.groupingPreset = undefined;
+    this.groupingPresetName = undefined;
+    this.groupingWasAvailable = false;
+    this.groupingHadData = false;
+    while (this.baibaiMoves.length) restoreMovedNode(this.baibaiMoves.pop());
+    this.parameterSettings?.remove();
+    this.parameterSettings = undefined;
     this.tabButtons.clear();
     this.shell?.remove();
     this.shell = undefined;
@@ -402,6 +434,7 @@ class PresetEditor {
     this.promptSection = undefined;
     this.panel?.classList.remove(PANEL_CLASS);
     this.panel?.removeAttribute(PANEL_TAB_ATTRIBUTE);
+    this.panel?.removeAttribute('data-th-preset-grouping');
     this.panel = undefined;
   }
 
@@ -454,12 +487,24 @@ class PresetEditor {
     this.saveButton = makeElement(this.document, 'button', 'th-modern-preset-save menu_button', '保存预设');
     this.saveButton.type = 'button';
     this.saveButton.addEventListener('click', () => {
+      this.flushEditorApply();
       this.document.getElementById('update_oai_preset')?.click();
       this.scheduleDirtyCheck(1200);
     });
     status.append(this.dirtyBadge, this.saveButton);
     tabsRow.append(tabList, status);
     toolbar.append(tabsRow);
+    this.groupingTabs = makeElement(this.document, 'div', 'th-modern-preset-group-tabs');
+    this.groupingTabs.setAttribute('role', 'tablist');
+    for (const [mode, label] of [['default', '默认分组'], ['baibai', '柏宝箱分组']] as const) {
+      const button = makeElement(this.document, 'button', 'th-modern-preset-tab', label);
+      button.type = 'button';
+      button.setAttribute('role', 'tab');
+      button.dataset.grouping = mode;
+      button.addEventListener('click', () => this.setGroupingMode(mode));
+      this.groupingTabs.append(button);
+    }
+    toolbar.append(this.groupingTabs);
     this.toolbar = toolbar;
     this.renderDirty();
   }
@@ -480,6 +525,101 @@ class PresetEditor {
       button.classList.toggle('is-active', active);
       button.setAttribute('aria-selected', String(active));
     }
+  }
+
+  private syncGroupingMode(): void {
+    const pm = this.promptManager;
+    if (!pm) return;
+    const available = isBaiBaiInstalled();
+    const name = this.host?.getPresetName?.();
+    const hasData = Boolean(readBaiBaiPromptGroups(pm.serviceSettings, name)?.groups.length);
+    const changedPreset = this.groupingPreset !== pm.serviceSettings.prompts || this.groupingPresetName !== name;
+    if (changedPreset || (available && !this.groupingWasAvailable) || (hasData && !this.groupingHadData)) {
+      this.groupingPreset = pm.serviceSettings.prompts;
+      this.groupingPresetName = name;
+      this.setGroupingMode(available && hasData ? 'baibai' : 'default');
+    } else if (!available && this.groupingMode === 'baibai') {
+      this.setGroupingMode('default');
+    }
+    this.groupingWasAvailable = available;
+    this.groupingHadData = hasData;
+    if (this.groupingTabs) this.groupingTabs.hidden = !available;
+    this.updateGroupingTabs();
+  }
+
+  private updateGroupingTabs(): void {
+    this.panel?.setAttribute('data-th-preset-grouping', this.groupingMode);
+    for (const button of this.groupingTabs?.querySelectorAll<HTMLButtonElement>('[data-grouping]') ?? []) {
+      const active = button.dataset.grouping === this.groupingMode;
+      button.classList.toggle('is-active', active);
+      button.setAttribute('aria-selected', String(active));
+    }
+    if (this.shell) this.shell.hidden = this.groupingMode === 'baibai';
+  }
+
+  private setGroupingMode(mode: 'default' | 'baibai'): void {
+    if (mode === this.groupingMode) {
+      this.updateGroupingTabs();
+      return;
+    }
+    this.flushEditorApply();
+    this.stopDrag?.();
+    this.groupingMode = mode;
+    this.updateGroupingTabs();
+    if (mode === 'default') {
+      this.editingId = null;
+      this.editingPrompt = null;
+      this.renderList();
+      return;
+    }
+    this.restoreEditor();
+    // 使用柏宝箱已安装在 Prompt Manager 上的渲染入口，保留其列表和事件。
+    const grouping = this.document.querySelector<HTMLInputElement>('#bai_bai_toolkit_preset_grouping_enabled');
+    if (grouping && !grouping.checked) {
+      grouping.checked = true;
+      grouping.dispatchEvent(new this.window.Event('input', { bubbles: true }));
+    }
+    const pm = this.promptManager;
+    try {
+      const render = pm?.renderPromptManagerListItems ?? pm?.render;
+      Promise.resolve(render?.call(pm)).catch(error => console.error('[现代化界面] 柏宝箱分组渲染失败', error));
+    } catch (error) {
+      console.error('[现代化界面] 柏宝箱分组渲染失败', error);
+    }
+  }
+
+  private syncBaiBaiSettings(): void {
+    if (!isBaiBaiInstalled() || !this.panel) return;
+    if (!this.parameterSettings?.isConnected) {
+      this.parameterSettings = makeElement(this.document, 'section', 'th-modern-preset-baibai-settings');
+      this.document.getElementById('respective-ranges-and-temps')?.after(this.parameterSettings);
+    }
+    const settings = this.parameterSettings;
+    if (!settings.isConnected) return;
+    const controls = [
+      this.document.querySelector('#bai_bai_toolkit_preset_grouping_enabled')?.closest<HTMLElement>('fieldset'),
+      this.document.querySelector('#bai_bai_toolkit_preset_auto_save_after_prompt_edit_enabled')?.closest<HTMLElement>('label'),
+      this.document.getElementById('bai_bai_toolkit_preset_interface_collapse_wrapper'),
+    ];
+    for (const control of controls) {
+      if (control && !settings.contains(control)) this.baibaiMoves.push(moveNode(control, settings));
+    }
+    settings.hidden = !settings.childElementCount;
+  }
+
+  private restoreEditor(): void {
+    this.editorObserver?.disconnect();
+    this.editorObserver = undefined;
+    const editArea = this.editAreaMove?.node;
+    editArea?.removeEventListener('input', this.handleEditorInput);
+    editArea?.removeEventListener('change', this.handleEditorInput);
+    editArea?.removeEventListener('click', this.handleEditorClick);
+    restoreMovedNode(this.editAreaMove);
+    this.editAreaMove = undefined;
+    restoreMovedNode(this.inspectMove);
+    this.inspectMove = undefined;
+    this.editingId = null;
+    this.editingPrompt = null;
   }
 
   /* ---------- 未保存提示 ---------- */
@@ -723,7 +863,7 @@ class PresetEditor {
   }
 
   private matchesFilter(row: PromptRow): boolean {
-    if (this.onlyEnabled && !row.enabled) return false;
+    if (this.onlyEnabled && (!row.enabled || this.baibaiDisabled.has(row.identifier))) return false;
     if (!this.search) return true;
     const name = getPromptName(row.prompt, row.identifier).toLowerCase();
     return name.includes(this.search) || (row.prompt?.content ?? '').toLowerCase().includes(this.search);
@@ -758,6 +898,7 @@ class PresetEditor {
 
     this.loadCollapsed();
     const order = this.getOrder();
+    this.baibaiDisabled = getBaiBaiDisabledPrompts(pm.serviceSettings, this.host?.getPresetName?.());
     this.groups = getPromptGroups(pm.serviceSettings);
     this.rows = buildPromptList(order, this.groups, identifier => this.getPrompt(identifier));
 
@@ -801,7 +942,7 @@ class PresetEditor {
 
   private getGroupState(group: PromptGroupData, order: readonly PromptOrderEntry[]): { enabled: number; total: number } {
     const ids = getGroupPromptIds(this.groups, group.id);
-    const enabled = ids.filter(id => order.find(entry => entry.identifier === id)?.enabled).length;
+    const enabled = ids.filter(id => !this.baibaiDisabled.has(id) && order.find(entry => entry.identifier === id)?.enabled).length;
     return { enabled, total: ids.length };
   }
 
@@ -843,13 +984,15 @@ class PresetEditor {
         : state.enabled
           ? 'mixed'
           : false;
+    const ids = getGroupPromptIds(this.groups, group.id);
+    const blocked = ids.length > 0 && ids.every(id => this.baibaiDisabled.has(id));
+    if (blocked) main.append(makeElement(this.document, 'span', 'th-modern-pm-badge is-warning', '柏宝箱禁用'));
     const toggle = makeSwitch(
       this.document,
       checked,
-      group.single_select ? '单选组：有选项开启时点击全部关闭，否则开启第一项' : '开启或关闭组内全部条目',
+      blocked ? '来源：柏宝箱分组已禁用' : group.single_select ? '单选组：有选项开启时点击全部关闭，否则开启第一项' : '开启或关闭组内全部条目',
     );
-    toggle.disabled = !state.total;
-    const ids = getGroupPromptIds(this.groups, group.id);
+    toggle.disabled = !state.total || blocked;
     const allSelected = ids.length > 0 && ids.every(id => this.selected.has(id));
     element.classList.toggle('is-selected', this.multiSelect && allSelected);
     element.append(handle, this.createCheck(allSelected), chevron, main, toggle);
@@ -858,12 +1001,14 @@ class PresetEditor {
 
   private createPromptRow(pm: HostPromptManager, row: PromptRow, tokens: number | null | undefined): HTMLElement {
     const { identifier, prompt } = row;
+    const blockedBy = this.baibaiDisabled.get(identifier);
+    const enabled = row.enabled && !blockedBy;
     const element = makeElement(this.document, 'div', 'th-modern-pm-row');
     element.dataset.id = identifier;
     element.style.setProperty('--th-modern-pm-indent', `${row.depth * INDENT_REM}rem`);
     element.setAttribute('role', 'option');
     element.setAttribute('aria-selected', String(this.selected.has(identifier)));
-    element.classList.toggle('is-disabled', !row.enabled);
+    element.classList.toggle('is-disabled', !enabled);
     element.classList.toggle('is-active', identifier === this.activeId && !this.activeGroupId);
     element.classList.toggle('is-selected', this.selected.has(identifier));
     element.classList.toggle('is-marker', !!prompt?.marker);
@@ -877,7 +1022,7 @@ class PresetEditor {
 
     if (prompt?.marker) {
       const icon = makeElement(this.document, 'i', 'th-modern-pm-kind bi bi-pin-angle-fill');
-      icon.title = '占位条目：内容由酒馆在生成时填入';
+      icon.title = '占位条目（只读）';
       element.append(icon);
     }
 
@@ -895,6 +1040,11 @@ class PresetEditor {
       badges.append(makeElement(this.document, 'span', 'th-modern-pm-badge is-depth', `@${prompt.injection_depth ?? 4}`));
     }
     if (!prompt) badges.append(makeElement(this.document, 'span', 'th-modern-pm-badge is-warning', '缺失'));
+    if (blockedBy) {
+      const source = makeElement(this.document, 'span', 'th-modern-pm-badge is-warning', '柏宝箱禁用');
+      source.title = `来源：柏宝箱分组「${blockedBy}」`;
+      badges.append(source);
+    }
     element.append(badges);
 
     element.append(makeElement(this.document, 'span', 'th-modern-pm-tokens', typeof tokens === 'number' ? String(tokens) : ''));
@@ -914,8 +1064,8 @@ class PresetEditor {
     }
     element.append(actions);
 
-    const toggle = makeSwitch(this.document, row.enabled, row.enabled ? '已启用，点击关闭' : '已关闭，点击启用');
-    toggle.disabled = !prompt || !pm.isPromptToggleAllowed(prompt);
+    const toggle = makeSwitch(this.document, enabled, blockedBy ? `来源：柏宝箱分组「${blockedBy}」已禁用` : enabled ? '已启用，点击关闭' : '已关闭，点击启用');
+    toggle.disabled = Boolean(blockedBy) || !prompt || !pm.isPromptToggleAllowed(prompt);
     element.append(toggle);
     return element;
   }
@@ -1170,6 +1320,7 @@ class PresetEditor {
     for (const identifier of identifiers) {
       const entry = order.find(item => item.identifier === identifier);
       const prompt = this.getPrompt(identifier);
+      if (enabled && this.baibaiDisabled.has(identifier)) continue;
       if (!entry || !prompt || !pm.isPromptToggleAllowed(prompt) || entry.enabled === enabled) continue;
       entry.enabled = enabled;
       this.resetTokenCount(identifier);
@@ -1200,7 +1351,7 @@ class PresetEditor {
       }
       return;
     }
-    const ids = getGroupPromptIds(this.groups, groupId);
+    const ids = getGroupPromptIds(this.groups, groupId).filter(id => !this.baibaiDisabled.has(id));
     const allEnabled = ids.every(id => order.find(entry => entry.identifier === id)?.enabled);
     this.setEnabled(ids, !allEnabled);
   }
@@ -1664,9 +1815,7 @@ class PresetEditor {
     if (!inspectArea || !messages || !pm.loadMessagesIntoInspectForm) {
       if (inspectArea) inspectArea.style.display = 'none';
       this.editorBody.hidden = true;
-      this.setPlaceholder(
-        '还没有可查看的内容。打开一个聊天后，酒馆在计算 Token 时会生成每个条目实际发送的消息；也可以点上方的刷新按钮重新计算。',
-      );
+      this.setPlaceholder('暂无可查看的内容，请打开聊天后点击刷新。');
       return;
     }
     pm.clearInspectForm?.();
@@ -1695,6 +1844,15 @@ class PresetEditor {
       editArea.addEventListener('input', this.handleEditorInput);
       editArea.addEventListener('change', this.handleEditorInput);
       editArea.addEventListener('click', this.handleEditorClick);
+      // CodeMirror 的撤销等命令更新 DOM，但不会产生 textarea 的 input 事件。
+      this.editorObserver = new this.window.MutationObserver(mutations => {
+        if (this.suppressEditorEvents) return;
+        if (mutations.some(mutation => {
+          const target = mutation.target.nodeType === 1 ? mutation.target as Element : mutation.target.parentElement;
+          return Boolean(target?.closest('.bai-bai-toolkit-preset-prompt-codemirror-editor'));
+        })) this.handleEditorInput();
+      });
+      this.editorObserver.observe(editArea, { childList: true, subtree: true, characterData: true });
     }
 
     const prompt = this.editingPrompt;
@@ -1745,7 +1903,7 @@ class PresetEditor {
           view === 'edit'
             ? editable
               ? '编辑条目'
-              : '占位条目的内容由酒馆生成，不能直接编辑'
+              : '此条目仅支持查看'
             : '查看最近一次实际发送的内容';
         button.addEventListener('click', () => this.setEditorView(view));
         views.append(button);
@@ -1761,8 +1919,10 @@ class PresetEditor {
       }
     }
     if (entry && prompt) {
-      const toggle = makeSwitch(this.document, entry.enabled, entry.enabled ? '已启用，点击关闭' : '已关闭，点击启用');
-      toggle.disabled = !pm.isPromptToggleAllowed(prompt);
+      const blockedBy = this.baibaiDisabled.get(identifier);
+      const enabled = entry.enabled && !blockedBy;
+      const toggle = makeSwitch(this.document, enabled, blockedBy ? `来源：柏宝箱分组「${blockedBy}」已禁用` : enabled ? '已启用，点击关闭' : '已关闭，点击启用');
+      toggle.disabled = Boolean(blockedBy) || !pm.isPromptToggleAllowed(prompt);
       toggle.addEventListener('click', () => this.toggleEntry(identifier));
       actions.append(toggle);
     }
@@ -1873,13 +2033,7 @@ class PresetEditor {
       'th-modern-pm-group-summary',
       `共 ${state.total} 个条目，已开启 ${state.enabled} 个。拖动组标题可以整组移动；把条目拖进或拖出分组即可调整成员。`,
     );
-    const note = makeElement(
-      this.document,
-      'small',
-      'th-modern-pm-meta-hint',
-      '分组保存在预设的 Luker 分组数据里，Luker 原生界面也能识别；单选设置只在现代化界面中生效。',
-    );
-    form.append(nameLabel, modeLabel, summary, note);
+    form.append(nameLabel, modeLabel, summary);
     extra.append(form);
   }
 
@@ -1903,7 +2057,14 @@ class PresetEditor {
   };
 
   private flushEditorApply(): void {
-    if (this.applyTimer) this.applyEditor();
+    const prefix = this.promptManager?.configuration.prefix ?? 'completion_';
+    const source = this.document.getElementById(`${prefix}prompt_manager_popup_entry_form_prompt`) as HTMLTextAreaElement | null;
+    const name = this.document.getElementById(`${prefix}prompt_manager_popup_entry_form_name`) as HTMLInputElement | null;
+    const changed = this.editAreaMove && this.editingPrompt && this.editorView === 'edit' && (
+      (source && source.value !== (this.editingPrompt.content ?? '')) ||
+      (name && name.value !== (this.editingPrompt.name ?? ''))
+    );
+    if (this.applyTimer || changed) this.applyEditor();
   }
 
   private applyEditor(): void {

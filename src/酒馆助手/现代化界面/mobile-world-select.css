@@ -711,3 +711,7 @@ body.th-modern-reduce-motion .th-modern-mobile-world-picker-sheet {
     transform: translateY(0);
   }
 }
+
+body.th-modern-enabled.th-modern-baibai-selector-modern .bai-bai-wi-global-selector-display {
+  display: none !important;
+}

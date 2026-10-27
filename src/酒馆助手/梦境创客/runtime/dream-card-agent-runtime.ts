@@ -614,7 +614,7 @@ export class DreamCardAgentRuntime {
           await persistence.persist(runtime);
         },
         onSkillsCommit: (skills, mountedIds) => this.commitMountedSkills(skills, mountedIds),
-        onUpdate: view => this.updateService(view),
+        onUpdate: view => this.updateService(view, true),
         operationRecoveryStore: this.operationRecoveryStore,
         requestToolApproval: (request, signal) => this.requestToolConfirmation(request, signal),
         resourceBaseUrl: this.resourceBaseUrl,
@@ -716,7 +716,7 @@ export class DreamCardAgentRuntime {
           canWriteNonCharacterResources: () => this.canWriteNonCharacterResources(),
           onPersist: runtime => persistence.persist(runtime),
           onSkillsCommit: (skills, mountedIds) => this.commitMountedSkills(skills, mountedIds),
-          onUpdate: view => this.updateService(view),
+          onUpdate: view => this.updateService(view, true),
           operationRecoveryStore: this.operationRecoveryStore,
           requestToolApproval: (request, signal) => this.requestToolConfirmation(request, signal),
           resourceBaseUrl: this.resourceBaseUrl,
@@ -822,7 +822,7 @@ export class DreamCardAgentRuntime {
             await persistence.persist(runtime);
           },
           onSkillsCommit: (skills, mountedIds) => this.commitMountedSkills(skills, mountedIds),
-          onUpdate: view => this.updateService(view),
+          onUpdate: view => this.updateService(view, true),
           operationRecoveryStore: this.operationRecoveryStore,
           requestToolApproval: (request, signal) => this.requestToolConfirmation(request, signal),
           resourceBaseUrl: this.resourceBaseUrl,
@@ -907,7 +907,7 @@ export class DreamCardAgentRuntime {
           canWriteNonCharacterResources: () => this.canWriteNonCharacterResources(),
           onPersist: runtime => persistence.persist(runtime),
           onSkillsCommit: (skills, mountedIds) => this.commitMountedSkills(skills, mountedIds),
-          onUpdate: view => this.updateService(view),
+          onUpdate: view => this.updateService(view, true),
           operationRecoveryStore: this.operationRecoveryStore,
           requestToolApproval: (request, signal) => this.requestToolConfirmation(request, signal),
           resourceBaseUrl: this.resourceBaseUrl,
@@ -2197,9 +2197,10 @@ export class DreamCardAgentRuntime {
     return GLOBAL_WORKSPACE_BINDING_ID;
   }
 
-  private effectiveSessionView(view: SessionView): SessionView {
-    const result = klona(view);
-    if (!findSelectedModel(this.settingsStore.load().providers, result.modelSelection))
+  private effectiveSessionView(view: SessionView, detached = false): SessionView {
+    // 会话订阅已提供脱离内部状态的视图，对外返回值仍使用独立副本。
+    const result = detached ? { ...view } : klona(view);
+    if (!findSelectedModel(this.state.providers, result.modelSelection))
       result.modelSelection = undefined;
     return result;
   }
@@ -2440,11 +2441,11 @@ export class DreamCardAgentRuntime {
     });
   }
 
-  private updateService(view: SessionView): void {
+  private updateService(view: SessionView, detached = false): void {
     this.inputSubmissions.observe(view);
     if (!isSessionOperationActive(view.status) && this.toolConfirmationResolve?.sessionId === view.sessionId)
       this.resolveToolConfirmation(false, view.sessionId);
-    const effectiveView = this.effectiveSessionView(view);
+    const effectiveView = this.effectiveSessionView(view, detached);
     this.state.sessionStatuses[view.sessionId] = view.status;
     // 会话正文、当前标题、角色索引和已打开页签是同一份会话的不同投影。
     // rename/send 会先更新运行中的 SessionView；在下一次索引回读前也要立即

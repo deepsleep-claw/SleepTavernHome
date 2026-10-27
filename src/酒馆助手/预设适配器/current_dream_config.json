@@ -42,19 +42,6 @@
           ]
         },
         {
-          "id": "Deepseek官方Need思维链",
-          "label": "Deepseek官方Need思维链",
-          "enable": [
-            "Deepseek官方",
-            "DeepSeek禁词",
-            "V4Pro神秘小指令",
-            "DeepseekV4pro思维链"
-          ],
-          "disable": [
-            "默认思维链"
-          ]
-        },
-        {
           "id": "Deepseek非官方",
           "label": "Deepseek非官方",
           "enable": [
@@ -63,34 +50,42 @@
           ]
         },
         {
-          "id": "GLM5.2/其他模型",
-          "label": "GLM5.2/其他模型",
+          "id": "GLM5.3/其他模型",
+          "label": "GLM5.3/其他模型",
           "enable": [
             "硅基流动或其他",
             "Glm/Gemini禁词"
           ]
         },
         {
-          "id": "Gemini",
-          "label": "Gemini",
+          "id": "Gemini3",
+          "label": "Gemini3",
           "enable": [
-            "硅基流动或其他",
-            "☆Gemini预填充",
-            "Glm/Gemini禁词"
-          ]
-        },
-        {
-          "id": "Gemini无预填充",
-          "label": "Gemini无预填充",
-          "enable": [
-            "硅基流动或其他",
+            "Gemini思考适配",
             "schema初始化-thinking",
             "Glm/Gemini禁词"
           ],
           "disable": [
             "schema初始化"
           ],
-          "description": "适用于Gemini3.7flash。"
+          "description": "适用于Gemini3系列。"
+        },
+        {
+          "id": "Gemini4",
+          "label": "Gemini4",
+          "enable": [
+            "Gemini思考适配",
+            "schema初始化-thinking",
+            "Glm/Gemini禁词",
+            "☆Gemini预填充对话",
+            "☆Gemini预填充回复",
+            "梦境思客Gemini"
+          ],
+          "disable": [
+            "schema初始化",
+            "梦境思客"
+          ],
+          "description": "适用于Gemini4 Argon。"
         },
         {
           "id": "混元3",
@@ -102,45 +97,45 @@
         },
         {
           "id": "KimiK3",
-          "label": "KimiK3 官方渠道",
-          "enable": [
-            "schema初始化-thinking",
-            "KimiK3思考",
-            "☆KimiK3预填充"
-          ],
-          "disable": [
-            "schema初始化"
-          ],
-          "effect": [
-            "kimi_partial_mode"
-          ],
-          "description": "Kimi Code或OpenRouter的官方渠道打开。"
-        },
-        {
-          "id": "KimiK3Other",
-          "label": "KimiK3 非官方渠道",
+          "label": "KimiK3",
           "enable": [
             "KimiK3思考"
           ],
-          "description": "其他非官方K3渠道打开。"
+          "description": "K3现在已无预填充，渠道合并"
         }
       ],
       "disable_group": [
-        "☆Gemini预填充",
+        "☆Gemini预填充对话",
+        "☆Gemini预填充回复",
         "☆混元3预填充",
         "☆KimiK3预填充",
         "Deepseek官方",
         "KimiK3思考",
         "硅基流动或其他",
+        "Gemini思考适配",
         "schema初始化-thinking",
         "DeepSeek禁词",
         "Glm/Gemini禁词",
-        "V4Pro神秘小指令",
-        "DeepseekV4pro思维链"
+        "梦境思客Gemini"
       ],
       "enable_group": [
         "schema初始化",
-        "默认思维链"
+        "梦境思客"
+      ]
+    },
+    {
+      "id": "额外模型适配",
+      "label": "额外模型适配",
+      "mode": "multiple",
+      "options": [
+        {
+          "id": "Gemini防截断",
+          "label": "Gemini防截断",
+          "description": "开启后会导致无法流式输出，但是可以解决截断问题。\n不过对于输入被拦截依然无法解决。",
+          "effect": [
+            "gemini_tool_output_mode"
+          ]
+        }
       ]
     },
     {
@@ -158,6 +153,33 @@
           },
           "enable": [
             "{match}"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "思维链设置",
+      "label": "思维链设置",
+      "mode": "single",
+      "disable_group": [
+        "默认思维链",
+        "发散思维链",
+        "DeepseekV4pro思维链",
+        "自定义思维链"
+      ],
+      "options": [
+        {
+          "id": "默认思维链",
+          "label": "默认思维链",
+          "enable": [
+            "默认思维链"
+          ]
+        },
+        {
+          "id": "发散思维链",
+          "label": "发散思维链",
+          "enable": [
+            "发散思维链"
           ]
         }
       ]
@@ -285,7 +307,7 @@
           "type": "between",
           "match": {
             "below": "/(.*)===抢话设定(.*)===/",
-            "above": "/(.*)===叙事者(.*)===/"
+            "above": "/(.*)===思客人格(.*)===/"
           },
           "enable": [
             "{match}"
@@ -295,7 +317,7 @@
     },
     {
       "id": "叙事者",
-      "label": "叙事者",
+      "label": "思客人格",
       "mode": "single",
       "options": [
         {
@@ -303,7 +325,7 @@
           "label": "{match}",
           "type": "between",
           "match": {
-            "below": "/(.*)===叙事者(.*)===/",
+            "below": "/(.*)===思客人格(.*)===/",
             "above": "/(.*)===字数要求(.*)===/"
           },
           "enable": [
@@ -366,7 +388,26 @@
           "label": "{match}",
           "type": "between",
           "match": {
-            "below": "/(.*)===其他设定(.*)===/",
+            "below": "/(.*)===选开功能(.*)===/",
+            "above": "/(.*)===数据库兼容(.*)===/"
+          },
+          "enable": [
+            "{match}"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "数据库兼容",
+      "label": "数据库兼容",
+      "mode": "multiple",
+      "options": [
+        {
+          "id": "数据库兼容",
+          "label": "{match}",
+          "type": "between",
+          "match": {
+            "below": "/(.*)===数据库兼容(.*)===/",
             "above": "/(.*)===设定结束(.*)===/"
           },
           "enable": [

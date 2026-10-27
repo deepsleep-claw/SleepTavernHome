@@ -1,4 +1,5 @@
 import { createPinia } from 'pinia';
+import { initializeGeminiToolOutputModeApi } from './api';
 import { describeError, SCRIPT_NAME, SCRIPT_VERSION, SETTINGS_BUTTON } from './config';
 import { mountToolsMenu } from './menu';
 import { initPanel } from './panel';
@@ -20,6 +21,7 @@ $(() => {
   }
   const pinia = createPinia();
   const store = useJimiStore(pinia);
+  const modeApi = initializeGeminiToolOutputModeApi(store);
   const panel = initPanel(pinia);
   owner.__toolOutputBridge?.destroy();
   const runtime = createJimiRuntime({
@@ -51,6 +53,7 @@ $(() => {
     destroy() {
       if (destroyed) return;
       destroyed = true;
+      modeApi.destroy();
       runtime.destroy();
       button.stop();
       menu.destroy();

@@ -8,6 +8,8 @@ loading: on-demand
 
 用于需要变量、事件、消息或酒馆助手API的交互界面。先读取 `/skills/builtin/html-project/SKILL.md`；接口细节按需读取 `/skills/builtin/tavern-helper-api/SKILL.md`。
 
+起步可调用 `manage_html_project`：`{"action":"template","project":"/character/files/ui/project.yaml","renderer":"tavern-helper"}`。逐个写入返回的文件；清单必须保留 `name`、`renderer`、`build.entry`、`regex.find`。普通正则的 `find_regex`、`replace_string` 属于编译产物，不能替代工程清单字段。
+
 - 界面代码运行在iframe中；通过酒馆助手公开接口通信，不抓取不稳定的内部DOM。
 - 初始化与销毁必须成对：清理事件、计时器、观察器、请求和挂载节点。
 - 对异步流程处理重复挂载、刷新、切换聊天和接口失败。

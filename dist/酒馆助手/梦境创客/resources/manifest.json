@@ -24,8 +24,8 @@
       "id": "html-project",
       "loading": "on-demand",
       "name": "HTML工程",
-      "sha256": "ba9e36c71d28b5fcd35878fe83809adb28481cb75d2af573ac9df35279f8c1f2",
-      "size": 4380,
+      "sha256": "08263b917fd0c6baa9cbff3701db0e696d6f55043583cba19fd3fb4f2871834f",
+      "size": 5194,
       "version": 1
     },
     {
@@ -34,8 +34,8 @@
       "id": "plain-html-regex",
       "loading": "on-demand",
       "name": "纯HTML正则界面",
-      "sha256": "76818673465e87c760f28e4075f87e79bf4274ccc5079bde2108d1e0353660d6",
-      "size": 1613,
+      "sha256": "30294abf3a63b571bddf38644c0cad824b73d25c3b90a64494aed5b5f1e78bf5",
+      "size": 1696,
       "version": 1
     },
     {
@@ -44,8 +44,8 @@
       "id": "tavern-helper-regex",
       "loading": "on-demand",
       "name": "酒馆助手正则界面",
-      "sha256": "6de03d3d628db9952547970fc4d3c87cf4af855b62e93ec83fe04277e0b3c5a4",
-      "size": 1242,
+      "sha256": "e60bea351eb224531cb203d02f51f523ff295ce5f8186710017739aa1d229743",
+      "size": 1417,
       "version": 1
     },
     {

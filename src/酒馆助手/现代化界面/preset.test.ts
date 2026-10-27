@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick, reactive } from 'vue';
 
 import { mountPresetEditor, type HostPromptManager } from './preset-module';
+import presetStyles from './preset.css?raw';
 import {
   assignToGroup,
   buildPromptList,
@@ -390,10 +391,155 @@ describe('预设提示词界面', () => {
     row('write').click();
     expect(document.getElementById('completion_prompt_manager_popup_edit')!.style.display).toBe('');
     [...document.querySelectorAll<HTMLButtonElement>('.th-modern-pm-view-button')].find(button => button.textContent === '查看')!.click();
-    expect(document.querySelector('.th-modern-pm-editor-placeholder')?.textContent).toContain('还没有可查看的内容');
+    expect(document.querySelector('.th-modern-pm-editor-placeholder')?.textContent).toContain('暂无可查看的内容');
 
     dispose();
     dispose = () => {};
     expect(inspect.parentElement?.id).toBe('completion_prompt_manager_popup');
+  });
+});
+
+describe('柏宝箱预设兼容', () => {
+  function installBaiBai(pm: HostPromptManager): void {
+    vi.stubGlobal('__baiBaiToolkitExtensionInstalled', {
+      installed: true,
+      __baiBaiToolkitPresetGroupGenerationGatePatch: {},
+    });
+    pm.serviceSettings.extensions!.baibaiToolkit = {
+      presetPromptGroups: {
+        groups: [{ id: 'bb_mode', name: '模式', enabled: false }],
+        prompts: { write: { groupId: 'bb_mode' }, chat: { groupId: 'bb_mode' } },
+      },
+    };
+  }
+
+  function grouping(mode: string): HTMLButtonElement {
+    return document.querySelector<HTMLButtonElement>(`[data-grouping="${mode}"]`)!;
+  }
+
+  it('有分组数据时默认调用柏宝箱渲染，并能往返切换编辑器', async () => {
+    createPresetPanel();
+    const style = document.createElement('style');
+    style.textContent = presetStyles;
+    document.body.append(style);
+    const pm = createPromptManager();
+    installBaiBai(pm);
+    const nativeAction = vi.fn();
+    pm.renderPromptManagerListItems = vi.fn(() => {
+      const container = document.getElementById('completion_prompt_manager')!;
+      if (!container.querySelector('.bai-bai-preset-group')) {
+        const button = document.createElement('button');
+        button.className = 'bai-bai-preset-group';
+        button.addEventListener('click', nativeAction);
+        container.append(button);
+      }
+    });
+    await mountWith(pm);
+    document.querySelector<HTMLButtonElement>('[data-tab="prompts"]')!.click();
+    expect(pm.renderPromptManagerListItems).toHaveBeenCalledOnce();
+    expect(grouping('baibai').getAttribute('aria-selected')).toBe('true');
+    const nativeGroup = document.querySelector<HTMLButtonElement>('.bai-bai-preset-group')!;
+    nativeGroup.click();
+    expect(nativeAction).toHaveBeenCalledOnce();
+    expect(document.querySelector('.th-modern-pm')?.hasAttribute('hidden')).toBe(true);
+    expect(getComputedStyle(document.querySelector('.th-modern-pm')!).display).toBe('none');
+    expect(getComputedStyle(document.getElementById('completion_prompt_manager')!).display).toBe('block');
+    expect(document.getElementById('completion_prompt_manager_popup_edit')?.parentElement?.id).toBe('completion_prompt_manager_popup');
+
+    grouping('default').click();
+    expect(document.getElementById('left-nav-panel')?.getAttribute('data-th-preset-grouping')).toBe('default');
+    await flushLayout();
+    row('write').click();
+    expect(document.querySelector('.is-group-header')?.textContent).toContain('输出模式');
+    expect(document.getElementById('completion_prompt_manager_popup_edit')?.closest('.th-modern-pm-editor')).not.toBeNull();
+    grouping('baibai').click();
+    await flushLayout();
+    expect(document.querySelector('.bai-bai-preset-group')).toBe(nativeGroup);
+    expect(document.getElementById('completion_prompt_manager_popup_edit')?.parentElement?.id).toBe('completion_prompt_manager_popup');
+    grouping('default').click();
+    await flushLayout();
+    expect(grouping('default').getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('默认列表和编辑器反映柏宝箱整组禁用，保留条目自身开关值', async () => {
+    createPresetPanel();
+    const pm = createPromptManager();
+    installBaiBai(pm);
+    await mountWith(pm);
+    grouping('default').click();
+    row('write').click();
+    const toggle = row('write').querySelector<HTMLButtonElement>('[role="switch"]')!;
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    expect(toggle.disabled).toBe(true);
+    expect(toggle.title).toContain('柏宝箱');
+    expect(document.querySelector<HTMLButtonElement>('.is-group-header [role="switch"]')?.disabled).toBe(true);
+    expect(row('write').textContent).toContain('柏宝箱禁用');
+    expect(document.querySelector<HTMLButtonElement>('.th-modern-pm-editor-header [role="switch"]')?.disabled).toBe(true);
+    expect(pm.getPromptOrderForCharacter(pm.activeCharacter).find(entry => entry.identifier === 'write')?.enabled).toBe(true);
+  });
+
+  it('分组开关关闭后恢复条目状态；切换预设重新选择分组页签', async () => {
+    createPresetPanel();
+    const pm = createPromptManager();
+    installBaiBai(pm);
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.id = 'bai_bai_toolkit_preset_grouping_enabled';
+    checkbox.checked = true;
+    document.body.append(checkbox);
+    await mountWith(pm);
+    grouping('default').click();
+    checkbox.checked = false;
+    checkbox.dispatchEvent(new Event('input', { bubbles: true }));
+    await flushLayout();
+    expect(row('write').querySelector('[role="switch"]')?.getAttribute('aria-checked')).toBe('true');
+    pm.serviceSettings.prompts = [...pm.serviceSettings.prompts];
+    document.getElementById('completion_prompt_manager')!.append(document.createElement('span'));
+    await flushLayout();
+    expect(grouping('baibai').getAttribute('aria-selected')).toBe('true');
+    pm.serviceSettings.extensions = {};
+    pm.serviceSettings.prompts = [...pm.serviceSettings.prompts];
+    document.getElementById('completion_prompt_manager')!.append(document.createElement('span'));
+    await flushLayout();
+    expect(grouping('default').getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('晚加载的柏宝箱设置进入参数页，事件及原位置在卸载后保留', async () => {
+    createPresetPanel();
+    const pm = createPromptManager();
+    await mountWith(pm);
+    const settings = document.createElement('div');
+    settings.className = 'bai_bai_toolkit_settings';
+    settings.innerHTML = '<fieldset><label><input type="checkbox" id="bai_bai_toolkit_preset_grouping_enabled">预设分组</label></fieldset>';
+    const fieldset = settings.firstElementChild!;
+    const changed = vi.fn();
+    fieldset.querySelector('input')!.addEventListener('input', changed);
+    document.body.append(settings);
+    await flushLayout();
+    expect(fieldset.closest('.th-modern-preset-baibai-settings')).not.toBeNull();
+    fieldset.querySelector('input')!.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(changed).toHaveBeenCalledOnce();
+    expect(document.querySelector('.th-modern-preset-group-tabs')?.hasAttribute('hidden')).toBe(false);
+    dispose();
+    dispose = () => {};
+    expect(fieldset.parentElement).toBe(settings);
+  });
+
+  it('无 input 事件的编辑命令和立即切换条目都会保存当前表单', async () => {
+    createPresetPanel();
+    const pm = createPromptManager();
+    await mountWith(pm);
+    const source = document.getElementById('completion_prompt_manager_popup_entry_form_prompt') as HTMLTextAreaElement;
+    const editor = document.createElement('div');
+    editor.className = 'bai-bai-toolkit-preset-prompt-codemirror-editor';
+    source.after(editor);
+    source.value = '命令修改';
+    editor.textContent = '命令修改';
+    await new Promise(resolve => setTimeout(resolve, 500));
+    expect(pm.getPromptById('main')?.content).toBe('命令修改');
+    source.value = '立即切换前修改';
+    row('intro').click();
+    expect(pm.getPromptById('main')?.content).toBe('立即切换前修改');
+    expect(source.value).toBe('开场');
   });
 });

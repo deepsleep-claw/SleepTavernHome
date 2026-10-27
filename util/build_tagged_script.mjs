@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createCdnRuntime } from './cdn_runtime.mjs';
 
 const defaultRepositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const stableVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
@@ -63,26 +64,30 @@ function createCdnUrl(repository, tag, entry) {
   return `https://cdn.jsdelivr.net/gh/${repository}@${encodeURIComponent(tag)}/${encodeEntry(entry)}`;
 }
 
-function createInstallerContent(config, updater) {
+export function createInstallerContent(config, updater) {
   const updaterUrl = JSON.stringify(updater.url);
   const updaterVersion = JSON.stringify(updater.version);
   const updaterApiMajor = JSON.stringify(config.updaterApiMajor);
   return `const updaterUrl = ${updaterUrl};
 const config = ${JSON.stringify(config, null, 2)};
+const source = getVariables({ type: 'script', script_id: getScriptId() }).__updater?.source;
+globalThis.__thCdnSource = source;
+const transport = (${createCdnRuntime.toString()})(source);
 const describeError = error => error instanceof Error && error.message ? error.message : String(error || '未知错误');
 
 try {
-  const updater = await import(updaterUrl);
-  if (updater.UPDATER_API_MAJOR !== ${updaterApiMajor}) {
-    throw new Error(\`更新器 API 不兼容：需要 v${config.updaterApiMajor}，实际为 v\${updater.UPDATER_API_MAJOR ?? '未知'}\`);
-  }
-  if (updater.UPDATER_VERSION !== ${updaterVersion}) {
-    throw new Error(\`更新器版本不匹配：需要 ${updater.version}，实际为 \${updater.UPDATER_VERSION ?? '未知'}\`);
-  }
-  if (typeof updater.bootPlugin !== 'function') {
-    throw new Error('更新器没有导出 bootPlugin()');
-  }
-  await updater.bootPlugin(config);
+  const loaded = await transport.importModule(updaterUrl, updater => {
+    if (updater.UPDATER_API_MAJOR !== ${updaterApiMajor}) {
+      throw new Error(\`更新器 API 不兼容：需要 v${config.updaterApiMajor}，实际为 v\${updater.UPDATER_API_MAJOR ?? '未知'}\`);
+    }
+    if (updater.UPDATER_VERSION !== ${updaterVersion}) {
+      throw new Error(\`更新器版本不匹配：需要 ${updater.version}，实际为 \${updater.UPDATER_VERSION ?? '未知'}\`);
+    }
+    if (typeof updater.bootPlugin !== 'function') {
+      throw new Error('更新器没有导出 bootPlugin()');
+    }
+  });
+  await loaded.module.bootPlugin(config);
 } catch (error) {
   console.error(\`[\${config.pluginName}] 启动失败。\`, error);
   if (typeof toastr !== 'undefined') {

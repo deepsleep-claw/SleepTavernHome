@@ -213,7 +213,7 @@ describe('全局组合库', () => {
       id: 'effects',
       label: '功能',
       mode: 'multiple',
-      options: [{ id: 'kimi', label: 'Kimi', effect: ['kimi_partial_mode'] }],
+      options: [{ id: 'gemini', label: 'Gemini 工具输出模式', effect: ['gemini_tool_output_mode'] }],
     });
     const id = 'with-effect';
     data.global[SELECTION_PRESETS_KEY] = {
@@ -225,13 +225,13 @@ describe('全局组合库', () => {
           name: '功能组合',
           selections: [
             { group_id: 'styles', group_label: '文风', option_id: 'styles-range', prompt_name: '乙', label: '乙' },
-            { group_id: 'effects', group_label: '功能', option_id: 'kimi', label: 'Kimi' },
+            { group_id: 'effects', group_label: '功能', option_id: 'gemini', label: 'Gemini 工具输出模式' },
           ],
         },
       ],
     };
     const result = await store.applySelectionPreset(id);
-    expect(result?.messages[0]).toContain('Kimi');
+    expect(result?.messages[0]).toContain('Gemini 工具输出模式');
     expect(data.current.prompts[2].enabled).toBe(true);
     expect(data.global[SELECTION_PRESETS_KEY].presets[0].selections).toHaveLength(2);
   });
@@ -241,7 +241,7 @@ describe('全局组合库', () => {
       id: 'effects',
       label: '功能',
       mode: 'multiple',
-      options: [{ id: 'kimi', label: 'Kimi', effect: ['kimi_partial_mode'] }],
+      options: [{ id: 'gemini', label: 'Gemini 工具输出模式', effect: ['gemini_tool_output_mode'] }],
     });
     const api = {
       version: 1,
@@ -251,7 +251,7 @@ describe('全局组合库', () => {
       },
       subscribe: () => ({ stop() {} }),
     };
-    Object.assign(window, { __dream_whale_kimi_partial_mode_api__: api });
+    Object.assign(window, { __dream_whale_gemini_tool_output_mode_api__: api });
     try {
       data.global[SELECTION_PRESETS_KEY] = {
         version: 1,
@@ -262,7 +262,7 @@ describe('全局组合库', () => {
             name: '组合',
             selections: [
               { group_id: 'styles', group_label: '文风', option_id: 'styles-range', prompt_name: '乙', label: '乙' },
-              { group_id: 'effects', group_label: '功能', option_id: 'kimi', label: 'Kimi' },
+              { group_id: 'effects', group_label: '功能', option_id: 'gemini', label: 'Gemini 工具输出模式' },
             ],
           },
         ],
@@ -273,7 +273,7 @@ describe('全局组合库', () => {
       expect(data.current).toEqual(previous);
       expect(data.global[SELECTION_PRESETS_KEY].active_id).toBe('');
     } finally {
-      Reflect.deleteProperty(window, '__dream_whale_kimi_partial_mode_api__');
+      Reflect.deleteProperty(window, '__dream_whale_gemini_tool_output_mode_api__');
     }
   });
 });

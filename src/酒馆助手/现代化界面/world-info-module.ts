@@ -1,5 +1,6 @@
 import { watch } from 'vue';
 
+import { isBaiBaiInstalled, observeBaiBaiSettings } from './baibai-compat';
 import { getHostDocument, getHostWindow } from './host-context';
 import { mountMobileWorldSelects } from './mobile-world-select-module';
 import type { useModernLayoutStore } from './store';
@@ -1215,15 +1216,7 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
         main.append(listPane, editorPane);
         popup.append(shell);
 
-        const worldControls = popup.querySelector<HTMLElement>('#world_create_button')?.closest<HTMLElement>('.flex-container');
-        if (worldControls) {
-            moveNode(worldControls, worldbar, this.moved);
-        }
-
-        const nativeTools = popup.querySelector<HTMLElement>('#world_info_search')?.closest<HTMLElement>('.flex-container');
-        if (nativeTools) {
-            moveNode(nativeTools, toolbar, this.moved);
-        }
+        this.moveNativeToolbar(popup, worldbar, toolbar);
 
         this.multiButton = createIconButton(this.document, 'menu_button th-modern-wi-multi-toggle', '多选条目', 'fa-regular fa-square-check');
         this.deleteSelectedButton = createIconButton(this.document, 'menu_button th-modern-wi-delete-selected danger', '删除选中条目', 'fa-regular fa-trash-can');
@@ -1272,6 +1265,31 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
         this.shell = shell;
         this.listPane = listPane;
         this.editorPane = editorPane;
+    }
+
+    private moveNativeToolbar(popup: HTMLElement, worldbar: HTMLElement, toolbar: HTMLElement): void {
+        for (const [selector, target] of [['#world_create_button', worldbar], ['#world_info_search', toolbar]] as const) {
+            const control = popup.querySelector<HTMLElement>(selector);
+            if (!control || target.contains(control)) continue;
+            const row = control.closest<HTMLElement>('.flex-container');
+            const node = row && popup.contains(row) && !row.contains(target) ? row : control;
+            moveNode(node, target, this.moved);
+        }
+        const header = popup.querySelector<HTMLElement>('.bai-bai-wi-popup-header');
+        for (const node of Array.from(header?.childNodes ?? [])) {
+            if (node.nodeType === 3) {
+                if (node.textContent?.trim()) moveNode(node, worldbar, this.moved);
+                continue;
+            }
+            if (node.nodeType !== 1) continue;
+            const element = node as HTMLElement;
+            if (element.classList.contains('bai-bai-wi-popup-source-stash')) continue;
+            const worldControl = element.matches('#world_editor_select, #world_create_button, .select2-container, [data-source="world_editor_select"]');
+            const target = worldControl ? worldbar : toolbar;
+            // 选择器控制器自行管理这些临时节点，恢复原生控件时不能重新插入已销毁的选择器。
+            if (element.classList.contains('th-modern-mobile-world-control')) target.append(node);
+            else moveNode(node, target, this.moved);
+        }
     }
 
     private bindEvents(): void {
@@ -1341,6 +1359,10 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
             this.observer.observe(this.listPane, { childList: true });
         }
         this.observer.observe(list, { childList: true });
+        const popup = this.findWorldPopup();
+        if (popup) this.observer.observe(popup, { childList: true });
+        const header = popup?.querySelector('.bai-bai-wi-popup-header');
+        if (header) this.observer.observe(header, { childList: true });
         this.observedList = list;
     }
 
@@ -1355,6 +1377,10 @@ class NativeWorldInfoEnhancer implements NativeWorldInfoController {
                 return;
             }
             this.syncSelectedWorld();
+            const popup = this.findWorldPopup();
+            const worldbar = this.shell?.querySelector<HTMLElement>('.th-modern-wi-worldbar');
+            const toolbar = this.shell?.querySelector<HTMLElement>('.th-modern-wi-toolbar');
+            if (popup && worldbar && toolbar) this.moveNativeToolbar(popup, worldbar, toolbar);
             this.observeCurrentList();
             this.enhanceEntries();
             this.restoreSelectionAfterRender();
@@ -1833,7 +1859,9 @@ export function mountWorldInfoEditor(store: Store): { destroy: () => void } {
     };
 
     const syncWorldSelects = (enabled: boolean, selectorEnabled: boolean) => {
-        if (!enabled) {
+        const useBaiBai = isBaiBaiInstalled() && store.settings.baibaiWorldSelector === 'baibai';
+        hostDocument.body.classList.toggle('th-modern-baibai-selector-modern', enabled && selectorEnabled && !useBaiBai);
+        if (!enabled || useBaiBai) {
             worldSelects?.destroy();
             worldSelects = undefined;
             return;
@@ -1843,6 +1871,7 @@ export function mountWorldInfoEditor(store: Store): { destroy: () => void } {
                 enabled: selectorEnabled,
                 onEnabledChange: nextEnabled => {
                     store.settings.modernWorldSelect = nextEnabled;
+                    if (isBaiBaiInstalled()) store.settings.baibaiWorldSelector = nextEnabled ? 'modern' : 'baibai';
                 },
             });
             return;
@@ -1853,7 +1882,8 @@ export function mountWorldInfoEditor(store: Store): { destroy: () => void } {
     const sync = () => {
         scheduledSync = 0;
         const shouldEnable = store.is_active && store.settings.modernWorldInfoEditor;
-        syncWorldSelects(shouldEnable, store.settings.modernWorldSelect);
+        const available = isBaiBaiInstalled();
+        syncWorldSelects(shouldEnable, available ? store.settings.baibaiWorldSelector !== 'baibai' : store.settings.modernWorldSelect);
         const worldInfo = findWorldInfo();
         observeWorldInfo(worldInfo);
         const isOpen = worldInfo?.classList.contains('openDrawer') ?? false;
@@ -1888,13 +1918,16 @@ export function mountWorldInfoEditor(store: Store): { destroy: () => void } {
     }
 
     const stopWatch = watch(
-        () => [store.is_active, store.settings.modernWorldInfoEditor, store.settings.modernWorldSelect] as const,
+        () => [store.is_active, store.settings.modernWorldInfoEditor, store.settings.modernWorldSelect, store.settings.baibaiWorldSelector] as const,
         scheduleSync,
         { immediate: true },
     );
+    const stopBaiBaiObserver = observeBaiBaiSettings(scheduleSync);
 
     return {
         destroy() {
+            stopBaiBaiObserver();
+            hostDocument.body.classList.remove('th-modern-baibai-selector-modern');
             stopWatch();
             observer?.disconnect();
             if (scheduledSync) {

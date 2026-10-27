@@ -13,6 +13,8 @@
 
 `project.yaml` 示例：
 
+必填字段是 `name`、`renderer`、`build.entry`、`regex.find`。`manage_html_project` 的 `template` 操作可返回完整文件集；将 `files` 中的内容写入返回的路径，再运行检查。`styles`、`scripts` 默认为空数组，`placement` 默认为 `[2]`，但所有显式列出的文件都必须存在。
+
 ```yaml
 name: 梦境状态栏
 renderer: plain-html # 编译目标；酒馆助手iframe界面使用tavern-helper
@@ -50,6 +52,14 @@ HTML片段使用 `<!--#include file="components/status.html" -->`。路径必须
 `build.entry`、`styles`、`scripts` 中列出的文件必须先写入。纯 HTML 工程保留空的 `scripts`；需要交互时将 `renderer` 改为 `tavern-helper`，创建 `scripts/main.js` 后再把它加入列表。JavaScript 模块相对导入可用 `../` 返回工程内的上层目录，但不能越过工程根；HTML include 和清单路径不能包含 `..`。
 
 实际工具调用形状：
+
+获取交互工程模板（仅返回文件，不执行写入）：
+
+```json
+{"action":"template","project":"/character/files/status/project.yaml","renderer":"tavern-helper"}
+```
+
+写入返回的所有文件后检查：
 
 ```json
 {"action":"check","project":"/character/files/status/project.yaml"}

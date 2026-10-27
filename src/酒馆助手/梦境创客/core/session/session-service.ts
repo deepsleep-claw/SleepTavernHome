@@ -176,6 +176,7 @@ function mountConfiguredSkills(configuration: AgentConfiguration, availableSkill
 }
 
 export class CardAgentSessionService {
+  private streamingView?: SessionView;
   private executing = false;
   private compacting = false;
   private compactionResumeStatus?: SessionLifecycleStatus;
@@ -408,15 +409,7 @@ export class CardAgentSessionService {
       status: this.status,
       tavernChats: this.tavernChatWorkspace?.exportRuntime(),
       title: this.title,
-      ui: klona(this.ui.filter(item => !item.hidden)).map(item => ({
-        ...item,
-        attachments: item.attachments?.map(attachment => ({
-          ...attachment,
-          missing: Boolean(
-            attachment.fileId && this.workspaceStore && !this.workspaceStore.getReference(attachment.fileId),
-          ),
-        })),
-      })),
+      ui: this.uiView(),
       warnings: [...this.warnings],
       workingFiles: (this.repository?.snapshot() ?? []).map(file => ({
         ...file,
@@ -2101,7 +2094,21 @@ export class CardAgentSessionService {
   private notify(): void {
     this.cancelStreamingUpdate?.();
     this.cancelStreamingUpdate = undefined;
-    this.onUpdate?.(this.view());
+    this.streamingView = undefined;
+    if (this.onUpdate) {
+      this.streamingView = this.view();
+      this.onUpdate(this.streamingView);
+    }
+  }
+
+  private uiView(): SessionUiItem[] {
+    return klona(this.ui.filter(item => !item.hidden)).map(item => ({
+      ...item,
+      attachments: item.attachments?.map(attachment => ({
+        ...attachment,
+        missing: Boolean(attachment.fileId && this.workspaceStore && !this.workspaceStore.getReference(attachment.fileId)),
+      })),
+    }));
   }
 
   /**
@@ -2112,7 +2119,14 @@ export class CardAgentSessionService {
     if (this.cancelStreamingUpdate || !this.onUpdate) return;
     this.cancelStreamingUpdate = this.scheduleStreamingUpdate(() => {
       this.cancelStreamingUpdate = undefined;
-      this.onUpdate?.(this.view());
+      // 增量只修改时间线；工作区、技能和操作日志在工具边界由 notify 更新。
+      const previous = this.streamingView ?? this.view();
+      this.streamingView = {
+        ...previous,
+        ui: this.uiView(),
+        contextUsage: this.runner?.state.contextUsage ?? previous.contextUsage,
+      };
+      this.onUpdate?.(this.streamingView);
     });
   }
 

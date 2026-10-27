@@ -30,6 +30,15 @@
       </button>
     </div>
 
+    <label v-if="updater.setSource" class="th-updater-source">
+      下载线路
+      <select :value="snapshot.source ?? 'auto'" :disabled="isBusy" @change="changeSource">
+        <option value="auto">自动（JSDMirror 优先）</option>
+        <option value="jsdmirror">JSDMirror 优先</option>
+        <option value="jsdelivr">jsDelivr 优先</option>
+      </select>
+      <small v-if="snapshot.loadedFrom">当前：{{ snapshot.loadedFrom }}</small>
+    </label>
     <small v-if="snapshot.error" class="th-updater-error">{{ snapshot.error }}</small>
   </section>
 </template>
@@ -37,7 +46,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, shallowRef } from 'vue';
 
-import type { PluginUpdaterController, UpdaterSnapshot } from './contracts';
+import type { PluginUpdaterController, UpdaterSnapshot, UpdateSource } from './contracts';
 
 const props = defineProps<{
   updater: PluginUpdaterController;
@@ -64,6 +73,10 @@ async function checkForUpdates() {
   } catch {
     // 错误已经写入更新器快照，由面板统一显示。
   }
+}
+
+function changeSource(event: Event) {
+  props.updater.setSource?.((event.target as HTMLSelectElement).value as UpdateSource);
 }
 
 async function installUpdate() {
@@ -135,6 +148,19 @@ async function installUpdate() {
   grid-column: 1 / -1;
   color: var(--crimson70, #d66);
   overflow-wrap: anywhere;
+}
+
+.th-updater-source {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.th-updater-source select {
+  width: auto;
+  min-width: 0;
 }
 
 @media (max-width: 600px) {

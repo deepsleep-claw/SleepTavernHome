@@ -2,10 +2,7 @@ import { checkMinimumVersion } from '@util/common';
 import { teleportStyle } from '@util/script';
 import type { PluginActivationContext, PluginRuntime } from '../../公共模块/脚本更新器/contracts';
 import { createProbeModel, createProbeStream } from './core/provider-probe';
-import {
-  configureDreamCardAgentResourceBase,
-  getDreamCardAgentRuntime,
-} from './runtime/dream-card-agent-runtime';
+import { configureDreamCardAgentResourceBase, getDreamCardAgentRuntime } from './runtime/dream-card-agent-runtime';
 import {
   DEFAULT_FLOATING_BUTTON_ANCHOR,
   floatingButtonOffsetForPosition,
@@ -307,9 +304,14 @@ export async function activate(context: PluginActivationContext): Promise<Plugin
 // 兼容开发阶段一直沿用的 `import dist/.../index.js`。正式更新器在动态导入后会
 // 立即调用 activate，因此会先把 activationRequested 置为 true，不会重复启动。
 if (clientEnvironment()) mountClientWindow();
-else setTimeout(() => {
-  if (activationRequested) return;
-  void activate(createStandaloneActivationContext()).catch(error => {
-    console.error(`[${DREAM_CARD_AGENT_NAME}] 本地直接导入启动失败。`, error);
-  });
-}, 0);
+else
+  setTimeout(() => {
+    if (
+      activationRequested ||
+      (globalThis as typeof globalThis & { __thManagedPluginLoad?: string }).__thManagedPluginLoad === PLUGIN_ID
+    )
+      return;
+    void activate(createStandaloneActivationContext()).catch(error => {
+      console.error(`[${DREAM_CARD_AGENT_NAME}] 本地直接导入启动失败。`, error);
+    });
+  }, 0);

@@ -8,6 +8,7 @@ import { mountExtensionSettings } from './extension-settings-module';
 import { mountMobileWorldSelects } from './mobile-world-select-module';
 import pickerStyles from './mobile-world-select.css?raw';
 import { mountWorldInfoEditor } from './world-info-module';
+import worldStyles from './world-info.css?raw';
 
 type Store = Parameters<typeof mountWorldInfoEditor>[0];
 let dispose = () => {};
@@ -156,6 +157,93 @@ describe('角色信息面板折叠', () => {
     expect(header.parentElement).toBe(panel);
     expect(getComputedStyle(header).display).not.toBe('none');
     expect(document.querySelectorAll('.th-modern-character-summary-main')).toHaveLength(1);
+  });
+});
+
+describe('柏宝箱世界书兼容', () => {
+  function createBaiBaiWorldInfo(): void {
+    vi.stubGlobal('__baiBaiToolkitExtensionInstalled', { installed: true });
+    document.body.innerHTML = `
+      <div id="WorldInfo" class="openDrawer"><div id="world_popup">
+        <div class="bai-bai-wi-popup-header">
+          <div class="bai-bai-wi-popup-source-stash" hidden></div>
+          <select id="world_editor_select"><option value="0">世界书</option></select>
+          <button id="world_create_button">创建</button><input id="world_info_search">
+          <button id="world_import">导入</button>
+        </div><div id="world_popup_entries_list"></div>
+      </div><div id="WIMultiSelector">
+        <select id="world_info" multiple><option value="0" selected>世界书</option></select>
+        <div class="bai-bai-wi-global-selector-display">世界书</div>
+      </div></div>`;
+    const style = document.createElement('style');
+    style.dataset.modernTestStyle = '';
+    style.textContent = `${pickerStyles}\n${worldStyles}`;
+    document.head.append(style);
+  }
+
+  it('切换选择器时只显示所选入口，卸载后恢复柏宝箱入口', async () => {
+    createBaiBaiWorldInfo();
+    const store = createStore();
+    store.settings.modernWorldSelect = true;
+    store.settings.baibaiWorldSelector = 'modern';
+    const nativeSelect = document.getElementById('world_info') as HTMLSelectElement;
+    const onChange = vi.fn();
+    nativeSelect.addEventListener('change', onChange);
+    dispose = mountWorldInfoEditor(store).destroy;
+    await flushLayout();
+    const baiDisplay = document.querySelector<HTMLElement>('.bai-bai-wi-global-selector-display')!;
+    expect(getComputedStyle(baiDisplay).display).toBe('none');
+    expect(document.querySelectorAll('[data-source="world_info"]')).toHaveLength(1);
+
+    store.settings.baibaiWorldSelector = 'baibai';
+    await flushLayout();
+    expect(getComputedStyle(baiDisplay).display).not.toBe('none');
+    expect(document.querySelectorAll('.th-modern-mobile-world-control')).toHaveLength(0);
+    expect(nativeSelect.options[0].selected).toBe(true);
+    nativeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(onChange).toHaveBeenCalledOnce();
+
+    store.settings.baibaiWorldSelector = 'modern';
+    await flushLayout();
+    expect(document.querySelectorAll('[data-source="world_info"]')).toHaveLength(1);
+    dispose();
+    dispose = () => {};
+    expect(getComputedStyle(baiDisplay).display).not.toBe('none');
+    expect(document.querySelectorAll('.th-modern-mobile-world-control')).toHaveLength(0);
+  });
+
+  it('接收柏宝箱拆分后的工具栏控件，保留事件并恢复原位置', async () => {
+    createBaiBaiWorldInfo();
+    const header = document.querySelector('.bai-bai-wi-popup-header')!;
+    const create = document.getElementById('world_create_button')!;
+    const search = document.getElementById('world_info_search')!;
+    const importButton = document.getElementById('world_import')!;
+    const clicked = vi.fn();
+    create.addEventListener('click', clicked);
+    dispose = mountWorldInfoEditor(createStore()).destroy;
+    await flushLayout();
+    expect(create.closest('.th-modern-wi-worldbar')).not.toBeNull();
+    expect(document.getElementById('world_editor_select')?.closest('.th-modern-wi-worldbar')).not.toBeNull();
+    expect(search.closest('.th-modern-wi-toolbar')).not.toBeNull();
+    expect(importButton.closest('.th-modern-wi-toolbar')).not.toBeNull();
+    create.click();
+    expect(clicked).toHaveBeenCalledOnce();
+    dispose();
+    dispose = () => {};
+    expect(create.parentElement).toBe(header);
+    expect(search.parentElement).toBe(header);
+    expect(importButton.parentElement).toBe(header);
+  });
+
+  it('现代工具栏挂载后出现的柏宝箱控件也可接收', async () => {
+    createBaiBaiWorldInfo();
+    dispose = mountWorldInfoEditor(createStore()).destroy;
+    await flushLayout();
+    const button = document.createElement('button');
+    button.textContent = '导出';
+    document.querySelector('.bai-bai-wi-popup-header')!.append(button);
+    await flushLayout();
+    expect(button.closest('.th-modern-wi-toolbar')).not.toBeNull();
   });
 });
 

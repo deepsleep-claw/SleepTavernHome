@@ -170,8 +170,37 @@ body.th-modern-enabled #left-nav-panel[data-th-preset-tab='prompts'] .th-modern-
   flex: 0 0 auto;
 }
 
-body.th-modern-enabled #left-nav-panel.th-modern-preset-enabled #completion_prompt_manager {
+body.th-modern-enabled #left-nav-panel.th-modern-preset-enabled:not([data-th-preset-grouping='baibai']) #completion_prompt_manager {
   display: none !important;
+}
+
+body.th-modern-enabled #left-nav-panel[data-th-preset-grouping='baibai'] #completion_prompt_manager {
+  display: block !important;
+  min-height: 0;
+  overflow: auto;
+}
+
+body.th-modern-enabled #left-nav-panel[data-th-preset-grouping='baibai'] .th-modern-pm,
+body.th-modern-enabled #left-nav-panel:not([data-th-preset-tab='prompts']) .th-modern-preset-group-tabs,
+body.th-modern-enabled #left-nav-panel .th-modern-preset-group-tabs[hidden],
+body.th-modern-enabled #left-nav-panel:not([data-th-preset-tab='params']) .th-modern-preset-baibai-settings {
+  display: none !important;
+}
+
+body.th-modern-enabled #left-nav-panel .th-modern-preset-group-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+body.th-modern-enabled #left-nav-panel .th-modern-preset-baibai-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+body.th-modern-enabled #left-nav-panel .th-modern-preset-baibai-settings fieldset {
+  min-width: 0;
 }
 
 /* ---------- 提示词页 ---------- */
@@ -822,10 +851,6 @@ body.th-modern-enabled #left-nav-panel.th-modern-preset-enabled .th-modern-pm-fi
 
 body.th-modern-enabled #left-nav-panel.th-modern-preset-enabled .th-modern-pm-group-summary {
   margin: 0;
-}
-
-body.th-modern-enabled #left-nav-panel.th-modern-preset-enabled .th-modern-pm-meta-hint {
-  color: var(--th-modern-pm-muted);
 }
 
 body.th-modern-enabled #left-nav-panel.th-modern-preset-enabled .th-modern-pm-editor-body {

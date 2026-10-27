@@ -1,3 +1,4 @@
+import { currentCdnRuntime } from '../../../../公共模块/脚本更新器/sources';
 import type { TavernFileClient } from '../persistence/file-client';
 import type { AgentSettingsStore, BuiltinSkillPackageReference } from '../persistence/settings';
 import { sha256 } from '../transaction/canonical';
@@ -77,7 +78,7 @@ export class RemoteBuiltinSkillStore {
 
   async refreshManifest(): Promise<RemoteSkillManifest> {
     const url = new URL('manifest.json', this.baseUrl).href;
-    const response = await fetch(url, { cache: 'no-store' });
+    const response = await currentCdnRuntime().fetchResource(url, { cache: 'no-store' });
     if (!response.ok) throw new Error(`内置Skill清单下载失败（HTTP ${response.status}）：${url}`);
     const value = (await response.json()) as unknown;
     if (!validManifest(value)) throw new Error(`内置Skill清单格式或协议版本不受支持：${url}`);
@@ -197,7 +198,7 @@ export class RemoteBuiltinSkillStore {
     const sourceUrl = new URL(descriptor.file, this.baseUrl).href;
     let response: Response;
     try {
-      response = await fetch(sourceUrl, { cache: 'no-store' });
+      response = await currentCdnRuntime().fetchResource(sourceUrl, { cache: 'no-store' });
     } catch (error) {
       // 新资源失败时，协议兼容的旧包仍可继续使用。
       if (currentCache) {
