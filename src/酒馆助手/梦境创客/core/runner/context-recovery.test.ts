@@ -30,12 +30,13 @@ describe('上下文恢复', () => {
       }
       return result(request.purpose === 'summary' ? '旧目标已整理' : '继续完成');
     });
+    const journal = new MemoryRunnerJournal();
     const runner = new AgentRunner({
       contextWindow: 20_000,
       executor: { execute },
       initialMessages: history(),
       headerMessageCount: 1,
-      journal: new MemoryRunnerJournal(),
+      journal,
       tools: [],
     });
     const state = await runner.start('继续');
@@ -43,6 +44,9 @@ describe('上下文恢复', () => {
     expect(execute.mock.calls.map(([request]) => request.purpose)).toEqual([undefined, 'summary', undefined]);
     expect(JSON.stringify(execute.mock.calls[2][0].messages)).toContain('旧目标已整理');
     expect(state.messages).toContainEqual({ role: 'user', content: '继续' });
+    expect(journal.events.find(event => event.type === 'context-compaction-started')).toMatchObject({
+      trigger: 'overflow',
+    });
   });
 
   it('同一步恢复后仍超限会停止，不反复压缩', async () => {

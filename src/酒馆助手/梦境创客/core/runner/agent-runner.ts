@@ -6,6 +6,7 @@ import {
   compactModelMessages,
   measureContext,
   estimateTokens,
+  estimateToolOutputTokens,
   normalizeTokenUsage,
   outputTokenBudget,
   type ApiUsageBaseline,
@@ -21,11 +22,14 @@ import type {
   RunnerToolInputStart,
 } from './step-executor';
 import { COMPACT_CONTEXT_TOOL, type RunnerTool, type ToolConfirmation } from './tools';
-import { isRichToolOutput, type ToolResultOutput } from './tool-output';
+import { isRichToolOutput, modelToolOutput } from './tool-output';
+import { MAX_TOOL_BATCH_TOKENS, ToolOutputBudget } from './tool-output-budget';
 import { isSameOrDescendant, normalizeWorkspacePath } from '../workspace/path';
 
 export type RunnerStatus =
   'completed' | 'context-exhausted' | 'failed' | 'idle' | 'running' | 'stopped' | 'waiting-approval';
+
+export type CompactionTrigger = 'threshold' | 'overflow' | 'manual' | 'model';
 
 export type RunnerEvent =
   | { at: number; messages: ModelMessage[]; type: 'model-completed' }
@@ -34,8 +38,21 @@ export type RunnerEvent =
   | { at: number; call: RunnerToolCall; output: unknown; type: 'tool-completed' }
   | { at: number; call: RunnerToolCall; error: string; type: 'tool-failed' }
   | { at: number; message: string; ids?: string[]; type: 'guidance-injected' }
-  | { at: number; summary: string; beforeTokens?: number; afterTokens?: number; type: 'context-compacted' }
-  | { at: number; type: 'context-compaction-started' }
+  | {
+      at: number;
+      summary: string;
+      beforeTokens?: number;
+      afterTokens?: number;
+      trigger?: CompactionTrigger;
+      type: 'context-compacted';
+    }
+  | {
+      at: number;
+      trigger?: CompactionTrigger;
+      inputTokens?: number;
+      contextWindow?: number;
+      type: 'context-compaction-started';
+    }
   | { at: number; reason: string; type: 'context-compaction-skipped' }
   | { at: number; attempt: number; reason: string; type: 'context-compaction-retrying' }
   | { at: number; failure?: string; status: RunnerStatus; type: 'status' };
@@ -97,9 +114,7 @@ export type AgentRunnerOptions = {
 };
 
 function toolResultMessage(call: RunnerToolCall, output: unknown): ModelMessage {
-  const modelOutput: ToolResultOutput = isRichToolOutput(output)
-    ? output.modelOutput
-    : { type: 'json', value: output as never };
+  const modelOutput = modelToolOutput(output);
   return {
     content: [
       {
@@ -164,7 +179,7 @@ export class AgentRunner {
   private readonly contextWindow: number;
   private controller?: AbortController;
   private runController?: AbortController;
-  private toolController?: AbortController;
+  private readonly toolControllers = new Set<AbortController>();
   private compactionFresh = false;
   private manualCompaction = false;
   private compactionInstructions = '';
@@ -251,7 +266,7 @@ export class AgentRunner {
     this.stopRequested = true;
     this.runController?.abort();
     this.controller?.abort();
-    this.toolController?.abort();
+    for (const controller of this.toolControllers) controller.abort();
   }
 
   async start(userMessage: UserContent): Promise<AgentRunnerState> {
@@ -308,7 +323,7 @@ export class AgentRunner {
       return this.state;
     } finally {
       this.controller = undefined;
-      this.toolController = undefined;
+      this.toolControllers.clear();
       this.runController = undefined;
       this.manualCompaction = false;
     }
@@ -422,7 +437,7 @@ export class AgentRunner {
         if (this.stopRequested) return this.finishStopped();
         if (isContextExceeded(error) && this.compactionEnabled && !reactiveCompactionAttempted) {
           reactiveCompactionAttempted = true;
-          await this.compactBeforeRequest();
+          await this.compactBeforeRequest('overflow');
           continue;
         }
         this.state.failure = error instanceof Error ? error.message : String(error);
@@ -489,6 +504,34 @@ export class AgentRunner {
     const pending = this.state.pending!;
     let completedCompaction: RunnerToolCall | undefined;
     const remaining = pending.calls.slice(pending.nextCall);
+    const completedIds = new Set(pending.calls.slice(0, pending.nextCall).map(call => call.toolCallId));
+    const spent = this.state.messages.reduce(
+      (total, message) =>
+        message.role !== 'tool'
+          ? total
+          : total +
+            message.content.reduce(
+              (sum, part) =>
+                sum +
+                (part.type === 'tool-result' && completedIds.has(part.toolCallId)
+                  ? estimateToolOutputTokens(part.output) + 8 + estimateTokens(part.toolName)
+                  : 0),
+              0,
+            ),
+      0,
+    );
+    const usage = this.measureContext();
+    const reserve = Math.min(this.executor.maxOutputTokens ?? 32_000, Math.floor(this.contextWindow * 0.2));
+    const budget = new ToolOutputBudget(
+      Math.max(
+        0,
+        Math.min(
+          MAX_TOOL_BATCH_TOKENS - spent,
+          Math.floor(this.contextWindow * 0.15) - spent,
+          usage.remainingTokens - reserve - Math.min(1_000, Math.floor(this.contextWindow * 0.05)),
+        ),
+      ),
+    );
     const allReadonly = remaining.every(call => this.toolMap.get(call.toolName)?.readonly);
     if (allReadonly) {
       const settled = await Promise.allSettled(remaining.map(call => this.executeOne(call)));
@@ -496,9 +539,9 @@ export class AgentRunner {
         const result = settled[index];
         const call = remaining[index];
         if (result.status === 'rejected') {
-          await this.failTool(call, result.reason);
+          await this.failTool(call, result.reason, budget, settled.length - index);
         } else {
-          await this.completeTool(call, result.value);
+          await this.completeTool(call, result.value, budget, settled.length - index);
         }
         pending.nextCall += 1;
       }
@@ -507,18 +550,18 @@ export class AgentRunner {
       for (const call of remaining) {
         if (this.stopRequested) return this.finishStopped().then(() => false);
         if (failedCalls.some(failed => mayDependOn(call, failed))) {
-          await this.skipTool(call);
+          await this.skipTool(call, budget, pending.calls.length - pending.nextCall);
           failedCalls.push(call);
           pending.nextCall += 1;
           continue;
         }
         try {
           const output = await this.executeOne(call);
-          await this.completeTool(call, output);
+          await this.completeTool(call, output, budget, pending.calls.length - pending.nextCall);
           if (call.toolName === 'compact_context') completedCompaction = call;
           pending.nextCall += 1;
         } catch (error) {
-          await this.failTool(call, error);
+          await this.failTool(call, error, budget, pending.calls.length - pending.nextCall);
           pending.nextCall += 1;
           failedCalls.push(call);
         }
@@ -533,6 +576,13 @@ export class AgentRunner {
         return false;
       }
       const previousHeaderMessageCount = this.headerMessageCount;
+      await this.journal.append({
+        at: this.now(),
+        type: 'context-compaction-started',
+        trigger: 'model',
+        inputTokens: this.measureContext().totalTokens,
+        contextWindow: this.contextWindow,
+      });
       const replacementHeader = this.refreshCompactionHeader
         ? await this.refreshCompactionHeader()
         : this.state.messages.slice(0, previousHeaderMessageCount);
@@ -542,7 +592,7 @@ export class AgentRunner {
         previousHeaderMessageCount,
         replacementHeader,
       );
-      await this.commitCompaction(candidate, summary, replacementHeader.length);
+      await this.commitCompaction(candidate, summary, replacementHeader.length, 'model');
     }
     this.state.pending = undefined;
     this.state.contextUsage = this.measureContext();
@@ -550,7 +600,9 @@ export class AgentRunner {
   }
 
   /** 独立的摘要请求不进入对话工具链；成功后才替换下一次调用所用的上下文。 */
-  private async compactBeforeRequest(): Promise<void> {
+  private async compactBeforeRequest(
+    trigger: CompactionTrigger = this.manualCompaction ? 'manual' : 'threshold',
+  ): Promise<void> {
     this.controller = new AbortController();
     const signal = this.controller.signal;
     const original = structuredClone(this.state.messages);
@@ -572,7 +624,13 @@ export class AgentRunner {
         '上下文空间不足，当前只有最新输入和最近模型步骤，无法继续压缩。请缩短最新输入或更换更大上下文模型。',
       );
     const beforeTokens = measureContext(original, this.contextWindow, undefined, this.toolSchemaTokens).totalTokens;
-    await this.journal.append({ at: this.now(), type: 'context-compaction-started' });
+    await this.journal.append({
+      at: this.now(),
+      type: 'context-compaction-started',
+      trigger,
+      inputTokens: this.measureContext().totalTokens,
+      contextWindow: this.contextWindow,
+    });
     // 摘要有独立输出预算，为推理内容留出空间，同时服从模型上限和剩余窗口。
     let summaryLimit = Math.min(8192, this.executor.maxOutputTokens ?? 20_000);
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -628,7 +686,7 @@ export class AgentRunner {
           if (afterTokens >= beforeTokens) {
             reason = '摘要未减少上下文占用';
           } else {
-            await this.commitCompaction(candidate, summary, header.length);
+            await this.commitCompaction(candidate, summary, header.length, trigger);
             return;
           }
         }
@@ -652,7 +710,12 @@ export class AgentRunner {
     }
   }
 
-  private async commitCompaction(messages: ModelMessage[], summary: string, headerCount: number): Promise<void> {
+  private async commitCompaction(
+    messages: ModelMessage[],
+    summary: string,
+    headerCount: number,
+    trigger: CompactionTrigger,
+  ): Promise<void> {
     const original = this.state.messages;
     const header = this.headerMessageCount;
     const baseline = this.apiUsageBaseline;
@@ -664,7 +727,14 @@ export class AgentRunner {
     this.apiUsageBaseline = undefined;
     this.state.contextUsage = this.measureContext();
     try {
-      await this.journal.append({ at: this.now(), summary, beforeTokens, afterTokens, type: 'context-compacted' });
+      await this.journal.append({
+        at: this.now(),
+        summary,
+        beforeTokens,
+        afterTokens,
+        trigger,
+        type: 'context-compacted',
+      });
       this.compactionFresh = true;
     } catch (error) {
       this.state.messages = original;
@@ -694,17 +764,24 @@ export class AgentRunner {
       if (!approved) return { approved: false, message: '用户拒绝了这次高危操作。' };
     }
     await this.journal.append({ at: this.now(), call, type: 'tool-executing' });
-    this.toolController = new AbortController();
-    if (this.stopRequested) this.toolController.abort();
+    const controller = new AbortController();
+    this.toolControllers.add(controller);
+    if (this.stopRequested) controller.abort();
     try {
-      await createCooperativeYield()(this.toolController.signal, true);
-      return await target.execute(call.input, call.toolCallId, { abortSignal: this.toolController.signal });
+      await createCooperativeYield()(controller.signal, true);
+      return await target.execute(call.input, call.toolCallId, { abortSignal: controller.signal });
     } finally {
-      this.toolController = undefined;
+      this.toolControllers.delete(controller);
     }
   }
 
-  private async completeTool(call: RunnerToolCall, output: unknown): Promise<void> {
+  private async completeTool(
+    call: RunnerToolCall,
+    output: unknown,
+    budget: ToolOutputBudget,
+    remainingCalls: number,
+  ): Promise<void> {
+    output = budget.take(output, remainingCalls, call.toolName);
     this.state.messages.push(toolResultMessage(call, output));
     await this.journal.append({
       at: this.now(),
@@ -714,16 +791,31 @@ export class AgentRunner {
     });
   }
 
-  private async failTool(call: RunnerToolCall, error: unknown): Promise<void> {
-    const message = error instanceof Error ? error.message : String(error);
-    this.state.messages.push(toolResultMessage(call, toolFailureOutput(error)));
+  private async failTool(
+    call: RunnerToolCall,
+    error: unknown,
+    budget: ToolOutputBudget,
+    remainingCalls: number,
+  ): Promise<void> {
+    const message = (error instanceof Error ? error.message : String(error)).slice(0, 8_000);
+    const boundedError = Object.assign(
+      new Error(message),
+      error && typeof error === 'object'
+        ? { code: (error as { code?: unknown }).code, path: (error as { path?: unknown }).path }
+        : {},
+    );
+    this.state.messages.push(
+      toolResultMessage(call, budget.take(toolFailureOutput(boundedError), remainingCalls, call.toolName)),
+    );
     await this.journal.append({ at: this.now(), call, error: message, type: 'tool-failed' });
   }
 
-  private async skipTool(call: RunnerToolCall): Promise<void> {
+  private async skipTool(call: RunnerToolCall, budget: ToolOutputBudget, remainingCalls: number): Promise<void> {
     const message = '前一个有依赖关系的工具失败，本调用未执行。';
     await this.journal.append({ at: this.now(), call, type: 'tool-started' });
-    this.state.messages.push(toolResultMessage(call, toolFailureOutput(message, true)));
+    this.state.messages.push(
+      toolResultMessage(call, budget.take(toolFailureOutput(message, true), remainingCalls, call.toolName)),
+    );
     await this.journal.append({ at: this.now(), call, error: message, type: 'tool-failed' });
   }
 

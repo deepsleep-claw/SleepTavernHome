@@ -112,11 +112,16 @@ export class CharacterMetadataStore {
     return reference;
   }
 
-  async upsertSession(entry: SessionIndexEntry): Promise<CharacterMetadata> {
+  async upsertSession(entry: SessionIndexEntry, expectedRevision?: number): Promise<CharacterMetadata> {
     const metadata = await this.load(entry.bindingId, {
       avatarId: entry.avatarId,
       characterName: entry.characterName,
     });
+    const current = metadata.sessions[entry.sessionId];
+    if (expectedRevision !== undefined && (current?.revision ?? 0) !== expectedRevision) {
+      if (entry.commitId && current?.commitId === entry.commitId) return metadata;
+      throw new Error('后端会话版本已更新，请重新检查备份版本。');
+    }
     metadata.avatarId = entry.avatarId ?? metadata.avatarId;
     metadata.characterName = entry.characterName;
     metadata.sessions[entry.sessionId] = structuredClone(entry);

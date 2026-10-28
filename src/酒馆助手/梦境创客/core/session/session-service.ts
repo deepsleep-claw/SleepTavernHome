@@ -104,6 +104,12 @@ type SessionServiceOptions = {
 };
 
 const DEFAULT_SESSION_TITLE = '新的创作会话';
+const COMPACTION_REASONS = {
+  threshold: '接近上下文上限',
+  overflow: '接口报告上下文超限',
+  manual: '手动触发',
+  model: '模型主动整理',
+};
 
 const RUN_SCOPED_UI_KINDS = new Set<SessionUiItem['kind']>(['assistant', 'guidance', 'reasoning', 'tool']);
 
@@ -799,7 +805,7 @@ export class CardAgentSessionService {
       id: `compact:${crypto.randomUUID()}`,
       at: this.now(),
       kind: 'status',
-      content: '正在压缩上下文…',
+      content: '正在压缩上下文（手动触发）…',
     };
     this.ui.push(item);
     try {
@@ -813,7 +819,7 @@ export class CardAgentSessionService {
       item.content =
         state.status === 'completed'
           ? (skipped?.reason ??
-            `上下文压缩完成：同口径估算约 ${compacted?.beforeTokens?.toLocaleString() ?? '—'} → ${compacted?.afterTokens?.toLocaleString() ?? '—'} tokens。${interruptedCheckpoint ? '可从中断处继续。' : ''}`)
+            `上下文压缩完成（手动触发）：同口径估算约 ${compacted?.beforeTokens?.toLocaleString() ?? '—'} → ${compacted?.afterTokens?.toLocaleString() ?? '—'} tokens。${interruptedCheckpoint ? '可从中断处继续。' : ''}`)
           : (state.failure ?? '上下文压缩已停止。');
       item.status = state.status === 'completed' ? 'completed' : 'failed';
       this.activeCheckpointId = interruptedCheckpoint;
@@ -1900,11 +1906,16 @@ export class CardAgentSessionService {
           kind: 'guidance',
         });
     } else if (event.type === 'context-compaction-started') {
+      const reason = event.trigger ? `（${COMPACTION_REASONS[event.trigger]}）` : '';
+      const usage =
+        event.inputTokens !== undefined && event.contextWindow !== undefined
+          ? ` 当前约 ${event.inputTokens.toLocaleString()} / ${event.contextWindow.toLocaleString()} tokens。`
+          : '';
       if (!this.compacting)
         this.ui.push({
           at: event.at,
           checkpointId: this.activeCheckpointId,
-          content: '正在压缩上下文…',
+          content: `正在压缩上下文${reason}…${usage}`,
           id: `compact:${crypto.randomUUID()}`,
           kind: 'status',
           status: 'running',
@@ -1919,7 +1930,7 @@ export class CardAgentSessionService {
         .reverse()
         .find(item => item.kind === 'status' && item.id.startsWith('compact:') && item.status !== 'completed');
       if (item) {
-        item.content = '上下文压缩完成，继续当前任务。';
+        item.content = `上下文压缩完成${event.trigger ? `（${COMPACTION_REASONS[event.trigger]}）` : ''}，继续当前任务。`;
         item.status = 'completed';
       }
     } else if (event.type === 'context-compaction-retrying') {
@@ -2106,7 +2117,9 @@ export class CardAgentSessionService {
       ...item,
       attachments: item.attachments?.map(attachment => ({
         ...attachment,
-        missing: Boolean(attachment.fileId && this.workspaceStore && !this.workspaceStore.getReference(attachment.fileId)),
+        missing: Boolean(
+          attachment.fileId && this.workspaceStore && !this.workspaceStore.getReference(attachment.fileId),
+        ),
       })),
     }));
   }

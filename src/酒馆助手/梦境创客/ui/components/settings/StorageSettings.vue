@@ -13,19 +13,88 @@
     <section class="dca-settings-group">
       <strong>本机会话与后端备份</strong>
       <p>会话与草稿保存在当前浏览器。后端备份用于跨浏览器恢复；恢复会话记录不会回退酒馆角色卡和世界书。</p>
+      <label class="dca-backup-frequency">
+        <span>备份频率</span>
+        <select
+          aria-label="备份频率"
+          :value="state.backupFrequencySeconds ?? 120"
+          :disabled="savingFrequency"
+          @change="changeFrequency"
+        >
+          <option v-for="option in BACKUP_FREQUENCIES" :key="option.seconds" :value="option.seconds">
+            {{ option.label }}
+          </option>
+        </select>
+      </label>
+      <small>按此间隔检查变动，有变动才备份。页面恢复后重新计时。</small>
+      <p role="status" class="dca-backup-status">
+        {{ state.sessionBackup?.localError || (state.sessionBackup?.localPending ? '本机正在保存' : '本机已保存') }}
+        · {{ state.sessionBackup?.syncing ? '正在备份' : `${state.sessionBackup?.pending ?? 0} 项等待备份` }}
+        <template v-if="state.sessionBackup?.lastSavedAt">
+          · 上次备份 {{ formatSessionDate(state.sessionBackup.lastSavedAt) }}
+        </template>
+      </p>
+      <p v-if="state.sessionBackup?.error" role="status" class="dca-backup-status">
+        备份暂未完成：{{ state.sessionBackup.error }}
+      </p>
       <div class="dca-row-actions">
+        <button
+          type="button"
+          :disabled="busy || state.sessionBackup?.syncing"
+          @click="action(() => runtime.backupSessions())"
+        >
+          立即备份
+        </button>
+        <button
+          v-if="state.sessionBackup?.localError"
+          type="button"
+          @click="action(() => runtime.retryLocalSessionSave())"
+        >
+          重试本机保存
+        </button>
+        <button v-if="state.sessionBackup?.conflicts?.length" type="button" @click="backupConflictsOpen = true">
+          处理版本冲突
+        </button>
         <button type="button" :disabled="busy" @click="exportSessions">导出本机会话与恢复点</button>
         <button type="button" :disabled="busy" @click="action(() => runtime.refreshSessionBackups())">
-          刷新后端备份列表
+          检查后端更新
         </button>
-        <button type="button" :disabled="busy || !state.active || state.busy" @click="restorePending = true">
+        <button
+          type="button"
+          :disabled="busy || !state.active || state.busy"
+          @click="
+            restoreTarget = undefined;
+            restorePending = true;
+          "
+        >
           恢复当前会话的后端备份
         </button>
+      </div>
+      <div v-if="state.sessionBackup?.updates?.length" class="dca-backup-updates">
+        <article v-for="entry in state.sessionBackup.updates" :key="`${entry.bindingId}:${entry.sessionId}`">
+          <span
+            ><strong>{{ entry.title }}</strong
+            ><small
+              >{{ entry.characterName }} · {{ formatSessionDate(entry.updatedAt)
+              }}<template v-if="entry.localDirty"> · 本机也有未备份内容</template></small
+            ></span
+          >
+          <button
+            type="button"
+            :disabled="busy"
+            @click="
+              restoreTarget = entry;
+              restorePending = true;
+            "
+          >
+            载入后端版本
+          </button>
+        </article>
       </div>
     </section>
     <div v-if="restorePending" class="dca-modal-backdrop">
       <section class="dca-modal" role="dialog" aria-modal="true">
-        <header><strong>恢复当前会话记录？</strong></header>
+        <header><strong>恢复所选会话记录？</strong></header>
         <p>本机当前记录会保留为恢复点，可以随本机会话一起导出。角色卡和世界书保持当前内容。</p>
         <footer>
           <button type="button" @click="restorePending = false">取消</button
@@ -170,10 +239,23 @@ import { computed, ref } from 'vue';
 import type { CharacterFileStorageSummary, ManagedFileSummary } from '../../../core/persistence/workspace-file-store';
 import { formatBytes, formatSessionDate } from '../../composables/format';
 import { useDreamCardAgent } from '../../composables/runtime';
+import { BACKUP_FREQUENCIES } from '../../../core/persistence/backup-frequency';
 
-const { action, openedSessionIds, runtime, state, workspaceView } = useDreamCardAgent();
+const { action, backupConflictsOpen, openedSessionIds, runtime, state, workspaceView } = useDreamCardAgent();
 const busy = ref(false);
+const savingFrequency = ref(false);
+async function changeFrequency(event: Event) {
+  const select = event.target as HTMLSelectElement;
+  savingFrequency.value = true;
+  try {
+    await action(() => runtime.updateSettings({ backupFrequencySeconds: Number(select.value) }));
+    select.value = String(state.value.backupFrequencySeconds ?? 120);
+  } finally {
+    savingFrequency.value = false;
+  }
+}
 const restorePending = ref(false);
+const restoreTarget = ref<{ bindingId: string; sessionId: string }>();
 async function exportSessions() {
   await action(async () => {
     const text = await runtime.exportBrowserSessions();
@@ -188,7 +270,13 @@ async function exportSessions() {
 async function restoreBackup() {
   busy.value = true;
   try {
-    if (await action(() => runtime.restoreCurrentSessionBackup())) {
+    if (
+      await action(() =>
+        restoreTarget.value
+          ? runtime.restoreSessionBackup(restoreTarget.value.bindingId, restoreTarget.value.sessionId)
+          : runtime.restoreCurrentSessionBackup(),
+      )
+    ) {
       restorePending.value = false;
       workspaceView.value = 'session';
     }
@@ -295,6 +383,39 @@ async function resetEverything() {
 <style lang="scss">
 .dca-storage-settings {
   padding-bottom: 2rem;
+}
+
+.dca-backup-frequency {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.dca-backup-frequency select {
+  min-width: 8rem;
+  max-width: 100%;
+}
+
+.dca-backup-status {
+  overflow-wrap: anywhere;
+}
+
+.dca-backup-updates article {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+}
+.dca-backup-updates span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.dca-backup-updates small {
+  display: block;
+  color: var(--dca-text-muted);
 }
 
 .dca-character-storage-list,

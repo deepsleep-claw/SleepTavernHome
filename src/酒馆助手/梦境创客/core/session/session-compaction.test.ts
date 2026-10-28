@@ -12,6 +12,33 @@ function reply(text: string): ModelStepResult {
 }
 
 describe('中断会话的上下文维护', () => {
+  it('模型主动压缩在时间线明确显示来源', async () => {
+    let step = 0;
+    const service = await CardAgentSessionService.create({
+      adapter: new MemoryCardStateAdapter(transactionState()),
+      agentConfiguration: defaultBuiltinAgentConfiguration(),
+      lock: new GlobalAgentTaskLock(),
+      executor: {
+        execute: async () => {
+          step++;
+          if (step === 1) return reply('旧步骤'.repeat(1_000));
+          if (step === 2) {
+            const call = { toolCallId: 'compact', toolName: 'compact_context', input: { summary: '旧步骤已经完成' } };
+            return {
+              ...reply(''),
+              finishReason: 'tool-calls',
+              toolCalls: [call],
+              assistantMessages: [{ role: 'assistant', content: [{ ...call, type: 'tool-call' }] }],
+            };
+          }
+          return reply('继续处理');
+        },
+      },
+    });
+    await service.send('第一轮');
+    const view = await service.send('继续');
+    expect(view.ui.some(item => item.kind === 'status' && item.content.includes('模型主动整理'))).toBe(true);
+  });
   it('摘要保存失败时还原上下文和完成事件，可再次压缩', async () => {
     let saved!: PersistedSessionRuntime;
     let rejectSummary = true;

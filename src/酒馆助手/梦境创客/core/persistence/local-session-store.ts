@@ -4,8 +4,9 @@ import { CharacterMetadataStore, type CharacterMetadata } from './character-stor
 import { SessionRevisionStore, type CommitSessionRevision, type SessionRevision } from './session-store';
 import type { SessionIndexEntry } from './settings';
 import { canonicalStringify } from '../transaction/canonical';
+import { SessionBackupScheduler } from './session-backup-scheduler';
 
-type LocalSessionIndex = Omit<LocalSession, 'input'>;
+type LocalSessionIndex = Omit<LocalSession, 'input' | 'pendingBackup'>;
 type LocalSession = {
   input: CommitSessionRevision;
   entry: SessionIndexEntry;
@@ -14,6 +15,11 @@ type LocalSession = {
   remoteRevision: number;
   recordVersion?: number;
   conflict?: SessionBackupConflict;
+  pendingBackup?: { commitId: string; snapshotKey: string; localRevision: number };
+  backupError?: string;
+  retryAt?: number;
+  failures?: number;
+  lastBackedUpAt?: number;
 };
 export type SessionBackupConflict = {
   bindingId: string;
@@ -28,10 +34,12 @@ export type SessionBackupConflict = {
 };
 export type SessionBackupResolution = 'local' | 'remote';
 export type SessionBackupStatus = {
+  updates?: Array<SessionIndexEntry & { localDirty: boolean }>;
   pending: number;
   syncing: boolean;
   localPending?: number;
   error?: string;
+  localError?: string;
   lastSavedAt?: number;
   conflicts?: SessionBackupConflict[];
 };
@@ -39,10 +47,11 @@ const keyFor = (bindingId: string, sessionId: string) =>
   `session:${encodeURIComponent(bindingId)}:${encodeURIComponent(sessionId)}`;
 
 export class LocalSessionStore {
-  private timer?: ReturnType<typeof setTimeout>;
+  private readonly scheduler: SessionBackupScheduler;
   private syncing?: Promise<void>;
   private disposed = false;
   private lastSavedAt?: number;
+  private updates: NonNullable<SessionBackupStatus['updates']> = [];
   private error?: string;
 
   constructor(
@@ -50,7 +59,20 @@ export class LocalSessionStore {
     private readonly remote: SessionRevisionStore,
     private readonly characters: CharacterMetadataStore,
     private readonly onStatus: (status: SessionBackupStatus) => void = () => {},
-  ) {}
+  ) {
+    this.scheduler = new SessionBackupScheduler(() => this.checkBackups());
+  }
+
+  setBackupFrequency(seconds: number): void {
+    this.scheduler.setFrequency(seconds);
+  }
+
+  private async checkBackups(): Promise<void> {
+    if (this.disposed || this.syncing) return;
+    const pending = await this.local.list<LocalSessionIndex>('session-index:');
+    if (pending.some(({ value }) => value.dirty && !value.conflict && (value.retryAt ?? 0) <= Date.now()))
+      await this.synchronize(() => this.flush(undefined, true));
+  }
 
   private async updateSession(
     key: string,
@@ -69,7 +91,7 @@ export class LocalSessionStore {
       },
       {
         key: `session-index:${key.slice('session:'.length)}`,
-        project: ({ input: _input, ...index }) => index,
+        project: ({ input: _input, pendingBackup: _pendingBackup, ...index }) => index,
       },
     );
   }
@@ -89,12 +111,12 @@ export class LocalSessionStore {
         updatedAt: input.runtime.updatedAt,
         revision: (previous?.entry.revision ?? 0) + 1,
         sha256: previous?.entry.sha256 ?? '',
-        size: new TextEncoder().encode(JSON.stringify(input.runtime)).byteLength,
+        size: previous?.entry.size ?? 0,
         url: previous?.entry.url ?? '',
       };
-      return { input: klona(input), entry, dirty: true, remoteRevision: previous?.remoteRevision ?? 0 };
+      return { ...previous, input, entry, dirty: true, deleted: false, remoteRevision: previous?.remoteRevision ?? 0 };
     });
-    this.schedule();
+    await this.local.flush?.();
     await this.publish();
     return entry;
   }
@@ -170,7 +192,7 @@ export class LocalSessionStore {
     const revision = await this.load(bindingId, sessionId).catch(() => undefined);
     if (!revision) return undefined;
     await this.updateSession(keyFor(bindingId, sessionId), row => row && { ...row, dirty: true, deleted: true });
-    this.schedule();
+    await this.local.flush?.();
     await this.publish();
     return revision.entry;
   }
@@ -180,19 +202,15 @@ export class LocalSessionStore {
     for (const sessionId of Object.keys(metadata.sessions)) await this.removeSession(bindingId, sessionId);
   }
 
-  private schedule(delay = 3000) {
-    if (this.disposed) return;
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = setTimeout(() => {
-      this.timer = undefined;
-      void this.backup().catch(error => {
-        this.onStatus({ pending: 1, syncing: false, error: String(error) });
-      });
-    }, delay);
-  }
-
   requestBackup() {
-    if (!this.timer) this.schedule();
+    void this.publish().catch(error => {
+      if (this.disposed) return;
+      this.onStatus({
+        pending: 0,
+        syncing: Boolean(this.syncing),
+        localError: `读取本机会话失败：${error instanceof Error ? error.message : String(error)}`,
+      });
+    });
   }
 
   async backup(): Promise<void> {
@@ -202,11 +220,13 @@ export class LocalSessionStore {
   }
 
   private synchronize(work: () => Promise<void>, rejectErrors = false): Promise<void> {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = undefined;
     const flushing = (async () => {
       if (typeof navigator !== 'undefined' && navigator.locks)
-        await navigator.locks.request('dream-creator-session-backup', work);
+        await navigator.locks.request('dream-creator-session-backup', { ifAvailable: true }, lock => {
+          if (lock) return work();
+          if (rejectErrors) throw new Error('另一页面正在备份，请稍后重试。');
+          return undefined;
+        });
       else await work();
     })();
     this.syncing = flushing
@@ -217,60 +237,135 @@ export class LocalSessionStore {
       .finally(async () => {
         this.syncing = undefined;
         await this.publish();
-        if (
-          (await this.local.list<LocalSessionIndex>('session-index:')).some(
-            row => row.value.dirty && !row.value.conflict,
-          )
-        )
-          this.schedule(30_000);
       });
     return this.syncing;
   }
 
-  private async flush(targetKey?: string): Promise<void> {
+  private async flush(targetKey?: string, automatic = false): Promise<void> {
     this.error = undefined;
     await this.publish(true);
     for (const { value: index } of await this.local.list<LocalSessionIndex>('session-index:')) {
-      if (!index.dirty) continue;
+      if (!index.dirty || (!targetKey && index.conflict)) continue;
+      if (automatic && (index.retryAt ?? 0) > Date.now()) continue;
       const key = keyFor(index.entry.bindingId, index.entry.sessionId);
       if (targetKey && key !== targetKey) continue;
       if (this.disposed) return;
+      try {
+        await this.backupSession(key);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await this.updateSession(key, current => {
+          if (!current) return current;
+          const failures = (current.failures ?? 0) + 1;
+          return {
+            ...current,
+            failures,
+            backupError: message,
+            retryAt: Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** Math.min(failures - 1, 5)),
+          };
+        }).catch(() => {
+          this.error = message;
+        });
+        if (targetKey) throw error;
+      }
+    }
+  }
+
+  private async acknowledge(
+    key: string,
+    entry: SessionIndexEntry | undefined,
+    localRevision: number,
+    deleted = false,
+  ): Promise<void> {
+    let snapshotKey: string | undefined;
+    await this.updateSession(key, current => {
+      snapshotKey = current?.pendingBackup?.snapshotKey;
+      return (
+        current && {
+          ...current,
+          dirty: current.entry.revision !== localRevision || Boolean(current.deleted) !== deleted,
+          remoteRevision: entry?.revision ?? 0,
+          pendingBackup: undefined,
+          backupError: undefined,
+          retryAt: undefined,
+          failures: 0,
+          lastBackedUpAt: Date.now(),
+          conflict: undefined,
+          entry: entry
+            ? { ...current.entry, url: entry.url, size: entry.size, sha256: entry.sha256, commitId: entry.commitId }
+            : current.entry,
+        }
+      );
+    });
+    await this.local.flush?.();
+    if (snapshotKey) await this.local.update(snapshotKey, () => undefined).catch(() => undefined);
+    this.lastSavedAt = Date.now();
+  }
+
+  private async backupSession(key: string): Promise<void> {
+    // 先确认或重试已提交的快照，再处理期间产生的新内容。
+    for (let pass = 0; pass < 2; pass += 1) {
       const row = await this.local.get<LocalSession>(key);
-      if (!row?.dirty) continue;
+      if (!row?.dirty || this.disposed) return;
       const metadata = await this.characters.load(row.entry.bindingId);
       const existing = metadata.sessions[row.entry.sessionId];
-      let entry: SessionIndexEntry | undefined;
-      let remoteRevision: number | undefined;
+      if (row.pendingBackup && existing?.commitId === row.pendingBackup.commitId) {
+        await this.acknowledge(key, existing, row.pendingBackup.localRevision);
+        continue;
+      }
       if (existing && existing.revision !== row.remoteRevision) {
         const backup = await this.remote.load(row.entry.bindingId, row.entry.sessionId);
         if (!row.deleted && canonicalStringify(backup.runtime) === canonicalStringify(row.input.runtime)) {
-          // 上传成功但本机确认丢失时，只补齐确认，不再上传相同的会话正文。
-          entry = backup.entry;
-          remoteRevision = backup.referencedRevision ?? backup.entry.revision;
+          await this.acknowledge(
+            key,
+            { ...backup.entry, revision: backup.referencedRevision ?? backup.entry.revision },
+            row.entry.revision,
+          );
         } else {
           await this.recordConflict(key, row, {
             ...backup.entry,
             revision: backup.referencedRevision ?? backup.entry.revision,
           });
-          continue;
         }
-      } else {
-        entry = row.deleted
-          ? (await this.characters.removeSession(row.entry.bindingId, row.entry.sessionId), undefined)
-          : await this.remote.commit(row.input);
+        return;
       }
+      if (!existing && row.remoteRevision > 0 && !row.deleted) {
+        throw new Error('后端会话备份已被删除，请检查后端版本后再恢复备份。');
+      }
+      if (row.deleted) {
+        await this.characters.removeSession(row.entry.bindingId, row.entry.sessionId);
+        await this.acknowledge(key, undefined, row.entry.revision, true);
+        return;
+      }
+      const commitId = row.pendingBackup?.commitId ?? crypto.randomUUID();
+      const pending = row.pendingBackup ?? {
+        commitId,
+        snapshotKey: `backup-snapshot:${commitId}`,
+        localRevision: row.entry.revision,
+      };
+      if (!row.pendingBackup) await this.local.put(pending.snapshotKey, { input: { ...row.input, commitId } });
+      let admitted = false;
       await this.updateSession(key, current => {
-        if (!current) return current;
-        return {
-          ...current,
-          dirty: current.entry.revision !== row.entry.revision || Boolean(current.deleted) !== Boolean(row.deleted),
-          remoteRevision: remoteRevision ?? entry?.revision ?? 0,
-          conflict: undefined,
-          entry: entry ? { ...current.entry, url: entry.url, sha256: entry.sha256 } : current.entry,
-        };
+        if (
+          !current?.dirty ||
+          current.remoteRevision !== row.remoteRevision ||
+          Boolean(current.deleted) !== Boolean(row.deleted)
+        )
+          return current;
+        admitted = true;
+        return { ...current, pendingBackup: pending };
       });
+      if (!admitted) {
+        if (!row.pendingBackup) await this.local.update(pending.snapshotKey, () => undefined);
+        return;
+      }
+      await this.local.flush?.();
+      const snapshot = await this.local.get<{ input: CommitSessionRevision }>(pending.snapshotKey);
+      if (!snapshot) throw new Error('待备份快照缺失，本机会话仍保留，请导出后检查。');
+      const entry = await this.remote.commit(snapshot.input);
+      await this.acknowledge(key, entry, pending.localRevision);
       await this.local.put(`metadata:${row.entry.bindingId}`, await this.characters.load(row.entry.bindingId));
-      this.lastSavedAt = Date.now();
+      if (pending.localRevision === row.entry.revision) return;
     }
   }
 
@@ -341,17 +436,46 @@ export class LocalSessionStore {
         ) {
           throw new Error('本机会话又有更新，请重新选择。');
         }
-        return resolution === 'remote' ? remoteRow : { ...current, conflict: undefined, remoteRevision };
+        return resolution === 'remote'
+          ? remoteRow
+          : {
+              ...current,
+              conflict: undefined,
+              remoteRevision,
+              pendingBackup: undefined,
+              backupError: undefined,
+            };
       });
       await this.local.put(`metadata:${bindingId}`, await this.characters.load(bindingId));
       await this.flush(key);
     }, true);
   }
 
-  async refreshBackups(): Promise<void> {
-    for (const { key } of await this.local.list<CharacterMetadata>('metadata:'))
-      await this.local.update(key, () => undefined);
-    this.schedule(0);
+  async refreshBackups(bindingIds: string[] = []): Promise<void> {
+    await this.syncing;
+    const local = await this.local.list<LocalSessionIndex>('session-index:');
+    const bySession = new Map(
+      local.map(row => [keyFor(row.value.entry.bindingId, row.value.entry.sessionId), row.value]),
+    );
+    const bindings = new Set([...bindingIds, ...local.map(row => row.value.entry.bindingId)]);
+    const updates: NonNullable<SessionBackupStatus['updates']> = [];
+    const errors: string[] = [];
+    for (const bindingId of bindings) {
+      try {
+        const metadata = await this.characters.load(bindingId);
+        await this.local.put(`metadata:${bindingId}`, metadata);
+        for (const entry of Object.values(metadata.sessions)) {
+          const row = bySession.get(keyFor(bindingId, entry.sessionId));
+          if (!row || entry.revision !== row.remoteRevision)
+            updates.push({ ...entry, localDirty: Boolean(row?.dirty) });
+        }
+      } catch (error) {
+        errors.push(String(error));
+      }
+    }
+    this.updates = updates;
+    this.error = errors.length ? `后端版本检查未完成：${errors.join('；')}` : undefined;
+    await this.publish();
   }
 
   async exportSessions(): Promise<string> {
@@ -367,39 +491,53 @@ export class LocalSessionStore {
   }
 
   async restoreBackup(bindingId: string, sessionId: string): Promise<void> {
-    if (this.timer) {
-      clearTimeout(this.timer);
-      this.timer = undefined;
-    }
     await this.syncing;
-    const revision = await this.remote.load(bindingId, sessionId);
     const key = keyFor(bindingId, sessionId);
+    const before = await this.local.get<LocalSession>(key);
+    const revision = await this.remote.load(bindingId, sessionId);
     const current = await this.local.get<LocalSession>(key);
+    if (current?.recordVersion !== before?.recordVersion) throw new Error('本机会话已有新内容，请重新检查后端版本。');
     if (current) await this.local.put(`session-recovery:${sessionId}:${crypto.randomUUID()}`, current);
-    await this.updateSession(key, () => ({
-      dirty: false,
-      remoteRevision: revision.referencedRevision ?? revision.entry.revision,
-      entry: revision.entry,
-      input: {
-        bindingId,
-        avatarId: revision.entry.avatarId,
-        characterName: revision.entry.characterName,
-        status: revision.entry.status,
-        runtime: revision.runtime,
-      },
-    }));
+    await this.updateSession(key, latest => {
+      if (latest?.recordVersion !== before?.recordVersion) throw new Error('本机会话已有新内容，请重新检查后端版本。');
+      return {
+        dirty: false,
+        remoteRevision: revision.referencedRevision ?? revision.entry.revision,
+        entry: revision.entry,
+        input: {
+          bindingId,
+          avatarId: revision.entry.avatarId,
+          characterName: revision.entry.characterName,
+          status: revision.entry.status,
+          runtime: revision.runtime,
+        },
+      };
+    });
+    await this.local.flush?.();
+    this.updates = this.updates.filter(entry => entry.bindingId !== bindingId || entry.sessionId !== sessionId);
     this.error = undefined;
     await this.publish();
   }
 
   private async publish(syncing = Boolean(this.syncing)) {
-    const pending = (await this.local.list<LocalSessionIndex>('session-index:')).filter(row => row.value.dirty);
+    const rows = await this.local.list<LocalSessionIndex>('session-index:');
+    const pending = rows.filter(row => row.value.dirty);
     const conflicts = pending.flatMap(row => (row.value.conflict ? [row.value.conflict] : []));
-    this.onStatus({ pending: pending.length, conflicts, syncing, error: this.error, lastSavedAt: this.lastSavedAt });
+    const error =
+      this.error ??
+      [...new Set(pending.flatMap(row => (row.value.backupError ? [row.value.backupError] : [])))].join('；');
+    this.onStatus({
+      pending: pending.length,
+      conflicts,
+      updates: this.updates,
+      syncing,
+      error: error || undefined,
+      lastSavedAt: this.lastSavedAt ?? (Math.max(0, ...rows.map(row => row.value.lastBackedUpAt ?? 0)) || undefined),
+    });
   }
 
   dispose() {
     this.disposed = true;
-    if (this.timer) clearTimeout(this.timer);
+    this.scheduler.dispose();
   }
 }

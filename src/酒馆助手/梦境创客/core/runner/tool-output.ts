@@ -14,8 +14,10 @@ export function richToolOutput(modelOutput: ToolResultOutput, display: unknown):
 
 export function isRichToolOutput(value: unknown): value is RichToolOutput {
   return Boolean(
-    value &&
-      typeof value === 'object' &&
-      (value as Partial<RichToolOutput>).__dreamCreatorRichToolOutput === true,
+    value && typeof value === 'object' && (value as Partial<RichToolOutput>).__dreamCreatorRichToolOutput === true,
   );
+}
+
+export function modelToolOutput(value: unknown): ToolResultOutput {
+  return isRichToolOutput(value) ? value.modelOutput : { type: 'json', value: value as never };
 }

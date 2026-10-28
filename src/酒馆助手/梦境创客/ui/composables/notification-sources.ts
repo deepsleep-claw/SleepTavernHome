@@ -57,13 +57,20 @@ export function useRuntimeNotifications(context: DreamCardAgentContext) {
       }
 
       const backup = snapshot.sessionBackup;
+      if (backup?.localError) {
+        notifications.upsert({
+          id: 'session-local-save',
+          title: '本机会话尚未保存',
+          message: backup.localError,
+          level: 'error',
+          required: true,
+          actions: [{ id: 'retry-local', label: '重试本机保存', run: () => runtime.retryLocalSessionSave() }],
+        });
+      } else notifications.resolve('session-local-save', '本机会话已保存。');
       const conflicts = backup?.conflicts ?? [];
       const pending = backup?.pending ?? 0;
-      const wasRequired = notifications.entries.value.find(item => item.id === 'session-backup')?.required;
-      const required = Boolean(
-        backup?.error || conflicts.length || (wasRequired && (pending || backup?.localPending || backup?.syncing)),
-      );
-      if (required || pending || backup?.localPending || backup?.syncing) {
+      const required = conflicts.length > 0;
+      if (required || backup?.error || pending || backup?.localPending || backup?.syncing) {
         const actions = [];
         if (conflicts.length)
           actions.push({
@@ -81,7 +88,7 @@ export function useRuntimeNotifications(context: DreamCardAgentContext) {
             disabled: backup?.syncing,
             run: () => runtime.backupSessions(),
           });
-        if (required)
+        if (required || backup?.error)
           actions.push({
             id: 'storage',
             label: '查看详情',
@@ -92,7 +99,7 @@ export function useRuntimeNotifications(context: DreamCardAgentContext) {
           });
         notifications.upsert({
           id: 'session-backup',
-          title: required ? '后端备份需要处理' : '会话保存与备份',
+          title: required ? '备份版本需要选择' : backup?.error ? '后端备份暂未完成' : '会话保存与备份',
           message:
             backup?.error ||
             (conflicts.length
@@ -102,7 +109,7 @@ export function useRuntimeNotifications(context: DreamCardAgentContext) {
                 : backup?.syncing
                   ? '本机已保存 · 正在备份'
                   : `本机已保存 · ${pending} 项等待备份`),
-          level: required ? 'warning' : 'info',
+          level: required || backup?.error ? 'warning' : 'info',
           required,
           actions,
           toast: required,

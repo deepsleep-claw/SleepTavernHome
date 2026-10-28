@@ -4,6 +4,7 @@ import {
   type BrowserRecordStore,
 } from '../core/persistence/browser-record-store';
 import { BufferedSessionRecordStore } from '../core/persistence/buffered-session-record-store';
+import { normalizeBackupFrequency } from '../core/persistence/backup-frequency';
 import {
   LocalSessionStore,
   type SessionBackupConflict,
@@ -99,6 +100,7 @@ import { applyRealtimeStateOperations } from '../core/transaction/realtime-apply
 import { diffCardStates } from '../core/transaction/state-diff';
 
 export type DreamCardAgentRuntimeState = {
+  backupFrequencySeconds: number;
   sessionBackup?: SessionBackupStatus;
   approvalMode: SessionMode;
   interfaceModes: { overlay: boolean; navigation: boolean; detached: boolean };
@@ -203,6 +205,8 @@ export class DreamCardAgentRuntime {
   private readonly serviceModelSelections = new Map<string, string>();
   private readonly historyViews = new Map<string, SessionView>();
   private readonly settingsUnsubscribe?: () => void;
+  private settingsRefreshRevision = 0;
+  private settingsRefreshError?: string;
   private readonly subscribers = new Set<Subscriber>();
   private readonly providerMutations = new Map<string, Promise<unknown>>();
   private readonly deferredSessionSaves = new Map<string, DeferredSessionSave>();
@@ -259,7 +263,7 @@ export class DreamCardAgentRuntime {
                   pending: 0,
                   syncing: false,
                   ...this.state.sessionBackup,
-                  error: this.localSaveError,
+                  localError: this.localSaveError,
                 };
                 this.emit();
               }
@@ -272,11 +276,7 @@ export class DreamCardAgentRuntime {
                   syncing: false,
                   ...this.state.sessionBackup,
                   localPending: count,
-                  error:
-                    this.localSaveError ??
-                    (this.state.sessionBackup?.error?.startsWith('本机会话保存失败：')
-                      ? undefined
-                      : this.state.sessionBackup?.error),
+                  localError: this.localSaveError,
                 };
                 this.emit();
               }
@@ -293,7 +293,7 @@ export class DreamCardAgentRuntime {
             this.state.sessionBackup = {
               ...status,
               localPending: this.state.sessionBackup?.localPending,
-              error: this.localSaveError ?? status.error,
+              localError: this.localSaveError ?? status.localError,
             };
             this.emit();
           }
@@ -307,6 +307,7 @@ export class DreamCardAgentRuntime {
       : undefined;
     const settings = this.settingsStore.load();
     this.state = {
+      backupFrequencySeconds: settings.backupFrequencySeconds,
       approvalMode: settings.approvalMode,
       interfaceModes: klona(settings.interfaceModes),
       activeSessionAccess: 'live',
@@ -338,15 +339,13 @@ export class DreamCardAgentRuntime {
       sessionStatuses: {},
       warnings: [],
     };
+    this.localSessions?.setBackupFrequency(settings.backupFrequencySeconds);
     this.settingsUnsubscribe = this.settingsStore.subscribe?.(() => {
       this.reloadSettingsState();
       // 本页延迟保存模型选项时，角色索引内容已经由当前Runtime掌握；
       // 不再为了更新时间和文件大小重新下载索引。其它页面的广播仍走完整刷新。
       if (this.localDeferredSaveDepth > 0) return;
-      void this.reloadCharacterSessions();
-      void this.reloadGlobalSessions();
-      void this.reloadCharacterGroups();
-      void this.reloadSkills();
+      void this.refreshSettingsResources();
     });
     if (this.remoteBuiltinSkillStore) {
       void this.refreshBuiltinSkillResources(true).catch(error => {
@@ -363,6 +362,30 @@ export class DreamCardAgentRuntime {
 
   private sessionStore() {
     return this.localSessions ?? new SessionRevisionStore(this.fileClient, this.settingsStore, this.now);
+  }
+
+  private async refreshSettingsResources(): Promise<void> {
+    const revision = ++this.settingsRefreshRevision;
+    const results = await Promise.allSettled([
+      this.reloadCharacterSessions(),
+      this.reloadGlobalSessions(),
+      this.reloadCharacterGroups(),
+      this.reloadSkills(),
+    ]);
+    if (revision !== this.settingsRefreshRevision) return;
+    const errors = results.flatMap(result =>
+      result.status === 'rejected'
+        ? [result.reason instanceof Error ? result.reason.message : String(result.reason)]
+        : [],
+    );
+    if (errors.length) {
+      this.settingsRefreshError = `刷新会话和资源失败：${[...new Set(errors)].join('；')}`;
+      this.state.error = this.settingsRefreshError;
+    } else if (this.state.error === this.settingsRefreshError) {
+      this.state.error = undefined;
+      this.settingsRefreshError = undefined;
+    }
+    this.emit();
   }
 
   private async flushSessionBackups(bindingId: string): Promise<void> {
@@ -392,7 +415,12 @@ export class DreamCardAgentRuntime {
   }
 
   async backupSessions(): Promise<void> {
+    await this.browserRecords?.flush?.();
     await this.localSessions?.backup();
+  }
+
+  async retryLocalSessionSave(): Promise<void> {
+    await this.browserRecords?.flush?.();
   }
 
   async resolveSessionBackupConflict(
@@ -426,16 +454,28 @@ export class DreamCardAgentRuntime {
 
   async restoreCurrentSessionBackup(): Promise<void> {
     if (!this.localSessions || !this.state.active) throw new Error('请先打开需要恢复的会话。');
-    const { bindingId, sessionId, scope, status } = this.state.active;
-    if (isSessionOperationActive(status)) throw new Error('请先停止任务再恢复会话记录。');
+    const { bindingId, sessionId } = this.state.active;
+    await this.restoreSessionBackup(bindingId, sessionId);
+  }
+
+  async restoreSessionBackup(bindingId: string, sessionId: string): Promise<void> {
+    if (!this.localSessions) throw new Error('当前环境没有浏览器会话数据库。');
+    if (this.services.get(sessionId)?.isOperationActive()) throw new Error('请先停止任务再恢复会话记录。');
     await this.closeSession(sessionId);
     await this.localSessions.restoreBackup(bindingId, sessionId);
+    const {
+      runtime: { scope },
+    } = await this.localSessions.load(bindingId, sessionId);
+    await this.reloadCharacterSessions();
+    await this.reloadGlobalSessions();
+    await this.reloadCharacterGroups();
     if (scope === 'global') await this.openGlobalSession(sessionId);
-    else await this.openSession(sessionId);
+    else if (bindingId === this.state.currentCharacter?.bindingId) await this.openSession(sessionId);
+    else await this.openHistorySession(bindingId, sessionId);
   }
 
   async refreshSessionBackups(): Promise<void> {
-    await this.localSessions?.refreshBackups();
+    await this.localSessions?.refreshBackups(Object.keys(this.settingsStore.load().characterStores));
     await this.reloadCharacterSessions();
     await this.reloadGlobalSessions();
     await this.reloadCharacterGroups();
@@ -1840,6 +1880,7 @@ export class DreamCardAgentRuntime {
   }
 
   async updateSettings(input: {
+    backupFrequencySeconds?: number;
     interfaceModes?: { overlay: boolean; navigation: boolean; detached: boolean };
     activeThemeId?: string;
     compressImages?: boolean;
@@ -1853,6 +1894,7 @@ export class DreamCardAgentRuntime {
   }): Promise<void> {
     const settings = this.settingsStore.load();
     const previous = {
+      backupFrequencySeconds: this.state.backupFrequencySeconds,
       interfaceModes: klona(this.state.interfaceModes),
       activeThemeId: this.state.activeThemeId,
       compressImages: this.state.compressImages,
@@ -1865,6 +1907,8 @@ export class DreamCardAgentRuntime {
       sendWithCtrlEnter: this.state.sendWithCtrlEnter,
     };
     if (input.activeThemeId !== undefined) settings.activeThemeId = input.activeThemeId;
+    if (input.backupFrequencySeconds !== undefined)
+      settings.backupFrequencySeconds = normalizeBackupFrequency(input.backupFrequencySeconds);
     if (input.compressImages !== undefined) settings.compressImages = input.compressImages;
     if (input.dangerousNonCharacterResourceWrites !== undefined) {
       settings.dangerousNonCharacterResourceWrites = input.dangerousNonCharacterResourceWrites;
@@ -1899,6 +1943,7 @@ export class DreamCardAgentRuntime {
   }
 
   destroy(): void {
+    this.settingsRefreshRevision += 1;
     this.inputSubmissions.dispose();
     if (this.browserRecords instanceof BufferedSessionRecordStore) this.browserRecords.dispose();
     this.localSessions?.dispose();
@@ -2200,8 +2245,7 @@ export class DreamCardAgentRuntime {
   private effectiveSessionView(view: SessionView, detached = false): SessionView {
     // 会话订阅已提供脱离内部状态的视图，对外返回值仍使用独立副本。
     const result = detached ? { ...view } : klona(view);
-    if (!findSelectedModel(this.state.providers, result.modelSelection))
-      result.modelSelection = undefined;
+    if (!findSelectedModel(this.state.providers, result.modelSelection)) result.modelSelection = undefined;
     return result;
   }
 
@@ -2292,6 +2336,7 @@ export class DreamCardAgentRuntime {
   }
 
   private applyLightweightSettingsState(settings: {
+    backupFrequencySeconds: number;
     interfaceModes: { overlay: boolean; navigation: boolean; detached: boolean };
     activeThemeId: string;
     compressImages: boolean;
@@ -2303,6 +2348,8 @@ export class DreamCardAgentRuntime {
     onboardingDone: boolean;
     sendWithCtrlEnter: boolean;
   }): void {
+    this.state.backupFrequencySeconds = settings.backupFrequencySeconds;
+    this.localSessions?.setBackupFrequency(settings.backupFrequencySeconds);
     this.state.activeThemeId = settings.activeThemeId;
     this.state.compressImages = settings.compressImages;
     this.state.dangerousNonCharacterResourceWrites = settings.dangerousNonCharacterResourceWrites;
@@ -2501,6 +2548,8 @@ export class DreamCardAgentRuntime {
     this.state.defaultModelSelection = settings.defaultModelSelection;
     this.state.activePresetId = settings.activePresetId;
     this.state.approvalMode = settings.approvalMode;
+    this.state.backupFrequencySeconds = settings.backupFrequencySeconds;
+    this.localSessions?.setBackupFrequency(settings.backupFrequencySeconds);
     this.state.interfaceModes = klona(settings.interfaceModes);
     this.state.agentConfigurations = settings.agentConfigurations;
     this.state.compressImages = settings.compressImages;

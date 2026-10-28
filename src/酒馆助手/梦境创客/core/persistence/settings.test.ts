@@ -21,6 +21,18 @@ function character(bindingId: string, revision: number): CharacterStoreReference
 }
 
 describe('settings cross-window merge', () => {
+  it('备份频率默认两分钟，仅接纳可选间隔并参与跨窗口合并', () => {
+    expect(normalizeSettings().backupFrequencySeconds).toBe(120);
+    expect(normalizeSettings({ backupFrequencySeconds: 1 }).backupFrequencySeconds).toBe(120);
+    for (const seconds of [30, 60, 120, 300, 600])
+      expect(normalizeSettings({ backupFrequencySeconds: seconds }).backupFrequencySeconds).toBe(seconds);
+    const base = normalizeSettings();
+    const next = { ...base, backupFrequencySeconds: 300 };
+    expect(mergeSettingsChanges(base, next, { ...base, activeThemeId: 'new' })).toMatchObject({
+      backupFrequencySeconds: 300,
+      activeThemeId: 'new',
+    });
+  });
   const userAgent = (id: string, name: string) => ({
     id,
     name,
@@ -72,11 +84,23 @@ describe('settings cross-window merge', () => {
     const base = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS);
     const first = structuredClone(base);
     first.globalSkills.writer = {
-      description: '写作', id: 'writer', loading: 'full', name: '写作', revision: 1, updatedAt: 1, url: '/writer.md',
+      description: '写作',
+      id: 'writer',
+      loading: 'full',
+      name: '写作',
+      revision: 1,
+      updatedAt: 1,
+      url: '/writer.md',
     };
     const latest = structuredClone(base);
     latest.globalSkills.reviewer = {
-      description: '审阅', id: 'reviewer', loading: 'on-demand', name: '审阅', revision: 1, updatedAt: 2, url: '/reviewer.md',
+      description: '审阅',
+      id: 'reviewer',
+      loading: 'on-demand',
+      name: '审阅',
+      revision: 1,
+      updatedAt: 2,
+      url: '/reviewer.md',
     };
 
     expect(Object.keys(mergeSettingsChanges(base, first, latest).globalSkills).sort()).toEqual(['reviewer', 'writer']);
@@ -85,7 +109,11 @@ describe('settings cross-window merge', () => {
   it('始终用当前脚本内置预设替换设置中的旧副本', () => {
     const raw = structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS);
     raw.presetProfiles = [
-      { ...structuredClone(DEFAULT_PRESET), name: '旧内置副本', nodes: [{ ...DEFAULT_PRESET.nodes[0], content: '旧内容' }] },
+      {
+        ...structuredClone(DEFAULT_PRESET),
+        name: '旧内置副本',
+        nodes: [{ ...DEFAULT_PRESET.nodes[0], content: '旧内容' }],
+      },
       { ...structuredClone(DEFAULT_PRESET), id: 'preset:user', name: '用户预设' },
     ];
     const normalized = normalizeSettings(raw);
@@ -134,5 +162,4 @@ describe('settings cross-window merge', () => {
     });
     expect(normalized.agentConfigurations[2]).toMatchObject({ id: 'agent:user', name: '我的 Agent' });
   });
-
 });

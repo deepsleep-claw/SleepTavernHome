@@ -89,7 +89,7 @@ function filePartTokens(part: FilePart): number {
   return mediaType === 'text' ? Math.max(1, Math.ceil(bytes / 3)) : 1_000 + Math.ceil(bytes / 1_024);
 }
 
-function toolOutputTokens(output: ToolResultPart['output']): number {
+export function estimateToolOutputTokens(output: ToolResultPart['output']): number {
   if (output.type === 'execution-denied') return estimateTokens(output.reason ?? '');
   if (output.type !== 'content') return estimateTokens(output.value);
   // 多模态工具结果与用户附件使用相同预算，传输编码和签名不是模型正文。
@@ -126,7 +126,8 @@ function messageTokens(message: ModelMessage): number {
     if (part.type === 'file') return total + filePartTokens(part);
     if (part.type === 'image') return total + 1_200;
     if (part.type === 'tool-call') return total + estimateTokens({ name: part.toolName, input: part.input });
-    if (part.type === 'tool-result') return total + 4 + estimateTokens(part.toolName) + toolOutputTokens(part.output);
+    if (part.type === 'tool-result')
+      return total + 4 + estimateTokens(part.toolName) + estimateToolOutputTokens(part.output);
     return total;
   }, 4);
 }

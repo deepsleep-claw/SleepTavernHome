@@ -12,7 +12,7 @@ import { applyContextPatch } from '../workspace/context-patch';
 import { maskSecretsForModel, restoreSecretsFromModel } from '../workspace/secret-protection';
 import { isBinaryWorkspaceFile, WorkspaceError, type WorkspaceRepository } from '../workspace/types';
 import { richToolOutput } from './tool-output';
-import { globToRegex } from '../workspace/search';
+import { globToRegex, limitSearchResult } from '../workspace/search';
 
 export type ToolConfirmation = {
   description: string;
@@ -485,7 +485,8 @@ export function createWorkspaceRunnerTools(
         );
       },
       definition: tool({
-        description: '新建或整体写入文本文件，已有长文件优先使用apply_patch。HTML工程先用manage_html_project的template获取完整清单。直接写入/regexes/<scope>/*.yaml必须提供完整VFS正则对象，格式见/skills/builtin/card-workspace-io/references/regex-and-scripts.md；不是SillyTavern导入JSON字段。',
+        description:
+          '新建或整体写入文本文件，已有长文件优先使用apply_patch。HTML工程先用manage_html_project的template获取完整清单。直接写入/regexes/<scope>/*.yaml必须提供完整VFS正则对象，格式见/skills/builtin/card-workspace-io/references/regex-and-scripts.md；不是SillyTavern导入JSON字段。',
         inputSchema: z.object({
           content: z.string(),
           overwrite: z.boolean().optional().describe('默认false。仅在确认需要整体替换一个已有文件时显式设为true。'),
@@ -679,7 +680,7 @@ export function createWorkspaceRunnerTools(
     {
       definition: tool({
         description:
-          '像rg一样搜索文本。pattern默认是普通文本，搜索*、[等符号无需转义；仅在mode="regex"时按正则解释。glob/excludeGlob只筛选文件路径，例如**/*.md。',
+          '像rg一样搜索文本。pattern默认是普通文本，搜索*、[等符号无需转义；仅在mode="regex"时按正则解释。glob/excludeGlob只筛选文件路径，例如**/*.md。单行最多返回匹配附近2000字符，总输出最多约24000字符；truncated或textTruncated为true时需缩小范围，不能把片段当完整原文行替换。',
         inputSchema: z.object({
           caseSensitive: z.boolean().optional(),
           contextAfter: z.number().int().min(0).max(5).optional(),
@@ -702,7 +703,7 @@ export function createWorkspaceRunnerTools(
           const masked = await maskSecretsForModel(file.content, file.path);
           maskedLines.set(path, masked.maskedContent.split(/\r\n|\n|\r/u));
         }
-        return {
+        return limitSearchResult({
           ...result,
           matches: result.matches.map(match => {
             const lines = maskedLines.get(match.path) ?? [];
@@ -710,12 +711,13 @@ export function createWorkspaceRunnerTools(
             const afterCount = match.contextAfter.length;
             return {
               ...match,
+              textStartColumn: undefined,
               contextAfter: lines.slice(match.line, match.line + afterCount),
               contextBefore: lines.slice(Math.max(0, match.line - 1 - beforeCount), match.line - 1),
               text: lines[match.line - 1] ?? '',
             };
           }),
-        };
+        });
       },
       name: 'search_files',
       readonly: true,

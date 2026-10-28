@@ -4,6 +4,24 @@ import { isRichToolOutput } from './tool-output';
 import { createWorkspaceRunnerTools } from './tools';
 
 describe('workspace runner tools', () => {
+  it('脱敏重建搜索结果后仍保留输出上限和命中位置', async () => {
+    const path = '/files/large.md';
+    const content = '中'.repeat(1_200_000) + 'TARGET' + '尾'.repeat(20_000);
+    const repository = new MemoryWorkspaceRepository({
+      files: [{ content, path, mediaType: 'text/plain', readonly: false, resourceId: 'large' }],
+    });
+    const search = createWorkspaceRunnerTools(repository).find(item => item.name === 'search_files')!;
+    const result = (await search.execute({ path, pattern: 'TARGET' }, 'search')) as {
+      matches: { text: string; textStartColumn: number }[];
+      truncated: boolean;
+    };
+    expect(JSON.stringify(result).length).toBeLessThanOrEqual(24_000);
+    expect(result.truncated).toBe(true);
+    expect(result.matches[0].text).toContain('TARGET');
+    expect(result.matches[0].text.length).toBeLessThanOrEqual(2_000);
+    expect(result.matches[0].textStartColumn).toBeGreaterThan(1);
+    expect((await repository.read(path)).content).toBe(content);
+  });
   it('把通用文件读写、Patch、移动、删除和搜索映射到Repository', async () => {
     const repository = new MemoryWorkspaceRepository({
       files: [
@@ -161,15 +179,13 @@ describe('workspace runner tools', () => {
       matches: Array<{ text: string }>;
     };
     expect(search.matches[0].text).not.toContain(key);
-    await tools
-      .get('apply_patch')!
-      .execute(
-        {
-          patch: `*** Begin Patch\n*** Update File: ${path}\n@@\n key: ${token}\n-name: old\n+name: new\n*** End Patch`,
-          path,
-        },
-        'patch-secret',
-      );
+    await tools.get('apply_patch')!.execute(
+      {
+        patch: `*** Begin Patch\n*** Update File: ${path}\n@@\n key: ${token}\n-name: old\n+name: new\n*** End Patch`,
+        path,
+      },
+      'patch-secret',
+    );
     expect((await repository.read(path)).content).toBe(`key: ${key}\nname: new\n`);
   });
 

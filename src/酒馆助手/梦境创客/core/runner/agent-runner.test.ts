@@ -4,6 +4,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { AgentRunner, MemoryRunnerJournal } from './agent-runner';
 import type { ModelStepExecutor, ModelStepRequest, ModelStepResult, RunnerToolCall } from './step-executor';
 import type { RunnerTool } from './tools';
+import { createWorkspaceRunnerTools } from './tools';
+import { MemoryWorkspaceRepository } from '../workspace/memory-repository';
+import { measureContext } from './context';
 
 function modelStep(toolCalls: RunnerToolCall[] = [], text = 'done'): ModelStepResult {
   const assistantMessages: ModelMessage[] = [
@@ -52,6 +55,101 @@ function runnerTool(
 }
 
 describe('AgentRunner', () => {
+  it('1M 上下文中连续搜索超长单行文件不会因结果膨胀触发压缩', async () => {
+    const repository = new MemoryWorkspaceRepository({
+      files: [
+        {
+          path: '/files/large.md',
+          content: 'TARGET ' + '中'.repeat(1_200_000),
+          mediaType: 'text/plain',
+          readonly: false,
+          resourceId: 'large',
+        },
+      ],
+    });
+    const calls = Array.from({ length: 8 }, (_, index) => ({
+      toolName: 'search_files',
+      toolCallId: `search-${index}`,
+      input: { path: '/files/large.md', pattern: 'TARGET' },
+    }));
+    const executor = new QueueExecutor([modelStep(calls), modelStep([], '已完成定位')]);
+    const journal = new MemoryRunnerJournal();
+    const runner = new AgentRunner({
+      contextWindow: 1_048_576,
+      executor,
+      journal,
+      tools: createWorkspaceRunnerTools(repository),
+    });
+    expect((await runner.start('查找目标')).status).toBe('completed');
+    expect(executor.requests).toHaveLength(2);
+    expect(journal.events.some(event => event.type === 'context-compaction-started')).toBe(false);
+    expect(measureContext(executor.requests[1].messages, 1_048_576).toolTokens).toBeLessThan(48_000);
+  });
+  it('并行工具和失败输出共用预算，结果仍与调用一一配对', async () => {
+    const calls = Array.from({ length: 12 }, (_, index) => ({
+      toolName: 'large',
+      toolCallId: `large-${index}`,
+      input: {},
+    }));
+    const executor = new QueueExecutor([modelStep(calls), modelStep([], 'done')]);
+    const runner = new AgentRunner({
+      contextWindow: 128_000,
+      executor,
+      journal: new MemoryRunnerJournal(),
+      tools: [
+        runnerTool('large', true, async (_input, id) => {
+          if (id.endsWith('-0')) throw new Error('x'.repeat(100_000));
+          return { content: '中'.repeat(100_000) };
+        }),
+      ],
+    });
+    expect((await runner.start('继续')).status).toBe('completed');
+    const toolMessages = executor.requests[1].messages.filter(message => message.role === 'tool');
+    expect(toolMessages).toHaveLength(calls.length);
+    expect(
+      toolMessages.flatMap(message =>
+        message.content.map(part => (part.type === 'tool-result' ? part.toolCallId : '')),
+      ),
+    ).toEqual(calls.map(call => call.toolCallId));
+    expect(measureContext(executor.requests[1].messages, 128_000).toolTokens).toBeLessThanOrEqual(19_200);
+  });
+  it('恢复未完成工具批次时已保存的结果仍占用该批预算', async () => {
+    const calls = Array.from({ length: 3 }, (_, index) => ({
+      toolName: 'large',
+      toolCallId: `large-${index}`,
+      input: {},
+    }));
+    const execute = vi.fn(async () => ({ content: '中'.repeat(100_000) }));
+    const executor = new QueueExecutor([modelStep([], 'done')]);
+    const runner = new AgentRunner({
+      contextWindow: 128_000,
+      executor,
+      journal: new MemoryRunnerJournal(),
+      tools: [runnerTool('large', true, execute)],
+      initialStatus: 'stopped',
+      initialPending: { calls, compacting: false, nextCall: 1 },
+      initialMessages: [
+        { role: 'user', content: '继续' },
+        ...modelStep(calls).assistantMessages,
+        {
+          role: 'tool',
+          content: [
+            {
+              type: 'tool-result',
+              toolName: 'large',
+              toolCallId: 'large-0',
+              output: { type: 'text', value: 'x'.repeat(45_000) },
+            },
+          ],
+        },
+      ],
+    });
+    expect((await runner.resume()).status).toBe('completed');
+    expect(execute).toHaveBeenCalledTimes(2);
+    const messages = executor.requests[0].messages;
+    expect(messages.filter(message => message.role === 'tool')).toHaveLength(3);
+    expect(measureContext(messages, 128_000).toolTokens).toBeLessThanOrEqual(19_200);
+  });
   it('阈值以下主动调用压缩也实际替换旧上下文', async () => {
     const executor = new QueueExecutor([
       modelStep([], 'old-answer'.repeat(100)),
@@ -65,6 +163,9 @@ describe('AgentRunner', () => {
     expect(result.status).toBe('completed');
     expect(JSON.stringify(result.messages)).not.toContain('old-answer');
     expect(journal.events.some(event => event.type === 'context-compacted')).toBe(true);
+    expect(journal.events.find(event => event.type === 'context-compaction-started')).toMatchObject({
+      trigger: 'model',
+    });
   });
 
   it('手动压缩强制请求摘要，完成后不继续模型任务', async () => {
@@ -256,6 +357,37 @@ describe('AgentRunner', () => {
       'a',
       'b',
     ]);
+  });
+
+  it('停止并行读取时取消所有仍在执行的工具', async () => {
+    const started: string[] = [];
+    const cancelled: string[] = [];
+    const calls = ['a', 'b'].map(toolCallId => ({ input: {}, toolCallId, toolName: 'read' }));
+    const runner = new AgentRunner({
+      executor: new QueueExecutor([modelStep(calls)]),
+      journal: new MemoryRunnerJournal(),
+      tools: [
+        runnerTool('read', true, async (_input, id, context) => {
+          started.push(id);
+          await new Promise<void>(resolve => {
+            context!.abortSignal.addEventListener(
+              'abort',
+              () => {
+                cancelled.push(id);
+                resolve();
+              },
+              { once: true },
+            );
+          });
+          return { cancelled: true };
+        }),
+      ],
+    });
+    const running = runner.start('read');
+    await vi.waitFor(() => expect(started).toEqual(['a', 'b']));
+    runner.stop();
+    expect((await running).status).toBe('stopped');
+    expect(cancelled).toEqual(['a', 'b']);
   });
 
   it('工具失败作为结果返回给模型，由模型决定是否修正重试', async () => {

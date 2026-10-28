@@ -14,7 +14,6 @@ type RecoveryRow = {
 };
 
 const DATABASE_NAME = 'dream-card-agent';
-const DATABASE_VERSION = 1;
 const STORE_NAME = 'operation-recovery';
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {
@@ -43,7 +42,9 @@ export class IndexedDbOperationRecoveryStore implements OperationRecoveryStore {
   async load(sessionId: string): Promise<PersistedOperationLog | undefined> {
     const database = await this.open();
     const transaction = database.transaction(STORE_NAME, 'readonly');
-    const row = await requestResult(transaction.objectStore(STORE_NAME).get(sessionId) as IDBRequest<RecoveryRow | undefined>);
+    const row = await requestResult(
+      transaction.objectStore(STORE_NAME).get(sessionId) as IDBRequest<RecoveryRow | undefined>,
+    );
     await transactionDone(transaction);
     return row ? klona(row.log) : undefined;
   }
@@ -58,24 +59,48 @@ export class IndexedDbOperationRecoveryStore implements OperationRecoveryStore {
   async save(sessionId: string, value: PersistedOperationLog): Promise<void> {
     const database = await this.open();
     const transaction = database.transaction(STORE_NAME, 'readwrite');
-    transaction.objectStore(STORE_NAME).put({ log: klona(value), sessionId, updatedAt: Date.now() } satisfies RecoveryRow);
+    transaction
+      .objectStore(STORE_NAME)
+      .put({ log: klona(value), sessionId, updatedAt: Date.now() } satisfies RecoveryRow);
     await transactionDone(transaction);
   }
 
   private open(): Promise<IDBDatabase> {
     if (typeof indexedDB === 'undefined') return Promise.reject(new Error('当前环境不支持IndexedDB。'));
     this.database ??= new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+      const request = indexedDB.open(DATABASE_NAME);
       request.addEventListener(
         'upgradeneeded',
         () => {
           const database = request.result;
-          if (!database.objectStoreNames.contains(STORE_NAME)) database.createObjectStore(STORE_NAME, { keyPath: 'sessionId' });
+          if (!database.objectStoreNames.contains(STORE_NAME))
+            database.createObjectStore(STORE_NAME, { keyPath: 'sessionId' });
         },
         { once: true },
       );
-      request.addEventListener('success', () => resolve(request.result), { once: true });
-      request.addEventListener('error', () => reject(request.error ?? new Error('无法打开IndexedDB。')), { once: true });
+      request.addEventListener(
+        'success',
+        () => {
+          const database = request.result;
+          if (!database.objectStoreNames.contains(STORE_NAME)) {
+            database.close();
+            reject(new Error('操作恢复数据库缺少记录表，请保留浏览器数据并检查版本。'));
+            return;
+          }
+          database.onversionchange = () => {
+            database.close();
+            this.database = undefined;
+          };
+          resolve(database);
+        },
+        { once: true },
+      );
+      request.addEventListener('error', () => reject(request.error ?? new Error('无法打开IndexedDB。')), {
+        once: true,
+      });
+    }).catch(error => {
+      this.database = undefined;
+      throw error;
     });
     return this.database;
   }
@@ -106,7 +131,14 @@ export class OperationRecoveryCoordinator {
 
 export class MemoryOperationRecoveryStore implements OperationRecoveryStore {
   private readonly values = new Map<string, PersistedOperationLog>();
-  async load(sessionId: string) { const value = this.values.get(sessionId); return value ? klona(value) : undefined; }
-  async remove(sessionId: string) { this.values.delete(sessionId); }
-  async save(sessionId: string, value: PersistedOperationLog) { this.values.set(sessionId, klona(value)); }
+  async load(sessionId: string) {
+    const value = this.values.get(sessionId);
+    return value ? klona(value) : undefined;
+  }
+  async remove(sessionId: string) {
+    this.values.delete(sessionId);
+  }
+  async save(sessionId: string, value: PersistedOperationLog) {
+    this.values.set(sessionId, klona(value));
+  }
 }

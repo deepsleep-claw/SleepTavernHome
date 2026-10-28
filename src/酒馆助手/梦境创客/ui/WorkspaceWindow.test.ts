@@ -236,7 +236,7 @@ describe('WorkspaceWindow', () => {
     expect(root.querySelector('.dca-settings-workspace')).toBeNull();
     expect(root.querySelector('.dca-home')).not.toBeNull();
   });
-  it('桌面通知收起后可重新打开，清除跳过待处理备份，重试成功后才解除', async () => {
+  it('后台备份失败在通知中心显示，重试期间禁用按钮，恢复后允许清除', async () => {
     const root = await mountWorkspace();
     const snapshot = structuredClone(mock.state);
     Object.assign(snapshot, {
@@ -246,21 +246,17 @@ describe('WorkspaceWindow', () => {
     mock.publish(snapshot);
     await nextTick();
     const trigger = root.querySelector<HTMLButtonElement>('.dca-workspace-status [data-notification-trigger]')!;
-    expect(trigger.getAttribute('aria-label')).toContain('1 条待处理');
-    root.querySelector<HTMLElement>('[data-notification-id="session-backup"] p')!.click();
-    await nextTick();
+    expect(trigger.getAttribute('aria-label')).not.toContain('待处理');
     expect(root.querySelector('[data-notification-id="session-backup"]')).toBeNull();
     trigger.click();
     await nextTick();
-    root.querySelector<HTMLButtonElement>('[title="清除可关闭消息"]')!.click();
-    await nextTick();
-    expect(root.querySelectorAll('.dca-notification-card')).toHaveLength(1);
+    expect(root.querySelector('.dca-notification-required')).toBeNull();
     root.querySelector<HTMLButtonElement>('.dca-notification-actions button')!.click();
     expect(mock.runtime.backupSessions).toHaveBeenCalledOnce();
     snapshot.sessionBackup = { pending: 1, syncing: true };
     mock.publish(snapshot);
     await nextTick();
-    expect(trigger.getAttribute('aria-label')).toContain('1 条待处理');
+    expect(trigger.getAttribute('aria-label')).not.toContain('待处理');
     expect(root.querySelector<HTMLButtonElement>('.dca-notification-actions button')!.disabled).toBe(true);
     snapshot.sessionBackup = { pending: 0, syncing: false };
     mock.publish(snapshot);

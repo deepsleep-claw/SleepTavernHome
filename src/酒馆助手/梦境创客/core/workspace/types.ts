@@ -53,6 +53,9 @@ export type SearchQuery = {
 };
 
 export type SearchMatch = {
+  textStartColumn?: number;
+  textTruncated?: boolean;
+  contextTruncated?: boolean;
   column: number;
   contextAfter: string[];
   contextBefore: string[];
@@ -62,6 +65,7 @@ export type SearchMatch = {
 };
 
 export type SearchResult = {
+  warning?: string;
   matchedFiles: number;
   matches: SearchMatch[];
   returnedMatches: number;

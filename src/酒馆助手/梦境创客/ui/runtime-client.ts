@@ -79,6 +79,8 @@ const CLIENT_METHODS = [
   'useCurrentWorkingFile',
   'writeWorkingFile',
   'backupSessions',
+  'retryLocalSessionSave',
+  'restoreSessionBackup',
   'exportBrowserSessions',
   'restoreCurrentSessionBackup',
   'refreshSessionBackups',

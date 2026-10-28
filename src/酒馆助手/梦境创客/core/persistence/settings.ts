@@ -9,6 +9,7 @@ import { DEFAULT_BUILTIN_AGENT, defaultBuiltinAgentConfiguration, type AgentConf
 import type { SessionMode } from '../session/types';
 import { isAgentToolId } from '../runner/tool-catalog';
 import { mergeProviderSettings } from './provider-settings-merge';
+import { normalizeBackupFrequency } from './backup-frequency';
 
 export type { AgentConfiguration } from './builtin-agent';
 
@@ -94,6 +95,7 @@ export type GlobalSkillFileIndexEntry = {
 };
 
 export type SessionIndexEntry = {
+  commitId?: string;
   previousBackupUrl?: string;
   avatarId?: string;
   bindingId: string;
@@ -121,6 +123,7 @@ export type CharacterStoreReference = {
 };
 
 export type DreamCardAgentSettings = {
+  backupFrequencySeconds: number;
   interfaceModes: { overlay: boolean; navigation: boolean; detached: boolean };
   activeThemeId: string;
   approvalMode: SessionMode;
@@ -150,6 +153,7 @@ export type DreamCardAgentSettings = {
 export const DEFAULT_AGENT_CONFIGURATION_ID = DEFAULT_BUILTIN_AGENT.id;
 
 export const DEFAULT_DREAM_CARD_AGENT_SETTINGS: DreamCardAgentSettings = {
+  backupFrequencySeconds: 120,
   interfaceModes: { overlay: true, navigation: true, detached: false },
   activeThemeId: 'builtin:clean',
   approvalMode: 'normal',
@@ -288,6 +292,7 @@ export function normalizeSettings(raw?: Partial<DreamCardAgentSettings>): DreamC
   return {
     ...structuredClone(DEFAULT_DREAM_CARD_AGENT_SETTINGS),
     ...structuredClone(raw ?? {}),
+    backupFrequencySeconds: normalizeBackupFrequency(raw?.backupFrequencySeconds),
     approvalMode: ['full', 'normal', 'yolo'].includes(raw?.approvalMode ?? '') ? raw!.approvalMode! : 'normal',
     interfaceModes: {
       overlay: raw?.interfaceModes?.overlay !== false,
@@ -346,6 +351,7 @@ export function mergeSettingsChanges(
     structuredClone(equal(base[key], incoming[key]) ? latest[key] : incoming[key]);
   return {
     activeThemeId: choose('activeThemeId'),
+    backupFrequencySeconds: choose('backupFrequencySeconds'),
     approvalMode: choose('approvalMode'),
     interfaceModes: choose('interfaceModes'),
     activeAgentConfigurationId: choose('activeAgentConfigurationId'),

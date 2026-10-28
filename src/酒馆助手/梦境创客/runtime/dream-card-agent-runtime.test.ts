@@ -1,7 +1,8 @@
 import type { ModelMessage } from 'ai';
 import { describe, expect, it, vi } from 'vitest';
 import { MemoryTavernFileClient } from '../core/persistence/file-client';
-import { MemoryBrowserRecordStore } from '../core/persistence/browser-record-store';
+import { IndexedDbBrowserRecordStore, MemoryBrowserRecordStore } from '../core/persistence/browser-record-store';
+import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { SessionRevisionStore } from '../core/persistence/session-store';
 import { MemorySessionDraftCache } from '../core/persistence/session-draft-cache';
 import { MemoryAgentSettingsStore, type DreamCardAgentSettings } from '../core/persistence/settings';
@@ -50,6 +51,66 @@ class DeferredMemorySettingsStore extends MemoryAgentSettingsStore {
     await super.save(settings);
   }
 }
+
+it('设置广播刷新会话失败时报告错误，存储恢复后可重试并清除提示', async () => {
+  const records = new MemoryBrowserRecordStore();
+  const settings = new MemoryAgentSettingsStore();
+  const runtime = new DreamCardAgentRuntime({
+    adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+    bridge: new FakeTavernBridge(),
+    browserRecords: records,
+    fileClient: new MemoryTavernFileClient(),
+    settingsStore: settings,
+  });
+  try {
+    const read = vi.spyOn(records, 'list').mockRejectedValue(new Error('数据库暂不可用'));
+    await settings.save(settings.load());
+    await vi.waitFor(() => expect(runtime.snapshot().error).toContain('数据库暂不可用'));
+    read.mockRestore();
+    await settings.save(settings.load());
+    await vi.waitFor(() => expect(runtime.snapshot().error).toBeUndefined());
+  } finally {
+    runtime.destroy();
+  }
+});
+
+it('已有版本 2 的浏览器数据库可以创建会话，旧草稿保持完整', async () => {
+  vi.stubGlobal('indexedDB', new IDBFactory());
+  vi.stubGlobal('IDBKeyRange', IDBKeyRange);
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.open('dream-creator-local:updated-user', 2);
+    request.onupgradeneeded = () => request.result.createObjectStore('records');
+    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      const db = request.result;
+      const transaction = db.transaction('records', 'readwrite');
+      transaction.objectStore('records').put({ text: '尚未发送的草稿' }, 'draft:kept');
+      transaction.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+    };
+  });
+  const records = new IndexedDbBrowserRecordStore(async () => 'updated-user');
+  const runtime = new DreamCardAgentRuntime({
+    adapterFactory: () => new MemoryCardStateAdapter(transactionState()),
+    bridge: new FakeTavernBridge(),
+    browserRecords: records,
+    fileClient: new MemoryTavernFileClient(),
+    settingsStore: new MemoryAgentSettingsStore(),
+  });
+  try {
+    await useAgentWithoutRemoteSkills(runtime);
+    await runtime.refreshCharacter();
+    const created = await runtime.createSession({ title: '更新后创建成功' });
+    expect(created.title).toBe('更新后创建成功');
+    expect(await records.list('session-index:')).toHaveLength(1);
+    expect(await records.get('draft:kept')).toEqual({ text: '尚未发送的草稿' });
+  } finally {
+    runtime.destroy();
+    vi.unstubAllGlobals();
+  }
+});
 
 function modelStep(tool = false): ModelStepResult {
   const messages: ModelMessage[] = tool

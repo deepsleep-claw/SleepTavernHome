@@ -5,6 +5,22 @@ import { BufferedSessionRecordStore } from './buffered-session-record-store';
 afterEach(() => vi.useRealTimers());
 
 describe('会话延迟落盘', () => {
+  it('一个本地记录失败不会阻挡其他记录落盘，并立即报告保存错误', async () => {
+    const base = new MemoryBrowserRecordStore();
+    const save = base.update.bind(base);
+    vi.spyOn(base, 'update').mockImplementation((key, update, index) =>
+      key === 'session:one' ? Promise.reject(new Error('quota')) : save(key, update, index),
+    );
+    const onError = vi.fn();
+    const store = new BufferedSessionRecordStore(base, undefined, onError);
+    await store.put('session:one', 'pending');
+    await store.put('session:two', 'saved');
+    await expect(store.flush()).rejects.toThrow('quota');
+    expect(await base.get('session:two')).toBe('saved');
+    expect(await store.get('session:one')).toBe('pending');
+    expect(onError).toHaveBeenCalled();
+    store.dispose();
+  });
   it('旧格式页面写入更新的正文时，记录计数更大的旧内容仍不能覆盖它', async () => {
     vi.useFakeTimers();
     const base = new MemoryBrowserRecordStore();

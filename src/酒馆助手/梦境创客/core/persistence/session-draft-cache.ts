@@ -3,6 +3,7 @@ import type { PersistedSessionRuntime } from '../session/types';
 import type { SessionIndexEntry } from './settings';
 
 export type PendingSessionDraft = {
+  commitId?: string;
   avatarId?: string;
   bindingId: string;
   characterName: string;
@@ -19,7 +20,6 @@ export interface SessionDraftCache {
 type DraftRow = PendingSessionDraft & { cacheId: string; updatedAt: number };
 
 const DATABASE_NAME = 'dream-card-agent-session-cache';
-const DATABASE_VERSION = 1;
 const STORE_NAME = 'pending-sessions';
 
 function cacheId(bindingId: string, sessionId: string): string {
@@ -81,14 +81,35 @@ export class IndexedDbSessionDraftCache implements SessionDraftCache {
   private open(): Promise<IDBDatabase> {
     if (typeof indexedDB === 'undefined') return Promise.reject(new Error('当前环境不支持IndexedDB。'));
     this.database ??= new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open(DATABASE_NAME, DATABASE_VERSION);
+      const request = indexedDB.open(DATABASE_NAME);
       request.addEventListener('upgradeneeded', () => {
         if (!request.result.objectStoreNames.contains(STORE_NAME)) {
           request.result.createObjectStore(STORE_NAME, { keyPath: 'cacheId' });
         }
       });
-      request.addEventListener('success', () => resolve(request.result), { once: true });
-      request.addEventListener('error', () => reject(request.error ?? new Error('无法打开会话恢复缓存。')), { once: true });
+      request.addEventListener(
+        'success',
+        () => {
+          const database = request.result;
+          if (!database.objectStoreNames.contains(STORE_NAME)) {
+            database.close();
+            reject(new Error('会话恢复缓存缺少记录表，请保留浏览器数据并检查版本。'));
+            return;
+          }
+          database.onversionchange = () => {
+            database.close();
+            this.database = undefined;
+          };
+          resolve(database);
+        },
+        { once: true },
+      );
+      request.addEventListener('error', () => reject(request.error ?? new Error('无法打开会话恢复缓存。')), {
+        once: true,
+      });
+    }).catch(error => {
+      this.database = undefined;
+      throw error;
     });
     return this.database;
   }

@@ -1,7 +1,9 @@
 import { boundedWait } from '../async';
+import { readSessionRecord, writeSessionRecord } from './indexed-session-record';
 
 export type BrowserRecordIndex<T> = { key: string; project: (value: T) => unknown };
 export interface BrowserRecordStore {
+  flush?(): Promise<void>;
   get<T>(key: string): Promise<T | undefined>;
   list<T>(prefix: string): Promise<Array<{ key: string; value: T }>>;
   put<T>(key: string, value: T): Promise<void>;
@@ -55,17 +57,25 @@ export class IndexedDbBrowserRecordStore implements BrowserRecordStore {
       .then(
         account =>
           new Promise<IDBDatabase>((resolve, reject) => {
-            const request = indexedDB.open(`dream-creator-local:${account}`, 1);
+            // 记录格式在行内标识；已有数据库沿用其结构版本。
+            const request = indexedDB.open(`dream-creator-local:${account}`);
             let expired = false;
             const timer = setTimeout(() => {
               expired = true;
               reject(new Error('打开本地会话数据库超时，请重试。'));
             }, 15_000);
-            request.onupgradeneeded = () => request.result.createObjectStore('records');
+            request.onupgradeneeded = () => {
+              if (!request.result.objectStoreNames.contains('records')) request.result.createObjectStore('records');
+            };
             request.onsuccess = () => {
               clearTimeout(timer);
               if (expired) {
                 request.result.close();
+                return;
+              }
+              if (!request.result.objectStoreNames.contains('records')) {
+                request.result.close();
+                reject(new Error('本机会话数据库缺少记录表，请保留浏览器数据并检查版本。'));
                 return;
               }
               request.result.onversionchange = () => {
@@ -95,23 +105,57 @@ export class IndexedDbBrowserRecordStore implements BrowserRecordStore {
   async get<T>(key: string): Promise<T | undefined> {
     const database = await this.open();
     const tx = database.transaction('records', 'readonly');
-    const request = tx.objectStore('records').get(key);
-    return transactionResult(tx, () => request.result as T | undefined);
+    const store = tx.objectStore('records');
+    const request = store.get(key);
+    let value: T | undefined;
+    let readError: unknown;
+    request.onsuccess = () =>
+      readSessionRecord(
+        store,
+        key,
+        request.result,
+        result => {
+          value = result as T | undefined;
+        },
+        error => {
+          readError = error;
+          tx.abort();
+        },
+      );
+    return transactionResult(tx, () => value).catch(error => {
+      throw readError ?? error;
+    });
   }
 
   async list<T>(prefix: string): Promise<Array<{ key: string; value: T }>> {
     const database = await this.open();
     const rows: Array<{ key: string; value: T }> = [];
     const tx = database.transaction('records', 'readonly');
-    const cursor = tx.objectStore('records').openCursor(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
+    const store = tx.objectStore('records');
+    let readError: unknown;
+    const cursor = store.openCursor(IDBKeyRange.bound(prefix, `${prefix}\uffff`));
     cursor.onsuccess = () => {
       const item = cursor.result;
       if (item) {
-        rows.push({ key: String(item.key), value: item.value as T });
+        const key = String(item.key);
+        readSessionRecord(
+          store,
+          key,
+          item.value,
+          value => {
+            rows.push({ key, value: value as T });
+          },
+          error => {
+            readError = error;
+            tx.abort();
+          },
+        );
         item.continue();
       }
     };
-    return transactionResult(tx, () => rows);
+    return transactionResult(tx, () => rows.sort((a, b) => a.key.localeCompare(b.key))).catch(error => {
+      throw readError ?? error;
+    });
   }
 
   async put<T>(key: string, value: T): Promise<void> {
@@ -128,20 +172,29 @@ export class IndexedDbBrowserRecordStore implements BrowserRecordStore {
     let updateError: unknown;
     const store = tx.objectStore('records');
     const request = store.get(key);
-    request.onsuccess = () => {
-      try {
-        const next = update(request.result as T | undefined);
-        if (next === undefined) store.delete(key);
-        else store.put(next, key);
-        if (index) {
-          if (next === undefined) store.delete(index.key);
-          else store.put(index.project(next), index.key);
-        }
-      } catch (error) {
-        tx.abort();
-        updateError = error;
-      }
-    };
+    request.onsuccess = () =>
+      readSessionRecord(
+        store,
+        key,
+        request.result,
+        (value, parts) => {
+          try {
+            const next = update(value as T | undefined);
+            writeSessionRecord(store, key, next, parts);
+            if (index) {
+              if (next === undefined) store.delete(index.key);
+              else store.put(index.project(next), index.key);
+            }
+          } catch (error) {
+            tx.abort();
+            updateError = error;
+          }
+        },
+        error => {
+          updateError = error;
+          tx.abort();
+        },
+      );
     return transactionResult(tx, () => undefined).catch(error => {
       throw updateError ?? error;
     });

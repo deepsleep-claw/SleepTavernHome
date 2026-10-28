@@ -55,6 +55,51 @@ async function fixture() {
 }
 
 describe('local session persistence', () => {
+  it('检查索引期间会话被删除时，不发布已经过时的正文', async () => {
+    const { store, input, characters, remote } = await fixture();
+    await store.commit(input);
+    const load = characters.load.bind(characters);
+    vi.spyOn(characters, 'load').mockImplementationOnce(async (...args) => {
+      const result = await load(...args);
+      await store.removeSession('card', 'one');
+      return result;
+    });
+    const commit = vi.spyOn(remote, 'commit');
+    await store.backup();
+    expect(commit).not.toHaveBeenCalled();
+    await expect(store.load('card', 'one')).rejects.toThrow('已删除');
+    await store.backup();
+    expect((await characters.load('card')).sessions.one).toBeUndefined();
+  });
+  it('检查后端更新保留本机工作内容，明确恢复后移除更新提示', async () => {
+    const { store, input, remote, statuses } = await fixture();
+    await store.commit(input);
+    await store.backup();
+    await remote.commit({ ...input, runtime: { ...input.runtime, title: '后端新记录' } });
+    await store.commit({ ...input, runtime: { ...input.runtime, title: '本机未备份记录' } });
+    const commit = vi.spyOn(remote, 'commit');
+    await store.refreshBackups();
+    expect(commit).not.toHaveBeenCalled();
+    expect(statuses.at(-1)?.updates).toMatchObject([{ sessionId: 'one', title: '后端新记录', localDirty: true }]);
+    expect((await store.load('card', 'one')).runtime.title).toBe('本机未备份记录');
+    await store.restoreBackup('card', 'one');
+    expect((await store.load('card', 'one')).runtime.title).toBe('后端新记录');
+    expect(statuses.at(-1)?.updates).toEqual([]);
+    expect(await store.exportSessions()).toContain('本机未备份记录');
+  });
+  it('下载恢复记录期间产生本机修改时拒绝覆盖', async () => {
+    const { store, input, remote } = await fixture();
+    await store.commit(input);
+    await store.backup();
+    const load = remote.load.bind(remote);
+    vi.spyOn(remote, 'load').mockImplementationOnce(async (...args) => {
+      const result = await load(...args);
+      await store.commit({ ...input, runtime: { ...input.runtime, title: '下载期间的新内容' } });
+      return result;
+    });
+    await expect(store.restoreBackup('card', 'one')).rejects.toThrow('已有新内容');
+    expect((await store.load('card', 'one')).runtime.title).toBe('下载期间的新内容');
+  });
   it('后端已收到相同内容时，重试补齐本机备份确认', async () => {
     const { store, remote, input, statuses } = await fixture();
     await store.commit(input);
@@ -136,21 +181,67 @@ describe('local session persistence', () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
-  it('后端备份等待最后一次更新后的三秒', async () => {
+  it('固定检查周期不被持续生成重置，没有变动时不访问后端', async () => {
     vi.useFakeTimers();
     try {
-      const { store, input } = await fixture();
-      const backup = vi.spyOn(store, 'backup').mockResolvedValue();
+      const { store, input, remote, characters } = await fixture();
+      const commit = vi.spyOn(remote, 'commit');
+      const load = vi.spyOn(characters, 'load');
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(load).not.toHaveBeenCalled();
       await store.commit(input);
-      await vi.advanceTimersByTimeAsync(2500);
+      await vi.advanceTimersByTimeAsync(119_000);
       await store.commit({ ...input, runtime: { ...input.runtime, updatedAt: 3 } });
-      await vi.advanceTimersByTimeAsync(2999);
-      expect(backup).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(backup).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(1000);
+      await store.backup();
+      expect(commit).toHaveBeenCalledOnce();
+      load.mockClear();
+      await vi.advanceTimersByTimeAsync(240_000);
+      expect(load).not.toHaveBeenCalled();
+      expect(commit).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
     }
+  });
+  it('索引响应丢失后继续生成，重新打开本地存储仍能确认旧提交并备份新内容', async () => {
+    const { store, input, files, local, remote, characters } = await fixture();
+    await store.commit(input);
+    await store.backup();
+    const upload = files.upload.bind(files);
+    vi.spyOn(files, 'upload').mockImplementationOnce(upload);
+    let fail = true;
+    vi.spyOn(files, 'upload').mockImplementation(async (name, bytes) => {
+      const result = await upload(name, bytes);
+      if (fail && name.includes('--Meta--')) {
+        fail = false;
+        throw new Error('response lost');
+      }
+      return result;
+    });
+    await store.commit({ ...input, runtime: { ...input.runtime, title: '已经上传' } });
+    await store.backup();
+    await store.commit({ ...input, runtime: { ...input.runtime, title: '继续生成的新内容' } });
+    store.dispose();
+    const statuses: SessionBackupStatus[] = [];
+    const restored = new LocalSessionStore(local, remote, characters, value => statuses.push(value));
+    stores.push(restored);
+    await restored.backup();
+    expect(statuses.at(-1)).toMatchObject({ pending: 0, conflicts: [] });
+    expect((await remote.load('card', 'one')).runtime.title).toBe('继续生成的新内容');
+  });
+  it('一个会话上传失败仍继续备份其他会话，刷新列表不触发上传', async () => {
+    const { store, input, remote, statuses } = await fixture();
+    const commit = remote.commit.bind(remote);
+    vi.spyOn(remote, 'commit').mockImplementation(value =>
+      value.runtime.sessionId === 'one' ? Promise.reject(new Error('first failed')) : commit(value),
+    );
+    await store.commit(input);
+    await store.commit({ ...input, runtime: { ...input.runtime, sessionId: 'two' } });
+    await store.refreshBackups();
+    expect(remote.commit).not.toHaveBeenCalled();
+    await store.backup();
+    expect((await remote.load('card', 'two')).runtime.sessionId).toBe('two');
+    expect(statuses.at(-1)).toMatchObject({ pending: 1, error: 'first failed' });
   });
   it('本地提交和索引读取不需要后端上传', async () => {
     const { store, files, input, statuses } = await fixture();

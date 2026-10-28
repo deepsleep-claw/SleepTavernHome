@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { compilePreset, DEFAULT_PRESET } from '../preset/compiler';
 import { defaultPresetValues } from '../session/prompt';
 import type { PersistedSessionRuntime } from '../session/types';
@@ -36,6 +36,71 @@ async function runtime(sessionId = 'session'): Promise<PersistedSessionRuntime> 
 }
 
 describe('single-file session store', () => {
+  it('上传期间另一个写入者发布新版本时，保留其版本并拒绝过时索引', async () => {
+    const client = new MemoryTavernFileClient();
+    const settings = new MemoryAgentSettingsStore();
+    const store = new SessionRevisionStore(client, settings, Date.now, new MemorySessionDraftCache(), true);
+    const other = new SessionRevisionStore(client, settings, Date.now, new MemorySessionDraftCache(), true);
+    const input = { bindingId: 'role', characterName: '测试', runtime: await runtime(), status: 'completed' as const };
+    await store.commit(input);
+    const upload = client.upload.bind(client);
+    let changed = false;
+    vi.spyOn(client, 'upload').mockImplementation(async (name, bytes) => {
+      const result = await upload(name, bytes);
+      if (!changed && name.includes('--Session--')) {
+        changed = true;
+        await other.commit({ ...input, runtime: { ...input.runtime, title: '其他页面的版本' } });
+      }
+      return result;
+    });
+    await expect(
+      store.commit({ ...input, runtime: { ...input.runtime, title: '上传中的旧基础版本' } }),
+    ).rejects.toThrow('版本已更新');
+    expect((await store.load('role', 'session')).runtime.title).toBe('其他页面的版本');
+  });
+  it('分块备份复用未变化的历史，缺块时拒绝不完整恢复', async () => {
+    const client = new MemoryTavernFileClient();
+    const settings = new MemoryAgentSettingsStore();
+    const store = new SessionRevisionStore(client, settings, Date.now, new MemorySessionDraftCache(), true);
+    const state = await runtime();
+    const input = { bindingId: 'role', characterName: '测试', runtime: state, status: 'completed' as const };
+    const first = await store.commit(input);
+    const uploaded = client.uploadedNames.length;
+    const second = await store.commit({ ...input, runtime: { ...state, title: '只有标题改变' } });
+    expect(client.uploadedNames.slice(uploaded).filter(name => name.includes('--Part--'))).toHaveLength(1);
+    expect((await new SessionRevisionStore(client, settings).load('role', 'session')).runtime.title).toBe(
+      '只有标题改变',
+    );
+    const manifest = JSON.parse(new TextDecoder().decode(await client.download(second.url)));
+    const reference = Object.values(manifest.parts)[0] as { url: string };
+    client.corrupt(reference.url);
+    await expect(new SessionRevisionStore(client, settings).load('role', 'session')).rejects.toThrow();
+    expect(client.urls()).toContain(first.url);
+  });
+  it('分块上传中断不发布索引，使用相同提交编号重试不会重传已确认块', async () => {
+    const client = new MemoryTavernFileClient();
+    const settings = new MemoryAgentSettingsStore();
+    const store = new SessionRevisionStore(client, settings, Date.now, new MemorySessionDraftCache(), true);
+    const state = await runtime();
+    const input = { bindingId: 'role', characterName: '测试', runtime: state, status: 'completed' as const };
+    const first = await store.commit(input);
+    const upload = client.upload.bind(client);
+    let parts = 0;
+    vi.spyOn(client, 'upload').mockImplementation(async (name, bytes) => {
+      if (name.includes('--Part--') && ++parts === 2) throw new Error('interrupted');
+      return upload(name, bytes);
+    });
+    const next = { ...input, commitId: 'retry-operation', runtime: { ...state, title: '新版', updatedAt: 9 } };
+    await expect(store.commit(next)).rejects.toThrow('interrupted');
+    expect(settings.load().characterStores.role).toBeDefined();
+    expect((await store.load('role', 'session')).entry.url).toBe(first.url);
+    const confirmed = client.uploadedNames.filter(name => name.includes('--Part--retry-operation'));
+    expect(confirmed).toHaveLength(1);
+    await store.commit(next);
+    await store.commit(next);
+    expect(client.uploadedNames.filter(name => name === confirmed[0])).toHaveLength(1);
+    expect((await store.load('role', 'session')).entry.revision).toBe(2);
+  });
   it('正文写入成功但索引更新失败后仍能加载较新且校验完整的记录', async () => {
     class PartialClient extends MemoryTavernFileClient {
       failMetadata = false;

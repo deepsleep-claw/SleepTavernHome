@@ -4,6 +4,7 @@ import { CharacterMetadataStore } from './character-store';
 import type { AgentSettingsStore, SessionIndexEntry } from './settings';
 import type { TavernFileClient } from './file-client';
 import { IndexedDbSessionDraftCache, type PendingSessionDraft, type SessionDraftCache } from './session-draft-cache';
+import { ChunkedSessionBackup, isChunkedSessionManifest, type ChunkedSessionManifest } from './chunked-session-backup';
 
 type SessionFilePayload = {
   runtime: PersistedSessionRuntime;
@@ -26,6 +27,7 @@ export type SessionRevision = {
 };
 
 export type CommitSessionRevision = {
+  commitId?: string;
   avatarId?: string;
   bindingId: string;
   characterName: string;
@@ -86,6 +88,7 @@ async function openEnvelope(value: SessionFileEnvelope): Promise<SessionFilePayl
 
 export class SessionRevisionStore {
   private readonly characters: CharacterMetadataStore;
+  private readonly chunks: ChunkedSessionBackup;
 
   constructor(
     private readonly client: TavernFileClient,
@@ -95,9 +98,11 @@ export class SessionRevisionStore {
     private readonly versioned = false,
   ) {
     this.characters = new CharacterMetadataStore(client, settingsStore, now);
+    this.chunks = new ChunkedSessionBackup(client);
   }
 
   async commit(input: CommitSessionRevision): Promise<SessionIndexEntry> {
+    if (this.versioned && !input.commitId) input = { ...input, commitId: crypto.randomUUID() };
     await this.draftCache.save(input).catch(() => undefined);
     const entry = await this.commitDraft(input);
     await this.draftCache.remove(input.bindingId, input.runtime.sessionId).catch(() => undefined);
@@ -127,15 +132,44 @@ export class SessionRevisionStore {
       characterName: input.characterName,
     });
     const previous = metadata.sessions[input.runtime.sessionId];
+    if (input.commitId && previous?.commitId === input.commitId) return previous;
     const revision = (previous?.revision ?? 0) + 1;
+    if (this.versioned) {
+      const commitId = input.commitId ?? crypto.randomUUID();
+      const result = await this.chunks.upload({
+        runtime: input.runtime,
+        revision,
+        commitId,
+        previousUrl: previous?.url,
+      });
+      const entry: SessionIndexEntry = {
+        avatarId: input.avatarId ?? previous?.avatarId,
+        bindingId: input.bindingId,
+        characterName: input.characterName,
+        sessionId: input.runtime.sessionId,
+        title: input.runtime.title,
+        createdAt: previous?.createdAt ?? input.runtime.createdAt,
+        updatedAt: this.now(),
+        status: input.status,
+        revision,
+        commitId,
+        url: result.url,
+        size: result.size,
+        sha256: '',
+        previousBackupUrl: previous?.url,
+      };
+      await this.characters.upsertSession(entry, previous?.revision ?? 0);
+      await this.chunks.collect(result.manifest, previous?.url).catch(() => undefined);
+      if (previous?.previousBackupUrl) await this.client.delete(previous.previousBackupUrl).catch(() => undefined);
+      return entry;
+    }
     const packed = await envelope({ runtime: input.runtime }, revision);
     const bytes = new TextEncoder().encode(canonicalStringify(packed));
-    const suffix = this.versioned ? `--r${revision}--${crypto.randomUUID()}` : '';
-    const name = `DreamCreator--Session--${safe(input.bindingId)}--${safe(input.runtime.sessionId)}${suffix}.json`;
+    const name = `DreamCreator--Session--${safe(input.bindingId)}--${safe(input.runtime.sessionId)}.json`;
     const url = await this.uploadWithRetry(name, bytes);
     const timestamp = this.now();
     const entry: SessionIndexEntry = {
-      previousBackupUrl: this.versioned ? previous?.url : undefined,
+      commitId: input.commitId,
       avatarId: input.avatarId ?? previous?.avatarId,
       bindingId: input.bindingId,
       characterName: input.characterName,
@@ -150,8 +184,6 @@ export class SessionRevisionStore {
       url,
     };
     await this.characters.upsertSession(entry);
-    if (this.versioned && previous?.previousBackupUrl)
-      await this.client.delete(previous.previousBackupUrl).catch(() => undefined);
     return entry;
   }
 
@@ -160,7 +192,12 @@ export class SessionRevisionStore {
     const entry = metadata.sessions[sessionId];
     if (!entry) throw new Error(`会话不存在：${sessionId}`);
     const bytes = await this.client.download(entry.url);
-    const packed = canonicalParse<SessionFileEnvelope>(new TextDecoder().decode(bytes));
+    const packed = canonicalParse<SessionFileEnvelope | ChunkedSessionManifest>(new TextDecoder().decode(bytes));
+    if (isChunkedSessionManifest(packed)) {
+      if (packed.sessionId !== sessionId || packed.revision !== entry.revision || packed.commitId !== entry.commitId)
+        throw new Error('会话备份版本与索引不匹配。');
+      return { entry, referencedRevision: entry.revision, runtime: await this.chunks.load(packed) };
+    }
     const payload = await openEnvelope(packed);
     if (payload.runtime.sessionId !== sessionId) throw new Error(`会话ID不匹配：${sessionId}`);
     const actualHash = await sha256(bytes);

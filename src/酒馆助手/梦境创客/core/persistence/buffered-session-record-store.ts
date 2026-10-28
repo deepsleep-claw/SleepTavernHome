@@ -122,7 +122,7 @@ export class BufferedSessionRecordStore implements BrowserRecordStore {
     await this.initialize();
     if (!key.startsWith('session:')) return this.base.update(key, update, index);
     // 等待初次读取后再次检查内存，避免并发更新覆盖已排队的新版本。
-    const stored = await this.get<T>(key);
+    const stored = this.pending.has(key) ? undefined : await this.base.get<T>(key);
     const current = this.pending.has(key) ? (this.pending.get(key)!.value as T | undefined) : stored;
     const value = update(structuredClone(current));
     this.pending.set(key, {
@@ -162,31 +162,42 @@ export class BufferedSessionRecordStore implements BrowserRecordStore {
     if (this.flushing) return this.flushing;
     const batch = [...this.pending];
     this.flushing = (async () => {
+      const errors: unknown[] = [];
       for (const [key, row] of batch) {
-        await this.base.update(
-          key,
-          current => {
-            const previous = current as { input?: unknown } | undefined;
-            const next = row.value as { input?: unknown } | undefined;
-            const order = compareRecordVersions(previous, next);
-            if (
-              order !== undefined &&
-              (order > 0 || (order === 0 && JSON.stringify(previous?.input) !== JSON.stringify(next?.input)))
-            ) {
-              throw new Error('会话已在其他页面更新，当前内容已保留，请导出后核对。');
-            }
-            return row.value;
-          },
-          row.index ? { key: row.index.key, project: () => row.index!.value } : undefined,
-        );
-        if (this.pending.get(key) === row) this.pending.delete(key);
+        try {
+          await this.base.update(
+            key,
+            current => {
+              const previous = current as { input?: unknown } | undefined;
+              const next = row.value as { input?: unknown } | undefined;
+              const order = compareRecordVersions(previous, next);
+              if (
+                order !== undefined &&
+                (order > 0 || (order === 0 && JSON.stringify(previous?.input) !== JSON.stringify(next?.input)))
+              ) {
+                throw new Error('会话已在其他页面更新，当前内容已保留，请导出后核对。');
+              }
+              return row.value;
+            },
+            row.index ? { key: row.index.key, project: () => row.index!.value } : undefined,
+          );
+          if (this.pending.get(key) === row) this.pending.delete(key);
+        } catch (error) {
+          errors.push(error);
+        }
       }
-    })().finally(() => {
-      this.flushing = undefined;
-      this.preserve();
-      this.onPending(this.pending.size);
-      if (this.pending.size && !this.timer) this.schedule();
-    });
+      if (errors.length) throw errors[0];
+    })()
+      .catch(error => {
+        this.onError(error);
+        throw error;
+      })
+      .finally(() => {
+        this.flushing = undefined;
+        this.preserve();
+        this.onPending(this.pending.size);
+        if (this.pending.size && !this.timer) this.schedule();
+      });
     return this.flushing;
   }
 
