@@ -1,6 +1,6 @@
 import { teleportStyle } from '@util/script';
 import { createPinia } from 'pinia';
-import { createApp } from 'vue';
+import { createApp, nextTick } from 'vue';
 import Popup from './Popup.vue';
 import { SCRIPT_NAME, usePresetAdapterStore } from './store';
 import {
@@ -25,6 +25,7 @@ type ViewportInsets = {
 };
 
 type ActivePopup = {
+  openSetup: () => void;
   destroy: () => void;
   resetPosition: () => void;
   refresh: () => void;
@@ -99,7 +100,9 @@ function getDefaultFrame(): Frame {
     viewport.height - viewport.insets.top - viewport.insets.bottom - VIEWPORT_MARGIN * 2,
   );
   const is_mobile = viewport.width <= 720;
-  const width = is_mobile ? available_width : Math.min(1180, Math.max(980, Math.round(available_width * 0.82)));
+  const width = is_mobile
+    ? available_width
+    : Math.min(available_width, 1180, Math.max(980, Math.round(available_width * 0.82)));
   const height = is_mobile
     ? Math.min(620, available_height)
     : Math.min(available_height, Math.max(620, Math.round(available_height * 0.84)));
@@ -107,7 +110,7 @@ function getDefaultFrame(): Frame {
   return clampFrame({
     height,
     width,
-    x: is_mobile ? min_x : viewport.width - viewport.insets.right - width - 28,
+    x: min_x + Math.round((available_width - width) / 2),
     y: is_mobile ? min_y : min_y + Math.round((available_height - height) / 2),
   });
 }
@@ -131,9 +134,10 @@ function applyFrame($window: JQuery<HTMLElement>, frame: Frame) {
   });
 }
 
-export function openPresetAdapterPopup(): Promise<void> {
+export function openPresetAdapterPopup(options: { setup?: boolean } = {}): Promise<void> {
   if (active_popup) {
     active_popup.refresh();
+    if (options.setup) active_popup.openSetup();
     active_popup.resetPosition();
     toastr.info(`${SCRIPT_NAME}界面已经打开。`, SCRIPT_NAME);
     return Promise.resolve();
@@ -141,6 +145,7 @@ export function openPresetAdapterPopup(): Promise<void> {
 
   const host_window = getHostWindow();
   const host_document = host_window.document;
+  const style = teleportStyle();
   const $window = $('<section>')
     .attr({
       'data-preset-adapter-theme': DEFAULT_PRESET_ADAPTER_THEME,
@@ -149,7 +154,10 @@ export function openPresetAdapterPopup(): Promise<void> {
       script_id: getScriptId(),
     })
     .addClass('preset-adapter-floating-window')
-    .appendTo('body');
+    .css('visibility', 'hidden');
+  // 容器查询依赖窗口宽度，连接页面前先确定完整尺寸。
+  applyFrame($window, getDefaultFrame());
+  $window.appendTo('body');
   const $titlebar = $('<div>').addClass('preset-adapter-floating-titlebar').appendTo($window);
   $('<div>')
     .addClass('preset-adapter-floating-title')
@@ -226,7 +234,6 @@ export function openPresetAdapterPopup(): Promise<void> {
   const app = createApp(Popup).use(pinia);
   app.mount($body[0]);
 
-  const style = teleportStyle();
   const store = usePresetAdapterStore(pinia);
   const getActiveTheme = (): PresetAdapterThemeId => {
     const theme = store.ui_preferences.theme;
@@ -248,9 +255,7 @@ export function openPresetAdapterPopup(): Promise<void> {
   const openThemePicker = () => {
     $theme_picker.prop('hidden', false);
     $theme_button.attr('aria-expanded', 'true');
-    $theme_grid
-      .find<HTMLElement>(`[data-preset-adapter-theme-option="${getActiveTheme()}"]`)
-      .trigger('focus');
+    $theme_grid.find<HTMLElement>(`[data-preset-adapter-theme-option="${getActiveTheme()}"]`).trigger('focus');
   };
   const refresh = () => {
     store.refresh();
@@ -274,7 +279,7 @@ export function openPresetAdapterPopup(): Promise<void> {
     }
   };
   refresh();
-  applyFrame($window, getDefaultFrame());
+  if (options.setup) store.startSetupGuide();
 
   let removePointerListeners = () => {};
   let destroyed = false;
@@ -391,8 +396,19 @@ export function openPresetAdapterPopup(): Promise<void> {
   host_document.addEventListener('pointerdown', onDocumentPointerDown);
   host_document.addEventListener('keydown', onDocumentKeyDown);
 
-  active_popup = { destroy, resetPosition, refresh };
-  return Promise.resolve();
+  active_popup = {
+    destroy,
+    resetPosition,
+    refresh,
+    openSetup: () => {
+      if (!store.setup_guide) store.startSetupGuide();
+    },
+  };
+  return nextTick().then(() => {
+    if (destroyed) return;
+    applyFrame($window, getDefaultFrame());
+    $window.css('visibility', 'visible');
+  });
 }
 
 export function refreshPresetAdapterPopup(): void {

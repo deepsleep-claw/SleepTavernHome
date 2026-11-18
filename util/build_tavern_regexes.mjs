@@ -83,7 +83,7 @@ async function resolveRequestedProjects(args) {
 async function buildRegexProject(projectDir) {
   const sourceDir = path.join(projectDir, 'source');
   const regex = JSON.parse(await fs.readFile(path.join(sourceDir, 'regex.json'), 'utf8'));
-  const { outputFile, wrapInBody, ...tavernRegex } = regex;
+  const { outputFile, wrapInBody, compactTemplate, ...tavernRegex } = regex;
 
   const [style, template, runtime] = await Promise.all([
     readTextIfExists(path.join(sourceDir, 'style.css')),
@@ -96,7 +96,8 @@ async function buildRegexProject(projectDir) {
     blocks.push('<style>', style, '</style>');
   }
   if (template) {
-    blocks.push(template);
+    // 行内标签的排版空白可能被宿主转换为可见换行。
+    blocks.push(compactTemplate ? template.replace(/\s*\r?\n\s*/g, ' ').replace(/>\s+</g, '><') : template);
   }
   if (runtime) {
     blocks.push('<script>', runtime, '</script>');

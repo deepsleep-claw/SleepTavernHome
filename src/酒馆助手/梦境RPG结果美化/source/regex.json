@@ -1,0 +1,16 @@
+{
+  "id": "0ff81105-cc26-4c8e-9726-b207679df465",
+  "scriptName": "[RPG美化]AI判定结果",
+  "outputFile": "梦境RPG判定结果.json",
+  "findRegex": "/<rpg_check\\b(?:\"[^\"]*\"|'[^']*'|[^'\">/])*(?:\\/\\s*>|>\\s*([\\s\\S]*?)\\s*<\\/rpg_check\\s*>)/gi",
+  "compactTemplate": true,
+  "trimStrings": [],
+  "placement": [2],
+  "disabled": false,
+  "markdownOnly": true,
+  "promptOnly": false,
+  "runOnEdit": true,
+  "substituteRegex": 0,
+  "minDepth": null,
+  "maxDepth": null
+}

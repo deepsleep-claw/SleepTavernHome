@@ -1,4 +1,9 @@
 import {
+  DEFAULT_DEBUG_RECORD_LIMIT,
+  readDebugRecordLimit,
+  saveDebugRecordLimit,
+} from '../../公共模块/squash_debug_settings';
+import {
   type DebugContentStore,
   IndexedDbDebugStorage,
   openIndexedDbDebugStorage,
@@ -13,7 +18,6 @@ export const SQUASH_DEBUG_GLOBAL_KEY = '__dream_whale_squash_debug_api__';
 
 const LEGACY_STORAGE_KEY = 'dream-whale:squash-debug-records';
 const LEGACY_CONTENT_STORAGE_KEY = 'dream-whale:squash-debug-contents';
-const MAX_RECORDS = 50;
 const CONTENT_PREVIEW_LENGTH = 120;
 
 type DebugState = Record<string, any>;
@@ -24,6 +28,7 @@ export type SquashDebugApi = {
   getContent: (record_id: string, content_id: string) => Promise<string | undefined>;
   getRecords: () => SquashDebugRecord[];
   max_records: number;
+  setMaxRecords: (value: number) => Promise<void>;
   ready: Promise<void>;
   subscribe: (callback: (records: SquashDebugRecord[]) => void) => { stop: () => void };
   version: 2;
@@ -44,6 +49,20 @@ let storage_ready: Promise<void> = Promise.resolve();
 let storage_queue: Promise<void> = Promise.resolve();
 let storage_warning_emitted = false;
 let usage_monitor: ReturnType<typeof createTokenUsageMonitor> | undefined;
+let max_records = DEFAULT_DEBUG_RECORD_LIMIT;
+let settings_loaded = false;
+
+function getMaxRecords(): number {
+  if (!settings_loaded) {
+    try {
+      max_records = readDebugRecordLimit();
+    } catch (error) {
+      console.warn('[压缩相邻消息] 读取 Debug 保存设置失败。', error);
+    }
+    settings_loaded = true;
+  }
+  return max_records;
+}
 
 function getHostWindow(): Window {
   return window.parent ?? window;
@@ -61,7 +80,7 @@ function getRecordTimestamp(record: SquashDebugRecord): number {
 function sortAndLimitRecords(values: SquashDebugRecord[]): SquashDebugRecord[] {
   return values
     .sort((left, right) => getRecordTimestamp(right) - getRecordTimestamp(left) || right.id.localeCompare(left.id))
-    .slice(0, MAX_RECORDS);
+    .slice(0, getMaxRecords());
 }
 
 function isSquashDebugRecord(value: unknown): value is SquashDebugRecord {
@@ -177,13 +196,13 @@ async function initializeStorage(): Promise<void> {
     storage = backend;
     const legacy = readLegacyDebugData();
     if (legacy.has_data) {
-      await backend.importLegacy(legacy.records, legacy.contents, MAX_RECORDS);
+      await backend.importLegacy(legacy.records, legacy.contents, getMaxRecords());
       removeLegacyDebugData();
     } else {
-      await backend.cleanup(MAX_RECORDS);
+      await backend.cleanup(getMaxRecords());
     }
 
-    const stored_records = await backend.loadRecords(MAX_RECORDS);
+    const stored_records = await backend.loadRecords(getMaxRecords());
     const merged_records = new Map(stored_records.map(record => [record.id, record]));
     records.forEach(record => merged_records.set(record.id, record));
     records = sortAndLimitRecords([...merged_records.values()]);
@@ -321,7 +340,7 @@ export function publishSquashDebugRecord(
   emitRecords();
 
   void enqueueStorage(async backend => {
-    await backend.saveRecord(record, contents, MAX_RECORDS);
+    await backend.saveRecord(record, contents, getMaxRecords());
     if (session_content_store.get(id) === contents) {
       session_content_store.delete(id);
     }
@@ -336,7 +355,7 @@ function updateTokenUsage(record_id: string, usage: DebugTokenUsage) {
   emitRecords();
   void enqueueStorage(async backend => {
     const current = records.find(item => item.id === record_id);
-    if (current) await backend.saveRecord(current, {}, MAX_RECORDS);
+    if (current) await backend.saveRecord(current, {}, getMaxRecords());
   });
 }
 
@@ -367,6 +386,15 @@ async function clearRecords(): Promise<void> {
   removeLegacyDebugData();
 }
 
+async function setMaxRecords(value: number): Promise<void> {
+  max_records = saveDebugRecordLimit(value);
+  settings_loaded = true;
+  records = sortAndLimitRecords(records);
+  pruneSessionContents();
+  emitRecords();
+  await enqueueStorage(backend => backend.cleanup(getMaxRecords()));
+}
+
 export function initializeSquashDebugGlobal(): { destroy: () => void } {
   const host_window = getHostWindow() as Window & { [SQUASH_DEBUG_GLOBAL_KEY]?: SquashDebugApi };
   const monitor = createTokenUsageMonitor(host_window, updateTokenUsage);
@@ -378,7 +406,10 @@ export function initializeSquashDebugGlobal(): { destroy: () => void } {
     database_name: SQUASH_DEBUG_DATABASE_NAME,
     getContent,
     getRecords,
-    max_records: MAX_RECORDS,
+    get max_records() {
+      return getMaxRecords();
+    },
+    setMaxRecords,
     ready: ensureStorageInitialized(),
     subscribe: callback => {
       listeners.add(callback);

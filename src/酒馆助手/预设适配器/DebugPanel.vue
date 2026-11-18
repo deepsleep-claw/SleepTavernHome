@@ -4,10 +4,34 @@
       <header class="pa-debug-pane-heading">
         <div>
           <h4>请求记录</h4>
-          <small>{{ records.length }} / 50 条</small>
+          <small>{{ records.length }} / {{ recordLimit }} 条</small>
         </div>
         <button type="button" :disabled="loading || !records.length" @click="confirm_clear = true">清空</button>
       </header>
+      <details class="pa-debug-save-settings">
+        <summary>保存设置</summary>
+        <form @submit.prevent="saveRecordLimit">
+          <label
+            >保存条数<input
+              v-model="record_limit_input"
+              type="number"
+              min="1"
+              :max="MAX_DEBUG_RECORD_LIMIT"
+              step="1"
+              required
+              :disabled="loading || settingsSaving || !canSetRecordLimit"
+          /></label>
+          <button
+            type="submit"
+            :disabled="loading || settingsSaving || !canSetRecordLimit || Number(record_limit_input) === recordLimit"
+          >
+            {{ settingsSaving ? '保存中…' : '保存' }}
+          </button>
+        </form>
+        <small>保留最近 1～{{ MAX_DEBUG_RECORD_LIMIT }} 条请求记录及正文，超出上限时清理最早的记录。</small>
+        <small v-if="!canSetRecordLimit">更新压缩相邻消息脚本后可调整保存上限。</small>
+        <p v-if="record_limit_error" class="pa-debug-danger" role="alert">{{ record_limit_error }}</p>
+      </details>
       <div class="pa-debug-selection">
         <small>{{
           compare_ids.length ? '已选 ' + compare_ids.length + ' / 2 条对比' : '点记录右侧“对比”选择两条'
@@ -268,6 +292,11 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import {
+  DEFAULT_DEBUG_RECORD_LIMIT,
+  MAX_DEBUG_RECORD_LIMIT,
+  DebugRecordLimitSchema,
+} from '../../公共模块/squash_debug_settings';
 import type { SquashDebugRecord } from '../压缩相邻消息/debug_types';
 import AdapterModal from './AdapterModal.vue';
 import DebugPrefixDiff from './DebugPrefixDiff.vue';
@@ -285,13 +314,34 @@ import {
   type ReadDebugContent,
 } from './debug_compare';
 
-const props = defineProps<{
-  records: SquashDebugRecord[];
-  selectedId: string;
-  loading: boolean;
-  readContent: ReadDebugContent;
-}>();
-const emit = defineEmits<{ select: [id: string]; clear: [] }>();
+const props = withDefaults(
+  defineProps<{
+    records: SquashDebugRecord[];
+    selectedId: string;
+    loading: boolean;
+    readContent: ReadDebugContent;
+    recordLimit?: number;
+    canSetRecordLimit?: boolean;
+    settingsSaving?: boolean;
+  }>(),
+  { recordLimit: DEFAULT_DEBUG_RECORD_LIMIT, canSetRecordLimit: false, settingsSaving: false },
+);
+const emit = defineEmits<{ select: [id: string]; clear: []; setRecordLimit: [value: number] }>();
+const record_limit_input = ref<number | string>(props.recordLimit);
+const record_limit_error = ref('');
+watch(
+  () => props.recordLimit,
+  value => {
+    record_limit_input.value = value;
+    record_limit_error.value = '';
+  },
+);
+function saveRecordLimit() {
+  if (!props.canSetRecordLimit || props.settingsSaving) return;
+  const parsed = DebugRecordLimitSchema.safeParse(Number(record_limit_input.value));
+  record_limit_error.value = parsed.success ? '' : '请输入 1～2000 之间的整数。';
+  if (parsed.success) emit('setRecordLimit', parsed.data);
+}
 const selected = computed(() => props.records.find(record => record.id === props.selectedId) ?? props.records[0]);
 const total_rows = computed(() => debugRows(selected.value?.state.total_rows));
 const triggered_rows = computed(() => debugRows(selected.value?.state.triggered_rows));
@@ -524,6 +574,45 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.pa-debug-save-settings {
+  padding: 0.6rem;
+  border-bottom: 1px solid var(--pa-border);
+  color: var(--pa-text);
+}
+.pa-debug-save-settings summary {
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+.pa-debug-save-settings form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 0.5rem;
+  margin: 0.6rem 0;
+}
+.pa-debug-save-settings label {
+  display: grid;
+  flex: 1;
+  gap: 0.3rem;
+  min-width: 0;
+  font-size: 0.8rem;
+}
+.pa-debug-save-settings input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--pa-border);
+  border-radius: var(--pa-control-radius, 8px);
+  padding: 0.4rem;
+  background: var(--pa-surface-soft);
+  color: var(--pa-text);
+}
+.pa-debug-save-settings > small {
+  display: block;
+  margin-top: 0.3rem;
+  color: var(--pa-muted);
+  font-size: 0.74rem;
+}
 .pa-debug-panel {
   display: grid;
   grid-template-columns: minmax(12rem, 15rem) minmax(0, 1fr);

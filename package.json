@@ -1,7 +1,8 @@
 {
   "scripts": {
     "build:dev": "webpack --mode development",
-    "build": "pnpm run check:agent && pnpm run check:modern && pnpm run check:updater && pnpm run check:preset-adapter && pnpm run check:squash && pnpm run check:dream-repair && pnpm run check:jimi-tools && pnpm run build:regex && webpack --mode production && node util/build_dream_repair_bundle.mjs && node util/build_jimi_tools_bundle.mjs && pnpm run validate:updates",
+    "build": "pnpm run check:rpg && pnpm run check:agent && pnpm run check:modern && pnpm run check:updater && pnpm run check:preset-adapter && pnpm run check:squash && pnpm run check:dream-repair && pnpm run check:jimi-tools && pnpm run build:regex && webpack --mode production && node util/build_dream_repair_bundle.mjs && node util/build_jimi_tools_bundle.mjs && node util/build_dream_rpg_bundle.mjs && pnpm run validate:updates",
+    "check:rpg": "tsc --project tsconfig.dream-rpg.json --noEmit --pretty false && eslint \"src/酒馆助手/梦境RPG/**/*.{ts,vue}\" \"src/酒馆助手/梦境RPG前端/**/*.{ts,vue}\" --max-warnings 0",
     "test:jimi-tools": "vitest run --config vitest.jimi-tools.config.mts",
     "check:jimi-tools": "pnpm run test:jimi-tools && tsc --project tsconfig.jimi-tools.json --noEmit --pretty false && eslint \"src/酒馆助手/基米工具/**/*.{ts,vue}\" \"vitest.jimi-tools.config.mts\" --max-warnings 0",
     "test:dream-repair": "vitest run --config vitest.dream-repair.config.mts",

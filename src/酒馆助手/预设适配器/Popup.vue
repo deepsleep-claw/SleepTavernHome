@@ -56,6 +56,9 @@
           <p>{{ page_subtitle }}</p>
         </div>
         <div class="preset-adapter-header-actions">
+          <button v-if="store.active_tab === 'preset'" type="button" :disabled="store.is_applying" @click="store.startSetupGuide()">
+            <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i> 设置引导
+          </button>
           <span class="preset-adapter-preset">{{ store.loaded_preset_name }}</span>
           <button type="button" class="preset-adapter-icon-button" title="刷新" @click="store.refresh()">
             <i class="fa-solid fa-rotate" aria-hidden="true"></i>
@@ -183,7 +186,12 @@
               <button
                 type="button"
                 class="preset-adapter-favorite-action"
-                :disabled="store.organizing || store.is_applying"
+                :disabled="
+                  store.organizing ||
+                  store.is_applying ||
+                  !favorite.option.requirements_met ||
+                  !favorite.option.selection_available
+                "
                 @click="handleOptionClick(favorite.group_id, favorite.option.id)"
               >
                 <i :class="favorite.option.status_icon_class" aria-hidden="true"></i>
@@ -251,6 +259,9 @@
             </header>
 
             <div v-show="isGroupContentVisible(group.id)" class="preset-adapter-group-body">
+              <button v-if="group.editor && !store.export_mode && !store.organizing" type="button" class="preset-adapter-create-prompt" :disabled="store.is_applying || store.has_blocking_errors" @click="store.openPromptEditor(group.id)">
+                <i class="fa-solid fa-plus" aria-hidden="true"></i> 新建文风
+              </button>
               <div
                 v-if="group.options.length > 0"
                 class="preset-adapter-options"
@@ -267,6 +278,7 @@
                       'preset-adapter-option-export-selected': store.isExportOptionSelected(group.id, option.id),
                       'preset-adapter-option-export-unavailable': store.export_mode && !option.exportable,
                       'preset-adapter-option-favorite': store.isFavoriteOption(group.id, option.preference_id),
+                      'preset-adapter-option-editable': group.editor && option.exportable && !store.export_mode && !store.organizing,
                     },
                   ]"
                 >
@@ -276,7 +288,7 @@
                     :disabled="
                       store.is_applying ||
                       store.has_blocking_errors ||
-                      (!store.export_mode && option.status === 'unmatched')
+                      (!store.export_mode && (!option.selection_available || !option.requirements_met))
                     "
                     :title="option.matched_summary"
                     :aria-pressed="
@@ -300,6 +312,17 @@
                         ><small v-if="option.description">{{ option.description }}</small></span
                       >
                     </span>
+                  </button>
+                  <button
+                    v-if="group.editor && option.exportable && !store.export_mode && !store.organizing"
+                    type="button"
+                    class="preset-adapter-edit-prompt"
+                    title="编辑文风"
+                    aria-label="编辑文风"
+                    :disabled="store.is_applying || store.has_blocking_errors"
+                    @click="store.openPromptEditor(group.id, option.id)"
+                  >
+                    <i class="fa-solid fa-pen" aria-hidden="true"></i>
                   </button>
                   <button
                     v-if="group.mode === 'multiple' && !store.export_mode"
@@ -979,10 +1002,17 @@
         :selected-id="store.selected_debug_record_id"
         :loading="store.debug_loading"
         :read-content="store.getDebugContent"
+        :record-limit="store.debug_max_records"
+        :can-set-record-limit="store.debug_limit_supported"
+        :settings-saving="store.debug_settings_saving"
         @select="store.selectDebugRecord"
         @clear="store.clearDebugRecords()"
+        @set-record-limit="store.setDebugMaxRecords"
       />
     </main>
+
+    <SetupGuide v-if="store.setup_guide" />
+    <PromptEditor v-if="store.prompt_editor" />
 
     <div v-if="store.review_panel?.kind === 'export'" class="preset-adapter-review-backdrop" @click.self="store.closeReviewPanel()">
       <section class="preset-adapter-review-panel" role="dialog" aria-modal="true" aria-label="确认导出">
@@ -1022,6 +1052,8 @@ import BrandLogo from './BrandLogo.vue';
 import DebugPanel from './DebugPanel.vue';
 import SelectionPresets from './SelectionPresets.vue';
 import SettingsImport from './SettingsImport.vue';
+import SetupGuide from './SetupGuide.vue';
+import PromptEditor from './PromptEditor.vue';
 import {
   type GroupView,
   type SummaryContentHandling,
@@ -1451,6 +1483,8 @@ async function confirmStartSummary() {
 <style>
 .preset-adapter-floating-window {
   position: fixed;
+  transition: none;
+  animation: none;
   z-index: 4000;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -2619,6 +2653,25 @@ async function confirmStartSummary() {
 .preset-adapter-root .preset-adapter-option:hover {
   border-color: var(--pa-border-strong);
   background: var(--pa-surface-raised);
+}
+
+.preset-adapter-root .preset-adapter-option.preset-adapter-option-editable {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.preset-adapter-root .preset-adapter-create-prompt {
+  justify-self: end;
+  font-size: 0.8rem;
+}
+
+.preset-adapter-root .preset-adapter-option .preset-adapter-edit-prompt {
+  align-self: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  color: var(--pa-muted);
 }
 
 .preset-adapter-root .preset-adapter-option-favorite:not(.preset-adapter-option-active) {

@@ -9,6 +9,9 @@ import {
   type GeminiToolOutputModeApi,
 } from '../../公共模块/gemini_tool_output_mode';
 import default_config_raw from './default_config.json?raw';
+import { DEFAULT_DEBUG_RECORD_LIMIT, DebugRecordLimitSchema } from '../../公共模块/squash_debug_settings';
+import { PromptEditorSchema, readPromptBody, writePromptBody, type PromptEditorConfig } from './prompt-editor';
+import { saveSetupGuideProgress, SETUP_STEPS, type SetupStepId } from './setup-guide';
 import {
   buildSelectionPlan,
   captureSelections,
@@ -17,6 +20,7 @@ import {
   SELECTION_PRESETS_KEY,
   SelectionLibrarySchema,
   SelectionPresetFileSchema,
+  selectionKey,
   selectionPresetFile,
   type SelectionContent,
   type SelectionLibrary,
@@ -59,6 +63,14 @@ const PresetAdapterOptionSchema = z
       .optional(),
     enable: z.array(PromptMatcherSchema).default([]),
     disable: z.array(PromptMatcherSchema).default([]),
+    requires_any: z.array(z.object({ group_id: z.string().min(1), option_id: z.string().min(1) })).default([]),
+    on_enable: z
+      .object({
+        enable: z.array(PromptMatcherSchema).default([]),
+        disable: z.array(PromptMatcherSchema).default([]),
+      })
+      .optional(),
+    tool_output: z.object({ enabled_tool: z.string().min(1), disabled_tool: z.string().min(1) }).optional(),
     effect: z
       .array(z.string().trim().min(1))
       .default([])
@@ -113,6 +125,7 @@ const AdapterGroupSchema = z
     mode: z.enum(['single', 'multiple']).default('single'),
     disable_group: z.array(PromptMatcherSchema).default([]),
     enable_group: z.array(PromptMatcherSchema).default([]),
+    editor: PromptEditorSchema.optional(),
     options: z.array(AdapterOptionSchema).default([]),
   })
   .superRefine((group, context) => {
@@ -214,6 +227,17 @@ const AdapterConfigSchema = z
     description: z.string().default(''),
     script_button_name: z.string().min(1).default(DEFAULT_SCRIPT_BUTTON_NAME),
     summary: SummaryConfigSchema,
+    prompt_rules: z
+      .array(
+        z.object({
+          when_enabled: z.array(PromptMatcherSchema).default([]),
+          when_disabled: z.array(PromptMatcherSchema).default([]),
+          when_targeted: z.array(PromptMatcherSchema).default([]),
+          enable: z.array(PromptMatcherSchema).default([]),
+          disable: z.array(PromptMatcherSchema).default([]),
+        }),
+      )
+      .default([]),
     groups: z.array(AdapterGroupSchema).default([]),
   })
   .prefault({});
@@ -273,7 +297,10 @@ type ExportSource = {
   match_id: string;
   prompt_index: number;
 };
-type ResolvedOption = Pick<PresetAdapterOption, 'id' | 'label' | 'description' | 'enable' | 'disable' | 'effect'> & {
+type ResolvedOption = Pick<
+  PresetAdapterOption,
+  'id' | 'label' | 'description' | 'enable' | 'disable' | 'effect' | 'requires_any' | 'on_enable' | 'tool_output'
+> & {
   export_source?: ExportSource;
   has_configured_prompt_matchers: boolean;
   preference_id: string;
@@ -286,6 +313,11 @@ export type OptionView = {
   id: string;
   selection: SelectionReference;
   selection_available: boolean;
+  requirements_met: boolean;
+  requires_any: PresetAdapterOption['requires_any'];
+  tool_output?: PresetAdapterOption['tool_output'];
+  on_enable_indexes: number[];
+  on_enable_disable_indexes: number[];
   label: string;
   description: string;
   export_source?: ExportSource;
@@ -322,6 +354,7 @@ export type GroupView = {
   id: string;
   label: string;
   description: string;
+  editor?: PromptEditorConfig;
   mode: AdapterGroup['mode'];
   mode_label: string;
   layout: 'row' | 'grid';
@@ -368,6 +401,28 @@ type CurrentChatVariableContext = {
 };
 
 type TabId = 'preset' | 'summary' | 'debug';
+
+type SetupGuideSession = {
+  preset_name: string;
+  chat_id: string;
+  config: AdapterConfig;
+  original: Preset;
+  preset: Preset;
+  step: SetupStepId;
+  prompt_states: Record<string, boolean>;
+  effect_states: Record<string, boolean>;
+  inputs: Record<string, string>;
+};
+
+type PromptEditSession = {
+  preset_name: string;
+  group_id: string;
+  match_id: string;
+  editor: PromptEditorConfig;
+  original?: PresetPrompt;
+  name: string;
+  body: string;
+};
 
 export type SummaryMessageView = {
   message_id: number;
@@ -433,6 +488,7 @@ type SquashDebugRecord = import('../压缩相邻消息/debug_types').SquashDebug
 type SquashDebugApiCommon = {
   getRecords: () => SquashDebugRecord[];
   max_records: number;
+  setMaxRecords?: (value: number) => Promise<void>;
   subscribe: (callback: (records: SquashDebugRecord[]) => void) => { stop: () => void };
 };
 
@@ -1473,6 +1529,7 @@ function resolveStatus(
   effect_target_states: Map<string, boolean>,
   has_unmatched_prompt_configuration: boolean,
   configuration_errors: string[],
+  projected_effects: Record<string, boolean> = {},
 ): OptionStatus {
   if (configuration_errors.length > 0 || has_unmatched_prompt_configuration) {
     return 'unmatched';
@@ -1489,7 +1546,7 @@ function resolveStatus(
   if (
     [...effect_target_states].some(([effect, expected_enabled]) => {
       const state = readEffectState(effect);
-      return state.available ? state.enabled !== expected_enabled : expected_enabled;
+      return state.available ? (projected_effects[effect] ?? state.enabled) !== expected_enabled : expected_enabled;
     })
   ) {
     return 'inactive';
@@ -1535,6 +1592,9 @@ function buildUnmatchedBetweenOption(option: PresetAdapterOption, message: strin
     enable: [],
     disable: [],
     effect: option.effect,
+    requires_any: option.requires_any,
+    on_enable: option.on_enable,
+    tool_output: option.tool_output,
     has_configured_prompt_matchers: option.enable.length > 0 || option.disable.length > 0,
     preference_id: JSON.stringify([option.id, 'between-unmatched']),
     source_option_id: option.id,
@@ -1668,6 +1728,9 @@ function resolveBetweenOptions(option: PresetAdapterOption, preset: Preset): Res
         enable: option.enable.map(matcher => fillMatcherPlaceholder(matcher, prompt.name)),
         disable: option.disable.map(matcher => fillMatcherPlaceholder(matcher, prompt.name)),
         effect: option.effect,
+        requires_any: option.requires_any,
+        on_enable: option.on_enable,
+        tool_output: option.tool_output,
         has_configured_prompt_matchers: option.enable.length > 0 || option.disable.length > 0,
         preference_id: JSON.stringify([option.id, prompt.name, occurrence]),
         source_option_id: option.id,
@@ -1746,9 +1809,13 @@ function buildOptionView(
   enable_group_indexes: number[],
   group_options: ResolvedOption[],
   configuration_errors: string[],
+  prompt_rule_states: Map<number, boolean>,
+  projected_effects: Record<string, boolean>,
 ): { view: OptionView; errors: string[] } {
   const enable_result = collectMatcherIndexes(option.enable, preset);
   const disable_result = collectMatcherIndexes(option.disable, preset);
+  const on_enable_result = collectMatcherIndexes(option.on_enable?.enable ?? [], preset);
+  const on_enable_disable_result = collectMatcherIndexes(option.on_enable?.disable ?? [], preset);
   const matched_indexes = [...new Set([...enable_result.indexes, ...disable_result.indexes])];
   const desired_states = new Map<number, boolean>();
   if (group.disable_group.length > 0 || group.enable_group.length > 0) {
@@ -1757,6 +1824,9 @@ function buildOptionView(
   }
   setPromptTargetStates(desired_states, disable_result.indexes, false);
   setPromptTargetStates(desired_states, enable_result.indexes, true);
+  prompt_rule_states.forEach((enabled, index) => {
+    if (desired_states.has(index)) desired_states.set(index, enabled);
+  });
   const effect_target_states = new Map<string, boolean>();
   if (group.mode === 'single') {
     group_options.forEach(group_option => {
@@ -1772,6 +1842,7 @@ function buildOptionView(
     effect_target_states,
     has_unmatched_prompt_configuration,
     configuration_errors,
+    projected_effects,
   );
   const summaries: string[] = [];
   if (matched_indexes.length > 0) {
@@ -1798,6 +1869,11 @@ function buildOptionView(
         ...(option.export_source ? { prompt_name: preset.prompts[option.export_source.prompt_index].name } : {}),
       },
       selection_available: status !== 'unmatched' && option.effect.every(effect => readEffectState(effect).available),
+      requirements_met: true,
+      requires_any: option.requires_any,
+      tool_output: option.tool_output,
+      on_enable_indexes: on_enable_result.indexes,
+      on_enable_disable_indexes: on_enable_disable_result.indexes,
       label: option.label,
       description: option.description,
       export_source: option.export_source,
@@ -1811,12 +1887,23 @@ function buildOptionView(
       effects: option.effect,
       configuration_errors,
     },
-    errors: [...enable_result.errors, ...disable_result.errors],
+    errors: [
+      ...enable_result.errors,
+      ...disable_result.errors,
+      ...on_enable_result.errors,
+      ...on_enable_disable_result.errors,
+    ],
   };
 }
 
-function buildGroupViews(config: AdapterConfig, preset: Preset): BuildGroupsResult {
+function buildGroupViews(
+  config: AdapterConfig,
+  preset: Preset,
+  projected_effects: Record<string, boolean> = {},
+): BuildGroupsResult {
   const errors: string[] = [];
+  const prompt_rules = resolvePromptRules(config, preset);
+  errors.push(...prompt_rules.errors);
   const option_errors: string[] = [];
   const effect_option_errors = getEffectOptionErrors(config);
   const chat_variable_context = readCurrentChatVariableContext();
@@ -1841,6 +1928,8 @@ function buildGroupViews(config: AdapterConfig, preset: Preset): BuildGroupsResu
         enable_group_result.indexes,
         resolved_options.options,
         configuration_errors,
+        prompt_rules.states,
+        projected_effects,
       );
       errors.push(...result.errors);
       return result.view;
@@ -1880,6 +1969,7 @@ function buildGroupViews(config: AdapterConfig, preset: Preset): BuildGroupsResu
       id: group.id,
       label: group.label,
       description: group.description,
+      editor: group.editor,
       mode: group.mode,
       mode_label:
         options.length === 0 && variable_inputs.length > 0 ? '变量输入' : group.mode === 'single' ? '单选' : '多选',
@@ -1891,7 +1981,124 @@ function buildGroupViews(config: AdapterConfig, preset: Preset): BuildGroupsResu
       enable_group_indexes: enable_group_result.indexes,
     };
   });
+  for (const group of groups) {
+    for (const option of group.options) {
+      if (option.requires_any.length === 0) continue;
+      option.requirements_met = option.requires_any.some(reference =>
+        groups
+          .find(candidate => candidate.id === reference.group_id)
+          ?.options.some(
+            candidate => candidate.selection.option_id === reference.option_id && candidate.status === 'active',
+          ),
+      );
+      if (!option.requirements_met) {
+        option.matched_summary += `；需先开启：${option.requires_any.map(reference => reference.option_id).join(' / ')}`;
+      }
+    }
+  }
   return { groups, errors, option_errors: [...new Set(option_errors)] };
+}
+
+function applyOptionEnableTargets(target_states: Map<number, boolean>, option: OptionView) {
+  setPromptTargetStates(target_states, option.on_enable_disable_indexes, false);
+  setPromptTargetStates(target_states, option.on_enable_indexes, true);
+}
+
+function resolvePromptRules(config: AdapterConfig, preset: Preset, projected_states = new Map<number, boolean>()) {
+  const states = new Map<number, boolean>();
+  const errors: string[] = [];
+  const matches = (matchers: PromptMatcher[], enabled: boolean) =>
+    matchers
+      .map(matcher => {
+        const result = collectMatcherIndexes([matcher], preset);
+        errors.push(...result.errors);
+        return (
+          result.indexes.length > 0 &&
+          result.indexes.every(index => (projected_states.get(index) ?? preset.prompts[index].enabled) === enabled)
+        );
+      })
+      .every(Boolean);
+  for (const rule of config.prompt_rules) {
+    const enabled_matches = matches(rule.when_enabled, true);
+    const disabled_matches = matches(rule.when_disabled, false);
+    const targeted = collectMatcherIndexes(rule.when_targeted, preset);
+    const enable = collectMatcherIndexes(rule.enable, preset);
+    const disable = collectMatcherIndexes(rule.disable, preset);
+    errors.push(...targeted.errors, ...enable.errors, ...disable.errors);
+    // 操作限定的联动只响应相关提示词，读取状态或切换其他选项时不执行。
+    if (rule.when_targeted.length > 0 && !targeted.indexes.some(index => projected_states.has(index))) continue;
+    if (!enabled_matches || !disabled_matches) continue;
+    setPromptTargetStates(states, disable.indexes, false);
+    setPromptTargetStates(states, enable.indexes, true);
+  }
+  return { states, errors };
+}
+
+function applyPromptRuleTargets(config: AdapterConfig, preset: Preset, target_states: Map<number, boolean>) {
+  // 根据本次切换后的条件计算联动，并将全部目标纳入同一次预设更新。
+  resolvePromptRules(config, preset, target_states).states.forEach((enabled, index) =>
+    target_states.set(index, enabled),
+  );
+}
+
+function applyOptionRequirementTargets(
+  config: AdapterConfig,
+  preset: Preset,
+  prompt_targets: Map<number, boolean>,
+  effect_targets: Map<string, boolean>,
+) {
+  applyPromptRuleTargets(config, preset, prompt_targets);
+  const projected = cloneJson(preset);
+  applyPromptTargetStates(projected, prompt_targets);
+  const { groups } = buildGroupViews(config, projected, Object.fromEntries(effect_targets));
+  const disabled = new Set<string>();
+  for (const option of groups.flatMap(group => group.options)) {
+    if (option.requirements_met) continue;
+    disabled.add(selectionKey(option.selection));
+    // 只清理仍开启的提示词，避免重复触发关闭选项时的联动。
+    setPromptTargetStates(
+      prompt_targets,
+      option.enable_indexes.filter(index => projected.prompts[index].enabled),
+      false,
+    );
+    option.effects.forEach(effect => effect_targets.set(effect, false));
+    if (option.tool_output) effect_targets.set(GEMINI_TOOL_OUTPUT_EFFECT_ID, false);
+  }
+  applyPromptRuleTargets(config, preset, prompt_targets);
+  return disabled;
+}
+
+function getToolOutputOptions(config: AdapterConfig, preset: Preset) {
+  return buildGroupViews(config, preset).groups.flatMap(group =>
+    group.options.filter(option => option.tool_output && option.status !== 'unmatched'),
+  );
+}
+
+function checkToolOutputSupport(config: AdapterConfig, preset: Preset, enabled: boolean) {
+  if (enabled && getToolOutputOptions(config, preset).length > 0 && !getGeminiToolOutputModeApi()?.selectTool) {
+    throw new Error('请更新并启用基米工具，以切换指定正文工具。');
+  }
+}
+
+function syncToolOutputOptions(config: AdapterConfig, preset: Preset) {
+  const api = getGeminiToolOutputModeApi();
+  if (!api?.getEnabled()) return;
+  const options = buildGroupViews(config, preset).groups.flatMap(group => group.options);
+  if (
+    options.some(
+      option =>
+        !option.requirements_met && (option.effects.includes(GEMINI_TOOL_OUTPUT_EFFECT_ID) || option.tool_output),
+    )
+  ) {
+    api.setEnabled(false);
+    return;
+  }
+  checkToolOutputSupport(config, preset, true);
+  for (const option of getToolOutputOptions(config, preset)) {
+    const { enabled_tool, disabled_tool } = option.tool_output!;
+    const active = option.status === 'active';
+    api.selectTool!(active ? enabled_tool : disabled_tool, active ? disabled_tool : enabled_tool);
+  }
 }
 
 function buildOptionTargetStates(
@@ -1912,6 +2119,7 @@ function buildOptionTargetStates(
     }
     setPromptTargetStates(target_states, option_view.disable_indexes, false);
     setPromptTargetStates(target_states, option_view.enable_indexes, true);
+    applyOptionEnableTargets(target_states, option_view);
     return target_states;
   }
 
@@ -1922,6 +2130,7 @@ function buildOptionTargetStates(
 
   setPromptTargetStates(target_states, option_view.disable_indexes, false);
   setPromptTargetStates(target_states, option_view.enable_indexes, true);
+  applyOptionEnableTargets(target_states, option_view);
   return target_states;
 }
 
@@ -2532,6 +2741,9 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   const summary_settings = ref<SummarySettings>(SummarySettingsSchema.parse(undefined));
   const summary_state = ref<SummaryViewState>({ ...EMPTY_SUMMARY_STATE });
   const debug_available = ref(false);
+  const debug_max_records = ref(DEFAULT_DEBUG_RECORD_LIMIT);
+  const debug_limit_supported = ref(false);
+  const debug_settings_saving = ref(false);
   const debug_loading = ref(false);
   const debug_records = ref<SquashDebugRecord[]>([]);
   const selected_debug_record_id = ref('');
@@ -2566,6 +2778,68 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   const errors = ref<string[]>([]);
   const blocking_errors = ref<string[]>([]);
   const is_applying = ref(false);
+  const setup_guide = ref<SetupGuideSession>();
+  const setup_error = ref('');
+  const prompt_editor = ref<PromptEditSession>();
+  const prompt_editor_error = ref('');
+  const setup_groups = computed(() => {
+    const draft = setup_guide.value;
+    if (!draft) return [];
+    const built = buildGroupViews(draft.config, draft.preset, draft.effect_states);
+    built.groups.forEach(group => {
+      group.variable_inputs.forEach(input => {
+        input.value = draft.inputs[JSON.stringify([group.id, input.id])] ?? input.value;
+      });
+    });
+    return built.groups;
+  });
+  const setup_is_gemini = computed(
+    () =>
+      setup_groups.value
+        .find(group => group.id === '模型适配')
+        ?.options.some(
+          option => ['Gemini3', 'Gemini4'].includes(option.selection.option_id) && option.status === 'active',
+        ) ?? false,
+  );
+  const setup_steps = computed(() => SETUP_STEPS.filter(step => step.id !== 'gemini' || setup_is_gemini.value));
+  const setup_step_index = computed(() => setup_steps.value.findIndex(step => step.id === setup_guide.value?.step));
+  const setup_step = computed(() => setup_steps.value[setup_step_index.value] ?? SETUP_STEPS[0]);
+  const setup_step_groups = computed(() =>
+    setup_groups.value.filter(group => setup_step.value.groups.some(id => id === group.id)),
+  );
+  const setup_can_advance = computed(() => {
+    if (!setup_guide.value) return false;
+    if (
+      setup_step.value.id === 'model' &&
+      !setup_step_groups.value.some(group => group.options.some(option => option.status === 'active'))
+    )
+      return false;
+    return (
+      setup_step.value.id === 'database' ||
+      setup_step_groups.value.every(
+        group =>
+          group.mode !== 'single' ||
+          !group.options.some(option => option.selection_available) ||
+          group.options.filter(option => option.status === 'active').length === 1,
+      )
+    );
+  });
+  const setup_overview = computed(() =>
+    setup_steps.value.flatMap(step =>
+      setup_groups.value
+        .filter(group => step.groups.some(id => id === group.id))
+        .map(group => ({
+          label: group.label,
+          value:
+            [
+              ...group.options.filter(option => option.status === 'active').map(option => option.label),
+              ...group.variable_inputs
+                .filter(input => !input.disabled && input.value.trim())
+                .map(input => `${input.label}：${input.value}`),
+            ].join('、') || '未选择',
+        })),
+    ),
+  );
   const selection_library = ref<SelectionLibrary>(SelectionLibrarySchema.parse({}));
   const selection_library_error = ref('');
   const active_selection_preset = computed(() =>
@@ -2733,6 +3007,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   }
 
   function renameSelectionPreset(id: string, name: string): boolean {
+    if (is_applying.value) return false;
     return editSelectionLibrary(library => {
       const preset = library.presets.find(item => item.id === id);
       if (!preset) throw new Error('选项组预设已不存在');
@@ -2741,6 +3016,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   }
 
   function deleteSelectionPreset(id: string): boolean {
+    if (is_applying.value) return false;
     return editSelectionLibrary(library => {
       library.presets = library.presets.filter(preset => preset.id !== id);
       if (library.active_id === id) library.active_id = '';
@@ -2780,6 +3056,32 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
       }
       const plan = buildSelectionPlan(saved.selections, state.groups);
       if (plan.errors.length > 0) return { title: '选项组合存在冲突', messages: plan.errors };
+      const disabled = applyOptionRequirementTargets(
+        state.config,
+        state.preset,
+        plan.prompt_states,
+        plan.effect_states,
+      );
+      const planned_preset = cloneJson(state.preset);
+      applyPromptTargetStates(planned_preset, plan.prompt_states);
+      const planned_groups = buildGroupViews(state.config, planned_preset).groups;
+      const selected_keys = new Set([...plan.matched.values()].flat().map(option => selectionKey(option.selection)));
+      const unavailable = planned_groups.flatMap(group =>
+        group.options.filter(
+          option =>
+            selected_keys.has(selectionKey(option.selection)) &&
+            !disabled.has(selectionKey(option.selection)) &&
+            !option.requirements_met,
+        ),
+      );
+      if (unavailable.length > 0) {
+        return { title: '选项前置条件未满足', messages: unavailable.map(option => option.matched_summary) };
+      }
+      checkToolOutputSupport(
+        state.config,
+        planned_preset,
+        plan.effect_states.get(GEMINI_TOOL_OUTPUT_EFFECT_ID) ?? getGeminiToolOutputModeApi()?.getEnabled() ?? false,
+      );
       for (const [effect, enabled] of plan.effect_states) {
         const api = getEffectApi(effect);
         if (!api && enabled) throw new Error('对应的功能脚本未启用，无法应用选项组合');
@@ -2794,6 +3096,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
       if (getLoadedPresetName() !== preset_name) throw new Error('酒馆预设已切换，请重新选择选项组预设');
       const effects = applyEffectTargetStates(plan.effect_states);
       if (effects.errors.length > 0) throw new Error(effects.errors.join('\n'));
+      syncToolOutputOptions(state.config, state.preset);
       // 当前选择是界面元数据，已保存的按钮快照保持独立。
       if (
         !editSelectionLibrary(library => {
@@ -2810,6 +3113,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
         try {
           if (prompt_snapshot) await restorePromptStateSnapshot(prompt_snapshot);
           restoreEffectStateSnapshot(effect_snapshot);
+          syncToolOutputOptions(readAdapterConfig().config, getPreset('in_use'));
         } catch (restore_error) {
           console.error(`[${SCRIPT_NAME}] 恢复按钮状态失败。`, restore_error);
         }
@@ -2820,6 +3124,425 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
       refresh();
     }
   }
+
+  function startSetupGuide(): boolean {
+    if (is_applying.value) return false;
+    try {
+      const state = loadState();
+      if (
+        !state.preset ||
+        state.errors.length > 0 ||
+        !state.groups.some(group => group.id === '模型适配' && group.options.some(option => option.selection_available))
+      ) {
+        throw new Error('当前预设没有可用的模型适配设置。');
+      }
+      saveSetupGuideProgress(false);
+      prompt_editor.value = undefined;
+      review_panel.value = undefined;
+      export_mode.value = false;
+      organizing.value = false;
+      active_tab.value = 'preset';
+      setup_error.value = '';
+      setup_guide.value = {
+        preset_name: getLoadedPresetName(),
+        chat_id: getCurrentChatIdSafe(),
+        config: cloneJson(state.config),
+        original: cloneJson(state.preset),
+        preset: cloneJson(state.preset),
+        step: 'model',
+        prompt_states: {},
+        effect_states: {},
+        inputs: {},
+      };
+      return true;
+    } catch (error) {
+      toastr.error(normalizeError(error), SCRIPT_NAME);
+      return false;
+    }
+  }
+
+  function closeSetupGuide() {
+    if (!is_applying.value) setup_guide.value = undefined;
+  }
+
+  function stageSetupTargets(
+    draft: SetupGuideSession,
+    targets: Map<number, boolean>,
+    effects = new Map(Object.entries(draft.effect_states)),
+  ) {
+    applyOptionRequirementTargets(draft.config, draft.preset, targets, effects);
+    targets.forEach((enabled, index) => {
+      draft.prompt_states[draft.preset.prompts[index].id] = enabled;
+    });
+    draft.effect_states = Object.fromEntries(effects);
+    applyPromptTargetStates(draft.preset, targets);
+  }
+
+  function selectSetupOption(group_id: string, option_id: string) {
+    const draft = setup_guide.value;
+    if (!draft || is_applying.value) return;
+    setup_error.value = '';
+    const group_config = draft.config.groups.find(group => group.id === group_id);
+    const group = setup_step_groups.value.find(group => group.id === group_id);
+    const option = group?.options.find(option => option.id === option_id);
+    if (!group_config || !group || !option?.selection_available || !option.requirements_met) return;
+    const effects = new Map(Object.entries(draft.effect_states));
+    buildOptionEffectTargetStates(group_config, group, option, false).forEach((enabled, effect) => {
+      effects.set(effect, enabled);
+    });
+    stageSetupTargets(draft, buildOptionTargetStates(group_config, group, option, false), effects);
+  }
+
+  function updateSetupInput(group_id: string, input_id: string, value: string) {
+    const draft = setup_guide.value;
+    const input = setup_step_groups.value
+      .find(group => group.id === group_id)
+      ?.variable_inputs.find(input => input.id === input_id);
+    if (!draft || !input || input.disabled || is_applying.value) return;
+    draft.inputs[JSON.stringify([group_id, input_id])] = value;
+  }
+
+  function moveSetupGuide(direction: -1 | 1) {
+    if (is_applying.value || !setup_guide.value || (direction === 1 && !setup_can_advance.value)) return;
+    const next = setup_steps.value[setup_step_index.value + direction];
+    if (next) setup_guide.value.step = next.id;
+    setup_error.value = '';
+  }
+
+  function skipSetupDatabase() {
+    const draft = setup_guide.value;
+    if (!draft || draft.step !== 'database' || is_applying.value) return;
+    const targets = new Map<number, boolean>();
+    setup_step_groups.value.forEach(group =>
+      group.options.forEach(option => {
+        setPromptTargetStates(targets, option.enable_indexes, false);
+      }),
+    );
+    stageSetupTargets(draft, targets);
+    moveSetupGuide(1);
+  }
+
+  async function persistManagedPreset(preset_name: string, preset: Preset) {
+    if (getLoadedPresetName() !== preset_name) throw new Error('当前酒馆预设已切换，请重新打开设置。');
+    await replacePreset('in_use', preset, { render: 'immediate' });
+    if (getLoadedPresetName() !== preset_name) throw new Error('当前酒馆预设已切换，请重新打开设置。');
+    await replacePreset(preset_name, preset, { render: 'none' });
+    if (getLoadedPresetName() !== preset_name) throw new Error('当前酒馆预设已切换，请重新打开设置。');
+  }
+
+  async function restoreManagedPreset(preset_name: string, current: Preset, saved: Preset) {
+    await replacePreset(preset_name, saved, { render: 'none' });
+    if (getLoadedPresetName() === preset_name) await replacePreset('in_use', current, { render: 'immediate' });
+  }
+
+  async function finishSetupGuide(): Promise<boolean> {
+    const draft = setup_guide.value;
+    if (!draft || is_applying.value || !setup_can_advance.value || draft.step !== 'features') return false;
+    setup_error.value = '';
+    is_applying.value = true;
+    let current_snapshot: Preset | undefined;
+    let saved_snapshot: Preset | undefined;
+    const effect_snapshot = new Map<string, boolean>();
+    const input_snapshots: { scope: 'chat' | 'global'; path: string; exists: boolean; value: unknown }[] = [];
+    try {
+      const state = loadState();
+      if (
+        getLoadedPresetName() !== draft.preset_name ||
+        !state.preset ||
+        state.errors.length > 0 ||
+        !_.isEqual(state.config, draft.config)
+      ) {
+        throw new Error('预设或设置配置已变化，请关闭引导后重新开始。');
+      }
+      const targets = new Map<number, boolean>();
+      for (const [id, enabled] of Object.entries(draft.prompt_states)) {
+        const indexes = state.preset.prompts.flatMap((prompt, index) => (prompt.id === id ? [index] : []));
+        const initial = draft.original.prompts.find(prompt => prompt.id === id);
+        if (indexes.length !== 1 || !_.isEqual(state.preset.prompts[indexes[0]], initial)) {
+          throw new Error('引导期间有相关提示词发生变化，请重新开始。');
+        }
+        targets.set(indexes[0], enabled);
+      }
+      const input_updates = Object.entries(draft.inputs).map(([key, value]) => {
+        const [group_id, input_id] = JSON.parse(key) as string[];
+        const input = state.groups
+          .find(group => group.id === group_id)
+          ?.variable_inputs.find(input => input.id === input_id);
+        if (!input || (input.scope === 'chat' && (!draft.chat_id || getCurrentChatIdSafe() !== draft.chat_id))) {
+          throw new Error('当前聊天已变化，请重新确认玩家角色设置。');
+        }
+        return { input, value };
+      });
+      const effect_targets = new Map(Object.entries(draft.effect_states));
+      applyOptionRequirementTargets(state.config, state.preset, targets, effect_targets);
+      const next = cloneJson(state.preset);
+      applyPromptTargetStates(next, targets);
+      checkToolOutputSupport(
+        state.config,
+        next,
+        effect_targets.get(GEMINI_TOOL_OUTPUT_EFFECT_ID) ?? getGeminiToolOutputModeApi()?.getEnabled() ?? false,
+      );
+      effect_targets.forEach((enabled, effect) => {
+        const api = getEffectApi(effect);
+        if (!api && enabled) throw new Error('对应的功能脚本未启用，请返回检查模型设置。');
+        if (api) effect_snapshot.set(effect, api.getEnabled());
+      });
+      current_snapshot = cloneJson(state.preset);
+      saved_snapshot = getPreset(draft.preset_name);
+      await persistManagedPreset(draft.preset_name, next);
+      if (input_updates.some(({ input }) => input.scope === 'chat') && getCurrentChatIdSafe() !== draft.chat_id)
+        throw new Error('当前聊天已切换，请重新开始引导。');
+      const effects = applyEffectTargetStates(effect_targets);
+      if (effects.errors.length > 0) throw new Error(effects.errors.join('\n'));
+      syncToolOutputOptions(state.config, next);
+      input_updates.forEach(({ input, value }) => {
+        const scope = { type: input.scope } as const;
+        const variables = getVariables(scope);
+        input_snapshots.push({
+          scope: input.scope,
+          path: input.variable_id,
+          exists: _.has(variables, input.variable_id),
+          value: cloneJson(_.get(variables, input.variable_id, null)),
+        });
+        _.set(variables, input.variable_id, value);
+        replaceVariables(variables, scope);
+      });
+      saveSetupGuideProgress(true);
+      setup_guide.value = undefined;
+      toastr.success('设置已应用并保存。', SCRIPT_NAME);
+      return true;
+    } catch (error) {
+      setup_error.value = normalizeError(error);
+      try {
+        input_snapshots.reverse().forEach(snapshot => {
+          if (snapshot.scope === 'chat' && getCurrentChatIdSafe() !== draft.chat_id) return;
+          const scope = { type: snapshot.scope } as const;
+          const variables = getVariables(scope);
+          if (snapshot.exists) _.set(variables, snapshot.path, snapshot.value);
+          else _.unset(variables, snapshot.path);
+          replaceVariables(variables, scope);
+        });
+        restoreEffectStateSnapshot(effect_snapshot);
+        if (current_snapshot && saved_snapshot)
+          await restoreManagedPreset(draft.preset_name, current_snapshot, saved_snapshot);
+        if (current_snapshot) syncToolOutputOptions(draft.config, current_snapshot);
+      } catch (restore_error) {
+        setup_error.value += `\n恢复设置失败：${normalizeError(restore_error)}`;
+      }
+      return false;
+    } finally {
+      is_applying.value = false;
+      refresh();
+    }
+  }
+
+  function getEditableRange(group: AdapterGroup, preset: Preset, match_id?: string) {
+    const candidates = group.options.filter(isPresetAdapterOption).filter(option => option.type === 'between');
+    const option = match_id
+      ? candidates.find(option => option.id === match_id)
+      : candidates.length === 1
+        ? candidates[0]
+        : undefined;
+    if (!option?.match) throw new Error('需要为文风组配置一个明确的内容区间。');
+    const below = option.match.below === '' ? { index: -1 } : getPromptIndexByBoundary(preset, option.match.below);
+    const above =
+      option.match.above === ''
+        ? { index: preset.prompts.length }
+        : getPromptIndexByBoundary(preset, option.match.above, below.index + 1);
+    if (below.error || above.error || (option.match.below !== '' && below.index < 0) || above.index < 0) {
+      throw new Error('未找到文风区间的起止标记。');
+    }
+    return { option, start: below.index + 1, end: above.index };
+  }
+
+  function openPromptEditor(group_id: string, option_id?: string): boolean {
+    if (is_applying.value) return false;
+    try {
+      const state = loadState();
+      const group = state.config.groups.find(group => group.id === group_id);
+      if (!state.preset || state.errors.length > 0 || !group?.editor)
+        throw new Error('当前分组没有可用的文风编辑配置。');
+      const option = option_id
+        ? state.groups.find(group => group.id === group_id)?.options.find(option => option.id === option_id)
+        : undefined;
+      if (option_id && !option?.export_source) throw new Error('没有找到要编辑的文风条目。');
+      const range = getEditableRange(group, state.preset, option?.export_source?.match_id);
+      const original = option?.export_source ? state.preset.prompts[option.export_source.prompt_index] : undefined;
+      if (original && state.preset.prompts.filter(prompt => prompt.name === original.name).length > 1) {
+        throw new Error('存在同名文风条目，无法唯一关联收藏与选项组合。');
+      }
+      prompt_editor.value = {
+        preset_name: getLoadedPresetName(),
+        group_id,
+        match_id: range.option.id,
+        editor: cloneJson(group.editor),
+        original: original ? cloneJson(original) : undefined,
+        name: original?.name ?? '',
+        body: original ? readPromptBody(original.content ?? '', group.editor) : '',
+      };
+      prompt_editor_error.value = '';
+      setup_guide.value = undefined;
+      return true;
+    } catch (error) {
+      toastr.error(normalizeError(error), SCRIPT_NAME);
+      return false;
+    }
+  }
+
+  function closePromptEditor() {
+    if (!is_applying.value) prompt_editor.value = undefined;
+  }
+
+  function syncManagedPromptReferences(group_id: string, previous: OptionView, next?: OptionView) {
+    const variables = getVariables({ type: 'global' });
+    if (variables[UI_PREFERENCES_KEY]) {
+      const preferences = AdapterUiPreferencesSchema.parse(variables[UI_PREFERENCES_KEY]);
+      const old_key = getFavoriteOptionKey(group_id, previous.preference_id);
+      preferences.favorite_option_keys = preferences.favorite_option_keys.flatMap(key =>
+        key !== old_key ? [key] : next ? [getFavoriteOptionKey(group_id, next.preference_id)] : [],
+      );
+      variables[UI_PREFERENCES_KEY] = preferences;
+    }
+    if (variables[SELECTION_PRESETS_KEY]) {
+      const library = SelectionLibrarySchema.parse(variables[SELECTION_PRESETS_KEY]);
+      library.presets.forEach(preset => {
+        preset.selections = preset.selections.flatMap(reference =>
+          selectionKey(reference) !== selectionKey(previous.selection)
+            ? [reference]
+            : next
+              ? [cloneJson(next.selection)]
+              : [],
+        );
+      });
+      variables[SELECTION_PRESETS_KEY] = library;
+    }
+    replaceVariables(variables, { type: 'global' });
+  }
+
+  async function mutateManagedPrompt(remove: boolean): Promise<boolean> {
+    const session = prompt_editor.value;
+    if (!session || is_applying.value || (remove && !session.original)) return false;
+    is_applying.value = true;
+    prompt_editor_error.value = '';
+    let current_snapshot: Preset | undefined;
+    let saved_snapshot: Preset | undefined;
+    let metadata_snapshot: Record<string, unknown> | undefined;
+    try {
+      const state = loadState();
+      const group = state.config.groups.find(group => group.id === session.group_id);
+      if (
+        !state.preset ||
+        state.errors.length > 0 ||
+        getLoadedPresetName() !== session.preset_name ||
+        !_.isEqual(group?.editor, session.editor)
+      ) {
+        throw new Error('当前预设或编辑配置已变化，请重新打开文风编辑。');
+      }
+      const range = getEditableRange(group!, state.preset, session.match_id);
+      const next = cloneJson(state.preset);
+      let previous_view: OptionView | undefined;
+      let edited_id: string;
+      if (session.original) {
+        const index = next.prompts.findIndex(prompt => prompt.id === session.original!.id);
+        if (index < range.start || index >= range.end || !_.isEqual(next.prompts[index], session.original)) {
+          throw new Error('文风条目已变化，请重新打开编辑。');
+        }
+        previous_view = state.groups
+          .find(group => group.id === session.group_id)
+          ?.options.find(option => option.export_source?.prompt_index === index);
+        edited_id = session.original.id;
+        if (remove) {
+          next.prompts.splice(index, 1);
+          const remaining = next.prompts.slice(range.start, range.end - 1);
+          if (
+            group!.mode === 'single' &&
+            session.original.enabled &&
+            remaining.length > 0 &&
+            !remaining.some(prompt => prompt.enabled)
+          ) {
+            remaining[0].enabled = true;
+          }
+        } else {
+          next.prompts[index].content = writePromptBody(session.original.content ?? '', session.body, session.editor);
+          next.prompts[index].name = z
+            .string()
+            .trim()
+            .min(1, '请输入文风名称。')
+            .regex(/^[^\r\n]+$/, '文风名称不能换行。')
+            .parse(session.name);
+        }
+      } else {
+        edited_id = SillyTavern.uuidv4();
+        next.prompts.splice(range.end, 0, {
+          id: edited_id,
+          name: z
+            .string()
+            .trim()
+            .min(1, '请输入文风名称。')
+            .regex(/^[^\r\n]+$/, '文风名称不能换行。')
+            .parse(session.name),
+          content: writePromptBody(undefined, session.body, session.editor),
+          enabled:
+            group!.mode === 'single' && !next.prompts.slice(range.start, range.end).some(prompt => prompt.enabled),
+          role: 'system',
+          position: { type: 'relative' },
+        });
+      }
+      const edited = next.prompts.find(prompt => prompt.id === edited_id);
+      if (
+        edited &&
+        [...next.prompts, ...next.prompts_unused].some(prompt => prompt.id !== edited_id && prompt.name === edited.name)
+      ) {
+        throw new Error('这个文风名称已被使用，请换一个名称。');
+      }
+      const next_groups = buildGroupViews(state.config, next).groups;
+      const next_view = edited
+        ? next_groups
+            .find(group => group.id === session.group_id)
+            ?.options.find(
+              option => option.export_source && next.prompts[option.export_source.prompt_index]?.id === edited_id,
+            )
+        : undefined;
+      if (edited && !next_view) throw new Error('文风名称与分组区间标记冲突，请换一个名称。');
+      current_snapshot = cloneJson(state.preset);
+      saved_snapshot = getPreset(session.preset_name);
+      await persistManagedPreset(session.preset_name, next);
+      if (previous_view && (remove || session.original?.name !== edited?.name)) {
+        const variables = getVariables({ type: 'global' });
+        metadata_snapshot = {};
+        [UI_PREFERENCES_KEY, SELECTION_PRESETS_KEY].forEach(key => {
+          if (Object.hasOwn(variables, key)) metadata_snapshot![key] = cloneJson(variables[key]);
+        });
+        syncManagedPromptReferences(session.group_id, previous_view, next_view);
+      }
+      prompt_editor.value = undefined;
+      toastr.success(remove ? '文风已删除并保存。' : '文风已保存。', SCRIPT_NAME);
+      return true;
+    } catch (error) {
+      prompt_editor_error.value = normalizeError(error);
+      try {
+        if (metadata_snapshot) {
+          const variables = getVariables({ type: 'global' });
+          [UI_PREFERENCES_KEY, SELECTION_PRESETS_KEY].forEach(key => {
+            if (Object.hasOwn(metadata_snapshot!, key)) variables[key] = metadata_snapshot![key];
+            else delete variables[key];
+          });
+          replaceVariables(variables, { type: 'global' });
+        }
+        if (current_snapshot && saved_snapshot)
+          await restoreManagedPreset(session.preset_name, current_snapshot, saved_snapshot);
+      } catch (restore_error) {
+        prompt_editor_error.value += `\n恢复文风失败：${normalizeError(restore_error)}`;
+      }
+      return false;
+    } finally {
+      is_applying.value = false;
+      refresh();
+    }
+  }
+
+  const saveManagedPrompt = () => mutateManagedPrompt(false);
+  const deleteManagedPrompt = () => mutateManagedPrompt(true);
 
   function saveUiPreferences(preferences: AdapterUiPreferences) {
     const normalized = AdapterUiPreferencesSchema.parse(preferences);
@@ -2936,6 +3659,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
   }
 
   function applyDebugRecords(records: SquashDebugRecord[]) {
+    debug_max_records.value = debug_api?.max_records ?? DEFAULT_DEBUG_RECORD_LIMIT;
     debug_records.value = records;
     if (!records.some(record => record.id === selected_debug_record_id.value)) {
       selected_debug_record_id.value = records[0]?.id ?? '';
@@ -2952,6 +3676,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     debug_subscription = undefined;
     debug_api = api;
     debug_available.value = !!api;
+    debug_limit_supported.value = !!api?.setMaxRecords;
     if (!api) {
       debug_loading.value = false;
       applyDebugRecords([]);
@@ -2985,6 +3710,26 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     attachDebugApi(getSquashDebugApi());
   }
 
+  async function setDebugMaxRecords(value: number): Promise<void> {
+    const api = debug_api;
+    if (!api?.setMaxRecords || debug_settings_saving.value) return;
+    const parsed = DebugRecordLimitSchema.safeParse(value);
+    if (!parsed.success) {
+      toastr.warning('保存条数需为 1～2000 之间的整数。', SCRIPT_NAME);
+      return;
+    }
+    debug_settings_saving.value = true;
+    try {
+      await api.setMaxRecords(parsed.data);
+      if (debug_api === api) applyDebugRecords(api.getRecords());
+      toastr.success('Debug 保存上限已更新。', SCRIPT_NAME);
+    } catch (error) {
+      toastr.error(`保存 Debug 设置失败：${normalizeError(error)}`, SCRIPT_NAME);
+    } finally {
+      debug_settings_saving.value = false;
+    }
+  }
+
   function startDebugWatch() {
     refreshDebugApi();
     if (debug_poll_timer !== undefined) {
@@ -3010,16 +3755,20 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     effect_subscription?.stop();
     effect_subscription = undefined;
     effect_api = api;
-    if (api) {
-      effect_subscription = api.subscribe(() => {
-        if (!is_applying.value) {
-          loadState();
+    const syncState = () => {
+      if (!is_applying.value) {
+        try {
+          if (api) {
+            syncToolOutputOptions(readAdapterConfig().config, getPreset('in_use'));
+          }
+        } catch (error) {
+          toastr.error(normalizeError(error), SCRIPT_NAME);
         }
-      });
-    }
-    if (!is_applying.value) {
-      loadState();
-    }
+        loadState();
+      }
+    };
+    if (api) effect_subscription = api.subscribe(syncState);
+    syncState();
   }
 
   function refreshEffectApi() {
@@ -4126,9 +4875,19 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
         toastr.error('没有找到要应用的选项。', SCRIPT_NAME);
         return;
       }
+      if (!option_view.selection_available || !option_view.requirements_met) {
+        toastr.warning(option_view.matched_summary, SCRIPT_NAME);
+        return;
+      }
 
       const target_states = buildOptionTargetStates(group_config, group_view, option_view, false);
       const effect_target_states = buildOptionEffectTargetStates(group_config, group_view, option_view, false);
+      applyOptionRequirementTargets(state.config, state.preset, target_states, effect_target_states);
+      checkToolOutputSupport(
+        state.config,
+        state.preset,
+        effect_target_states.get(GEMINI_TOOL_OUTPUT_EFFECT_ID) ?? getGeminiToolOutputModeApi()?.getEnabled() ?? false,
+      );
       if (target_states.size === 0 && effect_target_states.size === 0) {
         toastr.warning('该选项没有命中任何提示词或 effect。', SCRIPT_NAME);
         return;
@@ -4142,6 +4901,7 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
       const effect_result = applyEffectTargetStates(effect_target_states);
       notifyEffectErrors(effect_result.errors);
       if (effect_result.errors.length === 0) {
+        syncToolOutputOptions(state.config, state.preset);
         if (prompt_changed || effect_result.changed) {
           toastr.success(`已应用“${option_view.label}”。`, SCRIPT_NAME);
         } else {
@@ -4149,12 +4909,36 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
         }
       }
       refresh();
+    } catch (error) {
+      toastr.error(`应用选项失败：${normalizeError(error)}`, SCRIPT_NAME);
+      refresh();
     } finally {
       is_applying.value = false;
     }
   }
 
   return {
+    setup_guide,
+    setup_error,
+    setup_steps,
+    setup_step_index,
+    setup_step,
+    setup_step_groups,
+    setup_can_advance,
+    setup_overview,
+    startSetupGuide,
+    closeSetupGuide,
+    selectSetupOption,
+    updateSetupInput,
+    moveSetupGuide,
+    skipSetupDatabase,
+    finishSetupGuide,
+    prompt_editor,
+    prompt_editor_error,
+    openPromptEditor,
+    closePromptEditor,
+    saveManagedPrompt,
+    deleteManagedPrompt,
     active_selection_preset,
     selection_library,
     selection_library_error,
@@ -4180,6 +4964,10 @@ export const usePresetAdapterStore = defineStore(SCRIPT_NAME, () => {
     confirmExportReview,
     confirmImportReview,
     debug_available,
+    debug_max_records,
+    debug_limit_supported,
+    debug_settings_saving,
+    setDebugMaxRecords,
     debug_loading,
     debug_records,
     description,

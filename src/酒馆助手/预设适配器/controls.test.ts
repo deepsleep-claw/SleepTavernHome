@@ -44,14 +44,16 @@ describe('选项组预设界面', () => {
     fixture.store.refresh();
     app = createApp(SelectionPresets).use(fixture.pinia);
     app.mount(host());
-    expect(document.querySelector('select')!.value).toBe('');
-    change(document.querySelector('select')!, id);
+    expect(document.querySelector('#pa-selection-preset')!.textContent).toContain('当前已修改');
+    (document.querySelector('#pa-selection-preset') as HTMLButtonElement).click();
+    await flush();
+    document.querySelector<HTMLButtonElement>(`[data-selection-preset-id="${id}"] .pa-selection-choice`)!.click();
     await flush();
     button('切换', document.querySelector('[role="dialog"]')!).click();
     await flush();
     expect(fixture.data.current.prompts[1].enabled).toBe(true);
     expect(fixture.data.current.prompts[2].enabled).toBe(false);
-    expect(document.querySelector('select')!.value).toBe(id);
+    expect(document.querySelector('#pa-selection-preset')!.textContent?.trim()).toBe('组合');
   });
   it('新建使用当前按钮状态，名称冲突给出提示', async () => {
     const fixture = setupAdapter();
@@ -89,7 +91,9 @@ describe('选项组预设界面', () => {
     fixture.store.refresh();
     app = createApp(SelectionPresets).use(fixture.pinia);
     app.mount(host());
-    change(document.querySelector('select')!, first);
+    (document.querySelector('#pa-selection-preset') as HTMLButtonElement).click();
+    await flush();
+    document.querySelector<HTMLButtonElement>(`[data-selection-preset-id="${first}"] .pa-selection-choice`)!.click();
     await flush();
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('未保存');
     button('取消', document.querySelector('[role="dialog"]')!).click();
@@ -107,7 +111,9 @@ describe('选项组预设界面', () => {
     fixture.store.createSelectionPreset('当前组合');
     app = createApp(SelectionPresets).use(fixture.pinia);
     app.mount(host());
-    change(document.querySelector('select')!, saved.id);
+    (document.querySelector('#pa-selection-preset') as HTMLButtonElement).click();
+    await flush();
+    document.querySelector<HTMLButtonElement>(`[data-selection-preset-id="${saved.id}"] .pa-selection-choice`)!.click();
     await flush();
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain('丙');
     expect(document.querySelector('.pa-modal-backdrop')?.parentElement?.className).toBe(

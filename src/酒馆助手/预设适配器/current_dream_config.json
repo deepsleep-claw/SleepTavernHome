@@ -23,6 +23,55 @@
       }
     }
   },
+  "prompt_rules": [
+    {
+      "when_enabled": [
+        "Gemini思考适配",
+        "Gemini随机开头"
+      ],
+      "when_targeted": [
+        "Gemini思考适配",
+        "Gemini随机开头"
+      ],
+      "enable": [
+        "隐式思维链"
+      ],
+      "disable": [
+        "默认思维链",
+        "自定义思维链"
+      ]
+    },
+    {
+      "when_disabled": [
+        "Gemini随机开头"
+      ],
+      "when_targeted": [
+        "Gemini随机开头"
+      ],
+      "enable": [
+        "默认思维链"
+      ],
+      "disable": [
+        "隐式思维链",
+        "自定义思维链"
+      ]
+    },
+    {
+      "when_disabled": [
+        "Gemini思考适配"
+      ],
+      "when_targeted": [
+        "Gemini思考适配"
+      ],
+      "enable": [
+        "默认思维链"
+      ],
+      "disable": [
+        "隐式思维链",
+        "自定义思维链"
+      ]
+    }
+  ],
   "groups": [
     {
       "id": "模型适配",
@@ -62,11 +111,7 @@
           "label": "Gemini3",
           "enable": [
             "Gemini思考适配",
-            "schema初始化-thinking",
             "Glm/Gemini禁词"
-          ],
-          "disable": [
-            "schema初始化"
           ],
           "description": "适用于Gemini3系列。"
         },
@@ -75,14 +120,12 @@
           "label": "Gemini4",
           "enable": [
             "Gemini思考适配",
-            "schema初始化-thinking",
             "Glm/Gemini禁词",
             "☆Gemini预填充对话",
             "☆Gemini预填充回复",
             "梦境思客Gemini"
           ],
           "disable": [
-            "schema初始化",
             "梦境思客"
           ],
           "description": "适用于Gemini4 Argon。"
@@ -113,7 +156,6 @@
         "KimiK3思考",
         "硅基流动或其他",
         "Gemini思考适配",
-        "schema初始化-thinking",
         "DeepSeek禁词",
         "Glm/Gemini禁词",
         "梦境思客Gemini"
@@ -132,9 +174,41 @@
           "id": "Gemini防截断",
           "label": "Gemini防截断",
           "description": "开启后会导致无法流式输出，但是可以解决截断问题。\n不过对于输入被拦截依然无法解决。",
+          "requires_any": [
+            {
+              "group_id": "模型适配",
+              "option_id": "Gemini3"
+            },
+            {
+              "group_id": "模型适配",
+              "option_id": "Gemini4"
+            }
+          ],
           "effect": [
             "gemini_tool_output_mode"
           ]
+        },
+        {
+          "id": "Gemini防路由",
+          "label": "Gemini防路由",
+          "description": "开启 Gemini3 或 Gemini4 后可切换。开启时启用 Gemini随机开头，并切换为隐式思维链；关闭或切换为非 Gemini 适配时使用默认思维链。",
+          "requires_any": [
+            {
+              "group_id": "模型适配",
+              "option_id": "Gemini3"
+            },
+            {
+              "group_id": "模型适配",
+              "option_id": "Gemini4"
+            }
+          ],
+          "enable": [
+            "Gemini随机开头"
+          ],
+          "tool_output": {
+            "enabled_tool": "publish_story_content",
+            "disabled_tool": "publish_story"
+          }
         }
       ]
     },
@@ -163,8 +237,7 @@
       "mode": "single",
       "disable_group": [
         "默认思维链",
-        "发散思维链",
-        "DeepseekV4pro思维链",
+        "隐式思维链",
         "自定义思维链"
       ],
       "options": [
@@ -176,10 +249,17 @@
           ]
         },
         {
-          "id": "发散思维链",
-          "label": "发散思维链",
+          "id": "隐式思维链",
+          "label": "隐式思维链",
           "enable": [
-            "发散思维链"
+            "隐式思维链"
+          ]
+        },
+        {
+          "id": "自定义思维链",
+          "label": "自定义思维链",
+          "enable": [
+            "自定义思维链"
           ]
         }
       ]
@@ -217,6 +297,11 @@
       "id": "文风设置",
       "label": "文风设置",
       "mode": "single",
+      "editor": {
+        "type": "variable_macro",
+        "variable": "sleep_var_wenfeng",
+        "operation": "setvar"
+      },
       "options": [
         {
           "id": "文风",
@@ -236,6 +321,11 @@
       "id": "次要文风",
       "label": "次要文风",
       "mode": "multiple",
+      "editor": {
+        "type": "variable_macro",
+        "variable": "sleep_var_wenfeng",
+        "operation": "addvar"
+      },
       "options": [
         {
           "id": "次要文风",

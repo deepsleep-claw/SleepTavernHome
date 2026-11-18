@@ -1,0 +1,16 @@
+{
+  "id": "c317acd9-6158-43c2-9e64-fbd6c9b088ea",
+  "scriptName": "[RPG美化]用户行动",
+  "outputFile": "梦境RPG用户行动.json",
+  "findRegex": "/<rpg_ans\\b(?:\"[^\"]*\"|'[^']*'|[^'\">])*>\\s*([\\s\\S]*?)\\s*<\\/rpg_ans\\s*>/gi",
+  "compactTemplate": true,
+  "trimStrings": [],
+  "placement": [1],
+  "disabled": false,
+  "markdownOnly": true,
+  "promptOnly": false,
+  "runOnEdit": true,
+  "substituteRegex": 0,
+  "minDepth": null,
+  "maxDepth": null
+}

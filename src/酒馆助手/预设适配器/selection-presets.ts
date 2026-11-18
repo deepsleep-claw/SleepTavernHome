@@ -77,6 +77,8 @@ type SelectableOption = {
   enable_indexes: number[];
   disable_indexes: number[];
   effects: string[];
+  on_enable_indexes?: number[];
+  on_enable_disable_indexes?: number[];
 };
 
 export type SelectionGroup = {
@@ -189,6 +191,11 @@ export function buildSelectionPlan(selections: SelectionReference[], groups: Sel
   }
   // 显式选择优先于各组的关闭基线，共享的启用目标只应用一次。
   explicit_states.forEach(({ enabled }, index) => prompt_states.set(index, enabled));
+  // 开启选项的联动在整组选择之后应用，使其目标不受分组顺序影响。
+  [...resolved.matched.values()].flat().forEach(option => {
+    option.on_enable_disable_indexes?.forEach(index => prompt_states.set(index, false));
+    option.on_enable_indexes?.forEach(index => prompt_states.set(index, true));
+  });
   [...resolved.matched.values()]
     .flat()
     .forEach(option => option.effects.forEach(effect => effect_states.set(effect, true)));

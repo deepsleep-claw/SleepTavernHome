@@ -24,7 +24,7 @@
       "id": "html-project",
       "loading": "on-demand",
       "name": "HTML工程",
-      "sha256": "9f14c0e933616760f290b44819b002dfe009357ec603cdcdaf3dc0ea1fd6b530",
+      "sha256": "b332ff2852435da3ff606f5d3b6470ce25c6bfa3ed589b73194c2c6977e8f478",
       "size": 5194,
       "version": 1
     },
@@ -34,7 +34,7 @@
       "id": "plain-html-regex",
       "loading": "on-demand",
       "name": "纯HTML正则界面",
-      "sha256": "7993145b28602b5fde1d9b60444541449f24338235a3027604c2eea9780ef55f",
+      "sha256": "c305cce8a503c21e38c3956d6ccd0873e708f67790448f7474e798bf6ac46d54",
       "size": 1696,
       "version": 1
     },
@@ -44,7 +44,7 @@
       "id": "tavern-helper-regex",
       "loading": "on-demand",
       "name": "酒馆助手正则界面",
-      "sha256": "232a35638f8ae40df91a74a0f59ff6b40d6549d82f2f1b2fec16a78b63c45b48",
+      "sha256": "6da8e2eb560f36378b29155a0726b1ee412305d9f634da534ed7be7f40e2de26",
       "size": 1417,
       "version": 1
     },
@@ -54,7 +54,7 @@
       "id": "mvu-zod-card",
       "loading": "on-demand",
       "name": "MVU角色卡",
-      "sha256": "a1affc1c3bf337ce0b4a10ac6701c1d0eab8f44913f5a06146bd128c69e75467",
+      "sha256": "74ea4218e489313bcf46f13fd44d256ad9e7720eaf1b8c996f9f31d55b5a1e1f",
       "size": 21809,
       "version": 1
     },
@@ -64,7 +64,7 @@
       "id": "mvu-frontend",
       "loading": "on-demand",
       "name": "MVU前端界面",
-      "sha256": "a76fe8ef9d2cc47c9b626fecd50f100cff861584931cd1cba9f9d03ca6b8623e",
+      "sha256": "7a5833f8da44cfc7eeec72166e9107a218f0f1731695c23e603ded47d7a9539a",
       "size": 2295,
       "version": 1
     },
@@ -74,7 +74,7 @@
       "id": "tavern-helper-api",
       "loading": "on-demand",
       "name": "酒馆助手API参考",
-      "sha256": "1e47c2fee6f30bca799b59978ad92854ade85f9e9ca4a9d6814dfdce67b72568",
+      "sha256": "1f70b4e338a69bf59900b479580842eb2896c764a2f6ce8c45f9520ed93f0256",
       "size": 63551,
       "version": 1
     }

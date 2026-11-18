@@ -1,6 +1,7 @@
 import { checkMinimumVersion } from '@util/common';
 import { destroyPresetAdapterPopup, openPresetAdapterPopup, refreshPresetAdapterPopup } from './popup';
 import { SCRIPT_NAME, markGeneratedMessageAsSummaryIfMatched, readScriptButtonName } from './store';
+import { shouldAutoOpenSetupGuide } from './setup-guide';
 
 const WAND_CONTAINER_ID = 'sleep-preset-adapter-wand-container';
 const WAND_BUTTON_ID = 'sleep-preset-adapter-wand-button';
@@ -81,12 +82,20 @@ function ensureScriptButton(button_name: string) {
   });
 }
 
-function openPopupWithErrorToast() {
-  openPresetAdapterPopup().catch(error => {
+function openPopupWithErrorToast(setup = false) {
+  openPresetAdapterPopup({ setup }).catch(error => {
     const message = error instanceof Error ? error.message : String(error);
     toastr.error(`打开界面失败：${message}`, SCRIPT_NAME);
     console.error(`[${SCRIPT_NAME}] 打开界面失败。`, error);
   });
+}
+
+function openInitialSetupIfNeeded() {
+  try {
+    if (shouldAutoOpenSetupGuide()) openPopupWithErrorToast(true);
+  } catch (error) {
+    console.warn(`[${SCRIPT_NAME}] 读取设置引导状态失败。`, error);
+  }
 }
 
 $(() => {
@@ -99,12 +108,14 @@ $(() => {
   });
   const preset_changed_event = eventOn(tavern_events.PRESET_CHANGED, () => {
     refreshPresetAdapterPopup();
+    openInitialSetupIfNeeded();
   });
   const summary_detect_event = eventOn(tavern_events.GENERATION_ENDED, message_id => {
     markGeneratedMessageAsSummaryIfMatched(message_id);
     refreshPresetAdapterPopup();
   });
   const { destroy: destroyWandMenuButton } = mountWandMenuButton();
+  openInitialSetupIfNeeded();
 
   $(window).on('pagehide', () => {
     script_button_event.stop();

@@ -3,8 +3,8 @@
     ref="menu"
     class="pa-import-menu"
     @pointerenter="openOnHover"
-    @pointerleave="closeMenu"
-    @keydown.esc.stop.prevent="closeMenu"
+    @pointerleave="closeOnHoverLeave"
+    @keydown.esc.stop.prevent="closeFromKeyboard"
   >
     <summary :aria-disabled="disabled" :tabindex="disabled ? -1 : 0" @click="preventDisabled">
       <i class="fa-solid fa-arrow-down" aria-hidden="true"></i> 导入
@@ -15,7 +15,14 @@
       <button type="button" :disabled="disabled" @click="openPresetPicker">从旧预设导入</button>
     </div>
   </details>
-  <input ref="file_input" hidden type="file" accept="application/json,.json" @change="importFile" />
+  <input
+    ref="file_input"
+    class="pa-import-file-input"
+    type="file"
+    aria-hidden="true"
+    tabindex="-1"
+    @change="importFile"
+  />
   <AdapterModal v-if="picker_open" title="从旧预设导入" :busy="parsing" @close="picker_open = false">
     <label
       >选择来源预设
@@ -101,8 +108,9 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import AdapterModal from './AdapterModal.vue';
+import { readImportFile } from './import-file';
 import { SCRIPT_NAME, usePresetAdapterStore } from './store';
 
 const store = usePresetAdapterStore();
@@ -112,6 +120,7 @@ const picker_open = ref(false);
 const preset_names = ref<string[]>([]);
 const source_name = ref('');
 const parsing = ref(false);
+let host_document: Document | undefined;
 const disabled = computed(() => store.is_applying || store.has_blocking_errors);
 const review = computed(() => (store.review_panel?.kind === 'import' ? store.review_panel : undefined));
 const isSelected = (key: string) => review.value?.selected_keys.includes(key) ?? false;
@@ -129,14 +138,35 @@ function closeMenu() {
 function openOnHover(event: PointerEvent) {
   if (event.pointerType === 'mouse' && menu.value && !disabled.value) menu.value.open = true;
 }
+function closeOnHoverLeave(event: PointerEvent) {
+  // 触屏抬起也会产生离开事件，菜单需等点击选项或外部区域后收起。
+  if (event.pointerType === 'mouse') closeMenu();
+}
+function closeFromKeyboard() {
+  closeMenu();
+  menu.value?.querySelector('summary')?.focus();
+}
+function closeOnOutsidePointerDown(event: PointerEvent) {
+  if (menu.value?.open && event.target && !menu.value.contains(event.target as Node)) closeMenu();
+}
+watch(disabled, value => {
+  if (value) closeMenu();
+});
+onMounted(() => {
+  host_document = menu.value?.ownerDocument;
+  host_document?.addEventListener('pointerdown', closeOnOutsidePointerDown, true);
+});
+onBeforeUnmount(() => host_document?.removeEventListener('pointerdown', closeOnOutsidePointerDown, true));
 function preventDisabled(event: Event) {
   if (disabled.value) event.preventDefault();
 }
 function openFile() {
+  if (disabled.value) return;
   closeMenu();
   file_input.value?.click();
 }
 function openPresetPicker() {
+  if (disabled.value) return;
   closeMenu();
   preset_names.value = store.getImportPresetNames();
   source_name.value = '';
@@ -155,7 +185,7 @@ async function importFile(event: Event) {
   const input = event.target as HTMLInputElement;
   try {
     const file = input.files?.[0];
-    if (file) await store.importPresetSettings(await file.text(), file.name);
+    if (file) await store.importPresetSettings(await readImportFile(file), file.name);
   } catch (error) {
     toastr.error('读取设置文件失败：' + String(error), SCRIPT_NAME);
   } finally {
@@ -165,6 +195,16 @@ async function importFile(event: Event) {
 </script>
 
 <style>
+.preset-adapter-root .pa-import-file-input {
+  position: fixed;
+  top: 0;
+  left: -10000px;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+}
 .preset-adapter-root .pa-import-menu {
   position: relative;
 }

@@ -5,6 +5,7 @@ export type GeminiToolOutputModeApi = {
   version: 1;
   getEnabled: () => boolean;
   setEnabled: (enabled: boolean) => void;
+  selectTool?: (name: string, disabled_name: string) => void;
   subscribe: (callback: (enabled: boolean) => void) => { stop: () => void };
 };
 
