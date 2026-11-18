@@ -236,7 +236,7 @@ export function createRepairController(store: Store) {
       });
       let output: string;
       try {
-        const generated = await bounded(
+        const generated = await bounded<string | { content: string }>(
           generateRaw({
             ordered_prompts,
             generation_id: request_id,
