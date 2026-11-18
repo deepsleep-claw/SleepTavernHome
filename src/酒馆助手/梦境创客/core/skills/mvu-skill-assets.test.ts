@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs'; // eslint-disable-line import-x/no-nodejs-modules
 import { describe, expect, it } from 'vitest';
 import { parseFrontmatter, parseYamlObject, serializeYaml } from '../mapping/serde';
 import initvarTemplate from '../../内置资源/Skills/mvu-zod-card/templates/zod/worldbook/initvar.entry.md?raw';
@@ -14,14 +13,10 @@ import { LiveWorkspaceRepository } from '../workspace/live-repository';
 import runtimeInfo from '../../内置资源/Skills/mvu-zod-card/templates/zod/mvu-runtime/info.yaml?raw';
 import schemaInfo from '../../内置资源/Skills/mvu-zod-card/templates/zod/schema-registration/info.yaml?raw';
 
-const runtimeTemplate = readFileSync(
-  new URL('../../内置资源/Skills/mvu-zod-card/templates/zod/mvu-runtime/script.js', import.meta.url),
-  'utf8',
-);
-const schemaTemplate = readFileSync(
-  new URL('../../内置资源/Skills/mvu-zod-card/templates/zod/schema-registration/script.js', import.meta.url),
-  'utf8',
-);
+const [{ default: runtimeTemplate }, { default: schemaTemplate }] = await Promise.all([
+  import('../../内置资源/Skills/mvu-zod-card/templates/zod/mvu-runtime/script.js?raw'),
+  import('../../内置资源/Skills/mvu-zod-card/templates/zod/schema-registration/script.js?raw'),
+]);
 
 describe('MVU角色卡内置Skill', () => {
   it('安装模板可以逐文件写入并在规范化路径继续编辑', async () => {
