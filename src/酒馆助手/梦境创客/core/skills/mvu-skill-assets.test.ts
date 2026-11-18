@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { parseFrontmatter, parseYamlObject, serializeYaml } from '../mapping/serde';
-import runtimeTemplate from '../../内置资源/Skills/mvu-zod-card/templates/zod/mvu-runtime/script.js?raw';
-// import-x按普通JS解析模板文件，不理解Vite的?raw文本默认导出。
-// eslint-disable-next-line import-x/default
-import schemaTemplate from '../../内置资源/Skills/mvu-zod-card/templates/zod/schema-registration/script.js?raw';
 import initvarTemplate from '../../内置资源/Skills/mvu-zod-card/templates/zod/worldbook/initvar.entry.md?raw';
 import outputFormatTemplate from '../../内置资源/Skills/mvu-zod-card/templates/zod/worldbook/output-format.entry.md?raw';
 import updateRulesTemplate from '../../内置资源/Skills/mvu-zod-card/templates/zod/worldbook/update-rules.entry.md?raw';
@@ -16,6 +12,11 @@ import { CardWorkspaceLiveSource } from '../workspace/card-live-source';
 import { LiveWorkspaceRepository } from '../workspace/live-repository';
 import runtimeInfo from '../../内置资源/Skills/mvu-zod-card/templates/zod/mvu-runtime/info.yaml?raw';
 import schemaInfo from '../../内置资源/Skills/mvu-zod-card/templates/zod/schema-registration/info.yaml?raw';
+
+const [{ default: runtimeTemplate }, { default: schemaTemplate }] = await Promise.all([
+  import('../../内置资源/Skills/mvu-zod-card/templates/zod/mvu-runtime/script.js?raw'),
+  import('../../内置资源/Skills/mvu-zod-card/templates/zod/schema-registration/script.js?raw'),
+]);
 
 describe('MVU角色卡内置Skill', () => {
   it('安装模板可以逐文件写入并在规范化路径继续编辑', async () => {
