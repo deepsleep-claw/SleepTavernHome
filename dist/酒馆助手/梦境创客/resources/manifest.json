@@ -3,8 +3,8 @@
   "runtime": [
     {
       "file": "vendor/compiler-validator.js",
-      "sha256": "eda64f7b8e6a88dca0fb01fe088a76ba44d3e323e75506cb9d534692a0adc674",
-      "size": 274798
+      "sha256": "4bcb1bf17359b63f905aeaeab2134f26dae959d3325e35f015f7e85567caf225",
+      "size": 263702
     },
     {
       "file": "vendor/rollup.browser.js",
@@ -74,8 +74,8 @@
       "id": "tavern-helper-api",
       "loading": "on-demand",
       "name": "酒馆助手API参考",
-      "sha256": "1e47c2fee6f30bca799b59978ad92854ade85f9e9ca4a9d6814dfdce67b72568",
-      "size": 63551,
+      "sha256": "b3db4d6d1d77b8d0ee5d4d202a1518fdbf445f7b71d4f1d6268f613d744367eb",
+      "size": 64603,
       "version": 1
     }
   ]

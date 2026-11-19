@@ -68,12 +68,12 @@ type TavernRegexOptionGlobal = {
 type TavernRegexOptionCharacter = {
   /** 对角色卡局部 (`'character'`) 进行操作 */
   type: 'character';
-  name?: string | 'current';
+  name?: TypeFest.LiteralUnion<'current', string | `${string}.png`>;
 };
 type TavernRegexOptionPreset = {
   /** 对预设正则 (`'preset'`) 进行操作 */
   type: 'preset';
-  name?: string | 'in_use';
+  name?: TypeFest.LiteralUnion<'in_use', string>;
 };
 type TavernRegexOption = TavernRegexOptionGlobal | TavernRegexOptionCharacter | TavernRegexOptionPreset;
 
@@ -85,10 +85,6 @@ type TavernRegexOption = TavernRegexOptionGlobal | TavernRegexOptionCharacter | 
  * @returns 一个数组, 数组的元素是酒馆正则 `TavernRegex`. 该数组依据正则作用于文本的顺序排序, 也就是酒馆显示正则的地方从上到下排列.
  */
 declare function getTavernRegexes(option: TavernRegexOption): TavernRegex[];
-
-type ReplaceTavernRegexesOption = {
-  scope?: 'all' | 'global' | 'character';
-};
 
 /**
  * 完全替换酒馆正则为 `regexes`.
