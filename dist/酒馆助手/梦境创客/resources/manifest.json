@@ -3,8 +3,8 @@
   "runtime": [
     {
       "file": "vendor/compiler-validator.js",
-      "sha256": "4bcb1bf17359b63f905aeaeab2134f26dae959d3325e35f015f7e85567caf225",
-      "size": 263702
+      "sha256": "79db1960a5edb37f37f062beff20eb610c7285d24b8a5a76b43bbdcd5c247acb",
+      "size": 263697
     },
     {
       "file": "vendor/rollup.browser.js",
